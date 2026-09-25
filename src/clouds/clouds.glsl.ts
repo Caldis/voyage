@@ -243,12 +243,7 @@ float anvilDensity(vec2 xz, float alt, vec2 center, float R, float top, float lo
   float dens = vert * edge * mix(0.8, 0.12, smoothstep(0.25, 1.0, rho));
   // 砧底和砧的下半部分看到的天空少
   ao = mix(0.45, 1.0, smoothstep(aBot, aTop, alt));
-  // 砧底下的冰晶幡（fallstreaks）：稀薄、竖直的丝缕，让砧底毛茸茸的，而不是一刀切
-  if (alt < aBot + 0.1 && rho > 0.25 && rho < 0.95) {
-    float streak = textureLod(uShapeNoise, vec3(xz / 3.0, alt * 0.12) + 0.29, lod).g;
-    float fall = smoothstep(0.55, 0.85, streak) * (1.0 - smoothstep(0.0, 0.8, aBot - alt)) * edge * 0.035;
-    if (fall > dens) { dens = fall; ao = 0.5; }
-  }
+  // 砧底下的冰晶幡试过用竖直拉长的噪声做，远看成了一排梳齿状的竖条（squall 里尤其明显），先去掉
   // 乳状云：砧底下风方的一圈，挂着一个个半椭球形的口袋（口袋底面 = 砧底 − 深度 × √(1 − (d/半径)²)）
   float zone = smoothstep(0.3, 0.45, rho) * (1.0 - smoothstep(0.65, 0.8, rho)) * smoothstep(-0.2, 0.4, down);
   if (zone > 0.0 && alt < aBot + 0.3 && alt > aBot - 0.9) {
