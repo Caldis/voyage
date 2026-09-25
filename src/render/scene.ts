@@ -3,6 +3,9 @@ import { ATMOSPHERE_COMMON, FULLSCREEN_VERT } from "../atmosphere/common.glsl";
 import type { Atmosphere } from "../atmosphere/luts";
 import { CLOUD_COMMON } from "../clouds/clouds.glsl";
 import { CABIN_COMMON, PANE_COMMON } from "./cabin.glsl";
+import { CABIN_SHADING_COMMON } from "./cabin-shading.glsl";
+import { FABRIC_COMMON } from "./fabric.glsl";
+import { SEATS_COMMON } from "./seats.glsl";
 import { VIEW_COMMON } from "./view.glsl";
 import type { GroundClipmap } from "../ground/clipmap";
 import { GROUND_COMMON } from "./ground.glsl";
@@ -108,6 +111,9 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
 }
 
 ${WING_SHADING_COMMON}
+${CABIN_SHADING_COMMON}
+${FABRIC_COMMON}
+${SEATS_COMMON}
 
 void main() {
   vec3 rd = cabinRay(gl_FragCoord.xy);
@@ -118,14 +124,21 @@ void main() {
   vec3 pWall = ro + rd * ((0.0 - ro.z) / rdz);
   vec3 pShade = ro + rd * ((SHADE_DEPTH - ro.z) / rdz);
   vec3 pPane = ro + rd * ((PANE_DEPTH - ro.z) / rdz);
-  float dBezel = sdRoundRect(pWall.xy, BEZEL_HALF, BEZEL_RADIUS);
-  float dPane = sdRoundRect(pPane.xy, PANE_HALF, PANE_RADIUS);
+  // 最近的那扇窗（0 = 本窗，±1 = 前后相邻的窗，遮光板放下）；两窗正中间两边的距离相等，所以距离场是连续的。
+  // 窗洞、遮光板都在这扇窗的局部坐标里算（只差一个 x 平移）
+  float wi = floor(pWall.x / WINDOW_PITCH + 0.5);
+  float isMain = wi == 0.0 ? 1.0 : 0.0;
+  vec2 wOff = vec2(wi * WINDOW_PITCH, 0.0);
+  vec2 wq = pWall.xy - wOff;
+  float dBezel = sdRoundRect(wq, BEZEL_HALF, BEZEL_RADIUS);
+  float dPane = sdRoundRect(pPane.xy - wOff, PANE_HALF, PANE_RADIUS);
   // 抗锯齿宽度设上限：视线几乎贴着舱壁时交点飞到很远，导数会大到把几层颜色混在一起
   float wB = min(fwidth(dBezel), 0.005);
   float wP = min(fwidth(dPane), 0.005);
   float wS = min(fwidth(pShade.y), 0.005);
-  float px = length(fwidth(pWall.xy));
   float pixPane = max(length(fwidth(pPane.xy)), 1e-5);
+  float pixShade = max(length(fwidth(pShade.xy)), 1e-5);
+  float pixAng = 2.0 * uTanHalfFov / uResolution.y; // 一个像素的张角（分支里用它算解析的像素足迹）
 
   // ---- 窗外来的光（舱内所有表面共用） ----
   // 「sun」系列变量指直射主光源：白天是太阳，夜里是月亮
@@ -140,18 +153,32 @@ void main() {
   vec3 lWin = 0.5 * (eSkyH / M_PI + belowAlbedo * eDown / M_PI) * PANE_TRANSMITTANCE;
   // 舱内环境光：灯光 + 满舱窗户进来的光被来回反射后的均匀部分（经验系数，待换成辐射度近似）
   vec3 eCabin = uCabinLight * CABIN_LIGHT_COLOR + 0.06 * M_PI * lWin + 0.004 * eSunNormal * max(sunC.z, 0.0);
+  // 窗板反射舱内时仍用这一版（窗外画面与改前一致）；舱内表面的环境光里满舱窗户的回弹再多算一些（经验值）
+  vec3 eCabinRefl = eCabin;
+  eCabin += 0.03 * M_PI * lWin;
+  CabinLights cl;
+  cl.sunC = sunC;
+  cl.eSunNormal = eSunNormal;
+  cl.lWin = lWin;
+  cl.eCabin = eCabin;
+  // 遮光板放下的邻窗：外面的光透过半透的白塑料（和本窗遮光板的透光系数一致）
+  cl.lGlow = PLASTIC_ALBEDO / M_PI * 0.08 * (M_PI * lWin + eSunNormal * max(sunC.z, 0.0));
+  cl.readOn = 1.0 - smoothstep(0.005, 0.05, uCabinLight);
 
-  // ---- 舱壁 ----
-  // 塑料面板：毫米级的橘皮纹理 + 厘米级的轻微斑驳。远处纹理细于像素时淡出，免得闪烁
-  float grain = vnoise(pWall.xy * 900.0) - 0.5;
-  float mottle = vnoise(pWall.xy * 30.0) - 0.5;
-  float grainFade = 1.0 - smoothstep(0.0004, 0.0012, px);
-  vec3 wallAlbedo = PLASTIC_ALBEDO * (1.0 + 0.06 * grain * grainFade + 0.04 * mottle);
-  // 上亮下暗：顶灯和行李架下的灯带从上方照下来
-  float wallGrad = 1.0 + 0.35 * clamp(pWall.y / 0.4, -1.0, 1.0);
-  vec3 wall = wallAlbedo / M_PI * eCabin * wallGrad;
+  // ---- 座椅：挡在侧壁和窗前面（见 seats.glsl.ts） ----
+  float tWall = rd.z > 1e-4 ? traceWall(ro, rd) : 1e3;
+  SeatHit seat = traceSeats(ro, rd, tWall, pixAng);
+  vec3 seatCol = seat.cov > 0.0 ? shadeSeat(ro, rd, seat, pixAng, cl, uShadeBottom) : vec3(0.0);
+
+  // ---- 舱壁（带弧度的内饰板、窗罩翻边、接缝、脏污；见 cabin-shading.glsl.ts） ----
+  vec3 pW = ro + rd * tWall;
+  float wallSeatAO = mix(0.55, 1.0, smoothstep(0.0, 0.12, sdSeats(pW)));
+  float seed = wi * 3.7 + 1.0;
+  vec3 wall = shadeWall(pW, rd, tWall, pixAng, wq, dBezel, seed, wallSeatAO, cl);
+  // 窗板反射舱内用的平滑版本（和改前的舱壁一致，不带细节）
+  vec3 wallRefl = PLASTIC_ALBEDO / M_PI * eCabinRefl * (1.0 + 0.35 * clamp(pWall.y / 0.4, -1.0, 1.0));
   if (rd.z < 1e-4) {
-    gl_FragColor = vec4(wall, 0.0);
+    gl_FragColor = vec4(mix(wall, seatCol, seat.cov), 0.0);
     return;
   }
 
@@ -159,38 +186,30 @@ void main() {
   vec3 hit;
   vec3 reveal = wall;
   float hitZ = 1.0; // 打到内衬的深度，没打到就是 1（比窗板还深）
-  if (dBezel < 0.01 && marchFunnel(ro, rd, hit)) {
+  vec3 roL = ro - vec3(wOff, 0.0);
+  float shadeBottom = mix(NB_SHADE, uShadeBottom, isMain);
+  if (dBezel < 0.01 && marchFunnel(roL, rd, hit)) {
     hitZ = hit.z;
     vec3 n = funnelNormal(hit);
-    float depth01 = clamp(hit.z / PANE_DEPTH, 0.0, 1.0);
-    float ao = mix(1.0, 0.45, sqrt(depth01)); // 越深，看到的舱内越少
-    vec3 e = eCabin * ao + windowIrradiance(hit, n, lWin)
-           + eSunNormal * max(dot(n, sunC), 0.0) * sunThroughWindow(hit, sunC, uShadeBottom);
-    float g = vnoise(hit.xy * 900.0 + hit.z * 500.0) - 0.5;
-    // 窗板四周一圈深灰色的橡胶密封条
-    float gasket = (1.0 - smoothstep(0.004, 0.006, sdRoundRect(hit.xy, PANE_HALF, PANE_RADIUS))) * step(PANE_DEPTH - 0.012, hit.z);
-    vec3 albedo = mix(PLASTIC_ALBEDO * (1.0 + 0.05 * g * grainFade), vec3(0.06), gasket);
-    reveal = albedo / M_PI * e;
+    reveal = shadeReveal(hit, n, rd, length(hit - roL), pixAng, cl, mix(cl.lGlow, lWin, isMain), isMain, shadeBottom, seed);
     if (uDebug == 3) reveal = windowIrradiance(hit, n, lWin);
     if (uDebug == 4) reveal = n * 0.5 + 0.5;
   }
 
-  // ---- 遮光板：半透的白色塑料，舱内一侧能看到透过来的光 ----
-  vec3 eShadeOuter = M_PI * lWin + eSunNormal * max(sunC.z, 0.0);
-  vec3 shade = PLASTIC_ALBEDO / M_PI * (0.8 * eCabin + 0.08 * eShadeOuter);
-  // 遮光板下沿有一道凸起的把手，被顶上来的光照亮
-  float lip = smoothstep(0.012, 0.0, pShade.y - uShadeBottom);
-  shade *= 1.0 + 0.25 * lip;
+  // ---- 遮光板：半透的白色塑料，下沿有把手（见 cabin-shading.glsl.ts） ----
+  vec3 shade = shadeShade(pShade - vec3(wOff, 0.0), rd, pixShade, cl, shadeBottom, seed);
 
   // ---- 合成 ----
   float inBezel = 1.0 - smoothstep(-wB, wB, dBezel);
   float inPane = 1.0 - smoothstep(-wP, wP, dPane);
   // 视线在遮光板所在深度之前就打到内衬的话，遮光板被内衬挡住
-  float shaded = smoothstep(-wS, wS, pShade.y - uShadeBottom) * step(SHADE_DEPTH, hitZ);
+  float shaded = smoothstep(-wS, wS, pShade.y - shadeBottom) * step(SHADE_DEPTH, hitZ);
 
   vec4 cloud = texture(uClouds, gl_FragCoord.xy / uResolution);
-  vec3 view;
-  float tWing = inBezel > 0.0 ? wingHit(ro, rd, (PANE_DEPTH - ro.z) / rd.z) : -1.0;
+  // 邻窗遮光板下沿以下（窗洞最深处）：只有一点暗光
+  vec3 view = reveal * 0.3;
+  if (inBezel > 0.0 && isMain > 0.5) {
+  float tWing = wingHit(ro, rd, (PANE_DEPTH - ro.z) / rd.z);
   if (tWing > 0.0) {
     view = shadeWing(ro + rd * tWing, rd, sunC, eSkyH, eDown, belowAlbedo);
     // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度
@@ -233,14 +252,16 @@ void main() {
   view *= 1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole));
   // 窗板反射舱内：正对时约 4%，斜看时更多（菲涅尔）
   float fr = 0.04 + 0.96 * pow(1.0 - clamp(rd.z, 0.0, 1.0), 5.0);
-  view += fr * wall * 1.5;
+  view += fr * wallRefl * 1.5;
+  }
   vec3 col = mix(wall, mix(mix(reveal, view, inPane), shade, shaded), inBezel);
+  col = mix(col, seatCol, seat.cov);
   if (uDebug == 3 || uDebug == 4) col = mix(vec3(0.0), reveal, inBezel * (1.0 - inPane));
   if (uDebug == 1) col = vec3(hitZ / PANE_DEPTH, inBezel, shaded) * 10.0;
   if (uDebug == 2) col = vec3(log2(max(dot(col, vec3(0.2126, 0.7152, 0.0722)), 1e-6)) * 0.1 + 1.0) * 10.0;
   // HDR 目标是 32 位浮点时可以原样存下太阳的辐亮度（约 1.8e6 kcd/m²），眩光的能量才对。
   // alpha 存「这个像素有多少是窗外」，曝光时窗外和舱内分开适应
-  float outsideMask = inBezel * inPane * (1.0 - shaded);
+  float outsideMask = isMain * inBezel * inPane * (1.0 - shaded) * (1.0 - seat.cov);
   gl_FragColor = vec4(min(col, vec3(uHdrMax)), outsideMask);
 }
 `;
@@ -304,6 +325,7 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uAerialTransmittanceS: { value: atmosphere.aerialTransmittance.texture },
       uHdrMax: { value: 6e4 },
       uDebug: { value: 0 },
+      uLoopGuard: { value: 0 },
     },
   });
 }

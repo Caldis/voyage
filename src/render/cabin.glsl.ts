@@ -5,6 +5,9 @@
  */
 export const CABIN_COMMON = /* glsl */ `
 const vec3 CABIN_LIGHT_COLOR = vec3(1.0, 0.9, 0.76); // 约 3500 K 的暖白
+// 恒为 0。循环上限写成「常数 + uLoopGuard」，Windows 上 ANGLE → FXC 就无法把循环展开：
+// 舱内加了座椅之后，全部展开的场景着色器编译 80 多秒后直接失败（链接报错、日志为空）
+uniform int uLoopGuard;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -43,8 +46,8 @@ vec3 funnelNormal(vec3 p) {
 bool marchFunnel(vec3 ro, vec3 rd, out vec3 hit) {
   float zPrev = 0.0;
   const float N = 24.0;
-  for (float i = 1.0; i <= N; i += 1.0) {
-    float v = i / N;
+  for (int ii = 1; ii <= 24 + uLoopGuard; ii++) {
+    float v = float(ii) / N;
     float z = PANE_DEPTH * v * v; // 靠近舱壁处收窄得快，采样也密
     vec3 p = ro + rd * ((z - ro.z) / rd.z);
     if (sdFunnel(p) > 0.0) {
@@ -76,8 +79,8 @@ vec3 windowIrradiance(vec3 x, vec3 n, vec3 lWin) {
   float sum = 0.0;
   vec3 v0 = normalize(windowVertex(0) - x);
   vec3 vPrev = v0;
-  for (int i = 1; i <= 16; i++) {
-    vec3 v = i == 16 ? v0 : normalize(windowVertex(i) - x);
+  for (int i = 1; i <= 16 + uLoopGuard; i++) {
+    vec3 v = i >= 16 ? v0 : normalize(windowVertex(i) - x);
     vec3 c = cross(vPrev, v);
     float len = length(c);
     if (len > 1e-6) sum += acos(clamp(dot(vPrev, v), -1.0, 1.0)) * dot(n, c / len);
