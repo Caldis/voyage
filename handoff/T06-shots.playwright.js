@@ -10,6 +10,8 @@ async (page) => {
     { name: "noon", p: { preset: "wpac", time: 720, "wing-pos": "8" }, head: H0 },
     { name: "sunset", p: { preset: "wpac", time: 1040, "wing-pos": "8" }, head: H0 },
     { name: "night", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": false }, offset: [0, -25], head: { x: 0, y: 0.02, z: -0.25 } },
+    { name: "noon-default", p: { preset: "wpac", time: 720, "wing-pos": "8" }, head: { x: 0, y: 0.02, z: -0.42 } },
+    { name: "sunset-default", p: { preset: "wpac", time: 1040, "wing-pos": "8" }, head: { x: 0, y: 0.02, z: -0.42 } },
     { name: "noon-shade", p: { preset: "wpac", time: 720, "wing-pos": "8", shade: 0.45 }, head: { x: 0, y: 0.02, z: -0.42 } },
     { name: "sunset-shade", p: { preset: "wpac", time: 1040, "wing-pos": "8", shade: 0.45 }, head: { x: 0, y: 0.02, z: -0.42 } },
     { name: "noon-back", p: { preset: "wpac", time: 720, "wing-pos": "8" }, head: { x: 0, y: 0.02, z: -0.75 } },

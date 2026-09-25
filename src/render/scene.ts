@@ -237,7 +237,10 @@ void main() {
   float fwdLobe = exp(-(1.0 - dot(rd, sunC)) / 0.03);
   view *= 1.0 - 0.1 * sm;
   view += sunLit * eSunNormal * (0.015 * sc.x + 0.004 * sm * fwdLobe);
-  view += M_PI * lWin * (0.01 * sc.y + 0.006 * sm);
+  // 划痕 / 擦痕平时也能隐约看到：被舱内光和天空漫射照到，只有背景的百分之几
+  float wm = wipeMarks(q, pixPane);
+  view += M_PI * lWin * (0.04 * sc.y + 0.006 * sm + 0.05 * wm) + eCabinRefl / M_PI * 0.3 * (sc.y + wm);
+  view += sunLit * eSunNormal * 0.006 * wm * fwdLobe;
   // 窗板外侧的水：水线和水珠像小透镜，把周围一大片的光折射进来——亮度被「平均」成窗外的平均亮度，
   // 边缘因为全反射偏暗；迎着阳光时会闪亮
   vec2 wetCov = waterOnPane(q, pixPane, -uSeatSign, uTime, uWetness);

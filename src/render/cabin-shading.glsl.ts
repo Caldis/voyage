@@ -145,6 +145,37 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   // 翻边外侧贴着侧壁的一圈窄阴影
   ao *= 1.0 - 0.35 * (1.0 - smoothstep(FL, FL + 0.005, dBez)) * step(FL - 0.0005, dBez);
 
+  // 翻边与侧壁的接缝：一圈约 2.5 mm 的缎面铝收边条（截面是圆的，上沿迎着灯带发亮），外侧一道细阴影线。
+  // 下半圈被手蹭得更亮（粗糙度低）。数值是示意，不是某个机型的实测
+  float trimU = (dBez - FL) / 0.0025;                                  // 0..1 横跨收边条
+  float trim = lineCov(abs(dBez - (FL + 0.00125)), 0.00125, pix);
+  float trimTilt = (trimU - 0.5) * 1.6 * step(0.0, trimU) * step(trimU, 1.0);
+  float shadowLine = lineCov(abs(dBez - (FL + 0.0031)), 0.0004, pix);
+  ao *= 1.0 - 0.5 * shadowLine;
+  // 卡扣螺丝：沿翻边一圈 6 颗，直径约 5 mm 的圆头，中间十字槽
+  float screw = 0.0;
+  float screwSlot = 0.0;
+  vec2 screwN = vec2(0.0);
+  {
+    float ang = atan(wq.y * BEZEL_HALF.x / BEZEL_HALF.y, wq.x);
+    float k = floor(ang / (M_PI / 3.0)) + 0.5;
+    float a = k * (M_PI / 3.0);
+    vec2 dir = normalize(vec2(cos(a) * BEZEL_HALF.x, sin(a) * BEZEL_HALF.y));
+    float r = length(BEZEL_HALF);
+    for (int i = 0; i < 3; i++) r += (FL - 0.009) - sdRoundRect(dir * r, BEZEL_HALF, BEZEL_RADIUS);
+    vec2 d = wq - dir * r;
+    float rr = length(d);
+    screw = 1.0 - smoothstep(0.0025 - pix * 0.5, 0.0025 + pix * 0.5, rr);
+    vec2 dr = mat2(0.7071, 0.7071, -0.7071, 0.7071) * d; // 十字槽转 45°
+    screwSlot = max(lineCov(abs(dr.x), 0.00025, pix) * step(abs(dr.y), 0.0017),
+                    lineCov(abs(dr.y), 0.00025, pix) * step(abs(dr.x), 0.0017)) * screw;
+    screwN = d / 0.0025 * 0.9 * screw;                                   // 圆头的法线
+  }
+  slope += gB * trimTilt * trim + screwN;
+  // 凹角积灰：窗下半圈、收边条外侧那道缝里
+  float cornerDust = lineCov(abs(dBez - (FL + 0.0035)), 0.0012, pix) * smoothstep(-0.12, -0.2, wq.y)
+                   * (0.6 + 0.4 * vnoise(p.xy * 300.0 + seed));
+
   // 3. 面板接缝：每两扇窗一块板，竖缝在两窗之间；上方一道横缝接行李架下的面板
   float sx = abs(fract((p.x + 0.2665) / (2.0 * WINDOW_PITCH) + 0.5) - 0.5) * 2.0 * WINDOW_PITCH;
   float sy = abs(p.y - 0.42);
@@ -159,7 +190,8 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   float hand = exp(-pow((wq.y + 0.25) / 0.07, 2.0)) * exp(-pow(wq.x / 0.17, 2.0));
   hand += 0.6 * exp(-pow((wq.y + 0.05) / 0.12, 2.0)) * exp(-pow((abs(wq.x) - 0.21) / 0.035, 2.0)); // 两侧推墙探头看的位置
   float oil = hand * smoothstep(0.3, 0.7, fbm2(p.xy * 40.0 + seed));
-  albedo *= 1.0 - 0.10 * oil;
+  albedo *= 1.0 - 0.16 * oil;
+  albedo = mix(albedo, DUST_ALBEDO, cornerDust * 0.8);
   albedo = mix(albedo, albedo * vec3(0.97, 0.95, 0.90), hand * 0.6);
   rough = mix(rough, 0.25, clamp(oil * 1.4, 0.0, 1.0));
   // 蹭痕：约 5 cm 一格，稀疏；越往下越多
@@ -199,6 +231,17 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   float F = fresnelRough(nv, 0.04, rough);
   col += F * cabinEnv(reflect(rd, n), cl) * ao * (1.0 - 0.5 * rough) * grad;
   col += scr * 0.25 * cabinEnv(reflect(rd, n0), cl) * ao;
+  // 金属件（收边条、螺丝）：暗的漫反射 + 强的环境反射；下半圈手常摸的地方被磨亮
+  float metal = clamp(trim + screw, 0.0, 1.0);
+  if (metal > 0.0) {
+    float worn = smoothstep(-0.1, -0.22, wq.y);
+    float mr = mix(0.32, 0.18, worn);
+    vec3 mcol = vec3(0.62, 0.62, 0.64);
+    float Fm = fresnelRough(nv, 0.55, mr);
+    vec3 metalCol = mcol * 0.15 / M_PI * e + Fm * mcol * cabinEnv(reflect(rd, n), cl) * ao * mix(1.0, 1.5, worn);
+    metalCol *= 1.0 - 0.8 * screwSlot;
+    col = mix(col, metalCol, metal);
+  }
   return col;
 }
 
