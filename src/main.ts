@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { directionFromAzAlt, localToEquatorialColumns, magnitudeToKlux, moonState, sunPosition } from "./astro";
 import { buildStarMap, loadMoonTexture } from "./sky-assets";
 import { Traffic } from "./traffic";
-import { WEATHER_PRESETS, WeatherSystem } from "./weather";
+import { WeatherSystem } from "./weather";
 import { Atmosphere } from "./atmosphere/luts";
 import { CLOUD_PRESETS, Clouds, createCloudUniforms } from "./clouds/clouds";
 import { generateCloudNoise } from "./clouds/noise";
@@ -11,61 +11,11 @@ import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
 import { createSceneMaterial } from "./render/scene";
 import { GroundClipmap } from "./ground/clipmap";
-
-interface Preset {
-  id: string;
-  name: string;
-  lat: number;
-  lon: number;
-  /** 航向，度，从正北顺时针 */
-  heading: number;
-  /** 显示当地时间用的时区（UTC 偏移，小时） */
-  tz: number;
-  /** 程序生成岛屿的密度（每 30 km 格子出现的概率）；岛屿是示例，不对应真实地理 */
-  islands: number;
-  /** 航线终点（纬度, 经度）：有的话沿大圆航线飞过去，航向随位置变化；没有就沿固定航向直飞 */
-  dest?: [number, number];
-}
-
-// 预设都放在海上；下面出现的岛屿是程序生成的示例，不对应真实地理（真实地形见路线图 P5）
-const PRESETS: Preset[] = [
-  { id: "wpac", name: "西太平洋上空 · 东京以南约 600 km · 向南飞", lat: 30.0, lon: 139.8, heading: 180, tz: 9, islands: 0.12 },
-  { id: "ecs", name: "东海上空 · 上海以东约 400 km · 向东飞", lat: 31.2, lon: 126.0, heading: 80, tz: 8, islands: 0.05 },
-  { id: "scs", name: "南海上空 · 向西南飞", lat: 18.0, lon: 115.0, heading: 225, tz: 8, islands: 0.35 },
-  // 陆地：需要开「真实地理数据」
-  { id: "yangtze", name: "长江中下游 · 鄱阳湖以北 · 向东北飞", lat: 29.55, lon: 115.9, heading: 70, tz: 8, islands: 0 },
-  { id: "fuji", name: "骏河湾上空 · 向西飞（富士山从右前方出现）", lat: 35.0, lon: 138.95, heading: 270, tz: 9, islands: 0 },
-  // 真实航线（大圆航线，从爬升结束、进入巡航的位置开始）：需要开「真实地理数据」
-  { id: "hnd-cts", name: "航线：东京羽田 → 札幌新千岁（北上，经东北地方）", lat: 36.2, lon: 140.3, heading: 10, tz: 9, islands: 0, dest: [42.78, 141.69] },
-  { id: "hnd-itm", name: "航线：东京羽田 → 大阪伊丹（西行，经富士山）", lat: 35.35, lon: 139.35, heading: 260, tz: 9, islands: 0, dest: [34.78, 135.44] },
-  { id: "pvg-pek", name: "航线：上海浦东 → 北京首都（北上，过长江、黄河）", lat: 31.9, lon: 121.2, heading: 330, tz: 8, islands: 0, dest: [40.08, 116.58] },
-];
+import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateTurbulence } from "./flight";
+import { $, CRUISE_PITCH_DEG, type Preset, type VoyageState } from "./state";
+import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
-const CRUISE_PITCH_DEG = 2.5; // 巡航时机头略微抬起，侧窗里的地平线因此微微倾斜
-/** 真实爬升 / 下降率约 10–15 m/s；飞行阶段按钮按 10 倍加速，免得等十几分钟 */
-const ALT_RATE_KMS = 0.012 * 10;
-
-/** 地速随高度变化：巡航约 900 km/h，进近约 250 km/h */
-function speedAt(altKm: number) {
-  return 0.07 + (0.25 - 0.07) * THREE.MathUtils.smoothstep(altKm, 0.5, 9);
-}
-
-const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-
-const D2R = Math.PI / 180;
-/** 大圆航线的初始方位角（度，从正北顺时针） */
-function greatCircleBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const p1 = lat1 * D2R, p2 = lat2 * D2R, dl = (lon2 - lon1) * D2R;
-  const y = Math.sin(dl) * Math.cos(p2);
-  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
-  return ((Math.atan2(y, x) / D2R) + 360) % 360;
-}
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const dp = (lat2 - lat1) * D2R, dl = (lon2 - lon1) * D2R;
-  const a = Math.sin(dp / 2) ** 2 + Math.cos(lat1 * D2R) * Math.cos(lat2 * D2R) * Math.sin(dl / 2) ** 2;
-  return 6371 * 2 * Math.asin(Math.sqrt(a));
-}
 
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
 renderer.toneMapping = THREE.AgXToneMapping;
@@ -109,7 +59,7 @@ const hdr = new THREE.WebGLRenderTarget(1, 1, {
   depthBuffer: false,
 });
 
-const state = {
+const state: VoyageState = {
   preset: PRESETS[0],
   simTime: Date.now(),
   playRate: 0,
@@ -138,19 +88,6 @@ const state = {
   /** 真实地理数据（联网拉取卫星影像、地形、水体） */
   groundOn: true,
 };
-
-// ---------- 时间：按预设时区显示当地日期与时刻 ----------
-function localParts(ms: number, tz: number) {
-  const d = new Date(ms + tz * 3600e3);
-  return {
-    date: d.toISOString().slice(0, 10),
-    minutes: d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60,
-  };
-}
-
-function fromLocal(date: string, minutes: number, tz: number) {
-  return Date.parse(`${date}T00:00:00Z`) - tz * 3600e3 + minutes * 60e3;
-}
 
 /** 默认时刻：当天下午太阳高度角降到 8° 的时候，日落前的光最好看 */
 function defaultTime(preset: Preset) {
@@ -211,25 +148,6 @@ function cameraBasis(): THREE.Matrix3 {
   return new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeBasis(right, up, back));
 }
 
-// ---------- 面板 ----------
-const presetSel = $<HTMLSelectElement>("preset");
-const dateInput = $<HTMLInputElement>("date");
-const timeInput = $<HTMLInputElement>("time");
-const timeLabel = $("time-label");
-const info = $("info");
-
-presetSel.innerHTML = PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
-
-function syncTimeUi() {
-  const { date, minutes } = localParts(state.simTime, state.preset.tz);
-  dateInput.value = date;
-  timeInput.value = String(Math.floor(minutes));
-  const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
-  const mm = String(Math.floor(minutes % 60)).padStart(2, "0");
-  const sign = state.preset.tz >= 0 ? "+" : "−";
-  timeLabel.textContent = `${hh}:${mm}（UTC${sign}${Math.abs(state.preset.tz)}）`;
-}
-
 /** 画面跳变（换地点、拖时间、换座位）：眼睛直接适应，云的时间累积也清空 */
 function snapAll() {
   exposure.snap();
@@ -247,138 +165,8 @@ function setPreset(id: string) {
   cloudUniforms.uCloudOffset.value.set(0, 0);
   ground.reset(state.preset.lat, state.preset.lon);
   snapAll();
-  syncTimeUi();
+  syncTimeUi(state);
 }
-
-presetSel.addEventListener("change", () => setPreset(presetSel.value));
-dateInput.addEventListener("change", () => {
-  if (!dateInput.value) return;
-  state.simTime = fromLocal(dateInput.value, Number(timeInput.value), state.preset.tz);
-  snapAll();
-  syncTimeUi();
-});
-timeInput.addEventListener("input", () => {
-  state.simTime = fromLocal(dateInput.value, Number(timeInput.value), state.preset.tz);
-  snapAll();
-  syncTimeUi();
-});
-$("now").addEventListener("click", () => {
-  state.simTime = Date.now();
-  snapAll();
-  syncTimeUi();
-});
-document.querySelectorAll<HTMLButtonElement>("[data-rate]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    state.playRate = Number(btn.dataset.rate);
-    document.querySelectorAll("[data-rate]").forEach((b) => b.classList.toggle("on", b === btn));
-  });
-});
-$<HTMLInputElement>("ground-on").addEventListener("change", (e) => {
-  state.groundOn = (e.target as HTMLInputElement).checked;
-  snapAll();
-});
-$<HTMLSelectElement>("wing-pos").addEventListener("change", (e) => {
-  state.wingRootLE = Number((e.target as HTMLSelectElement).value);
-  snapAll();
-});
-$<HTMLSelectElement>("seat").addEventListener("change", (e) => {
-  state.seat = (e.target as HTMLSelectElement).value as "right" | "left";
-  snapAll();
-});
-
-function bindRange(id: string, apply: (v: number) => string) {
-  const input = $<HTMLInputElement>(id);
-  const out = $(`${id}-out`);
-  const update = () => (out.textContent = apply(Number(input.value)));
-  input.addEventListener("input", update);
-  update();
-}
-const altInput = $<HTMLInputElement>("altitude");
-bindRange("altitude", (v) => {
-  state.altitudeKm = v;
-  state.targetAltKm = v;
-  snapAll();
-  return `${v.toFixed(1)} km`;
-});
-bindRange("shade", (v) => {
-  state.shade = v;
-  return v === 0 ? "全开" : `拉下 ${Math.round(v * 100)}%`;
-});
-bindRange("wind", (v) => {
-  state.wind = v;
-  return `${v} m/s`;
-});
-bindRange("ev-comp", (v) => {
-  exposure.finalMat.uniforms.uEvComp.value = v;
-  return `${v > 0 ? "+" : ""}${v.toFixed(1)} EV`;
-});
-bindRange("manual-ev", (v) => {
-  exposure.finalMat.uniforms.uManualEv.value = v;
-  return `EV ${v.toFixed(1)}`;
-});
-const autoBox = $<HTMLInputElement>("auto-exposure");
-const syncAuto = () => {
-  exposure.finalMat.uniforms.uAuto.value = autoBox.checked;
-  $("manual-row").hidden = autoBox.checked;
-};
-autoBox.addEventListener("change", syncAuto);
-syncAuto();
-document.querySelectorAll<HTMLButtonElement>("[data-alt]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    state.targetAltKm = Number(btn.dataset.alt);
-  });
-});
-
-const cloudSel = $<HTMLSelectElement>("cloud-preset");
-cloudSel.innerHTML = CLOUD_PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
-cloudSel.addEventListener("change", () => {
-  state.cloudPreset = CLOUD_PRESETS.find((p) => p.id === cloudSel.value) ?? CLOUD_PRESETS[0];
-  clouds.applyPreset(state.cloudPreset);
-  weather.updateShell();
-  for (const [id, v] of [["coverage", state.cloudPreset.coverage], ["cloud-base", state.cloudPreset.bottom], ["cloud-thick", state.cloudPreset.top - state.cloudPreset.bottom]] as const) {
-    const el = $<HTMLInputElement>(id);
-    el.value = String(v);
-    el.dispatchEvent(new Event("input"));
-  }
-});
-bindRange("coverage", (v) => {
-  cloudUniforms.uCoverage.value = v;
-  return `${Math.round(v * 100)}%`;
-});
-bindRange("cloud-base", (v) => {
-  const thick = cloudUniforms.uCloudTop.value - cloudUniforms.uCloudBottom.value;
-  cloudUniforms.uCloudBottom.value = v;
-  cloudUniforms.uCloudTop.value = v + thick;
-  weather.updateShell();
-  clouds.snap();
-  return `${v.toFixed(1)} km`;
-});
-bindRange("cloud-thick", (v) => {
-  cloudUniforms.uCloudTop.value = cloudUniforms.uCloudBottom.value + v;
-  weather.updateShell();
-  clouds.snap();
-  return `${v.toFixed(1)} km`;
-});
-clouds.applyPreset(state.cloudPreset);
-weather.updateShell();
-
-// 天气：雷暴、台风摆在飞机附近（窗外这一侧）
-const weatherSel = $<HTMLSelectElement>("weather");
-weatherSel.innerHTML = WEATHER_PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
-function applyWeather() {
-  const h = THREE.MathUtils.degToRad(state.heading);
-  const fwd = new THREE.Vector3(Math.sin(h), 0, -Math.cos(h));
-  const out = new THREE.Vector3(Math.cos(h), 0, Math.sin(h)).multiplyScalar(state.seat === "right" ? 1 : -1);
-  weather.apply(weatherSel.value, cloudUniforms.uCloudOffset.value, fwd, out);
-  clouds.snap();
-}
-weatherSel.addEventListener("change", applyWeather);
-$<HTMLInputElement>("cabin-light").addEventListener("change", (e) => {
-  state.cabinLight = (e.target as HTMLInputElement).checked;
-});
-window.addEventListener("keydown", (e) => {
-  if (e.key === "h" || e.key === "H") $("panel").classList.toggle("hidden");
-});
 
 // ---------- 尺寸 ----------
 function resize() {
@@ -391,33 +179,22 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
-$<HTMLSelectElement>("quality").addEventListener("change", (e) => {
-  clouds.resolutionScale = Number((e.target as HTMLSelectElement).value);
-  resize();
-});
+
+setupUi({ state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms });
 
 // ---------- 主循环 ----------
-const COMPASS = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"];
-const compass = (deg: number) => COMPASS[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
-
 setPreset(state.preset.id);
 let last = performance.now();
 let frameCount = 0;
-const ownDirW = (headingDeg: number) => {
-  const hh = THREE.MathUtils.degToRad(headingDeg);
-  return new THREE.Vector3(Math.sin(hh), 0, -Math.cos(hh));
-};
-let lastInfo = 0;
 
 function frame(now: number) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   if (state.playRate > 0) {
     state.simTime += dt * 1000 * state.playRate;
-    syncTimeUi();
+    syncTimeUi(state);
   }
 
-  const { preset } = state;
   // 飞机当前的经纬度：起点 + 累计位移
   const [curLat, curLon] = ground.localFrame.toGeo(cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y);
   const sun = sunPosition(new Date(state.simTime), curLat, curLon, state.altitudeKm * 1000);
@@ -428,22 +205,7 @@ function frame(now: number) {
   // ---- 颠簸与窗上的水 ----
   if (frameCount++ % 4 === 0) clouds.probe(renderer, ownDirW(state.heading));
   const inCloud = clouds.cameraDensity;
-  let turbTarget = 0.03 + Math.min(inCloud * 3, 1) * 0.4;
-  const off0 = cloudUniforms.uCloudOffset.value;
-  for (const s of weather.storms) {
-    const dist = Math.hypot(s.x - off0.x, s.z - off0.y);
-    if (state.altitudeKm < s.top + 1) turbTarget = Math.max(turbTarget, 1 - THREE.MathUtils.smoothstep(dist, s.radius * 1.2, s.radius * 6));
-  }
-  state.turbulence += (turbTarget - state.turbulence) * (1 - Math.exp(-dt * 1.5));
-  // 在云里变湿（~3 秒湿透），出来后被气流吹干（~20 秒）
-  const wetRate = inCloud > 0.03 ? 0.35 : -0.05;
-  state.wetness = THREE.MathUtils.clamp(state.wetness + wetRate * dt, 0, 1);
-  const tb = state.turbulence;
-  const tt = now / 1000;
-  // 几个不成比例的频率叠起来，像不规则的气流冲击
-  const shake = (a: number) => Math.sin(tt * 7.3 + a) * 0.5 + Math.sin(tt * 13.1 + a * 2) * 0.3 + Math.sin(tt * 2.9 + a * 3) * 0.6;
-  state.rollDeg = tb * 1.2 * shake(0.7);
-  const bump = tb * 0.012 * shake(2.1);
+  const bump = updateTurbulence(state, { dt, now, inCloud, storms: weather.storms, cloudOffset: cloudUniforms.uCloudOffset.value });
 
   const k = 1 - Math.exp(-dt * 6);
   head.x += (head.tx - head.x) * k;
@@ -455,44 +217,15 @@ function frame(now: number) {
   atmosphere.updateSkyView(camR, sunDir[1], moonDir[1]);
   atmosphere.updateAerialPerspective(camR, sunDir[1]);
 
-  // 沿大圆航线飞：航向转向「当前位置到终点」的大圆方位角。客机转弯坡度一般不超过 25°，
-  // 对应的转弯角速度 ω = g·tanφ / v（巡航时约 1°/s）；坡度随转弯角速度平滑变化，转弯时窗外的地平线会倾斜
-  const vKms = speedAt(state.altitudeKm);
-  if (preset.dest) {
-    const target = greatCircleBearing(curLat, curLon, preset.dest[0], preset.dest[1]);
-    const diff = ((target - state.heading + 540) % 360) - 180;
-    const maxRate = THREE.MathUtils.radToDeg((9.81 * Math.tan(THREE.MathUtils.degToRad(25))) / (vKms * 1000));
-    const rate = THREE.MathUtils.clamp(diff * 0.3, -maxRate, maxRate); // 接近目标航向时柔和改平
-    state.heading = (state.heading + rate * dt + 360) % 360;
-    const bankTarget = THREE.MathUtils.radToDeg(Math.atan((vKms * 1000 * THREE.MathUtils.degToRad(rate)) / 9.81));
-    state.bankDeg += (bankTarget - state.bankDeg) * (1 - Math.exp(-dt * 0.7));
-    // 到达终点附近：回到起点重新飞
-    if (haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]) < 40) setPreset(preset.id);
-  } else {
-    state.bankDeg *= Math.exp(-dt);
-  }
-
-  // 飞机向前飞：云场按航向平移
-  const h = THREE.MathUtils.degToRad(state.heading);
-  // 飞行阶段：朝目标高度爬升或下降，俯仰角跟着变（爬升抬头约 8°，下降约 0°，巡航 2.5°）
-  const dAlt = state.targetAltKm - state.altitudeKm;
-  const climbing = Math.abs(dAlt) > 0.005;
-  if (climbing) {
-    state.altitudeKm += Math.sign(dAlt) * Math.min(Math.abs(dAlt), ALT_RATE_KMS * dt);
-    altInput.value = state.altitudeKm.toFixed(1);
-    $("altitude-out").textContent = `${state.altitudeKm.toFixed(1)} km → ${state.targetAltKm.toFixed(1)} km`;
-  }
-  const lowAndSlow = state.altitudeKm < 2 ? 3.5 : CRUISE_PITCH_DEG; // 低空低速时迎角更大，机头更高
-  const pitchTarget = climbing ? (dAlt > 0 ? 8 : 0) : lowAndSlow;
-  state.pitchDeg += (pitchTarget - state.pitchDeg) * (1 - Math.exp(-dt * 0.8));
-  const speedKms = speedAt(state.altitudeKm);
-  const step = speedKms * dt;
-  cloudUniforms.uCloudOffset.value.x += Math.sin(h) * step;
-  cloudUniforms.uCloudOffset.value.y += -Math.cos(h) * step;
-  const motion = new THREE.Vector3(Math.sin(h) * step, 0, -Math.cos(h) * step);
-  const ownDir = new THREE.Vector3(Math.sin(h), 0, -Math.cos(h));
-  const outwardW = new THREE.Vector3(Math.cos(h), 0, Math.sin(h)).multiplyScalar(state.seat === "right" ? 1 : -1);
-  traffic.update(dt, ownDir, speedKms, outwardW);
+  const flightResult = advanceFlight(state, {
+    dt,
+    curLat,
+    curLon,
+    cloudOffset: cloudUniforms.uCloudOffset.value,
+    onReachDest: () => setPreset(state.preset.id),
+  });
+  if (flightResult.climbing) syncAltitudeUi(state);
+  traffic.update(dt, flightResult.ownDir, flightResult.speedKms, flightResult.outwardW);
   weather.update(dt);
   const off = cloudUniforms.uCloudOffset.value;
   for (let i = 0; i < 16; i++) {
@@ -541,7 +274,7 @@ function frame(now: number) {
   u.uTime.value = now / 1000;
   u.uSeatSign.value = state.seat === "right" ? 1 : -1;
   // 真实地理数据开着时，程序生成的岛屿关掉（真实海岸线里自有岛屿）
-  u.uIslandDensity.value = state.groundOn ? 0 : preset.islands;
+  u.uIslandDensity.value = state.groundOn ? 0 : state.preset.islands;
   u.uGroundOn.value = state.groundOn ? 1 : 0;
   if (state.groundOn) ground.update(cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y);
   u.uTerrainMax.value = ground.maxHeightKm;
@@ -556,22 +289,12 @@ function frame(now: number) {
   u.uStrobe.value = ph < 0.05 || (ph > 0.14 && ph < 0.19) ? 1 : 0;
   // 舱灯开：约 200 lux；关：只剩地板灯带和零星阅读灯，约 1 lux
   u.uCabinLight.value = state.cabinLight ? 0.2 : 0.001;
-  clouds.render(motion, camBasis, c2w);
+  clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
   pass.render(sceneMat, hdr);
   exposure.render(hdr.texture, bloom.render(hdr), dt);
 
-  if (now - lastInfo > 250) {
-    lastInfo = now;
-    const outward = state.heading + (state.seat === "right" ? 90 : -90);
-    info.textContent =
-      `太阳高度角 ${sun.altitude.toFixed(1)}°，方位 ${sun.azimuth.toFixed(0)}°（${compass(sun.azimuth)}）\n` +
-      `月亮高度角 ${moon.altitude.toFixed(1)}°，方位 ${moon.azimuth.toFixed(0)}°，照亮 ${Math.round(moon.phaseFraction * 100)}%
-` +
-      `航向 ${state.heading.toFixed(0)}°${Math.abs(state.bankDeg) > 2 ? `（坡度 ${state.bankDeg.toFixed(0)}°）` : ""}，窗外朝${compass(outward)}，高度 ${state.altitudeKm.toFixed(1)} km` +
-      (preset.dest ? `，距终点 ${haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]).toFixed(0)} km` : "") + "\n" +
-      `位置 ${curLat.toFixed(3)}°N ${curLon.toFixed(3)}°E` + (state.groundOn && ground.pending > 0 ? `，地面瓦片加载中（${ground.pending}）` : "");
-  }
+  updateInfo(now, sun, moon, state, curLat, curLon, ground.pending);
   requestAnimationFrame(frame);
 }
 // 先让浏览器把加载遮罩画出来，再画第一帧：第一帧要编译所有着色器，首次打开时会阻塞很久
