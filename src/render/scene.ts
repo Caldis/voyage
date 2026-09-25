@@ -6,6 +6,8 @@ import { CABIN_COMMON, PANE_COMMON } from "./cabin.glsl";
 import { VIEW_COMMON } from "./view.glsl";
 import type { GroundClipmap } from "../ground/clipmap";
 import { GROUND_COMMON } from "./ground.glsl";
+import { GROUND_DETAIL_COMMON } from "./ground-detail.glsl";
+import { INLAND_WATER_COMMON } from "./inland-water.glsl";
 import { ISLANDS_COMMON } from "./islands.glsl";
 import { LIGHTNING_COMMON } from "./lightning.glsl";
 import { LIGHTS_COMMON } from "./lights.glsl";
@@ -43,7 +45,8 @@ uniform float uWetness;         // 窗板外侧的湿度 0..1
 uniform float uCameraFog;       // 飞机所在位置云的消光系数（1/km），机翼要隔着这层雾看
 uniform float uHdrMax;          // HDR 目标能存的最大值（半精度时是 6e4）
 // 调试可视化：0 关，1 内衬命中深度，2 亮度（伪彩），3 内衬受到的窗光，4 内衬法线，
-// 5 海面本身，6 海面天空反射，7 海面的内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子
+// 5 海面本身，6 海面天空反射，7 海面的内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子，
+// 11 真实地面的地表分类（红 树林、绿 农田、蓝 城区），12 真实地面的像素足迹
 uniform int uDebug;
 varying vec2 vUv;
 ${TRAFFIC_COMMON}
@@ -53,6 +56,8 @@ const vec3 PLASTIC_ALBEDO = vec3(0.78, 0.76, 0.72);
 
 ${OCEAN_COMMON}
 ${LIGHTNING_COMMON}
+${GROUND_DETAIL_COMMON}
+${INLAND_WATER_COMMON}
 ${TERRAIN_SHADING_COMMON}
 
 vec3 outsideRadiance(vec3 rd, vec4 cloud) {
@@ -294,6 +299,8 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uGroundLevel: { value: ground.levelUniform },
       uGroundOn: { value: 1 },
       uTerrainMax: { value: 0 },
+      uTerrainSteps: { value: 96 },
+      uDetailLoop: { value: 1 },
       uBolt: { value: Array.from({ length: 16 }, () => new THREE.Vector3()) },
       uBoltIntensity: { value: 0 },
       uTrafficPos: { value: [new THREE.Vector3(), new THREE.Vector3()] },

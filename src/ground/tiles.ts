@@ -11,7 +11,8 @@ import { PbfReader } from "pbf";
 
 export const IMAGERY_URL = (z: number, x: number, y: number) =>
   `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/${z}/${y}/${x}.jpg`;
-export const IMAGERY_MAX_ZOOM = 13;
+// z14 ≈ 10 m/像素，就是 Sentinel-2 的原生分辨率；更高的级别只是放大，没有新信息
+export const IMAGERY_MAX_ZOOM = 14;
 
 export const DEM_URL = (z: number, x: number, y: number) =>
   `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;

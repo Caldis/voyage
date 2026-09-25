@@ -12,6 +12,7 @@ uniform sampler2DArray uGroundHeight;
 uniform vec4 uGroundLevel[${GROUND_LEVELS}];   // (中心 x, 中心 z, 边长 km, 是否可用)
 uniform float uGroundOn;
 uniform float uTerrainMax;                     // 附近地形最高点（km）
+uniform int uTerrainSteps;                     // 地形求交的最多步数（uniform 而不是常量，免得 FXC 展开循环）
 
 const float GROUND_BASE = ${GROUND_BASE_KM.toFixed(1)};
 const float GROUND_RES = 1024.0;
@@ -78,27 +79,34 @@ float terrainHit(vec3 ro, vec3 rd) {
   float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
   float tPrev = tStart;
   const float N = 56.0;
-  for (float i = 1.0; i <= N; i += 1.0) {
-    // 步长前密后疏：近处的山要准，远处的只要大致对
-    float s = i / N;
-    float t = mix(tStart, tEnd, s * s);
+  float range = max(tEnd - tStart, 1e-3);
+  float t = tStart;
+  // 步长前密后疏（基准分布 t = tStart + range·s²，近处的山要准，远处的只要大致对）；
+  // 离地面近时再按「离地高度」缩小步长：固定步长会跨过比步长还窄的山脊，山脊的剪影在远处变成锯齿。
+  // 循环上限用 uniform（uTerrainSteps）：常量上限会被 Windows 上的 FXC 整个展开，冷编译慢到浏览器判定 GPU 卡死、丢失上下文
+  bool hit = false;
+  for (int i = 0; i < uTerrainSteps; i++) {
+    float s = sqrt((t - tStart) / range);
+    float dq = range * (2.0 * s + 1.0 / N) / N;
     vec3 p = ro + rd * t;
     float alt = length(p) - BOTTOM;
-    vec2 g = p.xz + uCloudOffset;
     float lod = groundLod(length(p.xz), t * pixelAngle);
-    if (alt < groundHeightAt(g, lod)) {
-      float a = tPrev, b = t;
-      for (int k = 0; k < 6; k++) {
-        float m = 0.5 * (a + b);
-        vec3 pm = ro + rd * m;
-        float lm = groundLod(length(pm.xz), m * pixelAngle);
-        if (length(pm) - BOTTOM < groundHeightAt(pm.xz + uCloudOffset, lm)) b = m; else a = m;
-      }
-      return b;
-    }
+    float hg = groundHeightAt(p.xz + uCloudOffset, lod);
+    if (alt < hg) { hit = true; break; }
     tPrev = t;
+    if (t >= tEnd) break;
+    t = min(t + min(dq, max((alt - hg) * 1.5, 0.004 * t + 0.01)), tEnd);
   }
-  return tSea;
+  if (!hit) return tSea;
+  // 打到了：在上一步与这一步之间二分
+  float a = tPrev, b = t;
+  for (int k = 0; k < 6; k++) {
+    float m = 0.5 * (a + b);
+    vec3 pm = ro + rd * m;
+    float lm = groundLod(length(pm.xz), m * pixelAngle);
+    if (length(pm) - BOTTOM < groundHeightAt(pm.xz + uCloudOffset, lm)) b = m; else a = m;
+  }
+  return b;
 }
 
 // 地形阴影：从 P 朝主光源方向在高度场上步进，被山挡住返回 0（带一点软边）
