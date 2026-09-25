@@ -206,8 +206,9 @@ float towerSdf(vec2 xz, float alt, vec2 axis, float R, float apex, float domeFra
 }
 
 // 砧状云（含乳状云）：返回密度（0..1），ao 是环境光遮蔽
-float anvilDensity(vec2 xz, float alt, vec2 center, float R, float top, float lod, out float ao) {
+float anvilDensity(vec2 xz, float alt, vec2 center, float R, float top, float lod, out float ao, out vec3 geo) {
   ao = 1.0;
+  geo = vec3(0.0, 9.0, 0.0);
   float H = top - STORM_BASE;
   float thick0 = 0.22 * H;                 // 中心处约 2.7 km 厚
   if (alt < top - thick0 - 2.6 || alt > top + 0.4) return 0.0;  // 下限含乳状云和靠近塔身处下弯的砧底
@@ -220,9 +221,11 @@ float anvilDensity(vec2 xz, float alt, vec2 center, float R, float top, float lo
   float Ra = R * 2.6 * (1.0 + 0.7 * max(down, 0.0) - 0.25 * max(-down, 0.0)) * (0.8 + 0.45 * np.g);
   float rho = ra / Ra;
   if (rho > 1.35) return 0.0;
-  // 外缘是被高空风拉开的冰晶纤维：沿风向拉长的噪声
+  // 外缘是被高空风拉开的冰晶纤维：沿风向拉长的噪声。
+  // 必须随高度变（竖直尺度约 0.7 km）：只用水平切片时，侧看每一列都一样，被竖直拉成木板纹（飑线里最明显）
   vec2 wn = vec2(dot(xz, uUpperWind), dot(xz, vec2(-uUpperWind.y, uUpperWind.x)));
-  float fib = textureLod(uShapeNoise, vec3(wn.x / (R * 3.0), 0.61, wn.y / (R * 0.35)), lod).b;
+  vec4 nf = textureLod(uShapeNoise, vec3(wn.x / (R * 3.0), alt / 2.8, wn.y / (R * 0.35)) + 0.61, lod);
+  float fib = nf.b;
   // 顶面：对流层顶附近几乎是平的，只有缓慢起伏，向外缘略微下沉
   // 顶面起伏：约 1.5 km 的圆鼓包（球冠化的 Worley），靠近塔顶翻腾得厉害，往外缘被吹平
   vec4 nu = textureLod(uShapeNoise, vec3(xz / 6.0, 0.53), lod);
@@ -238,25 +241,27 @@ float anvilDensity(vec2 xz, float alt, vec2 center, float R, float top, float lo
   aBot -= 2.0 * (1.0 - smoothstep(0.5 * R, 2.2 * R, dTop));
   float vert = smoothstep(aBot - 0.05, aBot + 0.25, alt) * (1.0 - smoothstep(aTop - 0.25, aTop + 0.05, alt));
   // 下风方的前缘变薄、变碎：纤维噪声在下风方权重更大
-  float edge = 1.0 - smoothstep(0.6, 1.0, rho + (0.5 + 0.5 * max(down, 0.0)) * (fib - 0.5) + 0.25 * (np.r - 0.5));
+  float edge = 1.0 - smoothstep(0.6, 1.0, rho + (0.5 + 0.5 * max(down, 0.0)) * (fib - 0.5) + 0.3 * (nf.r - 0.5));
   // 冰晶云比水滴云稀：中心不透明，外缘半透明
   float dens = vert * edge * mix(0.8, 0.12, smoothstep(0.25, 1.0, rho));
   // 砧底和砧的下半部分看到的天空少
   ao = mix(0.45, 1.0, smoothstep(aBot, aTop, alt));
   // 砧底下的冰晶幡试过用竖直拉长的噪声做，远看成了一排梳齿状的竖条（squall 里尤其明显），先去掉
-  // 乳状云：砧底下风方的一圈，挂着一个个半椭球形的口袋（口袋底面 = 砧底 − 深度 × √(1 − (d/半径)²)）
-  float zone = smoothstep(0.3, 0.45, rho) * (1.0 - smoothstep(0.65, 0.8, rho)) * smoothstep(-0.2, 0.4, down);
-  if (zone > 0.0 && alt < aBot + 0.3 && alt > aBot - 0.9) {
-    vec2 pc = pouchCell(xz / 1.3);
-    float s = 1.0 - pc.x * pc.x / 0.3;        // 口袋半径约 0.55 格
-    if (s > 0.0 && pc.y > 0.2) {
-      float depth = 0.7 * (0.3 + 1.2 * pc.y * pc.y) * zone;
-      float pb = aBot + 0.1 - depth * sqrt(s);
-      float m = smoothstep(pb, pb + 0.12, alt) * (1.0 - smoothstep(aBot + 0.1, aBot + 0.3, alt)) * 0.45;
-      if (m > dens) { dens = m; ao = 0.5; }
-    }
-  }
+  geo = vec3(aBot, rho, down);   // 给乳状云用
   return dens;
+}
+
+// 乳状云：砧底下风方的一圈，挂着一个个半椭球形的口袋（口袋底面 = 砧底 − 深度 × √(1 − (d/半径)²)）。geo = (砧底, rho, down)
+float mammatusDensity(vec2 xz, float alt, vec3 geo) {
+  float aBot = geo.x;
+  float zone = smoothstep(0.3, 0.45, geo.y) * (1.0 - smoothstep(0.65, 0.8, geo.y)) * smoothstep(-0.2, 0.4, geo.z);
+  if (zone <= 0.0 || alt > aBot + 0.3 || alt < aBot - 0.9) return 0.0;
+  vec2 pc = pouchCell(xz / 1.3);
+  float s = 1.0 - pc.x * pc.x / 0.3;        // 口袋半径约 0.55 格
+  if (s <= 0.0 || pc.y <= 0.2) return 0.0;
+  float depth = 0.7 * (0.3 + 1.2 * pc.y * pc.y) * zone;
+  float pb = aBot + 0.1 - depth * sqrt(s);
+  return smoothstep(pb, pb + 0.12, alt) * (1.0 - smoothstep(aBot + 0.1, aBot + 0.3, alt)) * 0.45;
 }
 
 // 雨幡：云底以下、主塔下方偏下风一点；被低层风吹斜；截面不规则，边缘是一道道竖直的雨丝
@@ -302,7 +307,10 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
   // 从表面往里约 250 m 内密度升到饱和：边界干脆，但步进能看到它的厚度
   float tower = smoothstep(0.0, 0.25, -sdf);
   float aoA;
-  float anvil = anvilDensity(xz, alt, c.xy, R, top, lod, aoA);
+  vec3 geo;
+  float anvil = anvilDensity(xz, alt, c.xy, R, top, lod, aoA, geo);
+  float mam = mammatusDensity(xz, alt, geo);
+  if (mam > anvil) { anvil = mam; aoA = 0.5; }
   if (tower <= 0.0 && anvil <= 0.0) return rain;
   if (detail) {
     vec3 dn = textureLod(uDetailNoise, vec3(xz.x, alt, xz.y) / DETAIL_TILE, lod).rgb;
@@ -359,6 +367,44 @@ float hurricaneDensity(vec2 xz, float alt, float lod) {
   // 眼墙保持实心；雨带和卷云盖再用噪声调出疏密
   float dn = max(remapc(d * (0.6 + 0.4 * n.r), 1.0 - fbm, 1.0, 0.0, 1.0) * 2.5, wall);
   return min(dn, 1.0);
+}
+
+// 精简版雷暴密度：只有塔身（含伴生塔）和砧的大形，没有乳状云、雨幡、细节侵蚀。
+// 给光线步进（朝太阳）、云影、探针用：这些地方只要光学厚度的大概，而完整版被内联进 4 个地方，冷编译慢了约 50%
+float stormDensityLite(vec4 c, vec2 xz, float alt, float lod) {
+  float top = c.w;
+  float R = c.z;
+  if (alt < STORM_BASE - 0.1 || alt > top + STORM_OVERSHOOT + 0.7) return 0.0;
+  float ao;
+  float sdf = towerSdf(xz, alt, c.xy, R, top + STORM_OVERSHOOT, 0.72, lod, ao);
+  for (int k = 0; k < 3; k++) {
+    float ang = float(k) * 2.1 + c.x * 0.37;
+    vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.5 + 0.3 * float(k));
+    float tk = STORM_BASE + (top - STORM_BASE) * (0.35 + 0.12 * float(k));
+    if (alt > tk + 0.5) continue;
+    sdf = sminStorm(sdf, towerSdf(xz, alt, ax, R * 0.45, tk, 0.4, lod, ao), mix(2.2, 0.6, smoothstep(STORM_BASE + 0.5, STORM_BASE + 3.5, alt)));
+  }
+  vec3 geo;
+  return max(smoothstep(0.0, 0.25, -sdf), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo));
+}
+
+// 所有云的密度（精简版雷暴）：光线步进、云影、探针用；层状云和台风与完整版相同
+float cloudDensityLite(vec3 p, float lod, bool detail) {
+  float alt = length(p) - BOTTOM;
+  if (alt < uShellBottom || alt > uShellTop) return 0.0;
+  float d = layerDensity(p, lod, detail);
+  if (uStormCount > 0 || uHurricane.w > 0.5) {
+    vec2 xz = p.xz + uCloudOffset;
+    for (int i = 0; i < 4; i++) {
+      if (i >= uStormCount) break;
+      vec4 c = uStorms[i];
+      vec2 dd = xz - c.xy;
+      if (dot(dd, dd) > c.z * c.z * 56.0) continue;
+      d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);
+    }
+    if (uHurricane.w > 0.5) d = max(d, hurricaneDensity(xz, alt, lod) * uCloudDensity);
+  }
+  return d;
 }
 
 // 所有云的密度：层状云、雷暴、台风取最大
@@ -430,7 +476,7 @@ float cloudShadow(vec3 p, vec3 sunDir) {
   float dt = (seg.y - seg.x) / N;
   for (float i = 0.0; i < 12.0; i += 1.0) {
     if (i >= N) break;
-    od += cloudDensity(p + sunDir * (seg.x + (i + 0.5) * dt), 2.0, false);
+    od += cloudDensityLite(p + sunDir * (seg.x + (i + 0.5) * dt), 2.0, false);
   }
   return exp(-od * dt * CLOUD_EXTINCTION);
 }

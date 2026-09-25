@@ -68,7 +68,8 @@ void main() {
   float albedoBelow = 0.06 + 0.5 * uCoverage;
   // 次数上限：从相机空步走到 60 km 外本身就要约 190 步，细化还要额外的步数（每进一次云 9 步）
   for (int i = 0; i < 256; i++) {
-    if (t >= seg.y || T < 0.005) break;
+    // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）
+    if (t >= seg.y || T < 0.005 || (!refineOn && i >= 192)) break;
     // 步长随距离变长：近处 60 m，远处 2 km
     float dtBase = clamp(t * 0.008, 0.06, 2.0);
     float dt = fine > 0 ? max(dtBase * 0.25, 0.03) : dtBase;
@@ -77,7 +78,8 @@ void main() {
     float dens = cloudDensity(p, lod, t < 150.0);
     float stormW = gStormW;
     float stormAO = gStormAO;
-    if (dens > 0.002 && refineOn && wasEmpty && fine == 0 && dtBase > 0.1 && t > seg.x) {
+    // 只在进入雷暴时细化（层状云不必，保持原样）；退回后这段会被小步重新采样，进云那一步的密度并没有丢
+    if (dens > 0.002 && stormW > 0.5 && wasEmpty && fine == 0 && dtBase > 0.1 && t > seg.x) {
       // 退回上一步（空白处走的是 2 倍步长），接下来 8 小步走完这 2 个大步
       t = max(t - 2.0 * dtBase, seg.x);
       fine = 8;
@@ -99,7 +101,7 @@ void main() {
       for (int j = 0; j < 8; j++) {
         if (j >= lightSteps) break;
         lt += ls;
-        od += cloudDensity(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
+        od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
         ls *= lightSteps == 8 ? 2.0 : 1.9;
       }
       od *= CLOUD_EXTINCTION;
@@ -217,7 +219,7 @@ varying vec2 vUv;
 void main() {
   vec3 p0 = vec3(0.0, uCamR, 0.0);
   float d = 0.0;
-  for (int k = 0; k < 4; k++) d += cloudDensity(p0 + uProbeDir * (float(k) * 0.12), 1.0, false);
+  for (int k = 0; k < 4; k++) d += cloudDensityLite(p0 + uProbeDir * (float(k) * 0.12), 1.0, false);
   gl_FragColor = vec4(d * 0.25, 0.0, 0.0, 1.0);
 }
 `;
