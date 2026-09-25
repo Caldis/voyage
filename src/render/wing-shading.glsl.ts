@@ -40,8 +40,11 @@ vec3 wingEnv(vec3 rW, float rough, vec3 eSky, vec3 eDown, float belowAlbedo) {
   float tG = raySphere(vec3(0.0, uCamR, 0.0), rW, BOTTOM);
   vec3 env = skyRadiance(rW, tG > 0.0);
   if (tG > 0.0) {
+    // 云海在地平线附近被空气透视冲淡，按俯角渐入。硬切的话，翼面「油罐」起伏把反射方向在地平线上下来回拨，
+    // 地平线的亮暗突变就被映成一圈圈木纹似的等高线（贴着看翼面时最明显）
     float aboveDeck = smoothstep(uCloudBottom, uCloudTop, uCamR - BOTTOM);
-    env = mix(env, 0.7 * eDown / M_PI, clamp(uCoverage * 0.9, 0.0, 1.0) * aboveDeck);
+    float dip = smoothstep(0.0, 0.12, -rW.y);
+    env = mix(env, 0.7 * eDown / M_PI, clamp(uCoverage * 0.9, 0.0, 1.0) * aboveDeck * dip);
   }
   // 粗糙的表面看到的是一大片天空的平均，而不是一个方向
   vec3 avg = (eSky * (0.5 + 0.5 * rW.y) + belowAlbedo * eDown * (0.5 - 0.5 * rW.y)) / M_PI;
