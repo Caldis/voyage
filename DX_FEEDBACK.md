@@ -33,3 +33,7 @@
 - 慢：等锁约 50 分钟，用浏览器约 15 分钟；冷编译 70–90 s，失败要等超时才知道且会弄坏共享浏览器。
 - 绕过：等锁时写代码；**离线着色器检查**：用 vite 在 node 里拼出完整片元着色器，再用 glslangValidator（npm 包 `glslang-validator-prebuilt-predownloaded`）检查语法 / 保留字，不占浏览器（脚本 `tmp-dump-shader.mjs` 在其 worktree，未提交）；改前对照用 `git archive` 拷 master + junction 指向 node_modules，在 5189 起服务。
 - 希望：每个代理各起**私有 headless Chromium**（playwright-core 已在 npx 缓存）做编译检查与截图，锁只留给测帧时间；离线 glslang 检查写进 SOP、拿锁前必跑；固定的「基线端口」；关 vsync 或 GPU timer 的计时句柄。
+
+### T03 审查（Opus）
+- 卡：browser_navigate 首次打开常 30 s 超时（其实页面在编译，可忽略继续）；分支与 master 之间隔着 T14，直接比会混进海浪开销，只能临时合并 + 装依赖 + 另起端口（多约 3 分钟）；addInitScript 注入在页面里累积（冷编译注入残留会让之后每次都冷启动），测量之间必须 browser_close；外部 GPU 负载让同场景从 10 ms 跳到 120 ms。
+- 希望：SOP 规定审查一律用「master 合并分支」构建对比（已补进 SOP 第 5 节）或给现成脚本；回归脚本自带多轮交替测量与离群剔除；`__voyageStartup` 按程序分别列出编译耗时（能直接看出是云程序还是场景程序变慢）。脚本在 `tmp/review-t03/`。
