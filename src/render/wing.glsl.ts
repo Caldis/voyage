@@ -423,7 +423,9 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
   float tBest = -1.0;
   int partBest = 0;
   float rPrev = 1e9;
-  bool grazed = false;  // 走过一个「离表面不到一个像素、然后又远离」的地方
+  bool grazed = false;
+  float dHit = 0.0;     // 命中点的距离场值（算曲率用）
+  float sumD = 0.0;     // 四面体四个采样的和  // 走过一个「离表面不到一个像素、然后又远离」的地方
   int phase = 0;        // 0 求交，1 法线（四面体四次采样），2 自阴影
   int j = 0;
   vec3 P = vec3(0.0);
@@ -442,6 +444,7 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
         w.cov = 1.0;
         w.part = gWingPart;
         w.edge = grazed;
+        dHit = d;
         done = true;
       } else {
         float r = d / fp;
@@ -463,6 +466,7 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
       if (done) { P = oA + dA * w.t; phase = 1; }
     } else if (phase == 1) {
       n += tetraDir(j) * d;
+      sumD += d;
       j++;
       if (j == 4) {
         n = normalize(n);
@@ -473,7 +477,14 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
         // 背向视线的法线（轮廓上、后缘这种薄边上常见）掰到略微朝向视线，而不是整个翻过来：
         // 翻转会让相邻像素在上、下表面的法线之间跳，后缘成了一串亮点
         float ndv = dot(n, -dA);
-        if (abs(ndv) < 0.08) w.edge = true;   // 几乎侧对视线：薄的后缘、小翼的边
+        // 离外轮廓还有几个像素？局部当成半径 R 的凸面，命中点离切线轮廓 ≈ R·(n·v)²/2（米）。
+        // R 由四面体采样的拉普拉斯估计：Σd_i − 4d₀ ≈ 2h²·∇²d，∇²d ≈ 1/R（取柱面，偏保守）。
+        // 薄后缘、盒子式拼接的棱角处 ∇²d 很大，R 很小，自然也算边缘像素。只按 |n·v| 判断的话，
+        // 斜着看的大片翼面（夕阳场景约 4% 的像素）都会被当成边缘去超采样，白白多花 1 毫秒多
+        float lap = (sumD - 4.0 * dHit) / (2.0 * 0.0023 * 0.0023);
+        float rad = 1.0 / max(lap, 1e-3);
+        float silPx = rad * ndv * ndv * 0.5 / (pa * w.t);
+        if (silPx < 1.5) w.edge = true;
         if (ndv < 0.05) n = normalize(n - dA * (0.05 - ndv));
         w.nA = n;
         phase = 2;

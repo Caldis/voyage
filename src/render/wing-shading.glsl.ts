@@ -123,10 +123,13 @@ vec2 rgss(int k) {
 // 视线打到机翼：返回 (颜色 × 窗板透射率之前的辐亮度, 覆盖率)。
 // 覆盖率 < 1 的是轮廓上的像素，调用方按它和窗外混合。cloud 是这条视线上的云（半分辨率云层纹理）
 //
-// 抗锯齿分两层：
-// 1. 外轮廓（机翼对天空 / 海面）：traceWing 按「最近距离 / 像素宽度」解析算覆盖率，一条射线就够。
-// 2. 内轮廓（襟翼压在主翼上、小翼和翼面、短舱和机翼）和侧对视线的薄边：中心射线打中了，覆盖率是 1，解析法管不到。
-//    这类像素（traceWing 标 edge）改成 4 条旋转网格子射线各自求交、着色再平均。开销只落在这些边缘像素上。
+// 抗锯齿：先打一条中心射线，判断这个像素是不是「边缘像素」——
+// - 擦边没打中（解析覆盖率介于 0 和 1 之间）：外轮廓外侧；
+// - 打中了但表面斜对视线（|n·v| < 0.3）：外轮廓内侧、薄的后缘、小翼的边；
+// - 打中之前先擦过另一处轮廓：内轮廓（襟翼压在主翼上、小翼和翼面、短舱和机翼）。
+// 边缘像素改成 4 条旋转网格（RGSS）子射线各自求交、着色再平均，每条子射线自己的覆盖率按半个像素的斜坡算。
+// 只用中心射线的解析覆盖率时，轮廓只有外侧半个像素有过渡、内侧是硬的，距离场又常高估距离，斜边上还是一级级的台阶。
+// 开销只落在边缘像素上（回归场景里约占 1% 以下）。
 // 求交和着色都放在同一个循环里、各只有一处调用，FXC 不会把它们内联成五份（冷编译时间不涨）。
 vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, float belowAlbedo, vec4 cloud) {
   vec3 lA = vec3(uSeatSign * sunC.x, sunC.y, sunC.z);
@@ -141,13 +144,13 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     if (k >= n) break;
     vec3 rdk = k == 0 ? rd : normalize(rd + (right * rgss(k).x + up * rgss(k).y) * pa);
     WingTrace w = traceWing(ro, rdk, tStart, lA);
-    if (k == 0 && w.cov >= 1.0 && w.edge && uWingEdgeAA > 0) {
+    if (k == 0 && uWingEdgeAA > 0 && ((w.cov > 0.0 && w.cov < 1.0) || w.edge)) {
       n = 5;
       single = 0.0;
       continue;
     }
-    // 子射线按「打中与否」计覆盖率；中心射线用解析覆盖率
-    float c = single > 0.5 ? w.cov : step(0.5, w.cov);
+    // 中心射线用解析覆盖率；子射线的斜坡收窄到半个像素（子射线之间相距约半个像素）
+    float c = single > 0.5 ? w.cov : clamp(2.0 * w.cov - 1.0, 0.0, 1.0);
     if (c <= 0.0) continue;
     vec3 col = shadeWing(ro + rdk * w.t, rdk, w, sunC, eSky, eDown, belowAlbedo);
     // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度

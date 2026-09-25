@@ -325,10 +325,16 @@ requestAnimationFrame(() =>
     // 不在首帧里同步编译：同步编译太久时 Chrome 会认为 GPU 卡死，报 VALIDATE_STATUS false 并丢失 WebGL 上下文
     // （上下文恢复后 LUT、噪声纹理都没了，画面错乱）。渲染目标要和真正渲染时一致（hdr），程序缓存才能命中
     try {
+      // 几何体、相机和 FullscreenPass 的一致（只有 position + uv 的全屏三角形），程序缓存的键才相同
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
+      const mesh = new THREE.Mesh(geo, sceneMat);
+      mesh.frustumCulled = false;
       const probe = new THREE.Scene();
-      probe.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), sceneMat));
+      probe.add(mesh);
       renderer.setRenderTarget(hdr);
-      await renderer.compileAsync(probe, new THREE.Camera());
+      await renderer.compileAsync(probe, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
       renderer.setRenderTarget(null);
     } catch (err) {
       console.warn("场景着色器后台编译失败，改为首帧同步编译", err);
@@ -337,6 +343,8 @@ requestAnimationFrame(() =>
     frame(performance.now());
     renderer.getContext().finish();
     tick("首帧（含着色器编译）");
+    // 场景材质名下编译过几个程序：1 说明后台编译的程序被首帧直接用上了；2 说明键不一致、首帧又同步编译了一遍
+    startup["场景材质的程序数"] = (renderer.properties.get(sceneMat) as { programs?: Map<string, unknown> }).programs?.size ?? -1;
     (window as unknown as { __voyageStartup: unknown }).__voyageStartup = startup;
     $("loading").classList.add("done");
   }, 50),
