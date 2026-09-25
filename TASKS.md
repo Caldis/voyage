@@ -11,8 +11,7 @@
 | T02 | 第 2 波 | 5192 | `worktree-agent-a611f3799d938f8bb`（842eb24） | Opus | 审查：返工（冷启动 +85% 且丢上下文、农田紫色、碎浪硬截断） | 返工中 |
 | T03 | 第 2 波 | 5193 | `worktree-agent-acc7000a8fde79d57`（211bb12） | Opus（已交付） | 排队（额度紧张，审查串行，等 T14 审查结束） | 待审查 |
 | T05 | 第 2 波 | 5195 | worktree（交付时回填） | Opus | 待派 | 进行中 |
-| T14 | 第 2 波（追加） | 5194 | `worktree-agent-afbefe1914f657874`（9b80b7b） | Opus（已交付，需接入 main.ts 4 行） | Opus 审查中（5183） | 待审查 |
-| T06 | 第 2 波（追加） | 5197 | worktree（交付时回填） | Opus | 待派 | 进行中 |
+| T06 | 第 2 波（追加） | 5197 | `worktree-agent-a871b3ab05694440d`（b805f08） | Opus（已交付） | 排队（T03 之后） | 待审查 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -57,6 +56,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | 编号 | 任务 | 合并日期 | 备注 |
 | --- | --- | --- | --- |
 | T01 | 拆分热点文件（main.ts → state / flight / ui；scene.ts → ocean / terrain-shading / wing-shading / lightning） | 2026-09-25 | Sonnet 实现，Opus 审查通过 |
+| T14 | 海面去重复：GPU FFT 海浪（JONSWAP + 三级级联 + LEAN + 阵风斑 + Monahan 白浪） | 2026-09-25 | Opus 实现，Opus 审查有条件通过（条件：main.ts 接入由协调者完成；sampler 16/16 须拦住新增）。非阻塞遗留：风速重算加防抖、湖面第三级方差钳制、白浪覆盖率核对、缺 EXT_color_buffer_float 的退路 |
 
 ### 此前由协调者直接开发（未走本流程）
 
