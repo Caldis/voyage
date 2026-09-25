@@ -5,7 +5,8 @@
 // 新增一类效果时，把它的代表场景加进 SCENES。每个场景都从「默认状态」出发，互不影响。
 async (page) => {
   const current = page.url();
-  const origin = /^http:\/\/127\.0\.0\.1:51\d\d/.test(current) ? new URL(current).origin : "http://127.0.0.1:5181";
+  // 这里的执行环境没有全局 URL（ReferenceError），用正则取 origin
+  const origin = (current.match(/^http:\/\/127\.0\.0\.1:51\d\d/) || ["http://127.0.0.1:5181"])[0];
   const only = null; // 只跑某几个场景时改成名字数组，例如 ["fuji-day", "night-city"]
 
   // 场景：p = 面板上的设置（id → 值），extra = 额外的调试状态，wait = 等待毫秒，ground = 是否等地面瓦片
