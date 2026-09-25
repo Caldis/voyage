@@ -58,7 +58,7 @@ float jacquardMotif(vec2 uv, float aa) {
 // kind：0 座椅面料（提花斜纹），1 头枕套（细平纹）。pix：像素足迹（米）
 Fabric fabricSample(vec2 uv, float pix, float kind) {
   Fabric fb;
-  float pitch = kind < 0.5 ? 0.0008 : 0.00045;
+  float pitch = kind < 0.5 ? 0.0011 : 0.0006;
   vec3 warpC = kind < 0.5 ? vec3(0.028, 0.034, 0.060) : vec3(0.60, 0.60, 0.58);
   vec3 weftC = kind < 0.5 ? vec3(0.15, 0.165, 0.205) : vec3(0.53, 0.55, 0.56);
   float motif = kind < 0.5 ? jacquardMotif(uv, pix / 0.013 * 1.5) : 0.0;
@@ -85,8 +85,18 @@ Fabric fabricSample(vec2 uv, float pix, float kind) {
 
   // 纱线一个周期要占约 3 个像素以上才画：少于这个数，斜纹的斜线和像素网格会拍出大尺度的斜向波纹（摩尔纹）
   float detail = 1.0 - smoothstep(0.12, 0.4, pix / pitch);
-  fb.albedo = mix(avg, detailed, detail);
-  fb.slope = slope * detail;
+  // 纱线分辨不出来时仍保留一级粗结构：斜纹的斜向纹路（沿 u.x + u.y 方向、周期 4 根纱，平纹是 2 根纱的格子），
+  // 用单一频率的正弦表示，本身是带限的；周期不到约 3 个像素时再淡出，所以不会拍出摩尔纹
+  float period = twill > 0.5 ? 4.0 : 2.0;
+  float rph = 2.0 * M_PI * (twill > 0.5 ? (u.x + u.y) : u.x) / period;
+  float rph2 = 2.0 * M_PI * u.y / period;
+  float rib = twill > 0.5 ? sin(rph) : 0.5 * (sin(rph) + sin(rph2));
+  float ribPeriodM = pitch * period * (twill > 0.5 ? 0.7071 : 1.0);
+  float coarse = (1.0 - detail) * (1.0 - smoothstep(0.15, 0.35, pix / ribPeriodM));
+  vec3 ribAlbedo = avg * (1.0 + 0.22 * rib);
+  vec2 ribSlope = (twill > 0.5 ? vec2(1.0, 1.0) * cos(rph) : vec2(cos(rph), cos(rph2)) * 0.5) * (2.0 * M_PI / period) * 0.35 * 0.5;
+  fb.albedo = mix(mix(avg, ribAlbedo, coarse), detailed, detail);
+  fb.slope = slope * detail + ribSlope * coarse;
 
   // 更粗一级的纱线粗细不匀（条干），几毫米尺度，在更远处才淡出
   float slub = vnoise(uv * vec2(90.0, 700.0)) - 0.5;

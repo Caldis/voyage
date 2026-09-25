@@ -134,7 +134,8 @@ vec2 scratches(vec2 q, vec3 v, vec3 s, float pix) {
   float lit = 0.0;
   float cover = 0.0;
   // 越靠下划痕越多：乘客的手、清洁布都在那里
-  float density = mix(0.15, 0.7, smoothstep(0.1, -0.15, q.y));
+  // 用户反馈「划痕太多」：只留偶尔注意到的几道（约为最初的 1/5）
+  float density = mix(0.03, 0.14, smoothstep(0.1, -0.15, q.y));
   for (int i = -1; i <= 1; i++)
   for (int j = -1; j <= 1; j++) {
     vec2 c = id + vec2(i, j);
@@ -177,12 +178,12 @@ float wipeMarks(vec2 q, float pix) {
     float ang = atan(d.y, d.x);
     float arc = smoothstep(0.0, 0.3, sin(ang * mix(1.0, 3.0, h) + h * 40.0) - 0.35);
     float dr = abs(fract(r / 0.0032) - 0.2 - 0.6 * fract(h * 13.0)) * 0.0032;
-    cov += paneLineCov(dr, 0.00003, pix) * arc * step(h, 0.5) * (1.0 - smoothstep(0.06, 0.1, r));
+    cov += paneLineCov(dr, 0.00003, pix) * arc * step(h, 0.1) * (1.0 - smoothstep(0.05, 0.08, r));
   }
   // 麻点：约 6 mm 一格，少数格子里有一个 0.1–0.2 mm 的小坑
   vec2 cell = floor(q / 0.006);
   vec2 hp = hash22(cell + 31.7);
-  if (hp.x < 0.12) {
+  if (hp.x < 0.025) {
     vec2 c = (cell + 0.2 + 0.6 * hash22(cell + 3.3)) * 0.006;
     float rp = mix(0.00005, 0.0001, hp.y);
     cov += (1.0 - smoothstep(rp - pix * 0.5, rp + pix * 0.5, length(q - c))) * min(1.0, rp * rp / max(pix * pix, 1e-12)) * 2.0;

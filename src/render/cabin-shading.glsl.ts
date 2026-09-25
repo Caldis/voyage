@@ -165,11 +165,12 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
     for (int i = 0; i < 3; i++) r += (FL - 0.009) - sdRoundRect(dir * r, BEZEL_HALF, BEZEL_RADIUS);
     vec2 d = wq - dir * r;
     float rr = length(d);
-    screw = 1.0 - smoothstep(0.0025 - pix * 0.5, 0.0025 + pix * 0.5, rr);
+    // 直径约 2 mm：默认视距下只有一两个像素、一点高光（用户：看不清才真实，大了会糊）
+    screw = (1.0 - smoothstep(0.001 - pix * 0.5, 0.001 + pix * 0.5, rr)) * min(1.0, 0.001 * 0.001 / max(pix * pix, 1e-12) + 0.3);
     vec2 dr = mat2(0.7071, 0.7071, -0.7071, 0.7071) * d; // 十字槽转 45°
-    screwSlot = max(lineCov(abs(dr.x), 0.00025, pix) * step(abs(dr.y), 0.0017),
-                    lineCov(abs(dr.y), 0.00025, pix) * step(abs(dr.x), 0.0017)) * screw;
-    screwN = d / 0.0025 * 0.9 * screw;                                   // 圆头的法线
+    screwSlot = max(lineCov(abs(dr.x), 0.0001, pix) * step(abs(dr.y), 0.0007),
+                    lineCov(abs(dr.y), 0.0001, pix) * step(abs(dr.x), 0.0007)) * screw;
+    screwN = d / 0.001 * 0.9 * screw;                                   // 圆头的法线
   }
   slope += gB * trimTilt * trim + screwN;
   // 凹角积灰：窗下半圈、收边条外侧那道缝里
