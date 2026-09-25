@@ -13,8 +13,12 @@ import { GROUND_LEVELS } from "../ground/clipmap";
  * - 全部由世界坐标的哈希决定，没有平铺纹理；田块、街区的走向和尺寸按几百米的 Voronoi 分区各自随机，不会出现规则重复；
  * - 不用屏幕导数（调用处在分支里），足迹用解析的「距离 × 像素张角 / 入射余弦」。
  * 这些是按航拍照片的经验调出来的外观模型，不是真实的地块 / 建筑数据。
+ *
+ * 编译开销大（Windows 上 FXC 会把这些函数全部内联），所以放在 GROUND_DETAIL 宏里：默认的场景着色器不含它，
+ * 低空时才由 GroundDetailVariant（scene.ts）在后台异步编译一个带宏的变体再切换过去，首帧不受影响。
  */
 export const GROUND_DETAIL_COMMON = /* glsl */ `
+#ifdef GROUND_DETAIL
 const vec3 DETAIL_LUMA = vec3(0.2126, 0.7152, 0.0722);
 // 恒为 1。循环上下限用它而不用常量：常量次数的循环会被 Windows 上的 FXC 整个展开（连同内联的函数），
 // 冷编译时间翻倍，严重时浏览器判定 GPU 卡死、丢失 WebGL 上下文
@@ -238,7 +242,11 @@ GroundDetail groundDetail(vec2 g, vec3 alb, float fp, vec3 sun, float lod) {
   // ---- 农田 ----
   if (cls.y > 0.02) {
     vec4 fd = fieldDetail(gm, fp);
-    vec3 fm = vec3(1.0 + fd.x) * vec3(1.0 - 0.16 * fd.y, 1.0 + 0.03 * fd.y, 1.0 - 0.3 * fd.y);
+    // 色调：h > 0 偏绿（长势好），h < 0 偏黄（成熟），h = −2 是裸土（偏褐）。都用幂次的色调，再按亮度归一：
+    // 只改色相、不改亮度（亮度差由 fd.x 负责，均值为 0），也不会出现 B 通道被放大的紫粉色
+    vec3 tint = fd.y >= 0.0 ? pow(vec3(0.9, 1.05, 0.92), vec3(fd.y)) : pow(vec3(1.12, 1.0, 0.78), vec3(-fd.y));
+    tint /= dot(tint, DETAIL_LUMA);
+    vec3 fm = vec3(1.0 + fd.x) * tint;
     o.albedoMul *= mix(vec3(1.0), fm, cls.y);
     o.slope += fd.zw * cls.y;
   }
@@ -292,4 +300,5 @@ vec2 albedoJitterKm(vec2 g, float fp, float texelM) {
   vec2 n = vec2(vnoise(gm / 4.0), vnoise(gm / 4.0 + 19.7)) + 0.5 * vec2(vnoise(gm / 1.7 + 5.3), vnoise(gm / 1.7 - 7.1));
   return (n / 1.5 - 0.5) * 2.0 * k / 1000.0;
 }
+#endif
 `;

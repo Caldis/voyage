@@ -97,6 +97,8 @@ float terrainHit(vec3 ro, vec3 rd) {
     if (t >= tEnd) break;
     t = min(t + min(dq, max((alt - hg) * 1.5, 0.004 * t + 0.01)), tEnd);
   }
+  // 没打到：包括步数用完（uTerrainSteps）还没走到 tEnd 的情况——这时退化成「打在海平面球上」，
+  // 远处极贴地平线的视线可能把山后的陆地画在海平面高度；96 步下实测场景里没有出现
   if (!hit) return tSea;
   // 打到了：在上一步与这一步之间二分
   float a = tPrev, b = t;

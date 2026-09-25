@@ -22,7 +22,11 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
   float cosI = max(abs(dot(rd, up)), 0.12);
   float fpM = max(tT * pixelAngle * 1000.0 * inversesqrt(cosI), 0.05);
   float texelM = GROUND_BASE * exp2(floor(lod)) * 1000.0 / GROUND_RES;
+#ifdef GROUND_DETAIL
   vec4 alb = sampleGround(uGroundAlbedo, g + albedoJitterKm(g, fpM, texelM), lod);
+#else
+  vec4 alb = sampleGround(uGroundAlbedo, g, lod);
+#endif
   if (alb.w <= 0.0) return vec4(0.0, 0.0, 0.0, -1.0);
   vec3 wat = sampleGround(uGroundWater, g, lod).rgb;
   // 水陆边界：水体遮罩是一个影像像素（近处约 8 m）宽的双线性渐变，低空时是一条模糊的带子。
@@ -50,6 +54,10 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
     vec3 eKey = keyLight(BOTTOM + h, up) * cloudShadow(P, uKeyDir);
     if (ndl > 0.0) eKey *= terrainShadow(P, uKeyDir, lod);
     vec3 eSky = skyIrradiance(BOTTOM + h, up);
+    vec3 albMul = vec3(1.0);
+    vec3 nD = n;
+    float shadowD = 1.0, aoD = 1.0;
+#ifdef GROUND_DETAIL
     // 低空近景细节：田块、树冠、街区与楼影（远处自动淡出，返回「无细节」）
     // 夜里（月光）细节几乎看不见，省掉；城市灯光另算，不受影响
     bool dayDetail = uSunDir.y > -0.05 && fpM < 24.0;
@@ -63,13 +71,17 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
       float edge = landClasses(albSun).x * (1.0 - forestHere);
       gd.shadow *= 1.0 - 0.8 * edge * (1.0 - smoothstep(10.0, 20.0, fpM));
     }
-    // 调试：11 地表分类（红 树林、绿 农田、蓝 城区），12 像素足迹（红 = fp / 20 m，绿 = 影像像素 / 20 m）
+    // 调试（只在细节变体里有）：11 地表分类（红 树林、绿 农田、蓝 城区），12 像素足迹（红 = fp / 20 m，绿 = 影像像素 / 20 m）
     if (uDebug == 11) return vec4(landClasses(alb.rgb) * 20.0, 1.0);
     if (uDebug == 12) return vec4(vec3(fpM / 20.0, texelM / 20.0, 0.0) * 20.0, 1.0);
-    vec3 nD = normalize(n - vec3(gd.slope.x, 0.0, gd.slope.y));
+    albMul = gd.albedoMul;
+    nD = normalize(n - vec3(gd.slope.x, 0.0, gd.slope.y));
+    shadowD = gd.shadow;
+    aoD = gd.ao;
+#endif
     float ndlD = dot(nD, uKeyDir);
-    vec3 land = alb.rgb * gd.albedoMul / M_PI * (eKey * gd.shadow * max(ndlD, 0.0) * step(0.0, ndl)
-                + eSky * (0.5 + 0.5 * dot(nD, up)) * gd.ao + eFlash);
+    vec3 land = alb.rgb * albMul / M_PI * (eKey * shadowD * max(ndlD, 0.0) * step(0.0, ndl)
+                + eSky * (0.5 + 0.5 * dot(nD, up)) * aoD + eFlash);
     // 城市灯光：亮度来自 NASA Black Marble（~500 m 分辨率），位置用影像里的城市区域（灰白、低饱和）落到街区上，
     // 再加一点街区尺度的明暗。色温取钠灯和 LED 混合的暖白。约 3 cd/m²（市中心从上往下看的量级）
     float night = wat.b;
@@ -114,15 +126,17 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
     water += alb.rgb * 0.7 / M_PI * eFlash;
     // 海岸的碎浪：只在海洋（不是湖、河）的岸边。离岸距离用粗三级（近处约 60 m 像素）的水体遮罩估计，
     // 浪线平行于岸、朝岸推进，沿岸的强弱用噪声打散。浪线比像素细时按均值画
-    if (wat.g > 0.5 && fpM < 40.0) {
+    // 足迹 20–40 m 之间平滑淡出（远处浪线细于像素，而且粗级遮罩给出的「离岸距离」已经不准）
+    float foamFade = 1.0 - smoothstep(20.0, 40.0, fpM);
+    if (wat.g > 0.5 && foamFade > 0.0) {
       float cw = sampleGround(uGroundWater, g, min(floor(lod) + 3.0, ${GROUND_LEVELS - 1}.0)).r;
-      float near = 1.0 - smoothstep(0.55, 0.97, cw);
+      float near = (1.0 - smoothstep(0.55, 0.85, cw)) * foamFade;
       if (near > 0.0) {
         float along = vnoise(g * 1000.0 / 90.0);
         float ph = cw * 20.0 - uTime * 0.7 + along * 5.0;
         float lines = mix(0.35, smoothstep(0.5, 0.95, sin(ph)), 1.0 - smoothstep(4.0, 12.0, fpM));
         float foam = near * lines * mix(0.3, 1.0, along) * clamp(uWind / 7.0, 0.3, 1.5);
-        foam = clamp(foam, 0.0, 1.0) * 0.8;
+        foam = clamp(foam, 0.0, 1.0) * 0.6;
         vec3 eFoam = keyLight(BOTTOM, up) * cloudShadow(P, uKeyDir) * max(dot(up, uKeyDir), 0.0) + skyIrradiance(BOTTOM, up);
         water = mix(water, 0.6 / M_PI * eFoam, foam);
         fView *= 1.0 - foam;
