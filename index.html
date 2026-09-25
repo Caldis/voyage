@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#111111" />
+    <title>航行伴侣</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='6' y='2' width='20' height='28' rx='10' fill='%23223'/%3E%3Crect x='9' y='6' width='14' height='20' rx='7' fill='%238ab4e8'/%3E%3C/svg%3E" />
+    <!-- 样式直接在 HTML 里引用：脚本执行前页面就有样式（原来经由 JS 注入，加载期间是一片没有样式的控件） -->
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app" aria-label="舷窗外的景色"></div>
+    <div id="loading" role="status">
+      <div class="loading-box">
+        <div class="loading-title">航行伴侣</div>
+        <div class="loading-text">正在准备舷窗外的天空……</div>
+        <div class="loading-hint">首次打开或程序更新后，浏览器需要编译着色器，可能要半分钟左右；之后会快很多。</div>
+      </div>
+    </div>
+    <aside id="panel">
+      <h1>航行伴侣 <small>按 H 隐藏</small></h1>
+      <label>地点<select id="preset"></select></label>
+      <div class="row">
+        <label>日期<input id="date" type="date" /></label>
+        <button id="now" type="button">现在</button>
+      </div>
+      <label>当地时刻 <span id="time-label"></span><input id="time" type="range" min="0" max="1439" step="1" /></label>
+      <div class="row rates">
+        <span>时间流速</span>
+        <button type="button" data-rate="0" class="on">暂停</button>
+        <button type="button" data-rate="1">1×</button>
+        <button type="button" data-rate="60">60×</button>
+        <button type="button" data-rate="600">600×</button>
+      </div>
+      <label>座位
+        <select id="seat">
+          <option value="right">右侧靠窗</option>
+          <option value="left">左侧靠窗</option>
+        </select>
+      </label>
+      <label>座位相对机翼
+        <select id="wing-pos">
+          <option value="8">机翼后方（能看到整片机翼）</option>
+          <option value="3">机翼上方</option>
+          <option value="-4">机翼前方（视野开阔）</option>
+        </select>
+      </label>
+      <label>高度 <output id="altitude-out"></output><input id="altitude" type="range" min="0.3" max="13" step="0.1" value="10.7" /></label>
+      <div class="row rates">
+        <span>飞行阶段<small>（10× 加速）</small></span>
+        <button type="button" data-alt="10.7">巡航</button>
+        <button type="button" data-alt="6">下降</button>
+        <button type="button" data-alt="1.5">进近</button>
+        <button type="button" data-alt="0.5">低空</button>
+      </div>
+      <label>遮光板 <output id="shade-out"></output><input id="shade" type="range" min="0" max="1" step="0.01" value="0" /></label>
+      <label>天气<select id="weather"></select></label>
+      <label>云<select id="cloud-preset"></select></label>
+      <label>云量 <output id="coverage-out"></output><input id="coverage" type="range" min="0" max="1" step="0.01" value="0.42" /></label>
+      <label>云底高度 <output id="cloud-base-out"></output><input id="cloud-base" type="range" min="0.3" max="12.5" step="0.1" value="1.2" /></label>
+      <label>云层厚度 <output id="cloud-thick-out"></output><input id="cloud-thick" type="range" min="0.2" max="10" step="0.1" value="2.2" /></label>
+      <label>海面风速 <output id="wind-out"></output><input id="wind" type="range" min="0" max="20" step="1" value="7" /></label>
+      <label>画质
+        <select id="quality">
+          <option value="1">高（云全分辨率）</option>
+          <option value="0.75">中</option>
+          <option value="0.5">低（云半分辨率）</option>
+        </select>
+      </label>
+      <label class="check"><input id="ground-on" type="checkbox" checked />真实地理数据（卫星影像、地形、水体，联网）</label>
+      <label class="check"><input id="cabin-light" type="checkbox" checked />舱内灯光</label>
+      <label class="check"><input id="auto-exposure" type="checkbox" checked />人眼式自动曝光</label>
+      <label>曝光补偿 <output id="ev-comp-out"></output><input id="ev-comp" type="range" min="-3" max="3" step="0.1" value="0" /></label>
+      <label id="manual-row">手动曝光 <output id="manual-ev-out"></output><input id="manual-ev" type="range" min="-2" max="17" step="0.1" value="14" /></label>
+      <pre id="info"></pre>
+      <p class="hint">移动鼠标 = 挪动头部，滚轮 = 靠近 / 远离舷窗</p>
+      <p class="credits">影像：Sentinel-2 cloudless 2020 by EOX IT Services GmbH（含修改过的 Copernicus Sentinel 数据，CC BY-NC-SA 4.0）· 地形：AWS Terrain Tiles · 水体：© OpenStreetMap contributors（OpenFreeMap）<br />关闭真实地理数据时，岛屿为程序生成的示例，不对应真实地理。<br />星表：耶鲁亮星表 BSC5（CDS V/50）· 月面贴图 © Solar System Scope（CC BY 4.0）</p>
+    </aside>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

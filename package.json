@@ -1,0 +1,24 @@
+{
+  "name": "voyage",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "航行伴侣：模拟从交通工具窗口看出去的风景，物理大气 + 真实太阳位置",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
+    "astronomy-engine": "^2.1.19",
+    "pbf": "^5.1.2",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
+  }
+}
