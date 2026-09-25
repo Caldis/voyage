@@ -22,6 +22,7 @@ uniform float uSlat;           // 缝翼偏角（弧度）
 uniform float uSpoiler;        // 扰流板偏角（弧度）
 uniform int uWingSteps;        // 机翼光线步进的最大步数（128）。用 uniform 做循环上限，FXC 就不会展开循环（展开后冷编译时间翻倍）
 uniform int uWingShadowSteps;  // 机翼自阴影的最大步数（24）
+uniform int uWingEdgeAA;       // 内轮廓 / 薄边超采样：0 关，1 开，2 开并把超采样的像素标成品红（调试）
 
 const float CABIN_WALL_RADIUS = 1.85;  // 窗口内饰面到机身轴线的距离
 const float WINDOW_HEIGHT = 0.25;      // 窗口中心高出机身轴线
@@ -384,6 +385,7 @@ struct WingTrace {
   vec3 nA;       // 法线（机体系），已经掰到朝向视线的一侧
   float shadow;  // 机翼自身的软阴影（小翼、短舱、扰流板、整流罩投到翼面上），1 = 不挡
   int part;      // 部件编号（见 gWingPart）
+  bool edge;     // 打中之前先擦过另一处轮廓（襟翼压在主翼上、小翼压在翼面上这类「内轮廓」），或者打中的是几乎侧对视线的薄边
 };
 
 vec3 tetraDir(int i) {
@@ -402,6 +404,7 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
   w.nA = vec3(0.0, 1.0, 0.0);
   w.shadow = 1.0;
   w.part = 0;
+  w.edge = false;
   float pa = pixelAngle();
   vec3 oA = cabinToAircraft(ro);
   vec3 dA = vec3(uSeatSign * rd.x, rd.y, rd.z);
@@ -419,6 +422,8 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
   float best = 1e9;
   float tBest = -1.0;
   int partBest = 0;
+  float rPrev = 1e9;
+  bool grazed = false;  // 走过一个「离表面不到一个像素、然后又远离」的地方
   int phase = 0;        // 0 求交，1 法线（四面体四次采样），2 自阴影
   int j = 0;
   vec3 P = vec3(0.0);
@@ -436,10 +441,13 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
         w.t = t;
         w.cov = 1.0;
         w.part = gWingPart;
+        w.edge = grazed;
         done = true;
       } else {
         float r = d / fp;
         if (r < best) { best = r; tBest = t; partBest = gWingPart; }
+        if (rPrev < 1.0 && r > rPrev) grazed = true;
+        rPrev = r;
         // 距离场只是近似（盒子式组合 + 翼型前缘陡），近处步长打六折保险；离得远（> 0.3 m）时相对误差小，打八五折省步数。
         // 最小步长取亚像素，免得穿过毫米级的后缘
         t += max(d * (d > 0.3 ? 0.85 : 0.6), max(0.2 * fp, 0.002));
@@ -465,6 +473,7 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
         // 背向视线的法线（轮廓上、后缘这种薄边上常见）掰到略微朝向视线，而不是整个翻过来：
         // 翻转会让相邻像素在上、下表面的法线之间跳，后缘成了一串亮点
         float ndv = dot(n, -dA);
+        if (abs(ndv) < 0.08) w.edge = true;   // 几乎侧对视线：薄的后缘、小翼的边
         if (ndv < 0.05) n = normalize(n - dA * (0.05 - ndv));
         w.nA = n;
         phase = 2;
@@ -508,7 +517,7 @@ float seam(float x, float width, float fw) {
 // fw 是 p 在一个像素内的变化量（取变化最快的那个方向）
 float fbmAA(vec2 p, float fw) {
   float s = 0.0, a = 0.5;
-  for (int i = 0; i < 4; i++) {
+  for (int i = min(uWingSteps, 0); i < 4; i++) {  // 起点依赖 uniform：不让 FXC 展开
     float keep = 1.0 - smoothstep(0.25, 0.5, fw);
     s += a * mix(0.5, vnoise(p), keep);
     p = p * 2.03 + 17.1;

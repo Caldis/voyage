@@ -50,6 +50,7 @@ Object.assign(sceneMat.uniforms, {
   uSpoiler: { value: 0 },
   uWingSteps: { value: 128 },
   uWingShadowSteps: { value: 24 },
+  uWingEdgeAA: { value: 1 },
 });
 const clouds = new Clouds(pass, atmosphere, cloudUniforms, sceneMat.uniforms);
 const exposure = new Exposure(pass);
@@ -318,8 +319,21 @@ function renderFrame(now: number) {
 }
 // 先让浏览器把加载遮罩画出来，再画第一帧：第一帧要编译所有着色器，首次打开时会阻塞很久
 requestAnimationFrame(() =>
-  setTimeout(() => {
+  setTimeout(async () => {
     tick("首帧之前的初始化");
+    // 场景着色器很大（Windows 上 ANGLE → FXC 冷编译约一分钟）。先用 KHR_parallel_shader_compile 在后台编译、轮询完成，
+    // 不在首帧里同步编译：同步编译太久时 Chrome 会认为 GPU 卡死，报 VALIDATE_STATUS false 并丢失 WebGL 上下文
+    // （上下文恢复后 LUT、噪声纹理都没了，画面错乱）。渲染目标要和真正渲染时一致（hdr），程序缓存才能命中
+    try {
+      const probe = new THREE.Scene();
+      probe.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), sceneMat));
+      renderer.setRenderTarget(hdr);
+      await renderer.compileAsync(probe, new THREE.Camera());
+      renderer.setRenderTarget(null);
+    } catch (err) {
+      console.warn("场景着色器后台编译失败，改为首帧同步编译", err);
+    }
+    tick("场景着色器编译（后台）");
     frame(performance.now());
     renderer.getContext().finish();
     tick("首帧（含着色器编译）");

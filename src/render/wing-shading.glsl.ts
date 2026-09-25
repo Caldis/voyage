@@ -58,7 +58,9 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTrace w, vec3 sunC, vec3 eSky, vec3 eDown, 
   vec3 n = vec3(uSeatSign * nA.x, nA.y, nA.z);          // 机体系 → 座舱系
   vec3 v = -rd;
   vec3 nW = uCabinToWorld * n;
-  float pix = length(pc - uHead) * 2.0 * uTanHalfFov / uResolution.y; // 命中点处一个像素对应的米数
+  // 命中点处一个像素对应的米数。斜着看翼面时像素在表面上被拉长约 1/cosθ 倍，按长边算，
+  // 接缝、铆钉线、污渍这些高频在掠射角下才不会闪（宁可略软，不要闪）
+  float pix = length(pc - uHead) * 2.0 * uTanHalfFov / uResolution.y / max(dot(n, v), 0.2);
   WingSurface m = wingSurface(P, pix, nA.y, w.part);
   vec3 lA = vec3(uSeatSign * sunC.x, sunC.y, sunC.z);
   float nl = dot(n, sunC);
@@ -113,20 +115,54 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTrace w, vec3 sunC, vec3 eSky, vec3 eDown, 
   return diffuse + spec + envSpec + lampLit + m.emit;
 }
 
+// 旋转网格（RGSS）的四个子像素偏移（单位：像素）
+vec2 rgss(int k) {
+  return k == 1 ? vec2(0.125, 0.375) : (k == 2 ? vec2(-0.375, 0.125) : (k == 3 ? vec2(0.375, -0.125) : vec2(-0.125, -0.375)));
+}
+
 // 视线打到机翼：返回 (颜色 × 窗板透射率之前的辐亮度, 覆盖率)。
 // 覆盖率 < 1 的是轮廓上的像素，调用方按它和窗外混合。cloud 是这条视线上的云（半分辨率云层纹理）
+//
+// 抗锯齿分两层：
+// 1. 外轮廓（机翼对天空 / 海面）：traceWing 按「最近距离 / 像素宽度」解析算覆盖率，一条射线就够。
+// 2. 内轮廓（襟翼压在主翼上、小翼和翼面、短舱和机翼）和侧对视线的薄边：中心射线打中了，覆盖率是 1，解析法管不到。
+//    这类像素（traceWing 标 edge）改成 4 条旋转网格子射线各自求交、着色再平均。开销只落在这些边缘像素上。
+// 求交和着色都放在同一个循环里、各只有一处调用，FXC 不会把它们内联成五份（冷编译时间不涨）。
 vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, float belowAlbedo, vec4 cloud) {
   vec3 lA = vec3(uSeatSign * sunC.x, sunC.y, sunC.z);
-  WingTrace w = traceWing(ro, rd, tStart, lA);
-  if (w.cov <= 0.0) return vec4(0.0);
-  vec3 col = shadeWing(ro + rd * w.t, rd, w, sunC, eSky, eDown, belowAlbedo);
-  // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度
-  if (uCameraFog > 0.0) {
-    float tFog = exp(-uCameraFog * w.t * 0.001);
-    vec3 fogColor = cloud.rgb / max(1.0 - cloud.a, 0.05);
-    col = mix(fogColor, col, tFog);
+  vec3 right = uCamBasis[0];
+  vec3 up = uCamBasis[1];
+  float pa = pixelAngle();
+  vec3 acc = vec3(0.0);
+  float covSum = 0.0;
+  int n = 1;
+  float single = 1.0;  // 1 = 只有中心射线（解析覆盖率），0 = 超采样
+  for (int k = min(uWingSteps, 0); k < 5; k++) {
+    if (k >= n) break;
+    vec3 rdk = k == 0 ? rd : normalize(rd + (right * rgss(k).x + up * rgss(k).y) * pa);
+    WingTrace w = traceWing(ro, rdk, tStart, lA);
+    if (k == 0 && w.cov >= 1.0 && w.edge && uWingEdgeAA > 0) {
+      n = 5;
+      single = 0.0;
+      continue;
+    }
+    // 子射线按「打中与否」计覆盖率；中心射线用解析覆盖率
+    float c = single > 0.5 ? w.cov : step(0.5, w.cov);
+    if (c <= 0.0) continue;
+    vec3 col = shadeWing(ro + rdk * w.t, rdk, w, sunC, eSky, eDown, belowAlbedo);
+    // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度
+    if (uCameraFog > 0.0) {
+      float tFog = exp(-uCameraFog * w.t * 0.001);
+      vec3 fogColor = cloud.rgb / max(1.0 - cloud.a, 0.05);
+      col = mix(fogColor, col, tFog);
+    }
+    // 调试：超采样的像素染成品红（亮度不变，不影响自动曝光）
+    if (uWingEdgeAA > 1 && single < 0.5) col = vec3(1.0, 0.0, 1.0) * dot(col, vec3(0.2126, 0.7152, 0.0722)) * 1.4;
+    acc += col * c;
+    covSum += c;
   }
-  return vec4(col, w.cov);
+  if (covSum <= 0.0) return vec4(0.0);
+  return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.25);
 }
 
 // 翼尖的航行灯（右绿左红）、白色频闪、尾灯：小光源 + 周围的光晕（光晕靠后面的眩光处理放大）；
