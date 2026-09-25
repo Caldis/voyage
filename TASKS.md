@@ -6,7 +6,13 @@
 
 ## 进行中
 
-（无）
+| 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
+| --- | --- | --- | --- | --- | --- | --- |
+| T02 | 第 2 波 | 5192 | worktree（交付时回填） | Opus | 待派 | 进行中 |
+| T03 | 第 2 波 | 5193 | worktree（交付时回填） | Opus | 待派 | 进行中 |
+| T05 | 第 2 波 | 5195 | worktree（交付时回填） | Opus | 待派 | 进行中 |
+
+第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`。
 
 ## 待办（按建议顺序）
 
@@ -23,6 +29,7 @@
 | T10 | 天气自然变化：飞行途中天气场随位置变化（晴空 → 积云 → 雷暴区），不必手动选预设 | 低 | `src/weather.ts`、`src/clouds/clouds.glsl.ts`（天气场部分） | 否 | 沿航线飞 10 分钟（600× 时间流速之外另做加速）观察 |
 | T11 | 音效（P7）：舱内噪声实时合成（宽带噪声 + 发动机低频），随高度、速度、颠簸变化；雷声（闪电后按距离延迟） | 低 | 新建 `src/audio.ts`，面板加开关（交付接入代码） | 需要接入 main（交付接入代码） | 主观听感；默认静音，用户点击后开启（浏览器自动播放限制） |
 | T12 | 云的打磨：卷云仍偏团状；强逆光下的银边；云底的絮状细节 | 低 | `src/clouds/clouds.glsl.ts`（层状云部分）、`src/clouds/clouds.ts` | 否 | sunset-wing、clouds-variety、卷云场景（新增） |
+| T13 | 中距离小积云有横向条纹 / 拖影（fuji-day 截图里富士山左侧那排小云，像扫描线；疑似 TAA 重投影或步进在有地面时的问题），先查根因 | 中 | `src/clouds/*` | 否 | fuji-day、route-hnd-cts |
 
 ## 已知问题（还没排成任务）
 

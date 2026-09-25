@@ -1,12 +1,15 @@
 // 回归场景：给 Playwright MCP 的 browser_run_code_unsafe 用（filename 参数指向本文件）。
 // 用法：先在浏览器里打开要测的开发服务器（主分支 5181，worktree 用 5190+N），再运行本文件；
 // 注意：工具会把文件内容包成「(内容)(page)」执行，文件末尾不能有分号。
-// 会沿用当前页面的端口，依次设置固定场景并截图到 tmp/screenshot/regression/<场景名>.png（路径相对仓库根目录）。
+// 会沿用当前页面的端口，依次设置固定场景并截图到 tmp/screenshot/regression/<场景名>.png（5181；其他端口是 regression-<端口>/，路径相对仓库根目录）。
 // 新增一类效果时，把它的代表场景加进 SCENES。每个场景都从「默认状态」出发，互不影响。
 async (page) => {
   const current = page.url();
   // 这里的执行环境没有全局 URL（ReferenceError），用正则取 origin
   const origin = (current.match(/^http:\/\/127\.0\.0\.1:51\d\d/) || ["http://127.0.0.1:5181"])[0];
+  // 主分支（5181）写到 regression/，其他端口（worktree）写到 regression-<端口>/，并行的代理互不覆盖
+  const port = origin.slice(-4);
+  const outDir = port === "5181" ? "tmp/screenshot/regression" : `tmp/screenshot/regression-${port}`;
   const only = null; // 只跑某几个场景时改成名字数组，例如 ["fuji-day", "night-city"]
 
   // 场景：p = 面板上的设置（id → 值），extra = 额外的调试状态，wait = 等待毫秒，ground = 是否等地面瓦片
@@ -67,7 +70,7 @@ async (page) => {
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
       return document.getElementById("info").textContent;
     }, sc);
-    const path = `tmp/screenshot/regression/${sc.name}.png`;
+    const path = `${outDir}/${sc.name}.png`;
     await page.screenshot({ path, timeout: 60000 });
     results.push({ scene: sc.name, path, info });
   }
