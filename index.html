@@ -39,11 +39,26 @@
           <option value="left">左侧靠窗</option>
         </select>
       </label>
+      <label>视角 <small>（在画面上按住拖动转头，滚轮前后挪，双击复位）</small>
+        <select id="view-preset"></select>
+      </label>
       <label>座位相对机翼
         <select id="wing-pos">
           <option value="8">机翼后方（能看到整片机翼）</option>
           <option value="3">机翼上方</option>
           <option value="-4">机翼前方（视野开阔）</option>
+        </select>
+      </label>
+      <label>襟翼 / 减速板
+        <select id="high-lift">
+          <option value="auto">自动（按高度，进近时放下）</option>
+          <option value="0">收起（0）</option>
+          <option value="1">1（缝翼 18°）</option>
+          <option value="1+F">1+F（襟翼 10°）</option>
+          <option value="2">2（襟翼 15°）</option>
+          <option value="3">3（襟翼 20°）</option>
+          <option value="full">FULL（襟翼 40°）</option>
+          <option value="speedbrake">减速板（扰流板上翻）</option>
         </select>
       </label>
       <label>高度 <output id="altitude-out"></output><input id="altitude" type="range" min="0.3" max="13" step="0.1" value="10.7" /></label>

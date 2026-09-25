@@ -11,9 +11,10 @@ import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
 import { createSceneMaterial } from "./render/scene";
 import { GroundClipmap } from "./ground/clipmap";
-import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateTurbulence } from "./flight";
+import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateHighLift, updateTurbulence } from "./flight";
 import { $, CRUISE_PITCH_DEG, type Preset, type VoyageState } from "./state";
 import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
+import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
@@ -41,6 +42,15 @@ const cloudUniforms = createCloudUniforms(generateCloudNoise(renderer, pass));
 tick("云噪声");
 const ground = new GroundClipmap(PRESETS[0].lat, PRESETS[0].lon);
 const sceneMat = createSceneMaterial(atmosphere, cloudUniforms, ground);
+// 机翼增升装置的 uniform（声明在 wing.glsl.ts）。在首次渲染前加进材质即可生效；以后可以挪进 createSceneMaterial
+// uWingSteps / uWingShadowSteps 是机翼光线步进和自阴影的最大步数：用 uniform 而不是常量，FXC 就不会把循环展开，冷编译不会翻倍
+Object.assign(sceneMat.uniforms, {
+  uFlap: { value: 0 },
+  uSlat: { value: 0 },
+  uSpoiler: { value: 0 },
+  uWingSteps: { value: 128 },
+  uWingShadowSteps: { value: 24 },
+});
 const clouds = new Clouds(pass, atmosphere, cloudUniforms, sceneMat.uniforms);
 const exposure = new Exposure(pass);
 const traffic = new Traffic();
@@ -87,7 +97,14 @@ const state: VoyageState = {
   wingRootLE: 8,
   /** 真实地理数据（联网拉取卫星影像、地形、水体） */
   groundOn: true,
+  highLift: "auto",
+  slatDeg: 0,
+  flapDeg: 0,
+  spoilerDeg: 0,
 };
+
+/** 机翼调试：strobe 设成数字时频闪固定在这个亮度（截「闪亮瞬间」用，例如 1），null 按正常节奏闪 */
+const wingDebug: { strobe: number | null } = { strobe: null };
 
 /** 默认时刻：当天下午太阳高度角降到 8° 的时候，日落前的光最好看 */
 function defaultTime(preset: Preset) {
@@ -102,22 +119,14 @@ function defaultTime(preset: Preset) {
 // ---------- 头部与视线 ----------
 const head = { x: 0, y: 0.02, z: -0.42, tx: 0, ty: 0.02, tz: -0.42 };
 
-window.addEventListener("pointermove", (e) => {
-  if ((e.target as HTMLElement).closest("#panel")) return;
-  const px = (e.clientX / window.innerWidth) * 2 - 1;
-  const py = (e.clientY / window.innerHeight) * 2 - 1;
-  // 鼠标往右，头往屏幕右侧挪；屏幕右侧对应座舱坐标 -x
-  head.tx = -px * 0.14;
-  head.ty = 0.02 - py * 0.1;
-});
-window.addEventListener(
-  "wheel",
-  (e) => {
-    if ((e.target as HTMLElement).closest("#panel")) return;
-    head.tz = THREE.MathUtils.clamp(head.tz + e.deltaY * 0.0004, -0.75, -0.2);
-  },
-  { passive: true },
-);
+/** 当前视角预设：面板「视角」下拉切换，双击画布回到它；换座位时按新座位重新换算 */
+let viewPreset = VIEW_PRESETS[0];
+function setView(id: string) {
+  viewPreset = VIEW_PRESETS.find((v) => v.id === id) ?? VIEW_PRESETS[0];
+  applyViewPreset(head, viewPreset, state.seat); // 只改目标位置，头会平滑挪过去
+}
+// 按住拖动才转视角（面板上的操作不会带动画面）；滚轮前后挪头；双击回到当前预设
+setupViewControls(renderer.domElement, head, () => setView(viewPreset.id));
 
 function cabinToWorld(): THREE.Matrix3 {
   const h = THREE.MathUtils.degToRad(state.heading);
@@ -152,6 +161,7 @@ function cameraBasis(): THREE.Matrix3 {
 function snapAll() {
   exposure.snap();
   clouds.snap();
+  updateHighLift(state, 0, true);
 }
 
 function setPreset(id: string) {
@@ -180,7 +190,7 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-setupUi({ state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms });
+setupUi({ state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id });
 
 // ---------- 主循环 ----------
 setPreset(state.preset.id);
@@ -188,6 +198,12 @@ let last = performance.now();
 let frameCount = 0;
 
 function frame(now: number) {
+  renderFrame(now);
+  requestAnimationFrame(frame);
+}
+
+/** 一帧的全部工作（更新 + 所有渲染 pass），不含调度下一帧；benchFrame 也用它 */
+function renderFrame(now: number) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   if (state.playRate > 0) {
@@ -225,6 +241,7 @@ function frame(now: number) {
     onReachDest: () => setPreset(state.preset.id),
   });
   if (flightResult.climbing) syncAltitudeUi(state);
+  updateHighLift(state, dt);
   traffic.update(dt, flightResult.ownDir, flightResult.speedKms, flightResult.outwardW);
   weather.update(dt);
   const off = cloudUniforms.uCloudOffset.value;
@@ -286,7 +303,10 @@ function frame(now: number) {
   u.uWingFlex.value = 0.5 + flexAmp * (0.03 * Math.sin(ts * 2.3) + 0.02 * Math.sin(ts * 5.1 + 1.3)) + 0.015 * Math.sin(ts * 0.7);
   // 翼尖频闪：每秒双闪
   const ph = ts % 1.1;
-  u.uStrobe.value = ph < 0.05 || (ph > 0.14 && ph < 0.19) ? 1 : 0;
+  u.uStrobe.value = wingDebug.strobe ?? (ph < 0.05 || (ph > 0.14 && ph < 0.19) ? 1 : 0);
+  u.uSlat.value = THREE.MathUtils.degToRad(state.slatDeg);
+  u.uFlap.value = THREE.MathUtils.degToRad(state.flapDeg);
+  u.uSpoiler.value = THREE.MathUtils.degToRad(state.spoilerDeg);
   // 舱灯开：约 200 lux；关：只剩地板灯带和零星阅读灯，约 1 lux
   u.uCabinLight.value = state.cabinLight ? 0.2 : 0.001;
   clouds.render(flightResult.motion, camBasis, c2w);
@@ -295,7 +315,6 @@ function frame(now: number) {
   exposure.render(hdr.texture, bloom.render(hdr), dt);
 
   updateInfo(now, sun, moon, state, curLat, curLon, ground.pending);
-  requestAnimationFrame(frame);
 }
 // 先让浏览器把加载遮罩画出来，再画第一帧：第一帧要编译所有着色器，首次打开时会阻塞很久
 requestAnimationFrame(() =>
@@ -309,5 +328,29 @@ requestAnimationFrame(() =>
   }, 50),
 );
 
+/** 调试：把场景 pass 连续渲染 n 次并等 GPU 做完，返回每次的毫秒数。比较着色器开销用（不受刷新率上限影响） */
+function benchScene(n = 20) {
+  // gl.finish() 在 Chrome（ANGLE）里不等 GPU，读回一个像素才会真正同步
+  const px = new Float32Array(4);
+  const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
+  pass.render(sceneMat, hdr);
+  sync();
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) pass.render(sceneMat, hdr);
+  sync();
+  return (performance.now() - t0) / n;
+}
+
+/** 调试：连续做 n 帧的全部渲染并等 GPU 做完，返回每帧的毫秒数（不受刷新率上限影响；时间按 16 ms 一帧推进） */
+function benchFrame(n = 10) {
+  const px = new Float32Array(4);
+  const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
+  sync();
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) renderFrame(last + 16);
+  sync();
+  return (performance.now() - t0) / n;
+}
+
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, wingDebug, benchScene, benchFrame };

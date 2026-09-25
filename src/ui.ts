@@ -3,8 +3,9 @@ import type { SunPosition, MoonState } from "./astro";
 import { CLOUD_PRESETS, type Clouds, type CloudUniforms } from "./clouds/clouds";
 import { PRESETS, haversineKm } from "./flight";
 import type { Exposure } from "./render/exposure";
-import { $, type VoyageState } from "./state";
+import { $, type HighLiftSetting, type VoyageState } from "./state";
 import { WEATHER_PRESETS, type WeatherSystem } from "./weather";
+import { VIEW_PRESETS } from "./view-presets";
 
 /**
  * 面板：DOM 绑定、信息栏文字、方位文字（COMPASS）。从 main.ts 拆出（T01 纯重构，未改动任何取值或绑定顺序）。
@@ -60,7 +61,9 @@ export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state
     `月亮高度角 ${moon.altitude.toFixed(1)}°，方位 ${moon.azimuth.toFixed(0)}°，照亮 ${Math.round(moon.phaseFraction * 100)}%
 ` +
     `航向 ${state.heading.toFixed(0)}°${Math.abs(state.bankDeg) > 2 ? `（坡度 ${state.bankDeg.toFixed(0)}°）` : ""}，窗外朝${compass(outward)}，高度 ${state.altitudeKm.toFixed(1)} km` +
-    (preset.dest ? `，距终点 ${haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]).toFixed(0)} km` : "") + "\n" +
+    (preset.dest ? `，距终点 ${haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]).toFixed(0)} km` : "") +
+    (state.slatDeg > 0.5 || state.flapDeg > 0.5 ? `，缝翼 ${state.slatDeg.toFixed(0)}° / 襟翼 ${state.flapDeg.toFixed(0)}°` : "") +
+    (state.spoilerDeg > 0.5 ? `，减速板 ${state.spoilerDeg.toFixed(0)}°` : "") + "\n" +
     `位置 ${curLat.toFixed(3)}°N ${curLon.toFixed(3)}°E` + (state.groundOn && groundPending > 0 ? `，地面瓦片加载中（${groundPending}）` : "");
 }
 
@@ -76,11 +79,15 @@ export interface UiDeps {
   clouds: Clouds;
   weather: WeatherSystem;
   cloudUniforms: CloudUniforms;
+  /** 切换视角预设（头平滑挪过去） */
+  setView: (id: string) => void;
+  /** 当前视角预设的 id */
+  currentView: () => string;
 }
 
 /** 绑定面板上的所有控件。调用一次，顺序和原来 main.ts 里一致。 */
 export function setupUi(deps: UiDeps) {
-  const { state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms } = deps;
+  const { state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView } = deps;
 
   const presetSel = $<HTMLSelectElement>("preset");
   presetSel.innerHTML = PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
@@ -116,10 +123,17 @@ export function setupUi(deps: UiDeps) {
     state.wingRootLE = Number((e.target as HTMLSelectElement).value);
     snapAll();
   });
+  $<HTMLSelectElement>("high-lift").addEventListener("change", (e) => {
+    state.highLift = (e.target as HTMLSelectElement).value as HighLiftSetting;
+  });
   $<HTMLSelectElement>("seat").addEventListener("change", (e) => {
     state.seat = (e.target as HTMLSelectElement).value as "right" | "left";
+    setView(currentView()); // 预设里的「朝机头 / 朝机尾」换到新座位的坐标
     snapAll();
   });
+  const viewSel = $<HTMLSelectElement>("view-preset");
+  viewSel.innerHTML = VIEW_PRESETS.map((v) => `<option value="${v.id}">${v.name}</option>`).join("");
+  viewSel.addEventListener("change", () => setView(viewSel.value));
 
   function bindRange(id: string, apply: (v: number) => string) {
     const input = $<HTMLInputElement>(id);
