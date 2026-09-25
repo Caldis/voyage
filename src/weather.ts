@@ -6,7 +6,9 @@ import type { CloudUniforms } from "./clouds/clouds";
  * 雷暴、台风都固定在地面（本地公里坐标），飞机飞过时从窗外经过。
  *
  * 闪电按泊松过程发生（每个单体平均几秒一次）；一次闪电有 2–4 次回击，间隔几十毫秒，所以会连闪几下。
- * 约 35% 是云地闪：生成一条从云底到地面的折线主通道（带一条分叉），由场景着色器画出来。
+ * 云内闪电（约 70%）是云里一段 3–10 km 长、大致水平的放电通道（有时钻进砧状云里），照亮整团云；
+ * 云地闪（约 30%）除了云里的一段竖直通道，还生成一条从云底到地面的折线主通道（带一条分叉），由场景着色器画出来。
+ * 云内闪 : 云地闪的比例因地区而异，常见的全球平均估计约 2–3 : 1，这里取 7 : 3。
  */
 
 export interface WeatherPreset {
@@ -42,6 +44,10 @@ export class WeatherSystem {
   hurricane: { x: number; z: number; eye: number } | null = null;
   private strokes: Stroke[] = [];
   private flashPos = new THREE.Vector3();
+  private flashEnd = new THREE.Vector3();
+  /** 调试 / 截图：true 时闪光亮度保持在 heldIntensity，不衰减、不触发新的闪电 */
+  hold = false;
+  heldIntensity = 0;
   /** 云地闪的主通道（本地公里坐标，y 是高度），给场景着色器 */
   readonly bolt = Array.from({ length: MAX_BOLT_POINTS }, () => new THREE.Vector3());
   boltCount = 0;
@@ -86,7 +92,8 @@ export class WeatherSystem {
     let top = u.uCloudTop.value;
     if (this.storms.length) {
       bottom = 0.0; // 雨幡一直落到地面
-      top = Math.max(top, ...this.storms.map((s) => s.top + 1.3));
+      // 上冲云顶高出砧顶约 0.9 km，再加上表面的隆起
+      top = Math.max(top, ...this.storms.map((s) => s.top + 1.8));
     }
     if (this.hurricane) {
       bottom = Math.min(bottom, 0.8);
@@ -98,6 +105,12 @@ export class WeatherSystem {
 
   update(dt: number) {
     this.time += dt;
+    if (this.hold) {
+      this.u.uFlash.value.set(this.flashPos.x, this.flashPos.y, this.flashPos.z, this.heldIntensity);
+      this.u.uFlashB.value.copy(this.flashEnd);
+      this.boltIntensity = this.boltCount > 0 ? this.heldIntensity : 0;
+      return;
+    }
     // 触发新的闪电
     for (const s of this.storms) {
       if (this.time < s.nextFlash) continue;
@@ -112,18 +125,44 @@ export class WeatherSystem {
       if (age >= 0) intensity += k.intensity * Math.exp(-age / 0.05);
     }
     this.u.uFlash.value.set(this.flashPos.x, this.flashPos.y, this.flashPos.z, intensity);
+    this.u.uFlashB.value.copy(this.flashEnd);
     this.boltIntensity = this.boltCount > 0 ? intensity : 0;
     if (intensity < 1e-3) this.boltCount = 0;
   }
 
-  private trigger(s: Storm) {
-    const cg = Math.random() < 0.35;
+  /** 调试：立刻在第 i 个雷暴里触发一次闪电。hold = true 时亮度停在 intensity（截图用），把 hold 改回 false 恢复 */
+  flashNow(i = 0, cg = false, hold = false, intensity = 300) {
+    const s = this.storms[i];
+    if (!s) return;
+    this.trigger(s, cg);
+    this.hold = hold;
+    this.heldIntensity = intensity;
+  }
+
+  private trigger(s: Storm, forceCg?: boolean) {
+    const cg = forceCg ?? Math.random() < 0.3;
     const ang = Math.random() * Math.PI * 2;
-    const rr = Math.random() * s.radius * 0.7;
+    const rr = Math.random() * s.radius * 0.6;
     const fx = s.x + Math.cos(ang) * rr;
     const fz = s.z + Math.sin(ang) * rr;
-    // 云内闪电在云体中上部；云地闪的光主要在云底附近
-    this.flashPos.set(fx, cg ? 2.0 : 3 + Math.random() * 6, fz);
+    const dir = Math.random() * Math.PI * 2;
+    if (cg) {
+      // 云地闪：云里的一段从云底往上走到 4–6 km（光主要在云的中下部）
+      const lean = 1 + Math.random() * 2;
+      this.flashPos.set(fx, 1.3, fz);
+      this.flashEnd.set(fx + Math.cos(dir) * lean, 4 + Math.random() * 2, fz + Math.sin(dir) * lean);
+    } else {
+      // 云内闪电：中上部一段大致水平的通道；约三分之一往下风方钻进砧状云（「蜘蛛闪电」）
+      const len = 3 + Math.random() * 7;
+      const alt = 5 + Math.random() * 4;
+      this.flashPos.set(fx, alt, fz);
+      if (Math.random() < 0.35) {
+        const w = this.u.uUpperWind.value;
+        this.flashEnd.set(fx + w.x * len * 1.5, s.top - 1.5, fz + w.y * len * 1.5);
+      } else {
+        this.flashEnd.set(fx + Math.cos(dir) * len, alt + (Math.random() - 0.5) * 2, fz + Math.sin(dir) * len);
+      }
+    }
     const n = 2 + Math.floor(Math.random() * 3);
     for (let i = 0; i < n; i++) this.strokes.push({ t0: this.time + i * (0.05 + Math.random() * 0.08), intensity: 300 * (i === 0 ? 1 : 0.5 + Math.random() * 0.5) });
     this.boltCount = 0;
