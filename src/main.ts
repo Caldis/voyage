@@ -11,6 +11,7 @@ import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
 import { createSceneMaterial } from "./render/scene";
 import { GroundClipmap } from "./ground/clipmap";
+import { OceanWaves } from "./ocean/waves";
 import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateTurbulence } from "./flight";
 import { $, CRUISE_PITCH_DEG, type Preset, type VoyageState } from "./state";
 import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
@@ -41,6 +42,9 @@ const cloudUniforms = createCloudUniforms(generateCloudNoise(renderer, pass));
 tick("云噪声");
 const ground = new GroundClipmap(PRESETS[0].lat, PRESETS[0].lon);
 const sceneMat = createSceneMaterial(atmosphere, cloudUniforms, ground);
+// 海浪：GPU FFT 三级级联（T14），每帧在场景 pass 之前更新
+const ocean = new OceanWaves(renderer);
+Object.assign(sceneMat.uniforms, ocean.uniforms);
 const clouds = new Clouds(pass, atmosphere, cloudUniforms, sceneMat.uniforms);
 const exposure = new Exposure(pass);
 const traffic = new Traffic();
@@ -291,6 +295,7 @@ function frame(now: number) {
   u.uCabinLight.value = state.cabinLight ? 0.2 : 0.001;
   clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
+  ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
   pass.render(sceneMat, hdr);
   exposure.render(hdr.texture, bloom.render(hdr), dt);
 
@@ -310,4 +315,4 @@ requestAnimationFrame(() =>
 );
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean };
