@@ -25,6 +25,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| DX-SC | **着色器编译时间专项（用户 2026-09-26 定为最高优先）**：先由开发体验官实测 ANGLE 后端 / 特性隔离 / 拆分收益（`research/DX_SHADER_COMPILE.md`），报告一出立即按其拆分并行派实现 | **最高** | 视报告拆分 | 视拆分 | 日常改一处着色器后看到效果的时间显著下降（目标：秒级到十几秒）；首次冷编译下降；画面与帧时间不变 |
 | T16 | **着色器编译进度条**（用户 2026-09-25：「纯等也有点干」）：用 `KHR_parallel_shader_compile`（three.js `compileAsync` / 轮询 `COMPLETION_STATUS_KHR`）把各个程序异步编译，加载遮罩显示分阶段清单（大气 LUT / 云噪声 / 云 / 场景 / 后期，逐项打勾）+ 总进度条 + 已用时间；单个程序编译期间驱动不给进度，条内按上次记录的各阶段耗时（localStorage）估算并标明「约」；命中缓存时一闪而过。编译期间页面保持响应（进度条能动） | **第 3 波第一个** | `src/main.ts`（启动段）、`index.html`（遮罩）、`src/style.css`、新建 `src/boot/*` | main（第 2 波 T05 占用，故排第 3 波） | 冷启动（清着色器缓存：换 ANGLE 后端或改一行着色器）看到逐项推进、不冻结；热启动 < 1 秒遮罩消失；`window.__voyageStartup` 继续有效 |
 | T07 | 光学细节：太阳附近的眼睛衍射星芒；窗板边缘色散；高空低温时内层窗板透气孔周围的冰晶 | 中 | `src/render/bloom.ts`、`src/render/exposure.ts`、`src/render/cabin.glsl.ts`（窗板部分） | 否 | sunset-wing、noon-cumulus |
 | T08 | 道路灯带：OSM transportation 图层，夜里的主干道与高速公路成为连续的灯带 | 中 | `src/ground/tiles.ts`、`src/ground/clipmap.ts`、地面着色模块 | 否（T01 后） | night-city、route-hnd-cts 夜间版（新增） |
