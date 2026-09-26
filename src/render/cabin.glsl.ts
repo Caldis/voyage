@@ -1,27 +1,13 @@
+import { NOISE_COMMON } from "./noise.glsl";
+
 /**
  * 舱内几何与光照（GLSL）。依赖 VIEW_COMMON 里的舷窗尺寸。
  * 窗洞内衬是一个从舱壁开口平滑收窄到窗板的「漏斗」：在舱壁处与墙面相切（形成圆润的窗沿），到窗板处收成窗板的形状。
  * 光照三部分：舱内环境光、窗板这块面光源的漫射照度、穿过窗板的直射阳光（逐点判断能不能穿过开口，所以会有清晰的光斑）。
  */
 export const CABIN_COMMON = /* glsl */ `
+${NOISE_COMMON}
 const vec3 CABIN_LIGHT_COLOR = vec3(1.0, 0.9, 0.76); // 约 3500 K 的暖白
-// 恒为 0。循环上限写成「常数 + uLoopGuard」，Windows 上 ANGLE → FXC 就无法把循环展开：
-// 舱内加了座椅之后，全部展开的场景着色器编译 80 多秒后直接失败（链接报错、日志为空）
-uniform int uLoopGuard;
-
-float hash12(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-
-float vnoise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
-             mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
-}
 
 // 漏斗在深度 z 处的收窄进度：sqrt 使它在舱壁处与墙面相切
 float funnelT(float z) { return sqrt(clamp(z / PANE_DEPTH, 0.0, 1.0)); }
@@ -106,17 +92,7 @@ float sunThroughWindow(vec3 x, vec3 sunC, float shadeBottom) {
 export const PANE_COMMON = /* glsl */ `
 // ---- 窗板上的细节：划痕、油污指纹、透气孔 ----
 
-vec2 hash22(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.xx + p3.yz) * p3.zy);
-}
-
-float fbm2(vec2 p) {
-  float s = 0.0, a = 0.5;
-  for (int i = 0; i < 4 + uLoopGuard; i++) { s += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
-  return s;
-}
+// hash22 / fbm2 在 noise.glsl.ts（CABIN_COMMON 已经拼进去了）
 
 float segDist(vec2 p, vec2 a, vec2 b) {
   vec2 pa = p - a, ba = b - a;

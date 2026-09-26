@@ -4,6 +4,272 @@
  * 坐标与大气一致：km，地心为原点，相机在 (0, uCamR, 0)，y 向上。
  * 云场随飞机前进整体向后平移：采样坐标 = 相机相对坐标 + uCloudOffset（飞机累计走过的水平位移）。
  */
+// 台风密度的两个版本共用同一段眼壁 / 眼底 / 卷云盖代码，只有雨带不同（见 CLOUD_COMMON 里的两处展开）
+function hurricaneDensityGlsl(name: string, bands: string): string {
+  return /* glsl */ `
+float ${name}(vec2 xz, float alt, float lod, bool detail, out float ao) {
+  ao = 1.0;
+  if (alt > HUR_TOP + 4.2) return 0.0;
+  vec2 d2 = xz - uHurricane.xy;
+  float r = length(d2);
+  float Re = uHurricane.z;          // 低层的眼半径
+  if (r > Re * 18.0) return 0.0;
+  float theta = atan(d2.y, d2.x);
+  float u = theta / HUR_TWO_PI;
+  float d = 0.0;
+  float wallW = 0.0;                // 这个点属于眼壁 / 雨区（1）还是别的部分
+
+  // ---- 眼壁的内缘半径 rIn(θ, 高度) ----
+  // 眼的平面形状不是正圆（常见近似多边形 / 椭圆），随高度缓慢扭转
+  float shape = 0.10 * sin(2.0 * theta + 0.6 + alt * 0.05) + 0.06 * sin(3.0 * theta + 2.1 - alt * 0.08) + 0.035 * sin(5.0 * theta + 4.0);
+  // 各扇区倾角不同：Δr / Δz 在 0.6–1.3 之间（约 30–52°）
+  float slopeK = 0.95 + 0.35 * sin(theta + 1.3) + 0.12 * sin(4.0 * theta + 0.5);
+  float rLow = Re * (1.0 + shape);
+  if (r < Re * 4.2) {
+    // 两次采样给出四个尺度：
+    //  nT：切向约 1/6 圈一个周期（约 35 km）、竖直 28 km —— g ≈ 9 km 宽 7 km 高的大对流塔，b ≈ 4 km
+    //  nS：切向 1/24 圈（约 9 km）、竖直 4 km —— g ≈ 2.3 km × 1 km 的横条，b 更细：水平的层状条纹
+    float lodT = max(lod - 2.3, 0.0);
+    vec4 nT = textureLod(uShapeNoise, vec3(u * 6.0, alt / 28.0, 0.37), lodT);
+    vec4 nS = textureLod(uShapeNoise, vec3(u * 24.0, alt / 4.0, 0.71), max(lod - 0.5, 0.0));
+    // 下陡上缓：低处接近 30°，越往上越向外摊（看台的形状）
+    // 卷云盖顶以上（上冲的对流塔）内壁不再外退：塔身是竖直的
+    float altW = min(alt, HUR_TOP - 0.2);
+    float rise = slopeK * (0.55 * altW + 0.045 * altW * altW);
+    // 两三级不规则的台阶（平台）：高度沿方位角大幅起伏、只在部分扇区明显。
+    // 试过按固定间距一级级量化，从巡航高度俯看像等高线地图
+    float l1 = 4.5 + 1.3 * sin(2.0 * theta + 0.4) + 0.6 * sin(5.0 * theta + 2.2);
+    float l2 = 8.5 + 1.6 * sin(3.0 * theta + 1.9) + 0.7 * sin(7.0 * theta + 0.3);
+    rise += 1.6 * smoothstep(l1 - 0.35, l1 + 0.35, alt) * smoothstep(-0.3, 0.5, sin(3.0 * theta + 0.8));
+    rise += 2.0 * smoothstep(l2 - 0.4, l2 + 0.4, alt) * smoothstep(-0.4, 0.4, sin(2.0 * theta + 2.6));
+    // 顶部向外卷：越接近卷云盖，内壁越平，最后变成卷云盖的底面，没有切边
+    float flare = HUR_FLARE * pow(smoothstep(HUR_FLARE_START, HUR_TOP, alt), 2.0);
+    // 对流塔：强弱按扇区变化（随机性），低处（雨区上方的层状云）平缓一些
+    float towerAmp = mix(0.8, 4.5, smoothstep(0.3, 0.7, nT.r)) * smoothstep(0.8, 4.0, alt);
+    // 外卷的上半截（从下面看是一片「天花板」）隆起要更大，否则是一条没有细节的灰带
+    float bump = towerAmp * hurCap(nT.g) + 1.1 * hurCap(nT.b) + (0.35 + 1.3 * smoothstep(10.0, 14.5, alt)) * hurCap(nS.g) + 0.2 * (nS.b - 0.5);
+    float rIn = rLow + rise + flare - bump;
+    float s = r - rIn;
+    // 眼壁 + 雨区：从海面附近到卷云盖是实心的；再往外云底抬升成卷云盖
+    float coreOuter = Re * (2.9 + 0.35 * sin(2.0 * theta + 1.0));
+    float baseAlt = mix(0.5 + 0.3 * (nS.a - 0.5), 12.0, smoothstep(coreOuter, coreOuter + Re * 0.9, r));
+    // 眼壁顶沿：各扇区高低不同（hurricaneRimTop），顶上一座座上冲的对流塔高出 1–4.5 km（天际线上高耸的圆顶塔），
+    // 离眼壁内缘远了就没有。塔的平面位置只取水平切片（极坐标 θ × r），不随高度变：
+    // 用随高度变的 3D 噪声当高度场，塔会上下断开成漂浮的团块（README 坑点）
+    vec4 nR = textureLod(uShapeNoise, vec3(u * 13.0, 0.61, r / 26.0), max(lod - 1.5, 0.0));
+    float rimZone = 1.0 - smoothstep(5.0, 16.0, s);
+    // 圆顶：Worley 距离直接给半椭圆剖面（宽约 5 km、高 1–4.5 km），再叠约 3 km 的小圆顶，顶上不是平台
+    float ddR = clamp((1.0 - nR.g) * 1.6, 0.0, 1.0) / 0.8;
+    float domeR = sqrt(max(1.0 - ddR * ddR, 0.0));
+    float overshoot = (4.2 * (0.4 + 0.6 * nR.b) * domeR * smoothstep(0.3, 0.6, nR.r)
+                     + 0.6 * max(hurCap(nT.b) + 0.1, 0.0) * domeR + 0.6 * hurTower(nT.g) * smoothstep(0.4, 0.7, nT.r)) * rimZone;
+    float rimTop = mix(hurricaneRimTop(theta), HUR_TOP, smoothstep(Re * 1.8, Re * 3.0, r));
+    float top = min(rimTop - 0.5 * (1.0 - nR.a) - 1.2 * smoothstep(Re * 2.0, Re * 5.0, r) + overshoot, HUR_TOP + 4.2);
+    float wall = smoothstep(0.0, 0.35, s) * smoothstep(baseAlt, baseAlt + 0.3, alt) * (1.0 - smoothstep(top - 0.4, top, alt));
+    if (wall > d) { d = wall; wallW = 1.0; }
+    // 遮蔽：隆起顶端看到的天空多、凹处少；眼壁下部像在井底，只看得到头顶一块天
+    // 眼壁表面只看得到半边天（另一半被眼壁自己挡住），对面还是眼壁：天空光约为开阔处的一半
+    ao = 0.55 * mix(0.3, 1.0, smoothstep(-1.5, 1.0, bump)) * mix(0.4, 1.0, smoothstep(1.0, 13.0, alt));
+    // ---- 眼底的层积云 ----
+    float rEyeLow = rLow + slopeK * 1.2;
+    if (r < rEyeLow + 2.0 && alt < 2.8) {
+      // 随低层气流旋转：离中心越远转得越多，单体被拉成略弯的弧
+      vec2 q = rot2(d2, 0.9 * r / Re);
+      vec4 nF = textureLod(uShapeNoise, vec3(q.x / 16.0, alt / 8.0, q.y / 16.0) + 0.43, max(lod - 1.2, 0.0));
+      // 成片：几公里大小的一片片云，中间有空隙露出海面，靠近眼壁更密；边界陡（云片的边缘是清楚的）
+      float cov = smoothstep(0.44, 0.54, nF.r + 0.25 * smoothstep(0.55, 1.0, r / rEyeLow));
+      // 云片有厚度（约 0.4–1 km），顶上是约 2 km 的闭合单体圆顶和约 1 km 的小圆顶
+      float fbase = 0.8 + 0.15 * nF.a;
+      float ftop = fbase + cov * (0.45 + 0.6 * hurCap(nF.b) + 0.3 * hurCap(nF.a)) + 0.5 * smoothstep(0.7, 1.05, r / rEyeLow);
+      float floorD = smoothstep(fbase, fbase + 0.12, alt) * smoothstep(0.0, 0.2, ftop - alt) * 0.8;
+      if (floorD > d) {
+        d = floorD;
+        wallW = 0.0;
+        // 眼底只看得到头顶的开口：越靠近眼壁越暗
+        ao = mix(0.75, 0.45, smoothstep(0.3, 1.0, r / rEyeLow));
+      }
+    }
+  }
+  // ---- 眼墙外：卷云盖与流出层的丝缕 ----
+  if (r > Re * 2.5 && alt > 11.0) {
+    // 卷云盖的底往外抬升（外缘只剩 14 km 附近薄薄一层卷云，巡航高度可以在它下面俯看雨带）
+    float canopyBase = 11.8 + 2.4 * smoothstep(Re * 4.0, Re * 12.0, r);
+    float canopyTop = HUR_TOP - 1.2 * smoothstep(Re * 2.0, Re * 5.0, r) - 1.4 * smoothstep(Re * 5.0, Re * 16.0, r);
+    if (alt > canopyBase - 0.3 && alt < canopyTop + 0.3) {
+      // 流出气流：高空的丝缕沿反气旋弯曲的螺线向外，坐标 (θ − 1.1 ln r) 沿丝缕不变
+      float lr = log(max(r, 1.0));
+      vec4 nC = textureLod(uShapeNoise, vec3((theta - 1.1 * lr) / HUR_TWO_PI * 16.0, lr * 1.6, alt / 6.0), lod);
+      float fib = nC.g * 0.7 + nC.b * 0.3;
+      float edge = 1.0 - smoothstep(Re * 9.0, Re * 16.0, r + Re * 4.0 * (fib - 0.5));
+      float vert = smoothstep(canopyBase - 0.3, canopyBase + 0.4, alt) * (1.0 - smoothstep(canopyTop - 0.4, canopyTop + 0.2, alt));
+      // 冰云：靠近眼壁厚，往外越来越薄、越来越丝缕状
+      float thin = smoothstep(Re * 3.5, Re * 10.0, r);
+      float canopy = vert * edge * mix(0.9, 0.3 * smoothstep(0.25, 0.75, fib), thin);
+      if (canopy > d) { d = canopy; wallW = 0.0; ao = 1.0; }
+    }
+  }
+${bands}
+  if (d <= 0.0) return 0.0;
+  // 眼壁、雨带、眼底：表面附近侵蚀成小的圆团（同雷暴）；卷云盖不侵蚀
+  if (detail && (wallW > 0.5 || alt < 3.0)) {
+    vec3 dn = textureLod(uDetailNoise, vec3(xz.x, alt, xz.y) / DETAIL_TILE, lod).rgb;
+    float dfbm = dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125;
+    d = remapc(d, (1.0 - dfbm) * 0.45, 1.0, 0.0, 1.0);
+  }
+  return d;
+}
+`;
+}
+
+const HUR_BANDS_FULL = /* glsl */ `
+  // ---- 外围螺旋雨带：一条条积雨云带 ----
+  // 6 条对数螺旋，倾角约 18°（tan = 6 / 18.5），相邻两带的半径比约 1.4（外围间距几十到一百公里）。
+  // 螺旋相位是纯解析的（不加噪声扰动）：带子保持连贯的弧形，从高处斜看才读得出弧形的排列；断续和宽窄交给强度噪声。
+  // 带上的积雨云塔是一个个解析单体（约 11 km 一格，每格随机位置、高矮、胖瘦）：塔身粗、圆顶、菜花状隆起，
+  // 高的塔顶上摊开一块被高空风吹偏的砧。旧做法把 Worley 距离当高度场，塔身竖直、一样高、顶是平台，侧看像一片石笋
+  if (r > Re * 2.8 && alt < 15.0) {
+    vec4 nB = textureLod(uShapeNoise, vec3(xz / 40.0, 0.19), max(lod - 2.5, 0.0));
+    float phB = 6.0 * theta - 18.5 * log(max(r, 1.0));
+    float cb = cos(phB);
+    // 相位的梯度：∇θ = (−y, x) / r²，∇ln r = (x, y) / r²。格子中心的相位用一阶展开估计（格子离采样点不过十几公里，
+    // 半径 ≥ 56 km，误差很小），循环里就不必每格再算 atan / log——这段被内联两处，FXC 编译时间对循环体大小很敏感
+    vec2 phGrad = (6.0 * vec2(-d2.y, d2.x) - 18.5 * d2) / (r * r);
+    float radial = smoothstep(Re * 2.8, Re * 4.0, r) * (1.0 - smoothstep(Re * 13.0, Re * 17.0, r));
+    float band = smoothstep(0.2, 0.75, cb) * smoothstep(0.3, 0.55, nB.b * 0.6 + nB.r * 0.4) * radial;
+    // 高过这一带最高的塔顶（含隆起、砧）就不必进单体循环：从 13 km 俯看时相机附近的大段视线都在这里，
+    // 不加这道判断 typhoon-outer 的帧时间是原来的近 3 倍
+    float topHere = mix(13.0, 8.5, smoothstep(Re * 3.5, Re * 15.0, r)) + 1.5;
+    if ((band > 0.01 || cb > 0.45) && alt < topHere) {
+      // 塔身表面的菜花状隆起（约 2 km / 1 km），3D 噪声，只作为表面起伏，不当高度场
+      vec4 nU = textureLod(uShapeNoise, vec3(xz.x / 9.0, alt / 7.0, xz.y / 9.0) + 0.29, max(lod - 0.7, 0.0));
+      float bump = 1.0 * hurCap(nU.g) + 0.45 * hurCap(nU.b);
+      const float CELL = 11.0;
+      vec2 gid = floor(xz / CELL);
+      float sdf = 1e3;
+      float anv = 0.0;
+      gHurCell = vec3(0.0);
+      vec2 nC = vec2(0.0);
+      vec3 nHR = vec3(0.0);   // 最近那座高塔的 (塔顶高, 半径, 随机数)
+      float nAnD = 1e9;
+      // 上界写成「1 + 恒为 0 的 uniform 表达式」，FXC 不把 9 个单体展开（这段被内联进步进和受光步进两处）
+      int cellHi = 1 + min(uStormCount, 0);
+      for (int ix = -1; ix <= cellHi; ix++)
+      for (int iy = -1; iy <= cellHi; iy++) {
+        vec2 id = gid + vec2(float(ix), float(iy));
+        vec2 h1 = stormHash22(id + 17.3);
+        vec2 c = (id + 0.2 + 0.6 * h1) * CELL;
+        // 塔身（含风切变、隆起）离塔心不超过约 7 km：远的格子不算塔身。砧在 8 km 以上、离塔心 20 km 以内才要找「最近的高塔」。
+        // 其余格子直接跳过（帧时间：从 13 km 俯看雨带时，这个循环是主要开销）
+        float dd2 = dot(xz - c, xz - c);
+        bool nearT = dd2 < 64.0;
+        if (!nearT && (alt < 8.0 || dd2 > 400.0)) continue;
+        vec2 h2 = stormHash22(id * 1.7 + 3.1);
+        float rcc = length(c - uHurricane.xy);
+        // 格子中心落在带轴附近才长塔；带轴上也有约 1/4 的格子空着（塔与塔之间的缝）
+        float coreC = smoothstep(0.55, 0.92, cos(phB + dot(phGrad, c - xz)))
+                    * smoothstep(Re * 3.0, Re * 4.2, rcc) * (1.0 - smoothstep(Re * 12.0, Re * 16.0, rcc)) * step(0.25, h2.x);
+        if (coreC <= 0.0) continue;
+        // 高矮参差：浓积云 5–7 km 到积雨云 9–13 km，离中心远的矮一些
+        float topMax = mix(13.0, 8.5, smoothstep(Re * 3.5, Re * 15.0, rcc));
+        float Ht = 2.0 + (mix(5.0, topMax, h2.y * (1.3 - 0.3 * h2.y)) - 2.0) * mix(0.55, 1.0, coreC);
+        float Rt = CELL * (0.3 + 0.16 * h1.x) * mix(0.75, 1.0, coreC);      // 塔身半径 3.3–5 km
+        // 砧的候选：离得最近的高塔（塔顶过 10 km）
+        if (Ht > 10.0 && dd2 < nAnD) { nAnD = dd2; nC = c; nHR = vec3(Ht, Rt, h2.y); }
+        if (!nearT) continue;
+        // 上半截被高空风吹斜
+        vec2 ax = c + uUpperWind * 0.12 * alt * alt / Ht;
+        float rho = length(xz - ax);
+        // 塔身：底部稍细、中部最胖；顶上是扁圆穹顶（穹顶高约 0.7 倍半径）
+        float hh = clamp(alt / Ht, 0.0, 1.0);
+        float rb = Rt * (0.8 + 0.2 * sin(hh * 2.6));
+        float domeH = min(Rt * 0.7, Ht * 0.35);
+        float domeS = Ht - domeH;
+        vec2 q = vec2(rho / rb, max(alt - domeS, 0.0) / domeH);
+        float lq = length(q);
+        float sd = (lq - 1.0) * mix(rb, domeH, q.y / max(lq, 1e-3));
+        if (sd < sdf) { sdf = sd; gHurCell = vec3(id, coreC); }
+      }
+      // 砧：只给最近的那座高塔算（放在循环外，循环体小一些）
+      // 高过 10 km 的塔顶下面摊开一块透镜，顺高空风偏出去，外缘变薄
+      float Ht = nHR.x, Rt = nHR.y;
+      if (Ht > 10.0) {
+        vec2 nAx = nC + uUpperWind * 0.12 * alt * alt / Ht;
+        vec2 ac = nC + uUpperWind * Rt * 1.3;
+        // 外缘不规则：水平切片噪声定大轮廓，随高度变的噪声（约 1 km）把边缘撕成纤维，不是一只边缘整齐的飞碟
+        // 顺风方向拉长约 1.7 倍（砧是被高空风吹出去的冰晶，不是圆盘）
+        vec2 da = xz - ac;
+        vec2 dw = vec2(dot(da, uUpperWind) / 1.7, dot(da, vec2(-uUpperWind.y, uUpperWind.x)));
+        float ra = length(dw) / (Rt * (1.7 + 0.5 * nHR.z)) + 0.6 * (nB.g - 0.5) + 0.4 * (nU.b - 0.5);
+        float ra2 = ra * ra;
+        float aTop = Ht - 0.4 - 0.7 * ra2 + 0.5 * hurCap(nU.a) * (1.0 - ra2);
+        // 底面：大尺度起伏；靠近塔顶处向下弯、和塔身连成蘑菇伞，不是一块插在塔上的平板
+        // 越往外越薄，外缘薄到没有（侧看不是一块齐边的厚板）
+        float aBot = aTop - 0.15 - 1.7 * max(1.0 - ra2, 0.0) + 0.6 * (nB.a - 0.5) * (1.0 - ra2)
+                   - 1.8 * (1.0 - smoothstep(0.6, 1.6, length(xz - nAx) / Rt));
+        float a = smoothstep(aBot, aBot + 0.35, alt) * (1.0 - smoothstep(aTop - 0.35, aTop, alt)) * (1.0 - smoothstep(0.6, 1.05, ra));
+        // 冰晶云比水滴云稀：中心不透明，外缘半透明
+        anv = a * smoothstep(10.0, 11.0, Ht) * mix(0.85, 0.15, smoothstep(0.25, 1.0, ra));
+      }
+      sdf -= 0.9 * bump * smoothstep(0.5, 2.5, alt);
+      float towerD = smoothstep(0.0, 0.35, -sdf);
+      // 两侧是 1–3 km 高的层状云「裙边」（雨区），带与带之间是晴空或零散的小积云
+      float H = 1.0 + 1.6 * band * (0.6 + 0.4 * nU.r) + 0.5 * bump - 0.6 * (1.0 - band);
+      float skirt = smoothstep(0.0, 0.35, H - alt) * smoothstep(0.5, 0.8, alt);
+      float bd = max(max(towerD, skirt), anv);
+      if (bd > d) {
+        d = bd;
+        bool isAnvil = anv > towerD && anv > skirt;
+        // 砧是半透明的冰晶云，不做表面侵蚀（侵蚀会把 0.1–0.4 的稀薄外缘整片削掉）
+        wallW = isAnvil ? 0.0 : 1.0;
+        ao = isAnvil ? mix(0.5, 1.0, smoothstep(9.0, 12.0, alt))
+           : mix(0.35, 1.0, smoothstep(-1.0, 0.8, bump)) * mix(0.5, 1.0, smoothstep(0.5, 8.0, alt));
+      }
+    }
+  }
+`;
+
+const HUR_BANDS_LIGHT = /* glsl */ `
+  // ---- 外围螺旋雨带（受光步进用的简化版）----
+  // 完整版的 3×3 单体循环（每格一座塔 + 砧）被内联进受光步进后，云程序的真冷启动多约 4 s（+20%），帧时间也涨得多。
+  // 这里只算完整版记下的那一座塔（gHurCell），不算砧、表面隆起和其他塔的遮挡：朝太阳的光学厚度只要大概，
+  // 但塔的形状必须和完整版一致——试过用一道不分单体的「脊」近似，塔身受光面出现大块亮斑、背面整片发黑
+  if (r > Re * 2.8 && alt < 15.0) {
+    // 带子的断续（强度噪声）不采样：受光步进每步少一次纹理读取，裙边按带子全连着算
+    float cb = cos(6.0 * theta - 18.5 * log(max(r, 1.0)));
+    float radial = smoothstep(Re * 2.8, Re * 4.0, r) * (1.0 - smoothstep(Re * 13.0, Re * 17.0, r));
+    float band = smoothstep(0.2, 0.75, cb) * radial;
+    // 高过这一带最高的塔顶（含隆起、砧）就不必进单体循环：从 13 km 俯看时相机附近的大段视线都在这里，
+    // 不加这道判断 typhoon-outer 的帧时间是原来的近 3 倍
+    float topHere = mix(13.0, 8.5, smoothstep(Re * 3.5, Re * 15.0, r)) + 1.5;
+    if ((band > 0.01 || cb > 0.45) && alt < topHere) {
+      // 直接用完整版在这条受光射线的起点记下的那座塔（gHurCell）：射线上其他塔的遮挡不算
+      const float CELL = 11.0;
+      vec3 bc = gHurCell;
+      float towerD = 0.0;
+      if (bc.z > 0.0) {
+        vec2 h1 = stormHash22(bc.xy + 17.3);
+        vec2 h2 = stormHash22(bc.xy * 1.7 + 3.1);
+        vec2 c = (bc.xy + 0.2 + 0.6 * h1) * CELL;
+        float rcc = length(c - uHurricane.xy);
+        float coreC = bc.z;
+        float topMax = mix(13.0, 8.5, smoothstep(Re * 3.5, Re * 15.0, rcc));
+        float Ht = 2.0 + (mix(5.0, topMax, h2.y * (1.3 - 0.3 * h2.y)) - 2.0) * mix(0.55, 1.0, coreC);
+        float Rt = CELL * (0.3 + 0.16 * h1.x) * mix(0.75, 1.0, coreC);
+        float rho = length(xz - c - uUpperWind * 0.12 * alt * alt / Ht);
+        float rb = Rt * (0.8 + 0.2 * sin(clamp(alt / Ht, 0.0, 1.0) * 2.6));
+        float domeH = min(Rt * 0.7, Ht * 0.35);
+        vec2 q = vec2(rho / rb, max(alt - Ht + domeH, 0.0) / domeH);
+        float lq = length(q);
+        towerD = coreC > 0.0 ? smoothstep(0.0, 0.35, -(lq - 1.0) * mix(rb, domeH, q.y / max(lq, 1e-3))) : 0.0;
+      }
+      float H = 1.0 + 1.6 * band * 0.8 - 0.6 * (1.0 - band);
+      float skirt = smoothstep(0.0, 0.35, H - alt) * smoothstep(0.5, 0.8, alt);
+      float bd = max(towerD, skirt);
+      if (bd > d) { d = bd; wallW = 1.0; ao = 1.0; }
+    }
+  }
+`;
+
 export const CLOUD_COMMON = /* glsl */ `
 uniform sampler3D uShapeNoise;
 uniform sampler3D uDetailNoise;
@@ -341,7 +607,14 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
 //  - 外围螺旋雨带：6 条对数螺旋（倾角约 18°），沿带排着一座座积雨云塔，带子有断续、宽窄不一。
 // 旧版把眼壁做成一堵垂直的墙：同一尺度的噪声铺满墙面、顶上一刀切平、底部挂一排絮条，眼底低云是一块块平板。
 const float HUR_TWO_PI = 6.2831853;
-const float HUR_TOP = 16.2;      // 卷云盖顶（眼壁最高处），km
+const float HUR_TOP = 16.2;      // 卷云盖顶，km
+const float HUR_FLARE = 8.5;     // 眼壁顶部向外卷的距离，km（看台最上面一圈）
+const float HUR_FLARE_START = 9.8;
+
+// 眼壁顶沿的高度随方位角变：对流最强的扇区（顺切变左侧）高、对面低 2 km 左右，顶沿不是一条水平线（T26）
+float hurricaneRimTop(float theta) {
+  return HUR_TOP - 0.5 + 1.2 * sin(theta + 0.4) + 0.45 * sin(3.0 * theta + 1.7);
+}
 
 // Worley 值 → 「陡侧壁 + 圆顶」的塔：格子中心一圈是平台（带圆顶），往外很快掉下去。
 // 直接用球冠当高度场，塔成了圆锥（雨带从侧面看像一片石笋）
@@ -357,131 +630,11 @@ float hurCap(float w) {
 }
 
 // 台风的密度（0..1）。ao：环境光遮蔽（眼底、眼壁下部、隆起之间的凹处看到的天空少）
-float hurricaneDensity(vec2 xz, float alt, float lod, bool detail, out float ao) {
-  ao = 1.0;
-  if (alt > HUR_TOP + 1.6) return 0.0;
-  vec2 d2 = xz - uHurricane.xy;
-  float r = length(d2);
-  float Re = uHurricane.z;          // 低层的眼半径
-  if (r > Re * 18.0) return 0.0;
-  float theta = atan(d2.y, d2.x);
-  float u = theta / HUR_TWO_PI;
-  float d = 0.0;
-  float wallW = 0.0;                // 这个点属于眼壁 / 雨区（1）还是别的部分
-
-  // ---- 眼壁的内缘半径 rIn(θ, 高度) ----
-  // 眼的平面形状不是正圆（常见近似多边形 / 椭圆），随高度缓慢扭转
-  float shape = 0.10 * sin(2.0 * theta + 0.6 + alt * 0.05) + 0.06 * sin(3.0 * theta + 2.1 - alt * 0.08) + 0.035 * sin(5.0 * theta + 4.0);
-  // 各扇区倾角不同：Δr / Δz 在 0.6–1.3 之间（约 30–52°）
-  float slopeK = 0.95 + 0.35 * sin(theta + 1.3) + 0.12 * sin(4.0 * theta + 0.5);
-  float rLow = Re * (1.0 + shape);
-  if (r < Re * 4.2) {
-    // 两次采样给出四个尺度：
-    //  nT：切向约 1/6 圈一个周期（约 35 km）、竖直 28 km —— g ≈ 9 km 宽 7 km 高的大对流塔，b ≈ 4 km
-    //  nS：切向 1/24 圈（约 9 km）、竖直 4 km —— g ≈ 2.3 km × 1 km 的横条，b 更细：水平的层状条纹
-    float lodT = max(lod - 2.3, 0.0);
-    vec4 nT = textureLod(uShapeNoise, vec3(u * 6.0, alt / 28.0, 0.37), lodT);
-    vec4 nS = textureLod(uShapeNoise, vec3(u * 24.0, alt / 4.0, 0.71), max(lod - 0.5, 0.0));
-    // 下陡上缓：低处接近 30°，越往上越向外摊（看台的形状）
-    float rise = slopeK * (0.55 * alt + 0.045 * alt * alt);
-    // 两三级不规则的台阶（平台）：高度沿方位角大幅起伏、只在部分扇区明显。
-    // 试过按固定间距一级级量化，从巡航高度俯看像等高线地图
-    float l1 = 4.5 + 1.3 * sin(2.0 * theta + 0.4) + 0.6 * sin(5.0 * theta + 2.2);
-    float l2 = 8.5 + 1.6 * sin(3.0 * theta + 1.9) + 0.7 * sin(7.0 * theta + 0.3);
-    rise += 1.6 * smoothstep(l1 - 0.35, l1 + 0.35, alt) * smoothstep(-0.3, 0.5, sin(3.0 * theta + 0.8));
-    rise += 2.0 * smoothstep(l2 - 0.4, l2 + 0.4, alt) * smoothstep(-0.4, 0.4, sin(2.0 * theta + 2.6));
-    // 顶部向外卷：越接近卷云盖，内壁越平，最后变成卷云盖的底面，没有切边
-    float flare = 7.0 * pow(smoothstep(10.5, 16.2, alt), 2.0);
-    // 对流塔：强弱按扇区变化（随机性），低处（雨区上方的层状云）平缓一些
-    float towerAmp = mix(0.8, 4.5, smoothstep(0.3, 0.7, nT.r)) * smoothstep(0.8, 4.0, alt);
-    float bump = towerAmp * hurCap(nT.g) + 1.1 * hurCap(nT.b) + 0.35 * hurCap(nS.g) + 0.2 * (nS.b - 0.5);
-    float rIn = rLow + rise + flare - bump;
-    // 眼壁 + 雨区：从海面附近到卷云盖是实心的；再往外云底抬升成卷云盖
-    float coreOuter = Re * (2.9 + 0.35 * sin(2.0 * theta + 1.0));
-    float baseAlt = mix(0.5 + 0.3 * (nS.a - 0.5), 12.0, smoothstep(coreOuter, coreOuter + Re * 0.9, r));
-    // 眼壁顶上一座座上冲的对流塔高出卷云盖 0.5–1.5 km（天际线上的鼓包），离眼壁远了就没有
-    float overshoot = 1.5 * hurTower(nT.g) * smoothstep(0.35, 0.7, nT.r) * (1.0 - smoothstep(6.0, 16.0, r - rLow - 16.0));
-    float top = HUR_TOP - 0.5 * (1.0 - nT.a) - 1.2 * smoothstep(Re * 2.0, Re * 5.0, r) + overshoot;
-    float s = r - rIn;
-    float wall = smoothstep(0.0, 0.35, s) * smoothstep(baseAlt, baseAlt + 0.3, alt) * (1.0 - smoothstep(top - 0.4, top, alt));
-    if (wall > d) { d = wall; wallW = 1.0; }
-    // 遮蔽：隆起顶端看到的天空多、凹处少；眼壁下部像在井底，只看得到头顶一块天
-    // 眼壁表面只看得到半边天（另一半被眼壁自己挡住），对面还是眼壁：天空光约为开阔处的一半
-    ao = 0.55 * mix(0.3, 1.0, smoothstep(-1.5, 1.0, bump)) * mix(0.4, 1.0, smoothstep(1.0, 13.0, alt));
-    // ---- 眼底的层积云 ----
-    float rEyeLow = rLow + slopeK * 1.2;
-    if (r < rEyeLow + 2.0 && alt < 2.8) {
-      // 随低层气流旋转：离中心越远转得越多，单体被拉成略弯的弧
-      vec2 q = rot2(d2, 0.9 * r / Re);
-      vec4 nF = textureLod(uShapeNoise, vec3(q.x / 16.0, alt / 8.0, q.y / 16.0) + 0.43, max(lod - 1.2, 0.0));
-      // 成片：几公里大小的一片片云，中间有空隙露出海面，靠近眼壁更密；边界陡（云片的边缘是清楚的）
-      float cov = smoothstep(0.44, 0.54, nF.r + 0.25 * smoothstep(0.55, 1.0, r / rEyeLow));
-      // 云片有厚度（约 0.4–1 km），顶上是约 2 km 的闭合单体圆顶和约 1 km 的小圆顶
-      float fbase = 0.8 + 0.15 * nF.a;
-      float ftop = fbase + cov * (0.45 + 0.6 * hurCap(nF.b) + 0.3 * hurCap(nF.a)) + 0.5 * smoothstep(0.7, 1.05, r / rEyeLow);
-      float floorD = smoothstep(fbase, fbase + 0.12, alt) * smoothstep(0.0, 0.2, ftop - alt) * 0.8;
-      if (floorD > d) {
-        d = floorD;
-        wallW = 0.0;
-        // 眼底只看得到头顶的开口：越靠近眼壁越暗
-        ao = mix(0.75, 0.45, smoothstep(0.3, 1.0, r / rEyeLow));
-      }
-    }
-  }
-  // ---- 眼墙外：卷云盖与流出层的丝缕 ----
-  if (r > Re * 2.5 && alt > 11.0) {
-    // 卷云盖的底往外抬升（外缘只剩 14 km 附近薄薄一层卷云，巡航高度可以在它下面俯看雨带）
-    float canopyBase = 11.8 + 2.4 * smoothstep(Re * 4.0, Re * 12.0, r);
-    float canopyTop = HUR_TOP - 1.2 * smoothstep(Re * 2.0, Re * 5.0, r) - 1.4 * smoothstep(Re * 5.0, Re * 16.0, r);
-    if (alt > canopyBase - 0.3 && alt < canopyTop + 0.3) {
-      // 流出气流：高空的丝缕沿反气旋弯曲的螺线向外，坐标 (θ − 1.1 ln r) 沿丝缕不变
-      float lr = log(max(r, 1.0));
-      vec4 nC = textureLod(uShapeNoise, vec3((theta - 1.1 * lr) / HUR_TWO_PI * 16.0, lr * 1.6, alt / 6.0), lod);
-      float fib = nC.g * 0.7 + nC.b * 0.3;
-      float edge = 1.0 - smoothstep(Re * 9.0, Re * 16.0, r + Re * 4.0 * (fib - 0.5));
-      float vert = smoothstep(canopyBase - 0.3, canopyBase + 0.4, alt) * (1.0 - smoothstep(canopyTop - 0.4, canopyTop + 0.2, alt));
-      // 冰云：靠近眼壁厚，往外越来越薄、越来越丝缕状
-      float thin = smoothstep(Re * 3.5, Re * 10.0, r);
-      float canopy = vert * edge * mix(0.9, 0.3 * smoothstep(0.25, 0.75, fib), thin);
-      if (canopy > d) { d = canopy; wallW = 0.0; ao = 1.0; }
-    }
-  }
-  // ---- 外围螺旋雨带：一条条积雨云带 ----
-  if (r > Re * 2.8 && alt < 13.5) {
-    float lr = log(max(r, 1.0));
-    vec4 nB = textureLod(uShapeNoise, vec3(xz / 40.0, 0.19), max(lod - 2.5, 0.0));
-    // 6 条对数螺旋，倾角约 18°（tan = 6 / 18.5），相邻两带的半径比约 1.4（外围间距几十到一百公里）；
-    // 相位随大尺度噪声摆动，带子有宽有窄、有断续
-    float ph = 6.0 * theta - 18.5 * lr + 3.0 * (nB.r - 0.5);
-    float band = smoothstep(0.3, 0.8, cos(ph)) * smoothstep(0.3, 0.55, nB.b * 0.6 + nB.r * 0.4);
-    band *= smoothstep(Re * 2.8, Re * 4.0, r) * (1.0 - smoothstep(Re * 13.0, Re * 17.0, r));
-    if (band > 0.01) {
-      // 积雨云塔：约 10 km 一个的 Worley 单体（nB.g），「陡侧壁 + 圆顶」（超椭圆剖面），
-      // 表面叠 3D 的球冠隆起（约 2 km / 1 km），侧壁和顶上都是菜花状。
-      // 旧做法把 3.5 km 的单体直接当高度场，塔又细又高、顶是尖的，像一片石笋
-      vec4 nU = textureLod(uShapeNoise, vec3(xz.x / 9.0, alt / 7.0, xz.y / 9.0) + 0.29, max(lod - 0.7, 0.0));
-      float bump = 1.0 * hurCap(nU.g) + 0.45 * hurCap(nU.b);
-      float dd = clamp((1.0 - nB.g) * 1.6, 0.0, 1.0) - 0.08 * bump;
-      float q = clamp(dd / 0.75, 0.0, 1.0);
-      float tower = sqrt(sqrt(max(1.0 - q * q * q * q, 0.0)));
-      float core = smoothstep(0.7, 0.97, cos(ph)) * band;
-      float bandTop = mix(12.5, 7.5, smoothstep(Re * 3.5, Re * 15.0, r)) * (0.7 + 0.6 * nB.r);
-      float H = 0.6 + (bandTop - 0.6) * core * tower * (0.55 + 0.45 * nU.r) + bump * core * tower;
-      // 两侧是 1.5–3 km 高的层状云「裙边」（雨区），带与带之间是晴空或零散的小积云
-      H = max(H, 1.0 + 1.6 * band * (0.6 + 0.4 * nU.r) + 0.5 * bump - 0.6 * (1.0 - band));
-      float bd = smoothstep(0.0, 0.35, H - alt) * smoothstep(0.5, 0.8, alt);
-      if (bd > d) { d = bd; wallW = 1.0; ao = mix(0.35, 1.0, smoothstep(-1.0, 0.8, bump)) * mix(0.5, 1.0, smoothstep(0.5, 8.0, alt)); }
-    }
-  }
-  if (d <= 0.0) return 0.0;
-  // 眼壁、雨带、眼底：表面附近侵蚀成小的圆团（同雷暴）；卷云盖不侵蚀
-  if (detail && (wallW > 0.5 || alt < 3.0)) {
-    vec3 dn = textureLod(uDetailNoise, vec3(xz.x, alt, xz.y) / DETAIL_TILE, lod).rgb;
-    float dfbm = dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125;
-    d = remapc(d, (1.0 - dfbm) * 0.45, 1.0, 0.0, 1.0);
-  }
-  return d;
-}
+// 完整版雨带求值时顺手记下「离采样点最近的那座塔」（格子号 xy、coreC）：受光步进直接用它，不再在循环里找
+vec3 gHurCell = vec3(0.0);
+${hurricaneDensityGlsl("hurricaneDensity", HUR_BANDS_FULL)}
+// 受光步进（朝太阳）用：雨带只算最近的一座塔（见 HUR_BANDS_LIGHT）
+${hurricaneDensityGlsl("hurricaneDensityLight", HUR_BANDS_LIGHT)}
 
 // 台风内部不要普通的晴天积云（眼里、眼壁、雨区都已由台风自己描述）：返回层状云的保留比例
 float hurricaneLayerMask(vec2 xz) {
@@ -525,7 +678,7 @@ float hurricaneShadowDensity(vec2 xz, float alt) {
   float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * (1.0 - smoothstep(Re * 9.0, Re * 16.0, r))
                * smoothstep(12.0, 12.8, alt) * mix(0.9, 0.25, smoothstep(Re * 3.5, Re * 10.0, r));
   float band = smoothstep(0.3, 0.8, cos(6.0 * theta - 18.5 * log(max(r, 1.0)))) * smoothstep(Re * 2.8, Re * 4.0, r)
-             * (1.0 - smoothstep(6.0, 10.0, alt)) * 0.6;
+             * (1.0 - smoothstep(8.0, 12.0, alt)) * 0.6;
   return max(max(core, canopy), band);
 }
 
@@ -547,7 +700,7 @@ float cloudDensityLite(vec3 p, float lod, bool detail, bool fullHurricane) {
     if (uHurricane.w > 0.5) {
       float hao;
       d *= hurricaneLayerMask(xz);
-      float hd = fullHurricane ? hurricaneDensity(xz, alt, lod, detail, hao) : hurricaneShadowDensity(xz, alt);
+      float hd = fullHurricane ? hurricaneDensityLight(xz, alt, lod, detail, hao) : hurricaneShadowDensity(xz, alt);
       d = max(d, hd * uCloudDensity);
     }
   }

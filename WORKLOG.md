@@ -294,3 +294,5 @@ pnpm --filter voyage typecheck && pnpm --filter voyage build
 - 收尾回归（私有 headless，d3d11，13 场景，`tmp/screenshot/wave3-final/`）：全部正常；帧时间 noon 2.3 ms、台风 9 ms、storm-day 7.6 ms。协调者目视 noon-cumulus（亮白舱壁、机翼反射正常）、night-city（睡眠氛围光、城市灯火清楚）。
 - 清理了 8 个已合并 worktree 与 t04-base；两个仍被代理锁住的 worktree（DX、T16，均已合并）待其进程结束后再清。
 - 第 3 波插单占比偏高（用户反馈集中），第 4 波按「路线图主干占多数」排：SC-5（拆窗外 / 舱内 pass，含 SC-3b）与 T18（低空霾 / 限高）为主干，T22（机翼表面）与 T26（台风第二轮）为插单。
+- **第 4 波派发**：主干 SC-5（+SC-3b，拆窗外 / 舱内 pass，独占 scene.ts / main.ts / ground.glsl）、T18（低空霾 / 限高：flight / ui / state / index / ground/* / atmosphere/* / 新 haze.glsl；着色器接入以片段交付，SC-5 合并后协调者接）；插单 T22（机翼表面）、T26（台风第二轮）。同时首次派性能工程师（research/PERF_REPORT_wave3.md）与美术总监第二次观感检查（research/ART_REVIEW_wave3.md）；开发体验官本波已产出两份报告（DX_REPORT_wave2、DX_SHADER_COMPILE），本次收尾不再单派。
+- **用户定：不许因等回复停工**（上一次阻塞式提问让进度卡了一整晚）。SOP 新增一节：取向性选择按推荐 / 可逆方案直接执行、汇报里写明可改，记入「待用户确认」；只有不可逆 / 对外动作才停下问，且等待期间继续推进其他工作。
