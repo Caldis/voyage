@@ -343,6 +343,13 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
 const float HUR_TWO_PI = 6.2831853;
 const float HUR_TOP = 16.2;      // 卷云盖顶（眼壁最高处），km
 
+// Worley 值 → 「陡侧壁 + 圆顶」的塔：格子中心一圈是平台（带圆顶），往外很快掉下去。
+// 直接用球冠当高度场，塔成了圆锥（雨带从侧面看像一片石笋）
+float hurTower(float w) {
+  float dd = clamp((1.0 - w) * 1.6, 0.0, 1.0);
+  return (1.0 - smoothstep(0.5, 0.8, dd)) * (0.75 + 0.25 * sqrt(1.0 - dd * dd));
+}
+
 float hurCap(float w) {
   // Worley 值（1 − 距离）→ 球冠隆起 √(1 − d²) − 0.55：每个格子鼓成圆顶，交界处是折痕（见 towerSdf 的说明）
   float dd = clamp((1.0 - w) * 1.6, 0.0, 1.0);
@@ -352,7 +359,7 @@ float hurCap(float w) {
 // 台风的密度（0..1）。ao：环境光遮蔽（眼底、眼壁下部、隆起之间的凹处看到的天空少）
 float hurricaneDensity(vec2 xz, float alt, float lod, bool detail, out float ao) {
   ao = 1.0;
-  if (alt > HUR_TOP + 0.5) return 0.0;
+  if (alt > HUR_TOP + 1.6) return 0.0;
   vec2 d2 = xz - uHurricane.xy;
   float r = length(d2);
   float Re = uHurricane.z;          // 低层的眼半径
@@ -386,18 +393,21 @@ float hurricaneDensity(vec2 xz, float alt, float lod, bool detail, out float ao)
     // 顶部向外卷：越接近卷云盖，内壁越平，最后变成卷云盖的底面，没有切边
     float flare = 7.0 * pow(smoothstep(10.5, 16.2, alt), 2.0);
     // 对流塔：强弱按扇区变化（随机性），低处（雨区上方的层状云）平缓一些
-    float towerAmp = mix(0.6, 3.0, smoothstep(0.3, 0.7, nT.r)) * smoothstep(0.8, 4.0, alt);
+    float towerAmp = mix(0.8, 4.5, smoothstep(0.3, 0.7, nT.r)) * smoothstep(0.8, 4.0, alt);
     float bump = towerAmp * hurCap(nT.g) + 1.1 * hurCap(nT.b) + 0.35 * hurCap(nS.g) + 0.2 * (nS.b - 0.5);
     float rIn = rLow + rise + flare - bump;
     // 眼壁 + 雨区：从海面附近到卷云盖是实心的；再往外云底抬升成卷云盖
     float coreOuter = Re * (2.9 + 0.35 * sin(2.0 * theta + 1.0));
     float baseAlt = mix(0.5 + 0.3 * (nS.a - 0.5), 12.0, smoothstep(coreOuter, coreOuter + Re * 0.9, r));
-    float top = HUR_TOP - 0.5 * (1.0 - nT.a) - 1.2 * smoothstep(Re * 2.0, Re * 5.0, r);
+    // 眼壁顶上一座座上冲的对流塔高出卷云盖 0.5–1.5 km（天际线上的鼓包），离眼壁远了就没有
+    float overshoot = 1.5 * hurTower(nT.g) * smoothstep(0.35, 0.7, nT.r) * (1.0 - smoothstep(6.0, 16.0, r - rLow - 16.0));
+    float top = HUR_TOP - 0.5 * (1.0 - nT.a) - 1.2 * smoothstep(Re * 2.0, Re * 5.0, r) + overshoot;
     float s = r - rIn;
     float wall = smoothstep(0.0, 0.35, s) * smoothstep(baseAlt, baseAlt + 0.3, alt) * (1.0 - smoothstep(top - 0.4, top, alt));
     if (wall > d) { d = wall; wallW = 1.0; }
     // 遮蔽：隆起顶端看到的天空多、凹处少；眼壁下部像在井底，只看得到头顶一块天
-    ao = mix(0.45, 1.0, smoothstep(-1.2, 0.8, bump)) * mix(0.6, 1.0, smoothstep(1.0, 12.0, alt));
+    // 眼壁表面只看得到半边天（另一半被眼壁自己挡住），对面还是眼壁：天空光约为开阔处的一半
+    ao = 0.55 * mix(0.3, 1.0, smoothstep(-1.5, 1.0, bump)) * mix(0.4, 1.0, smoothstep(1.0, 13.0, alt));
     // ---- 眼底的层积云 ----
     float rEyeLow = rLow + slopeK * 1.2;
     if (r < rEyeLow + 2.0 && alt < 2.8) {
@@ -446,16 +456,21 @@ float hurricaneDensity(vec2 xz, float alt, float lod, bool detail, out float ao)
     float band = smoothstep(0.3, 0.8, cos(ph)) * smoothstep(0.3, 0.55, nB.b * 0.6 + nB.r * 0.4);
     band *= smoothstep(Re * 2.8, Re * 4.0, r) * (1.0 - smoothstep(Re * 13.0, Re * 17.0, r));
     if (band > 0.01) {
-      // 高度场只随水平位置变：用 3D 噪声做高度场时，不同高度给出不同的顶，塔身上下断开成一团团漂浮的云
-      vec4 nU = textureLod(uShapeNoise, vec3(xz / 14.0, 0.61), max(lod - 1.0, 0.0));
-      // 带的中轴上是积雨云塔（约 3.5 km 的圆顶 + 约 1.7 km 的小塔，塔顶高低错落，内侧的带更高）；
+      // 积雨云塔：约 10 km 一个的 Worley 单体（nB.g），「陡侧壁 + 圆顶」（超椭圆剖面），
+      // 表面叠 3D 的球冠隆起（约 2 km / 1 km），侧壁和顶上都是菜花状。
+      // 旧做法把 3.5 km 的单体直接当高度场，塔又细又高、顶是尖的，像一片石笋
+      vec4 nU = textureLod(uShapeNoise, vec3(xz.x / 9.0, alt / 7.0, xz.y / 9.0) + 0.29, max(lod - 0.7, 0.0));
+      float bump = 1.0 * hurCap(nU.g) + 0.45 * hurCap(nU.b);
+      float dd = clamp((1.0 - nB.g) * 1.6, 0.0, 1.0) - 0.08 * bump;
+      float q = clamp(dd / 0.75, 0.0, 1.0);
+      float tower = sqrt(sqrt(max(1.0 - q * q * q * q, 0.0)));
+      float core = smoothstep(0.7, 0.97, cos(ph)) * band;
+      float bandTop = mix(12.5, 7.5, smoothstep(Re * 3.5, Re * 15.0, r)) * (0.7 + 0.6 * nB.r);
+      float H = 0.6 + (bandTop - 0.6) * core * tower * (0.55 + 0.45 * nU.r) + bump * core * tower;
       // 两侧是 1.5–3 km 高的层状云「裙边」（雨区），带与带之间是晴空或零散的小积云
-      float core = smoothstep(0.72, 0.97, cos(ph)) * band;
-      float bandTop = mix(12.5, 7.5, smoothstep(Re * 3.5, Re * 15.0, r)) * (0.75 + 0.5 * nB.g);
-      float H = 0.6 + (bandTop - 0.6) * core * (0.3 + 0.9 * max(hurCap(nU.g), -0.25)) + 0.6 * core * hurCap(nU.b);
-      H = max(H, 1.2 + 1.8 * band * (0.6 + 0.4 * nU.r) - 0.6 * (1.0 - band));
+      H = max(H, 1.0 + 1.6 * band * (0.6 + 0.4 * nU.r) + 0.5 * bump - 0.6 * (1.0 - band));
       float bd = smoothstep(0.0, 0.35, H - alt) * smoothstep(0.5, 0.8, alt);
-      if (bd > d) { d = bd; wallW = 1.0; ao = smoothstep(0.0, 0.8, H - alt) * 0.3 + 0.7 * smoothstep(0.5, 6.0, alt); }
+      if (bd > d) { d = bd; wallW = 1.0; ao = mix(0.35, 1.0, smoothstep(-1.0, 0.8, bump)) * mix(0.5, 1.0, smoothstep(0.5, 8.0, alt)); }
     }
   }
   if (d <= 0.0) return 0.0;

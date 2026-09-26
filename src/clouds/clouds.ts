@@ -68,8 +68,8 @@ void main() {
   vec3 fAB = vec3(uFlashB.x - uCloudOffset.x, BOTTOM + uFlashB.y, uFlashB.z - uCloudOffset.y) - fA;
   float flashI = uFlash.w / (1.0 + 0.25 * length(fAB)); // 总能量摊到整条通道上
   // 下方（海面 / 低云）反射上来的光的反照率：有低云时明显更亮
-  // 台风眼里四周和脚下都是被照亮的云（反照率约 0.8），不是海面
-  float albedoBelow = uHurricane.w > 0.5 ? 0.6 : 0.06 + 0.5 * uCoverage;
+  // 台风眼里脚下和对面是被照亮的云，不是海面（取 0.35：再高背光的眼壁被照得和天空一样亮，失去明暗）
+  float albedoBelow = uHurricane.w > 0.5 ? 0.35 : 0.06 + 0.5 * uCoverage;
   // 次数上限：从相机空步走到 60 km 外本身就要约 190 步，细化还要额外的步数（每进一次云 9 步）
   for (int i = 0; i < 256; i++) {
     // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）

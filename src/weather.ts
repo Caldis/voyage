@@ -101,7 +101,7 @@ export class WeatherSystem {
     }
     if (this.hurricane) {
       bottom = Math.min(bottom, 0.5);
-      top = Math.max(top, 16.7); // 卷云盖顶 16.2 km
+      top = Math.max(top, 17.8); // 卷云盖顶 16.2 km，眼壁上的上冲云顶再高 1.5 km
     }
     u.uShellBottom.value = bottom;
     u.uShellTop.value = top;
