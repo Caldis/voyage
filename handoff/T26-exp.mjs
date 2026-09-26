@@ -95,6 +95,16 @@ try {
         }, pts);
         console.log("   probe", JSON.stringify(vals));
       }
+      if (args.bench) {
+        // --bench：同一页面里交替测，排除其他进程抢 GPU 的时段差异（取 5 次 benchFrame(20) 的中位数）
+        const ms = await page.evaluate(async () => {
+          const r = [];
+          for (let i = 0; i < 5; i++) r.push(await window.__voyage.benchFrame(20));
+          r.sort((a, b) => a - b);
+          return r[2];
+        });
+        console.log(`   bench ${sc.name}-${vn}: ${ms.toFixed(3)} ms`);
+      }
       const f = path.join(out, `${sc.name}-${vn}.png`);
       await page.screenshot({ path: f, timeout: 60000 });
       console.log(`${sc.name}-${vn}  ${Date.now() - t0} ms${miss.length ? "  未命中: " + miss.join(" | ") : ""}`);

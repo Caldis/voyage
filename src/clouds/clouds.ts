@@ -38,15 +38,23 @@ float hurricaneCasterDensity(vec2 xz, float alt) {
   float r = length(d2);
   float Re = uHurricane.z;
   if (r > Re * 9.0) return 0.0;
-  float theta = atan(d2.y, d2.x);
-  float slopeK = 0.95 + 0.35 * sin(theta + 1.3) + 0.12 * sin(4.0 * theta + 0.5);
-  float l1 = 4.5 + 1.3 * sin(2.0 * theta + 0.4);
-  float l2 = 8.5 + 1.6 * sin(3.0 * theta + 1.9);
-  float rIn = Re * (1.0 + 0.10 * sin(2.0 * theta + 0.6 + alt * 0.05)) + slopeK * (0.55 * alt + 0.045 * alt * alt)
-            + 1.6 * smoothstep(l1 - 0.35, l1 + 0.35, alt) * smoothstep(-0.3, 0.5, sin(3.0 * theta + 0.8))
-            + 2.0 * smoothstep(l2 - 0.4, l2 + 0.4, alt) * smoothstep(-0.4, 0.4, sin(2.0 * theta + 2.6))
-            + HUR_FLARE * pow(smoothstep(HUR_FLARE_START, HUR_TOP, alt), 2.0) + 1.5;
-  float top = hurricaneRimTop(theta) + 0.5;
+  // 方位角的正余弦直接由方向向量得到，倍角公式展开 sin(nθ + φ)：这个函数每像素要求值几十次，省掉 atan 和一串 sin（帧时间）
+  vec2 cs = d2 / max(r, 1e-3);                  // (cos θ, sin θ)
+  vec2 cs2 = vec2(cs.x * cs.x - cs.y * cs.y, 2.0 * cs.x * cs.y);
+  vec2 cs3 = vec2(cs2.x * cs.x - cs2.y * cs.y, cs2.x * cs.y + cs2.y * cs.x);
+  vec2 cs4 = vec2(cs2.x * cs2.x - cs2.y * cs2.y, 2.0 * cs2.x * cs2.y);
+  // sin(nθ + φ) = sin nθ cos φ + cos nθ sin φ
+  #define HSIN(c, ph) ((c).y * cos(ph) + (c).x * sin(ph))
+  float slopeK = 0.95 + 0.35 * HSIN(cs, 1.3) + 0.12 * HSIN(cs4, 0.5);
+  float l1 = 4.5 + 1.3 * HSIN(cs2, 0.4);
+  float l2 = 8.5 + 1.6 * HSIN(cs3, 1.9);
+  float fl = smoothstep(HUR_FLARE_START, HUR_TOP, alt);
+  float rIn = Re * (1.0 + 0.10 * HSIN(cs2, 0.6)) + slopeK * (0.55 * alt + 0.045 * alt * alt)
+            + 1.6 * smoothstep(l1 - 0.35, l1 + 0.35, alt) * smoothstep(-0.3, 0.5, HSIN(cs3, 0.8))
+            + 2.0 * smoothstep(l2 - 0.4, l2 + 0.4, alt) * smoothstep(-0.4, 0.4, HSIN(cs2, 2.6))
+            + HUR_FLARE * fl * fl + 1.5;
+  float top = HUR_TOP - 0.5 + 1.2 * HSIN(cs, 0.4) + 0.45 * HSIN(cs3, 1.7) + 0.5;   // = hurricaneRimTop(θ) + 0.5
+  #undef HSIN
   float wall = smoothstep(rIn, rIn + 2.0, r) * (1.0 - smoothstep(top - 0.6, top, alt));
   float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * smoothstep(12.0, 12.8, alt) * (1.0 - smoothstep(HUR_TOP - 1.0, HUR_TOP, alt));
   return max(wall, canopy);
@@ -75,8 +83,8 @@ float hurricaneSunVis(vec3 p, vec3 dir, float start) {
 vec3 hurricaneShadowedInscatter(vec3 ro, vec3 rd, float depth, vec3 full) {
   vec3 acc = vec3(0.0);
   vec3 prev = vec3(0.0);
-  const float N = 8.0;
-  for (int k = 1; k < 9 + min(uStormCount, 0); k++) {
+  const float N = 6.0;
+  for (int k = 1; k < 7 + min(uStormCount, 0); k++) {
     float fk = float(k);
     vec3 Lk = fk >= N ? full : textureLod(uAerialInscatter, aerialPerspectiveUvw(rd, uSunDir, depth * fk / N), 0.0).rgb;
     float vis = hurricaneSunVis(ro + rd * (depth * (fk - 0.5) / N), uSunDir, 0.0);
@@ -122,6 +130,8 @@ void main() {
   int fine = 0;
   float fineDt = 0.03;
   bool wasEmpty = true;
+  float hurVis = 1.0;         // 台风长影的缓存（见下）
+  float hurVisT = -1e9;
   float lastEmpty = seg.x;   // 最近一个空白采样点的位置：表面一定在它和第一个有云的采样点之间
   // 闪电放电通道（线段）：两端换到相机坐标
   vec3 fA = vec3(uFlash.x - uCloudOffset.x, BOTTOM + uFlash.y, uFlash.z - uCloudOffset.y);
@@ -218,8 +228,11 @@ void main() {
       // 台风：对面眼壁投下的长影（几十公里，受光步进只走 15 km 够不着）。太阳不高时眼壁下半截和眼底都在影子里，
       // 上亮下暗，「体育场」的碗形靠这个读出来
       // 只在眼和眼壁附近算（外围雨带头顶的卷云盖由受光步进负责，这里再算一遍会重复压暗）
-      if (uHurricane.w > 0.5 && stormW > 0.5 && length(p.xz + uCloudOffset - uHurricane.xy) < uHurricane.z * 3.5)
-        sunLight *= hurricaneSunVis(p, uKeyDir, 3.0);
+      // 长影在空间上变化很慢（半影几公里）：同一条视线上离上次求值不到 2 km 就沿用，省掉大部分求值（帧时间）
+      if (uHurricane.w > 0.5 && stormW > 0.5 && length(p.xz + uCloudOffset - uHurricane.xy) < uHurricane.z * 3.5) {
+        if (abs(t - hurVisT) > 2.0) { hurVis = hurricaneSunVis(p, uKeyDir, 3.0); hurVisT = t; }
+        sunLight *= hurVis;
+      }
       // 环境光：上半球的天空光，云顶亮、云底暗
       float h01 = clamp((r - BOTTOM - uShellBottom) / (uShellTop - uShellBottom), 0.0, 1.0);
       vec3 eSky = skyIrradiance(r, up);
