@@ -15,7 +15,7 @@ vec2 rippleSlope(vec2 xzM, float fp, out float resolvedVar) {
   float windScale = clamp(uWind / 7.0, 0.1, 2.0);
   float lambda = 7.0;
   float amp = 0.05 * windScale;
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < uTerrainSteps / 32; i++) {   // 3 层；上限借用 uniform，免得 FXC 展开
     float res = 1.0 - smoothstep(0.25, 0.6, fp / lambda);
     if (res > 0.0) {
       vec2 p = xzM / lambda + vec2(0.35, 0.2) * uTime / lambda * 1.5 + float(i) * 17.3;
@@ -32,14 +32,13 @@ vec2 rippleSlope(vec2 xzM, float fp, out float resolvedVar) {
 }
 
 // 湖泊、河流在水面处的辐亮度（不含天空反射，天空反射由调用处按 fView 加）。
-// body：水体本身的反射率（取影像的水色）；nView 输出平均法线给天空反射用
-vec3 inlandWaterRadiance(vec3 P, vec3 rd, float fp, vec3 body, out float fView, out vec3 nView) {
+// body：水体本身的反射率（取影像的水色）；eSun / eSky：水面处主光源（已含云影）与天空光的照度，由调用处算好传进来
+// （keyLight / cloudShadow 很重，在 FXC 里每调用一处就内联一份，冷编译会明显变慢）；nView 输出平均法线给天空反射用
+vec3 inlandWaterRadiance(vec3 P, vec3 rd, float fp, vec3 body, vec3 eSun, vec3 eSky, out float fView, out vec3 nView) {
   vec3 n = normalize(P);
   vec3 v = -rd;
   float cosV = max(dot(n, v), 1e-3);
   float cosS = dot(n, uKeyDir);
-  vec3 eSun = keyLight(BOTTOM, n) * cloudShadow(P, uKeyDir);
-  vec3 eSky = skyIrradiance(BOTTOM, n);
   vec2 xzM = (P.xz + uCloudOffset) * 1000.0;
   float resVar;
   vec2 sl = rippleSlope(xzM, fp, resVar);

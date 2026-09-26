@@ -12,6 +12,7 @@ uniform sampler2DArray uGroundHeight;
 uniform vec4 uGroundLevel[${GROUND_LEVELS}];   // (中心 x, 中心 z, 边长 km, 是否可用)
 uniform float uGroundOn;
 uniform float uTerrainMax;                     // 附近地形最高点（km）
+uniform int uGroundLevelCount;                 // = GROUND_LEVELS（uniform 是为了不让 FXC 展开循环）
 uniform int uTerrainSteps;                     // 地形求交的最多步数（uniform 而不是常量，免得 FXC 展开循环）
 
 const float GROUND_BASE = ${GROUND_BASE_KM.toFixed(1)};
@@ -38,10 +39,11 @@ vec3 levelUv(int L, vec2 g) {
   return vec3(uv, float(L));
 }
 
-// 找从 lod 开始往粗走第一个可用的级别；都不可用返回 −1
+// 找从 lod 开始往粗走第一个可用的级别；都不可用返回 −1。
+// 上限用 uniform（uGroundLevelCount = ${GROUND_LEVELS}）：sampleGround 在着色器里被调用几十处，常量上限会让 FXC 在每一处都展开，
+// 冷编译明显变慢（T02 实测）
 int usableLevel(int L, vec2 g) {
-  for (int i = 0; i < ${GROUND_LEVELS}; i++) {
-    if (i < L) continue;
+  for (int i = max(L, 0); i < uGroundLevelCount; i++) {
     if (levelCovers(i, g)) return i;
   }
   return -1;

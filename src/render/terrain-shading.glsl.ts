@@ -113,11 +113,14 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
     // 海洋用海面模型（涌浪 + 风浪）；湖泊、河流用只有细碎涟漪的内陆水面（海面的长波放在河上会出现摩尔纹）
     // 河口、港湾里两种水面相接的地方（遮罩的海洋通道在 0..1 之间）两个模型都算、按比例混合，免得出现一条硬接缝
     vec3 water = vec3(0.0);
+    // 内陆水面和碎浪共用的照度，只算一次
+    vec3 eSunW = keyLight(BOTTOM, up) * cloudShadow(P, uKeyDir);
+    vec3 eSkyW = skyIrradiance(BOTTOM, up);
     if (wat.g > 0.001) water = oceanRadiance(P, rd, tT, alb.rgb * 0.7, 1.0, fView, nView);
     if (wat.g < 0.999) {
       float fI;
       vec3 nI;
-      vec3 wI = inlandWaterRadiance(P, rd, fpM, alb.rgb * 0.7, fI, nI);
+      vec3 wI = inlandWaterRadiance(P, rd, fpM, alb.rgb * 0.7, eSunW, eSkyW, fI, nI);
       float m = wat.g > 0.001 ? 1.0 - wat.g : 1.0;
       water = mix(water, wI, m);
       fView = mix(fView, fI, m);
@@ -137,7 +140,7 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
         float lines = mix(0.35, smoothstep(0.5, 0.95, sin(ph)), 1.0 - smoothstep(4.0, 12.0, fpM));
         float foam = near * lines * mix(0.3, 1.0, along) * clamp(uWind / 7.0, 0.3, 1.5);
         foam = clamp(foam, 0.0, 1.0) * 0.6;
-        vec3 eFoam = keyLight(BOTTOM, up) * cloudShadow(P, uKeyDir) * max(dot(up, uKeyDir), 0.0) + skyIrradiance(BOTTOM, up);
+        vec3 eFoam = eSunW * max(dot(up, uKeyDir), 0.0) + eSkyW;
         water = mix(water, 0.6 / M_PI * eFoam, foam);
         fView *= 1.0 - foam;
       }

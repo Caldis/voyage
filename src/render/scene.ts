@@ -4,7 +4,7 @@ import type { Atmosphere } from "../atmosphere/luts";
 import { CLOUD_COMMON } from "../clouds/clouds.glsl";
 import { CABIN_COMMON, PANE_COMMON } from "./cabin.glsl";
 import { VIEW_COMMON } from "./view.glsl";
-import type { GroundClipmap } from "../ground/clipmap";
+import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
 import { GROUND_COMMON } from "./ground.glsl";
 import { GROUND_DETAIL_COMMON } from "./ground-detail.glsl";
 import { INLAND_WATER_COMMON } from "./inland-water.glsl";
@@ -300,6 +300,7 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uGroundOn: { value: 1 },
       uTerrainMax: { value: 0 },
       uTerrainSteps: { value: 96 },
+      uGroundLevelCount: { value: GROUND_LEVELS },
       uDetailLoop: { value: 1 },
       uBolt: { value: Array.from({ length: 16 }, () => new THREE.Vector3()) },
       uBoltIntensity: { value: 0 },
