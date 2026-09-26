@@ -1,13 +1,12 @@
 // 舱内 / 窗外亮度统计（T23）：给 Playwright MCP 的 browser_run_code_unsafe 用（filename 参数指向本文件）。
-// 用法：先打开要测的开发服务器，URL 里带 tag，例如 http://127.0.0.1:5223/?tag=before，再运行本文件；
-// 每个场景截两张图到 tmp/screenshot/T23/<tag>/：<场景>.png（正常画面）和 <场景>-mask.png（窗外遮罩，白 = 窗外），
-// 并返回各场景的适应亮度（cd/m²）。然后跑 `python apps/voyage/scripts/cabin_luminance.py tmp/screenshot/T23/<tag>` 出亮度表。
+// 用法：先打开要测的开发服务器，URL 里带输出目录，例如 http://127.0.0.1:5181/?out=tmp/screenshot/cabin/after，再运行本文件；
+// 每个场景截两张图到 out 目录（相对仓库根，默认 tmp/screenshot/cabin-luminance）：<场景>.png（正常画面）和 <场景>-mask.png（窗外遮罩，白 = 窗外），
+// 并返回各场景的适应亮度（cd/m²）。然后跑 `python apps/voyage/scripts/cabin_luminance.py <out 目录> [对照目录…]` 出亮度表。
 // 注意：工具会把文件内容包成「(内容)(page)」执行，文件末尾不能有分号。
 async (page) => {
   const current = page.url();
   const origin = (current.match(/^http:\/\/127\.0\.0\.1:5\d\d\d/) || ["http://127.0.0.1:5181"])[0];
-  const tag = (current.match(/[?&]tag=([\w-]+)/) || [null, "run"])[1];
-  const outDir = `tmp/screenshot/T23/${tag}`;
+  const outDir = decodeURIComponent((current.match(/[?&]out=([^&#]+)/) || [null, "tmp/screenshot/cabin-luminance"])[1]);
 
   const SCENES = [
     { name: "noon-cumulus", p: { preset: "wpac", time: 720, "wing-pos": "8" } },
@@ -55,13 +54,12 @@ async (page) => {
       }
       v.snapAll();
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
-      // 适应亮度：exposure.adapted[0] 是最近一帧写入的 1×1 目标（rgb = 窗外、舱内（中心加权）、舱内（按面积）的 log2 亮度，单位 kcd/m²）
+      // 适应亮度：exposure.adapted[0] 是最近一帧写入的 1×1 目标（rgb = 窗外对数均值、舱内对数均值（按面积）、窗外线性均值，log2 kcd/m²）
       const ex = v.exposure;
       const px = new Float32Array(4);
       ex.pass.renderer.readRenderTargetPixels(ex.adapted[0], 0, 0, 1, 1, px);
       const cd = (x) => +(1000 * 2 ** x).toPrecision(4);
-      // 旧版（改前）只有 rg 两路；新版 b 是按面积平均的舱内亮度
-      return { outCd: cd(px[0]), cabinCenterCd: cd(px[1]), cabinAreaCd: cd(px[2]), outLinCd: cd(px[3]), uLegacy: ex.finalMat.uniforms.uLegacy?.value ?? null };
+      return { outCd: cd(px[0]), cabinCd: cd(px[1]), outLinCd: cd(px[2]) };
     }, sc);
     await page.screenshot({ path: `${outDir}/${sc.name}.png`, timeout: 60000 });
     await page.evaluate(() => (window.__voyage.exposure.finalMat.uniforms.uDebugMask.value = true));
@@ -70,5 +68,5 @@ async (page) => {
     await page.evaluate(() => (window.__voyage.exposure.finalMat.uniforms.uDebugMask.value = false));
     results.push({ scene: sc.name, ...info });
   }
-  return { origin, tag, results }
+  return { origin, outDir, results }
 }
