@@ -5,6 +5,9 @@
  */
 export const CABIN_COMMON = /* glsl */ `
 const vec3 CABIN_LIGHT_COLOR = vec3(1.0, 0.9, 0.76); // 约 3500 K 的暖白
+// 恒为 0。循环上限写成「常数 + uLoopGuard」，Windows 上 ANGLE → FXC 就无法把循环展开：
+// 舱内加了座椅之后，全部展开的场景着色器编译 80 多秒后直接失败（链接报错、日志为空）
+uniform int uLoopGuard;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -43,8 +46,8 @@ vec3 funnelNormal(vec3 p) {
 bool marchFunnel(vec3 ro, vec3 rd, out vec3 hit) {
   float zPrev = 0.0;
   const float N = 24.0;
-  for (float i = 1.0; i <= N; i += 1.0) {
-    float v = i / N;
+  for (int ii = 1; ii <= 24 + uLoopGuard; ii++) {
+    float v = float(ii) / N;
     float z = PANE_DEPTH * v * v; // 靠近舱壁处收窄得快，采样也密
     vec3 p = ro + rd * ((z - ro.z) / rd.z);
     if (sdFunnel(p) > 0.0) {
@@ -76,8 +79,8 @@ vec3 windowIrradiance(vec3 x, vec3 n, vec3 lWin) {
   float sum = 0.0;
   vec3 v0 = normalize(windowVertex(0) - x);
   vec3 vPrev = v0;
-  for (int i = 1; i <= 16; i++) {
-    vec3 v = i == 16 ? v0 : normalize(windowVertex(i) - x);
+  for (int i = 1; i <= 16 + uLoopGuard; i++) {
+    vec3 v = i >= 16 ? v0 : normalize(windowVertex(i) - x);
     vec3 c = cross(vPrev, v);
     float len = length(c);
     if (len > 1e-6) sum += acos(clamp(dot(vPrev, v), -1.0, 1.0)) * dot(n, c / len);
@@ -111,7 +114,7 @@ vec2 hash22(vec2 p) {
 
 float fbm2(vec2 p) {
   float s = 0.0, a = 0.5;
-  for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
+  for (int i = 0; i < 4 + uLoopGuard; i++) { s += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
   return s;
 }
 
@@ -131,7 +134,8 @@ vec2 scratches(vec2 q, vec3 v, vec3 s, float pix) {
   float lit = 0.0;
   float cover = 0.0;
   // 越靠下划痕越多：乘客的手、清洁布都在那里
-  float density = mix(0.15, 0.7, smoothstep(0.1, -0.15, q.y));
+  // 用户反馈「划痕太多」：只留偶尔注意到的几道（约为最初的 1/5）
+  float density = mix(0.03, 0.14, smoothstep(0.1, -0.15, q.y));
   for (int i = -1; i <= 1; i++)
   for (int j = -1; j <= 1; j++) {
     vec2 c = id + vec2(i, j);
@@ -153,6 +157,38 @@ vec2 scratches(vec2 q, vec3 v, vec3 s, float pix) {
     }
   }
   return vec2(lit, cover);
+}
+
+float paneLineCov(float d, float w, float pix) {
+  float ww = max(w, pix);
+  return (w / ww) * (1.0 - smoothstep(0.0, ww, d));
+}
+
+// 擦拭留下的同心弧形细纹 + 零星的微小麻点（内层防刮板被清洁布一圈圈擦过）。
+// 返回覆盖率（已按像素宽度摊薄，远处自然变成极轻的一层，不闪烁）；平时只被漫射光照到，亮度只有背景的百分之几
+float wipeMarks(vec2 q, float pix) {
+  float cov = 0.0;
+  // 两个擦拭中心，每个一组同心弧，只在部分角度上出现
+  for (int i = 0; i < 2; i++) {
+    vec2 c = i == 0 ? vec2(0.03, -0.06) : vec2(-0.05, 0.05);
+    vec2 d = q - c;
+    float r = length(d);
+    float ring = floor(r / 0.0032);
+    float h = hash12(vec2(ring, float(i) * 7.1));
+    float ang = atan(d.y, d.x);
+    float arc = smoothstep(0.0, 0.3, sin(ang * mix(1.0, 3.0, h) + h * 40.0) - 0.35);
+    float dr = abs(fract(r / 0.0032) - 0.2 - 0.6 * fract(h * 13.0)) * 0.0032;
+    cov += paneLineCov(dr, 0.00003, pix) * arc * step(h, 0.1) * (1.0 - smoothstep(0.05, 0.08, r));
+  }
+  // 麻点：约 6 mm 一格，少数格子里有一个 0.1–0.2 mm 的小坑
+  vec2 cell = floor(q / 0.006);
+  vec2 hp = hash22(cell + 31.7);
+  if (hp.x < 0.025) {
+    vec2 c = (cell + 0.2 + 0.6 * hash22(cell + 3.3)) * 0.006;
+    float rp = mix(0.00005, 0.0001, hp.y);
+    cov += (1.0 - smoothstep(rp - pix * 0.5, rp + pix * 0.5, length(q - c))) * min(1.0, rp * rp / max(pix * pix, 1e-12)) * 2.0;
+  }
+  return cov;
 }
 
 // 油污与指纹：平时看不见，阳光从附近照过来时发出朦胧的散射光
