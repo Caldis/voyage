@@ -370,6 +370,12 @@ requestAnimationFrame(() =>
       history: THREE.WebGLRenderTarget[];
     }
     const cloudsInternal = clouds as unknown as CloudsInternals;
+    // resolveMat 采样 uCurrent / uCurrentDepth / uHistory：真正跑 clouds.render() 之前它们都是
+    // null，这里先绑上真纹理（和 Clouds.render() 里赋的值同一批对象），避免第一次用到这个材质时
+    // 采样不完整纹理
+    cloudsInternal.resolveMat.uniforms.uCurrent.value = cloudsInternal.raw.textures[0];
+    cloudsInternal.resolveMat.uniforms.uCurrentDepth.value = cloudsInternal.raw.textures[1];
+    cloudsInternal.resolveMat.uniforms.uHistory.value = cloudsInternal.history[1].texture;
     try {
       // 几何体、相机和 FullscreenPass 的一致（只有 position + uv 的全屏三角形），程序缓存的键才相同
       const geo = new THREE.BufferGeometry();
@@ -402,9 +408,19 @@ requestAnimationFrame(() =>
     }
     tick("场景 / 机翼 / 云着色器编译（后台）");
     boot.finish("shaders");
-    // 云光线步进程序已经并进上面那一批后台编译，不用再像 T16 那样假渲染一次触发编译、
-    // 再用 clouds.snap() 撤销假调用留下的时间累积痕迹了。保留这一句 tick 只是为了让
-    // window.__voyageStartup 里还能单独看到这一项的耗时（应接近 0，用来验证 SC-4 是否生效）
+    // march / resolve 的编译已经在上面那一批里做完了（isReady() 实测确认为 true），不用再像 T16
+    // 那样假渲染一次触发编译、也不用 clouds.snap() 撤销假调用留下的时间累积痕迹了。
+    // 但实测发现一个新问题：compileAsync 批次刚 resolve 之后，不管哪个材质，第一次真正调用
+    // renderer.render() 都还会额外同步卡住主线程约 3 秒——单独计时过，march 自己只要几毫秒，卡住
+    // 的是「这批编译完之后第一次真正 render()」这件事本身，换成先渲染谁都一样。这不是 SC-4 引入的
+    // 新问题：master 分支原有的「假渲染」同样会撞上这一下，只是和 march/resolve 从零开始的真实编译
+    // 时间叠在一起，没被单独看出来（数据、排查过程见 handoff/SC-4.md）。这里主动触发一次，把这笔跑
+    // 不掉的开销留在语义还算贴切的「云光线步进程序编译」里，好过任它随机砸到后面不相关的阶段
+    // （比如海面 FFT）误导排查
+    {
+      pass.render(cloudsInternal.marchMat, cloudsInternal.raw);
+      pass.render(cloudsInternal.resolveMat, cloudsInternal.history[0]);
+    }
     tick("云光线步进程序编译");
     await nextPaint();
 
@@ -432,6 +448,7 @@ requestAnimationFrame(() =>
     startup["场景材质的程序数"] = programs(sceneMat);
     startup["机翼材质的程序数"] = programs(wingMat);
     startup["云光线步进材质的程序数"] = programs(cloudsInternal.marchMat);
+    startup["云 resolve 材质的程序数"] = programs(cloudsInternal.resolveMat);
     (window as unknown as { __voyageStartup: unknown }).__voyageStartup = startup;
     $("loading").classList.add("done");
   }, 50),
