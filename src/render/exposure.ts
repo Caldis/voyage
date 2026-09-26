@@ -64,6 +64,7 @@ uniform float uEvComp;
 uniform sampler2D uBloom;
 uniform float uBloomLevels;
 uniform float uGlare;       // 被眼睛和窗板散射到周围的能量比例
+uniform bool uDebugMask;      // 调试：输出窗外遮罩
 uniform float uCabinAdaptation; // 舱内向自身亮度适应的程度，0 = 跟窗外一样曝光，1 = 完全按舱内曝光
 #include <common>
 #include <dithering_pars_fragment>
@@ -103,6 +104,8 @@ void main() {
     c = mix(c, rod * vec3(0.66, 0.82, 1.0), scotopic * 0.8);
   }
   gl_FragColor = vec4(c * exposure, 1.0);
+  // 调试：直接输出窗外遮罩（统计脚本用它区分窗外 / 舱内像素），不走色调映射
+  if (uDebugMask) { gl_FragColor = vec4(vec3(src.a), 1.0); return; }
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
   #include <dithering_fragment>
@@ -155,6 +158,7 @@ export class Exposure {
       uBloomLevels: { value: Bloom.WEIGHT_SUM },
       uGlare: { value: 0.04 },
       uCabinAdaptation: { value: 0.5 },
+      uDebugMask: { value: false },
     },
     true,
   );
