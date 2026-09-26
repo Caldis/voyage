@@ -396,6 +396,13 @@ export class GroundDetailVariant {
     renderer
       .compileAsync(scene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1))
       .then(() => {
+        // compileAsync 只等「编译完成」，不管编译是否成功（例如函数重名）。取出程序、触发一次诊断，失败就不切换
+        const program = (renderer.properties.get(m) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
+        program?.getUniforms();
+        if (!program || program.diagnostics?.runnable === false) {
+          this.state = "failed";
+          return;
+        }
         this.material = m;
         this.state = "ready";
       })

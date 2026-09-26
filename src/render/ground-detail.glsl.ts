@@ -26,9 +26,9 @@ uniform int uDetailLoop;
 
 mat2 rot2(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
 
-// 盒式滤波后的细线覆盖率：线宽 w、到中线的距离 d、像素足迹 fp（都是米）。
+// 盒式滤波后的细线覆盖率（带 detail 前缀：舱内模块 cabin-shading 也有一个 lineCov，同一程序里不能重名）：线宽 w、到中线的距离 d、像素足迹 fp（都是米）。
 // 等于宽 w 的方波与宽 fp 的盒子卷积（梯形）：远处线变淡变宽，但总「墨量」不变
-float lineCov(float d, float w, float fp) {
+float detailLineCov(float d, float w, float fp) {
   float m = min(w, fp);
   return clamp((0.5 * (w + fp) - d) / m, 0.0, 1.0) * m / fp;
 }
@@ -89,7 +89,7 @@ vec4 fieldDetail(vec2 gm, float fp) {
   hue = fract(h.x * 31.7 + h.y * 5.1) < 0.12 ? -2.0 : hue;
   hue *= fade * edgeAA;
   // 田埂、田间小路：约 1.5 m 宽，比田里亮（草埂、土路）；减去平均覆盖率，远处不改变整体亮度
-  float ridge = max(lineCov(de.x, 1.5, fp), lineCov(de.y, 1.5, fp));
+  float ridge = max(detailLineCov(de.x, 1.5, fp), detailLineCov(de.y, 1.5, fp));
   tone += 0.45 * (ridge - 1.5 * (1.0 / sz.x + 1.0 / sz.y)) * (1.0 - smoothstep(0.2, 0.6, fp / sz.x));
   // 垄沟：约一半的田块有，沿田块的长边，间距 1.5–3.5 m
   float per = mix(1.5, 3.5, fract(h.x * 5.3 + h.y));
@@ -163,15 +163,15 @@ vec4 urbanAt(vec2 q, vec4 rg, float dens, float fp, out vec3 tint) {
     vec2 c = lf - 0.5 * lotSz;
     slope = lotSz.x > lotSz.y ? vec2(0.0, sign(c.y) * 0.47) : vec2(sign(c.x) * 0.47, 0.0);
     // 女儿墙 / 檐口：楼边一圈窄的暗线
-    roofAlb *= 1.0 - 0.3 * lineCov(dIn, 0.8, fp);
+    roofAlb *= 1.0 - 0.3 * detailLineCov(dIn, 0.8, fp);
   } else {
-    roofAlb *= 1.0 - 0.35 * lineCov(dIn - 0.8, 0.7, fp);
+    roofAlb *= 1.0 - 0.35 * detailLineCov(dIn - 0.8, 0.7, fp);
   }
   // 地面：街道是沥青（暗），地块里的空地有院子、停车场、树
-  float streetM = lineCov(dStreet, W, fp);
+  float streetM = detailLineCov(dStreet, W, fp);
   float ground = mix(mix(0.85, 1.05, hl2.x), 0.55, streetM);
   // 街道中线 / 车道线：宽街上一条浅线
-  ground += 0.5 * lineCov(dStreet, 0.3, fp) * step(10.0, W);
+  ground += 0.5 * detailLineCov(dStreet, 0.3, fp) * step(10.0, W);
   tint = mix(vec3(1.0), tint, isB);
   return vec4(h * isB, mix(ground, roofAlb, isB), slope * isB);
 }
