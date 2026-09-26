@@ -73,7 +73,10 @@ void main() {
     // 步长随距离变长：近处 60 m，远处 2 km
     float dtBase = clamp(t * 0.008, 0.06, 2.0);
     float dt = fine > 0 ? max(dtBase * 0.25, 0.03) : dtBase;
-    vec3 p = ro + rd * (t + dt * jitter);
+    // 这一步代表的区间长度：空白处走 2 倍步长。抖动必须覆盖整个区间——旧版只抖动 dt、却走 2dt，
+    // 每个区间的后一半永远采不到，远处的薄云被「同心球壳」切成一条条水平细纹（T13）
+    float stepLen = (fine > 0 || !wasEmpty) ? dt : 2.0 * dt;
+    vec3 p = ro + rd * (t + stepLen * jitter);
     float lod = clamp(log2(dtBase / 0.055), 0.0, 5.0);
     float dens = cloudDensity(p, lod, t < 150.0);
     float stormW = gStormW;
@@ -151,17 +154,17 @@ void main() {
         // 强度按观感标定：白天只在通道附近隐约可见，夜里通道周围几公里亮起来、十公里外的云只被照亮一点
         S += vec3(0.8, 0.85, 1.0) * flashI * 0.005 * exp(-fd / 1.5) / (1.0 + fd * fd) * mix(1.0, stormAO, 0.5);
       }
-      float stepT = exp(-sigma * dt);
+      float stepT = exp(-sigma * stepLen);
       // 云的反照率接近 1：散射系数 ≈ 消光系数，积分式里 σ 被约掉
       L += T * S * (1.0 - stepT);
       depthSum += T * (1.0 - stepT) * t;
       wSum += T * (1.0 - stepT);
       T *= stepT;
-      t += dt;
+      t += stepLen;
     } else {
       // 空白区域大步走（细化时仍用小步）
       wasEmpty = true;
-      t += fine > 0 ? dt : 2.0 * dt;
+      t += stepLen;
     }
   }
   if (wSum <= 0.0) return;
