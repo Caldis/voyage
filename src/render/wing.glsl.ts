@@ -22,7 +22,8 @@ uniform float uSlat;           // 缝翼偏角（弧度）
 uniform float uSpoiler;        // 扰流板偏角（弧度）
 uniform int uWingSteps;        // 机翼光线步进的最大步数（128）。用 uniform 做循环上限，FXC 就不会展开循环（展开后冷编译时间翻倍）
 uniform int uWingShadowSteps;  // 机翼自阴影的最大步数（24）
-uniform int uWingDebug;        // 调试开关（按位）：1 去掉油罐鼓包，2 去掉翼尖灯照明，4 去掉环境反射，8 去掉自阴影，16 只看漫反射的反照率
+uniform int uWingDebug;        // 调试开关（按位）：1 去掉油罐鼓包，2 去掉翼尖灯照明，4 去掉环境反射，8 去掉自阴影，16 只看漫反射的反照率，
+                               // 64 关掉掠射射线的延长步数，128 边缘子射线一律从半路出发（T22 之前的做法，对照用）
 uniform int uWingEdgeAA;       // 内轮廓 / 薄边超采样：0 关，1 开，2 开并把超采样的像素标成品红（调试）
 
 const float CABIN_WALL_RADIUS = 1.85;  // 窗口内饰面到机身轴线的距离
@@ -309,15 +310,18 @@ float sdWingFairing(vec3 P) {
   float s = wingSpanS(P.z);
   float sf = abs(s - WING_FAIR_S1) < abs(s - WING_FAIR_S2) ? WING_FAIR_S1 : (abs(s - WING_FAIR_S2) < abs(s - WING_FAIR_S3) ? WING_FAIR_S2 : WING_FAIR_S3);
   float zf = ROOT_Z + sf * WING_SPAN;
-  float side = abs(P.z - zf) - 0.2;
-  if (side > 0.3) return side;
   float c = wingChordAt(sf);
-  float xm = wingLeX(zf) - P.x;
-  float x0 = 0.45 * c;
-  float len = 0.635 * c;   // 从 0.45c 到约 1.085c：只比后缘多出一小截（约 0.085c，旧版的一半）
   // 轴线：铰链处下表面往下 0.16 m，一条直线（不跟着翼型弯）
   float hx = WING_FLAP_LE * c;
   float hy = wingBaseY(zf, sf) + wingCamberAt(WING_FLAP_LE, c) - c * wingTcAt(sf) * wingNacaHalf(WING_FLAP_LE) - 0.16;
+  // 包围：展向 ±0.2 m、竖直方向不高于轴线以上 0.35 m（独木舟最高处约 0.3 m）。两者取大，都是真实距离的下界。
+  // 旧版只按展向距离 |z − zf| 包围，翼面上方的点离整流罩几米高，距离场却只报几十厘米；
+  // 自阴影的软阴影估计（14·d / 走过的距离）把它当成「擦边」，整片上翼面被压暗成一圈圈年轮纹（T22 根因）
+  float bound = max(abs(P.z - zf) - 0.2, P.y - (hy + 0.35));
+  if (bound > 0.3) return bound;
+  float xm = wingLeX(zf) - P.x;
+  float x0 = 0.45 * c;
+  float len = 0.635 * c;   // 从 0.45c 到约 1.085c：只比后缘多出一小截（约 0.085c，旧版的一半）
   float uh = (hx - x0) / len;
   // 前半截
   float u0 = (xm - x0) / len;
@@ -328,7 +332,8 @@ float sdWingFairing(vec3 P) {
   vec2 l = vec2(q.x * cs - q.y * sn, q.x * sn + q.y * cs);
   float u1 = (hx + l.x - x0) / len;
   float dAft = max(wingCanoe(u1, l.y, P.z - zf, len), (uh - 0.03 - u1) * len);
-  return min(dFront, dAft);
+  // 独木舟的椭圆距离在远处按短轴缩放、严重低估（尾段只有真实距离的 1/4），同样取包围的下界兜底
+  return max(min(dFront, dAft), bound);
 }
 
 // 发动机短舱 + 吊挂。u = 从进气道唇口向后的距离
@@ -409,6 +414,8 @@ struct WingTraceResult {
   vec3 nGeo;     // 不带油罐鼓包的几何法线（翼尖灯照明用，见 shadeWing）
   float shadow;  // 机翼自身的软阴影（小翼、短舱、扰流板、整流罩投到翼面上），1 = 不挡
   int part;      // 部件编号（见 gWingPart）
+  bool inner;    // 打中之前先擦过另一处轮廓（内轮廓）
+  float bumpVar; // 按像素足迹滤掉的油罐鼓包斜率方差（并入粗糙度）
   bool edge;     // 打中之前先擦过另一处轮廓（襟翼压在主翼上、小翼压在翼面上这类「内轮廓」），或者打中的是几乎侧对视线的薄边
 };
 
@@ -432,6 +439,8 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
   w.shadow = 1.0;
   w.part = 0;
   w.edge = false;
+  w.inner = false;
+  w.bumpVar = 0.0;
   float pa = wingPixelAngle();
   vec3 oA = wingCabinToAircraft(ro);
   vec3 dA = vec3(uSeatSign * rd.x, rd.y, rd.z);
@@ -459,7 +468,9 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
   vec3 n = vec3(0.0);
   float ts = 0.12;
   float res = 1.0;
-  int total = marchSteps + 4 + shadowSteps;
+  // 求交的步数上限：中心射线贴着表面掠射（外轮廓附近）时可以延长到 3 倍，见下面「步数用完」一段
+  int limit = marchSteps;
+  int total = marchSteps * 3 + 4 + shadowSteps;
   for (int i = min(uWingSteps, 0); i < total; i++) {
     vec3 q = phase == 0 ? oA + dA * t : (phase == 1 ? P + wingTetraDir(j) * 0.0023 : P + w.nA * 0.01 + lA * ts);
     float d = sdWing(q);
@@ -471,6 +482,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         w.cov = 1.0;
         w.part = gWingPart;
         w.edge = grazed;
+        w.inner = grazed;
         dHit = d;
         done = true;
       } else {
@@ -481,7 +493,16 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         // 距离场只是近似（盒子式组合 + 翼型前缘陡），近处步长打六折保险；离得远（> 0.3 m）时相对误差小，打八五折省步数。
         // 最小步长取亚像素，免得穿过毫米级的后缘
         t += max(d * (d > 0.3 ? 0.85 : 0.6), max(0.3 * fp, 0.002));
-        if (t > tExit || i >= marchSteps - 1) {
+        // 掠射：还在包围盒里、离表面不到 3 个像素、还没过最近点（r 没比最近时大出一个像素）
+        bool approaching = t <= tExit && best < 3.0 && r < best + 1.0;
+        bool nearGraze = approaching && marchSteps == uWingSteps;
+        // 轮廓附近的射线几乎和表面相切，球体追踪每步只能挪近一点点。从上方斜看前缘时，边缘超采样的子射线（64 步）
+        // 走不到前缘就用完了，四条都算「没打中」，这个像素整个露出背景——前缘外轮廓成了一级级 1 像素的硬台阶
+        // （T22，穿云场景最明显）；中心射线同理（128 步用完一律算打中）。
+        // 这种射线再给步数（最多 3 倍），走完以后按真正的最近距离算。只落在轮廓附近一两个像素宽的一条线上
+        bool extend = approaching && i >= limit - 1 && limit < 3 * marchSteps && marchSteps == uWingSteps && (uWingDebug & 64) == 0;
+        if (extend) limit += marchSteps;
+        if (!extend && (t > tExit || i >= limit - 1)) {
           // 像素中心离轮廓 best 个像素：覆盖率按一个像素宽的盒子滤波（轮廓整体外扩半个像素，看不出来）
           w.cov = clamp(1.0 - best, 0.0, 1.0);
           // 步数用完时还在包围盒里、离表面不到 3 个像素：多半是贴着表面掠射、一步步挪不完，算打中。
@@ -489,7 +510,8 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
           // 内轮廓和后缘上出现一串亮点
           // 只对中心射线这样做：边缘超采样的子射线一旦被「提升」成命中，着色点就落在薄后缘外的空中、
           // 法线取的是后缘端面，夕阳下后缘成了一串白点（审查返工第 1 项的根因）
-          if (marchSteps == uWingSteps && t <= tExit && best < 3.0) w.cov = 1.0;
+          // 已经过了最近点、正在远离表面的射线是擦边而过，不提升（T22）
+          if (nearGraze) w.cov = 1.0;
           if (w.cov <= 0.0) return w;
           w.t = tBest;
           w.part = partBest;
@@ -506,16 +528,27 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         // 蒙皮在翼肋（展向约 0.6 m 一道）和桁条（弦向约 0.2 m 一道）之间微微鼓起（「油罐效应」），天空的倒影因此轻轻起伏。
         // 用解析的鼓包 h = A·(1−cos 2πa)(1−cos 2πb)/4，梯度在格子边界处为零，法线处处连续。
         // 旧写法用值噪声直接当法线扰动：值噪声的导数不连续，近看时反射被切成一块块的「碎面台阶」
+        // 肋距 / 桁距不是等距的：坐标用一维值噪声扭一下，每格宽窄差 ±15%（导数 < 0.5，坐标仍单调，格子不会折叠）；
+        // 鼓的幅度逐格 0.5–1 倍随机。规则网格在远处和掠射角下会和像素网格干涉出一圈圈的纹（铁律：随机性造就真实）
         vec2 cell = vec2(P.z / 0.6, P.x / 0.2);
+        cell += 0.15 * (vec2(vnoise(vec2(cell.x, 3.7)), vnoise(vec2(cell.y, 9.1))) * 2.0 - 1.0);
         vec2 fc = fract(cell);
-        float amp = 0.0005 * (0.4 + 0.6 * hash12(floor(cell) + 7.1));   // 每格鼓得不一样（米）
+        float amp = 0.0005 * (0.5 + 0.5 * hash12(floor(cell) + 7.1));   // 每格鼓得不一样（米）
         vec2 g = vec2(
           sin(6.2832 * fc.x) * (1.0 - cos(6.2832 * fc.y)) * 6.2832 / 0.6,
           (1.0 - cos(6.2832 * fc.x)) * sin(6.2832 * fc.y) * 6.2832 / 0.2) * amp * 0.25;
+        // 按像素足迹淡出（LEAN 的思路）：桁距 0.2 m 的起伏在一个像素里放不下几个周期时，逐像素的法线只剩欠采样的噪声，
+        // 换成平均法线 + 把滤掉的斜率方差并入粗糙度（shadeWing 里 α² += 2σ²）。足迹按掠射拉长（1/(n·v)）。
+        // σ² 取这组鼓包斜率的均方值：A²/16 · 1.5 · 0.5 · (2π/0.2)²，A 取平均幅度
+        float fpB = pa * w.t / max(abs(dot(n, dA)), 0.2);
+        float keepB = 1.0 - smoothstep(0.03, 0.1, fpB);
+        g *= keepB;
         // 只作用在主翼上下表面（法线大致朝上 / 朝下时），g = (∂h/∂z, ∂h/∂x)
         float flatness = (w.part == 0 && (uWingDebug & 1) == 0) ? abs(n.y) : 0.0;   // 只作用在主翼蒙皮上：圆弧前缘、襟翼、小翼上会被拉成一块块的斑
+        float bumpVar = (1.0 - keepB * keepB) * 6.5e-6;   // (0.375 mm / 4)² · 0.75 · (2π / 0.2 m)² ≈ 6.5e-6
         vec3 nFlat = n;
         n = normalize(n - vec3(g.y, 0.0, g.x) * flatness * sign(n.y));
+        w.bumpVar = bumpVar * flatness;
         // 背向视线的法线（轮廓上、后缘这种薄边上常见）掰到略微朝向视线，而不是整个翻过来：
         // 翻转会让相邻像素在上、下表面的法线之间跳，后缘成了一串亮点
         float ndv = dot(n, -dA);
@@ -585,7 +618,8 @@ float wingFbmAA(vec2 p, float fw) {
   return s;
 }
 
-struct WingSurface { vec3 albedo; float metal; float rough; vec3 emit; float coat; };
+// coatRough：清漆层的粗糙度（翼面 0.06，光滑的清漆；小翼的航司色涂装 0.15，见 wingTipSurface）
+struct WingSurface { vec3 albedo; float metal; float rough; vec3 emit; float coat; float coatRough; };
 
 // 翼面漆：浅灰、半光（清漆层），每块蒙皮板的漆色和光泽略有差别
 const vec3 WING_PAINT = vec3(0.70, 0.71, 0.72);
@@ -598,6 +632,7 @@ WingSurface wingPaint(vec3 albedo, float rough) {
   m.rough = rough;
   m.emit = vec3(0.0);
   m.coat = 0.9;
+  m.coatRough = 0.06;
   return m;
 }
 
@@ -608,6 +643,7 @@ WingSurface wingBareMetal(float albedo, float rough) {
   m.rough = rough;
   m.emit = vec3(0.0);
   m.coat = 0.0;
+  m.coatRough = 0.06;
   return m;
 }
 
@@ -689,8 +725,14 @@ WingSurface wingSkin(float xi, float zm, float s, float chord, float pix, int pa
 WingSurface wingTipSurface(vec3 P, float pix) {
   WingTipCoord q = wingTipCoord(P);
   float lw = pix / q.arcLen;
-  float liv = smoothstep(0.62 - lw, 0.62 + lw, q.sig / q.arcLen);
-  WingSurface m = wingPaint(mix(WING_PAINT * 0.97, WING_LIVERY, liv), 0.18);
+  // 航司色从弯折段的下三分之一处开始，分界线朝后缘略微抬高（沿气流斜着收），整段弯折几乎都是航司色。
+  // 旧版在弯折 62% 处水平分界：弯折下半截那一小段翼面灰朝着天空、特别亮，看上去像小翼根部单独嵌了一截白色的块（用户 12.png）
+  float livEdge = 0.3 + 0.15 * clamp(q.xi, 0.0, 1.0);
+  float liv = smoothstep(livEdge - lw, livEdge + lw, q.sig / q.arcLen);
+  // 航司色的底漆层按哑光处理（0.35），光泽交给清漆层：底漆也按 0.18 算镜面时，两层高光叠起来又亮又宽，像金属
+  WingSurface m = wingPaint(mix(WING_PAINT * 0.97, WING_LIVERY, liv), mix(0.18, 0.35, liv));
+  // 航司色涂装的清漆不是镜面：粗糙度 0.15（旧版和翼面一样 0.06，天空倒影清清楚楚，读起来像镀铬）
+  m.coatRough = mix(0.06, 0.15, liv);
   // 小翼和翼尖的对接缝
   m.albedo *= 1.0 - 0.5 * wingSeam(q.sig - 0.12, 0.006, pix);
   // 航司色的漆层里有细小的金属颗粒（金属漆），光泽更「深」

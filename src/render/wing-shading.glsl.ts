@@ -84,17 +84,19 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 e
   float nvS = w.edge ? max(nv, 0.3) : nv;
   float vhS = w.edge ? max(vh, 0.3) : vh;
   vec3 fBase = f0 + (1.0 - f0) * pow(1.0 - vhS, 5.0);
-  float aBase = w.edge ? max(m.rough * m.rough, 0.1) : m.rough * m.rough;
+  // 按像素足迹滤掉的油罐鼓包斜率方差并入粗糙度（α² += 2σ²，LEAN 的思路；见 wingTrace）
+  float aBase = w.edge ? max(m.rough * m.rough, 0.1) : sqrt(m.rough * m.rough * m.rough * m.rough + 2.0 * w.bumpVar);
   vec3 spec = fBase * ggxD(nh, aBase) * smithG(nvS, max(nl, 1e-3), aBase) / (4.0 * nvS * max(nl, 1e-3)) * eSun * nl;
   float coat = m.coat * (1.0 - m.metal);
   float fCoat = 0.04 + 0.96 * pow(1.0 - vhS, 5.0);
-  // 清漆粗糙度 0.06（平方 0.004）；边缘处放宽
-  float WING_A_COAT = w.edge ? 0.05 : 0.004;
+  // 清漆：翼面粗糙度 0.06（α = 0.004），小翼 0.15；再加上滤掉的鼓包方差。边缘处放宽
+  float cr2 = m.coatRough * m.coatRough;
+  float WING_A_COAT = w.edge ? max(cr2, 0.05) : sqrt(cr2 * cr2 + 2.0 * w.bumpVar);
   spec += coat * fCoat * ggxD(nh, WING_A_COAT) * smithG(nvS, max(nl, 1e-3), WING_A_COAT) / (4.0 * nvS * max(nl, 1e-3)) * eSun * nl;
 
-  // 环境反射：清漆是镜面，基础层按粗糙度取模糊的平均
+  // 环境反射：清漆近乎镜面，基础层按粗糙度取模糊的平均
   vec3 r = uCabinToWorld * reflect(rd, n);
-  vec3 envSharp = wingEnv(r, 0.0, eSky, eDown, belowAlbedo);
+  vec3 envSharp = wingEnv(r, m.coatRough, eSky, eDown, belowAlbedo);
   vec3 envBase = wingEnv(r, m.rough, eSky, eDown, belowAlbedo);
   // 边缘像素（轮廓、薄后缘）上的法线在一个像素里从正对转到侧对，菲涅尔在掠射端冲到 1，
   // 地平线最亮的那一段天空被整条反射进来——子采样一平均，后缘就成了一串亮点。边缘处按 n·v ≥ 0.3 算菲涅尔
@@ -177,7 +179,10 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     if (k == 0 && uWingEdgeAA > 0 && w.cov >= 1.0 && w.edge) {
       n = uWingEdgeAA == 3 ? 1 : 5;   // 3：只判断不超采样（测开销用）
       single = 0.0;
-      t0 = max(tStart, w.t * 0.5);   // 子射线从中心命中点的一半距离出发：更近的遮挡（邻近部件）也能打到
+      // 内轮廓（中心射线打中之前先擦过别的部件）：子射线从中心命中点的一半距离出发，更近的遮挡（邻近部件）也能打到。
+      // 外轮廓附近（按曲率判断的边缘）前面没有别的东西，子射线从命中点前 16 个像素宽的地方出发：
+      // 贴着翼面掠射的子射线从半路出发要走几百步才挪到前缘，步数不够时四条都算「没打中」，前缘外轮廓成了硬台阶（T22）
+      t0 = max(tStart, w.inner || (uWingDebug & 128) != 0 ? w.t * 0.5 : w.t - 16.0 * pa * w.t);
       sh0 = w.shadow;
       continue;
     }
