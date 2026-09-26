@@ -12,6 +12,8 @@ uniform sampler2DArray uGroundHeight;
 uniform vec4 uGroundLevel[${GROUND_LEVELS}];   // (中心 x, 中心 z, 边长 km, 是否可用)
 uniform float uGroundOn;
 uniform float uTerrainMax;                     // 附近地形最高点（km）
+uniform int uGroundLevelCount;                 // = GROUND_LEVELS（uniform 是为了不让 FXC 展开循环）
+uniform int uTerrainSteps;                     // 地形求交的最多步数（uniform 而不是常量，免得 FXC 展开循环）
 
 const float GROUND_BASE = ${GROUND_BASE_KM.toFixed(1)};
 const float GROUND_RES = 1024.0;
@@ -37,10 +39,11 @@ vec3 levelUv(int L, vec2 g) {
   return vec3(uv, float(L));
 }
 
-// 找从 lod 开始往粗走第一个可用的级别；都不可用返回 −1
+// 找从 lod 开始往粗走第一个可用的级别；都不可用返回 −1。
+// 上限用 uniform（uGroundLevelCount = ${GROUND_LEVELS}）：sampleGround 在着色器里被调用几十处，常量上限会让 FXC 在每一处都展开，
+// 冷编译明显变慢（T02 实测）
 int usableLevel(int L, vec2 g) {
-  for (int i = 0; i < ${GROUND_LEVELS}; i++) {
-    if (i < L) continue;
+  for (int i = max(L, 0); i < uGroundLevelCount; i++) {
     if (levelCovers(i, g)) return i;
   }
   return -1;
@@ -53,8 +56,10 @@ vec4 sampleGround(sampler2DArray tex, vec2 g, float lod) {
   int L1 = usableLevel(L0 + 1, g);
   float f = L0 == int(floor(lod)) ? fract(lod) : 0.0;
   vec4 a = textureLod(tex, levelUv(L0, g), 0.0);
-  if (L1 < 0 || f <= 0.0) return vec4(a.rgb, 1.0);
+  if (L1 < 0) return vec4(a.rgb, 1.0);
   vec4 b = textureLod(tex, levelUv(L1, g), 0.0);
+  // 影像瓦片没取到的地方 alpha = 0（见 clipmap.buildImagery）：用粗一级补上。水体、高度纹理的 alpha 恒为 1，不受影响
+  a.rgb = mix(b.rgb, a.rgb, a.a);
   return vec4(mix(a.rgb, b.rgb, f), 1.0);
 }
 
@@ -78,27 +83,36 @@ float terrainHit(vec3 ro, vec3 rd) {
   float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
   float tPrev = tStart;
   const float N = 56.0;
-  for (float i = 1.0; i <= N; i += 1.0) {
-    // 步长前密后疏：近处的山要准，远处的只要大致对
-    float s = i / N;
-    float t = mix(tStart, tEnd, s * s);
+  float range = max(tEnd - tStart, 1e-3);
+  float t = tStart;
+  // 步长前密后疏（基准分布 t = tStart + range·s²，近处的山要准，远处的只要大致对）；
+  // 离地面近时再按「离地高度」缩小步长：固定步长会跨过比步长还窄的山脊，山脊的剪影在远处变成锯齿。
+  // 循环上限用 uniform（uTerrainSteps）：常量上限会被 Windows 上的 FXC 整个展开，冷编译慢到浏览器判定 GPU 卡死、丢失上下文
+  bool hit = false;
+  for (int i = 0; i < uTerrainSteps; i++) {
+    float s = sqrt((t - tStart) / range);
+    float dq = range * (2.0 * s + 1.0 / N) / N;
     vec3 p = ro + rd * t;
     float alt = length(p) - BOTTOM;
-    vec2 g = p.xz + uCloudOffset;
     float lod = groundLod(length(p.xz), t * pixelAngle);
-    if (alt < groundHeightAt(g, lod)) {
-      float a = tPrev, b = t;
-      for (int k = 0; k < 6; k++) {
-        float m = 0.5 * (a + b);
-        vec3 pm = ro + rd * m;
-        float lm = groundLod(length(pm.xz), m * pixelAngle);
-        if (length(pm) - BOTTOM < groundHeightAt(pm.xz + uCloudOffset, lm)) b = m; else a = m;
-      }
-      return b;
-    }
+    float hg = groundHeightAt(p.xz + uCloudOffset, lod);
+    if (alt < hg) { hit = true; break; }
     tPrev = t;
+    if (t >= tEnd) break;
+    t = min(t + min(dq, max((alt - hg) * 1.5, 0.004 * t + 0.01)), tEnd);
   }
-  return tSea;
+  // 没打到：包括步数用完（uTerrainSteps）还没走到 tEnd 的情况——这时退化成「打在海平面球上」，
+  // 远处极贴地平线的视线可能把山后的陆地画在海平面高度；96 步下实测场景里没有出现
+  if (!hit) return tSea;
+  // 打到了：在上一步与这一步之间二分
+  float a = tPrev, b = t;
+  for (int k = 0; k < 6; k++) {
+    float m = 0.5 * (a + b);
+    vec3 pm = ro + rd * m;
+    float lm = groundLod(length(pm.xz), m * pixelAngle);
+    if (length(pm) - BOTTOM < groundHeightAt(pm.xz + uCloudOffset, lm)) b = m; else a = m;
+  }
+  return b;
 }
 
 // 地形阴影：从 P 朝主光源方向在高度场上步进，被山挡住返回 0（带一点软边）

@@ -9,7 +9,7 @@ import { generateCloudNoise } from "./clouds/noise";
 import { Bloom } from "./render/bloom";
 import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
-import { createSceneMaterial } from "./render/scene";
+import { GroundDetailVariant, createSceneMaterial } from "./render/scene";
 import { createWingMaterial } from "./render/wing-pass";
 import { GroundClipmap } from "./ground/clipmap";
 import { OceanWaves } from "./ocean/waves";
@@ -55,6 +55,8 @@ Object.assign(sceneMat.uniforms, {
   uWingEdgeAA: { value: 1 },
 });
 // 海浪：GPU FFT 三级级联（T14），每帧在场景 pass 之前更新
+// 低空地面细节（T02）：海拔 4 km 以下后台编译 GROUND_DETAIL 变体，编好才切换
+const groundDetail = new GroundDetailVariant(sceneMat);
 const ocean = new OceanWaves(renderer);
 Object.assign(sceneMat.uniforms, ocean.uniforms);
 const clouds = new Clouds(pass, atmosphere, cloudUniforms, sceneMat.uniforms);
@@ -323,7 +325,8 @@ function renderFrame(now: number) {
   clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
-  pass.render(sceneMat, hdr);
+  // 场景（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdr，机翼 pass 再读实际画出来的 hdr 合成
+  pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : sceneMat, hdr);
   wingMat.uniforms.uScene.value = hdr.texture;
   pass.render(wingMat, hdrWing);
   exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
@@ -405,4 +408,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean, wingDebug, wingMat, benchScene, benchWing, benchFrame };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean, groundDetail, wingDebug, wingMat, benchScene, benchWing, benchFrame };

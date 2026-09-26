@@ -7,8 +7,10 @@ import { CABIN_SHADING_COMMON } from "./cabin-shading.glsl";
 import { FABRIC_COMMON } from "./fabric.glsl";
 import { SEATS_COMMON } from "./seats.glsl";
 import { VIEW_COMMON } from "./view.glsl";
-import type { GroundClipmap } from "../ground/clipmap";
+import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
 import { GROUND_COMMON } from "./ground.glsl";
+import { GROUND_DETAIL_COMMON } from "./ground-detail.glsl";
+import { INLAND_WATER_COMMON } from "./inland-water.glsl";
 import { ISLANDS_COMMON } from "./islands.glsl";
 import { LIGHTNING_COMMON } from "./lightning.glsl";
 import { LIGHTS_COMMON } from "./lights.glsl";
@@ -45,7 +47,10 @@ uniform float uWetness;         // 窗板外侧的湿度 0..1
 uniform float uCameraFog;       // 飞机所在位置云的消光系数（1/km），机翼要隔着这层雾看
 uniform float uHdrMax;          // HDR 目标能存的最大值（半精度时是 6e4）
 // 调试可视化：0 关，1 内衬命中深度，2 亮度（伪彩），3 内衬受到的窗光，4 内衬法线，
-// 5 海面本身，6 海面天空反射，7 海面的内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子
+// 5 海面本身，6 海面天空反射，7 海面的内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子，
+// 11 白浪覆盖率 / 本地粗糙度，12 海面可分辨的平均斜率（11、12 见 ocean.glsl.ts），
+// 21 真实地面的地表分类（红 树林、绿 农田、蓝 城区），22 真实地面的像素足迹（21、22 只在低空细节变体里有），
+// 23 真实地面的水体遮罩（红 水面、绿 海洋通道、蓝 夜光）
 uniform int uDebug;
 varying vec2 vUv;
 ${TRAFFIC_COMMON}
@@ -55,6 +60,8 @@ const vec3 PLASTIC_ALBEDO = vec3(0.78, 0.76, 0.72);
 
 ${OCEAN_COMMON}
 ${LIGHTNING_COMMON}
+${GROUND_DETAIL_COMMON}
+${INLAND_WATER_COMMON}
 ${TERRAIN_SHADING_COMMON}
 
 vec3 outsideRadiance(vec3 rd, vec4 cloud) {
@@ -308,6 +315,9 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uGroundLevel: { value: ground.levelUniform },
       uGroundOn: { value: 1 },
       uTerrainMax: { value: 0 },
+      uTerrainSteps: { value: 96 },
+      uGroundLevelCount: { value: GROUND_LEVELS },
+      uDetailLoop: { value: 1 },
       uBolt: { value: Array.from({ length: 16 }, () => new THREE.Vector3()) },
       uBoltIntensity: { value: 0 },
       uTrafficPos: { value: [new THREE.Vector3(), new THREE.Vector3()] },
@@ -321,4 +331,72 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uLoopGuard: { value: 0 },
     },
   });
+}
+
+/**
+ * 低空近景细节的着色器变体（带 GROUND_DETAIL 宏）。细节层让 Windows 上的冷编译几乎翻倍，而且只有离地几公里以内才看得出来，
+ * 所以默认的场景着色器不含它：需要时（离地高度 < ENABLE_BELOW_KM）才用 renderer.compileAsync 在后台编译
+ * （KHR_parallel_shader_compile，不阻塞渲染），编好之后才切过去。变体和默认材质共用同一份 uniforms，切换不需要同步任何状态。
+ */
+export class GroundDetailVariant {
+  static readonly ENABLE_BELOW_KM = 4;
+  /** 高于这个高度切回默认材质（带一点滞回，免得在门限附近来回切） */
+  static readonly DISABLE_ABOVE_KM = 4.5;
+  private material: THREE.ShaderMaterial | null = null;
+  private state: "idle" | "compiling" | "ready" | "failed" = "idle";
+  private active = false;
+
+  constructor(private readonly base: THREE.ShaderMaterial) {}
+
+  /** 每帧调用：给出离地高度（km），返回这一帧该用的材质 */
+  pick(renderer: THREE.WebGLRenderer, aglKm: number): THREE.ShaderMaterial {
+    if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM) this.prepare(renderer);
+    if (this.state !== "ready" || !this.material) return this.base;
+    if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM) this.active = true;
+    else if (aglKm > GroundDetailVariant.DISABLE_ABOVE_KM) this.active = false;
+    return this.active ? this.material : this.base;
+  }
+
+  get status() {
+    return this.state;
+  }
+
+  private prepare(renderer: THREE.WebGLRenderer) {
+    if (this.state !== "idle") return;
+    this.state = "compiling";
+    const b = this.base;
+    const m = new THREE.ShaderMaterial({
+      vertexShader: b.vertexShader,
+      fragmentShader: b.fragmentShader,
+      uniforms: b.uniforms, // 共用同一份 uniforms
+      defines: { ...b.defines, GROUND_DETAIL: 1 },
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const scene = new THREE.Scene();
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
+    const mesh = new THREE.Mesh(geometry, m);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    renderer
+      .compileAsync(scene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1))
+      .then(() => {
+        // compileAsync 只等「编译完成」，不管编译是否成功（例如函数重名）。取出程序、触发一次诊断，失败就不切换
+        const program = (renderer.properties.get(m) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
+        program?.getUniforms();
+        if (!program || program.diagnostics?.runnable === false) {
+          this.state = "failed";
+          return;
+        }
+        this.material = m;
+        this.state = "ready";
+      })
+      .catch(() => {
+        this.state = "failed";
+      })
+      .finally(() => geometry.dispose());
+  }
 }

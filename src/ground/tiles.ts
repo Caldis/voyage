@@ -11,7 +11,8 @@ import { PbfReader } from "pbf";
 
 export const IMAGERY_URL = (z: number, x: number, y: number) =>
   `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/${z}/${y}/${x}.jpg`;
-export const IMAGERY_MAX_ZOOM = 13;
+// z14 ≈ 10 m/像素，就是 Sentinel-2 的原生分辨率；更高的级别只是放大，没有新信息
+export const IMAGERY_MAX_ZOOM = 14;
 
 export const DEM_URL = (z: number, x: number, y: number) =>
   `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
@@ -44,6 +45,9 @@ class Lru<V> {
     }
     return v;
   }
+  delete(k: string) {
+    this.map.delete(k);
+  }
   set(k: string, v: V) {
     this.map.set(k, v);
     if (this.map.size > this.cap) this.map.delete(this.map.keys().next().value as string);
@@ -61,6 +65,11 @@ export function loadBitmap(url: string): Promise<ImageBitmap | null> {
       .then((b) => (b ? createImageBitmap(b) : null))
       .catch(() => null);
     bitmaps.set(url, p);
+    // 失败（网络错误、限流）不要永久缓存成 null：下次重建这一级时再试
+    const key = url;
+    p.then((b) => {
+      if (!b) bitmaps.delete(key);
+    });
   }
   return p;
 }
