@@ -9,7 +9,7 @@ import { generateCloudNoise } from "./clouds/noise";
 import { Bloom } from "./render/bloom";
 import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
-import { createSceneMaterial } from "./render/scene";
+import { GroundDetailVariant, createSceneMaterial } from "./render/scene";
 import { GroundClipmap } from "./ground/clipmap";
 import { OceanWaves } from "./ocean/waves";
 import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateTurbulence } from "./flight";
@@ -43,6 +43,8 @@ tick("云噪声");
 const ground = new GroundClipmap(PRESETS[0].lat, PRESETS[0].lon);
 const sceneMat = createSceneMaterial(atmosphere, cloudUniforms, ground);
 // 海浪：GPU FFT 三级级联（T14），每帧在场景 pass 之前更新
+// 低空地面细节（T02）：海拔 4 km 以下后台编译 GROUND_DETAIL 变体，编好才切换
+const groundDetail = new GroundDetailVariant(sceneMat);
 const ocean = new OceanWaves(renderer);
 Object.assign(sceneMat.uniforms, ocean.uniforms);
 const clouds = new Clouds(pass, atmosphere, cloudUniforms, sceneMat.uniforms);
@@ -296,7 +298,7 @@ function frame(now: number) {
   clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
-  pass.render(sceneMat, hdr);
+  pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : sceneMat, hdr);
   exposure.render(hdr.texture, bloom.render(hdr), dt);
 
   updateInfo(now, sun, moon, state, curLat, curLon, ground.pending);
@@ -315,4 +317,4 @@ requestAnimationFrame(() =>
 );
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean, groundDetail };
