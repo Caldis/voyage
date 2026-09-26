@@ -459,6 +459,10 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int
         if (t > tExit || i >= marchSteps - 1) {
           // 像素中心离轮廓 best 个像素：覆盖率按一个像素宽的盒子滤波（轮廓整体外扩半个像素，看不出来）
           w.cov = clamp(1.0 - best, 0.0, 1.0);
+          // 步数用完时还在包围盒里、离表面不到 3 个像素：多半是贴着表面掠射、一步步挪不完，算打中。
+          // 否则边缘超采样的子射线（步数只有 1/4）会被误判成「没打中」，把背后更亮的天空 / 海面混进来，
+          // 内轮廓和后缘上出现一串亮点
+          if (t <= tExit && best < 3.0) w.cov = 1.0;
           if (w.cov <= 0.0) return w;
           w.t = tBest;
           w.part = partBest;

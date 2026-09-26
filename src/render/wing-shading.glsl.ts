@@ -78,20 +78,29 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTrace w, vec3 sunC, vec3 eSky, vec3 eDown, 
   float nh = max(dot(n, h), 0.0);
   float vh = max(dot(v, h), 0.0);
   vec3 f0 = mix(vec3(0.04), m.albedo, m.metal);
-  vec3 fBase = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
-  float aBase = m.rough * m.rough;
-  vec3 spec = fBase * ggxD(nh, aBase) * smithG(nv, max(nl, 1e-3), aBase) / (4.0 * nv * max(nl, 1e-3)) * eSun * nl;
+  // 边缘像素（轮廓、薄后缘）：法线在一个像素里从正对扫到侧对，逆光时总有一个方向正好把太阳以掠射角
+  // 镜面反射进眼睛（1/(4·n·v) 在 n·v → 0 时放大上千倍）。几条子射线只有一两条碰上，平均后就是后缘上的一串亮珠。
+  // 边缘处把 n·v 下限抬到 0.3、波瓣放宽（镜面抗锯齿：像素足迹内的平均亮度远没有单点那么高）
+  float nvS = w.edge ? max(nv, 0.3) : nv;
+  float vhS = w.edge ? max(vh, 0.3) : vh;
+  vec3 fBase = f0 + (1.0 - f0) * pow(1.0 - vhS, 5.0);
+  float aBase = w.edge ? max(m.rough * m.rough, 0.1) : m.rough * m.rough;
+  vec3 spec = fBase * ggxD(nh, aBase) * smithG(nvS, max(nl, 1e-3), aBase) / (4.0 * nvS * max(nl, 1e-3)) * eSun * nl;
   float coat = m.coat * (1.0 - m.metal);
-  float fCoat = 0.04 + 0.96 * pow(1.0 - vh, 5.0);
-  const float A_COAT = 0.004; // 清漆粗糙度 0.06 的平方
-  spec += coat * fCoat * ggxD(nh, A_COAT) * smithG(nv, max(nl, 1e-3), A_COAT) / (4.0 * nv * max(nl, 1e-3)) * eSun * nl;
+  float fCoat = 0.04 + 0.96 * pow(1.0 - vhS, 5.0);
+  // 清漆粗糙度 0.06（平方 0.004）；边缘处放宽
+  float A_COAT = w.edge ? 0.05 : 0.004;
+  spec += coat * fCoat * ggxD(nh, A_COAT) * smithG(nvS, max(nl, 1e-3), A_COAT) / (4.0 * nvS * max(nl, 1e-3)) * eSun * nl;
 
   // 环境反射：清漆是镜面，基础层按粗糙度取模糊的平均
   vec3 r = uCabinToWorld * reflect(rd, n);
   vec3 envSharp = wingEnv(r, 0.0, eSky, eDown, belowAlbedo);
   vec3 envBase = wingEnv(r, m.rough, eSky, eDown, belowAlbedo);
-  vec3 fEnv = f0 + (max(vec3(1.0 - m.rough), f0) - f0) * pow(1.0 - nv, 5.0);
-  float fEnvCoat = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
+  // 边缘像素（轮廓、薄后缘）上的法线在一个像素里从正对转到侧对，菲涅尔在掠射端冲到 1，
+  // 地平线最亮的那一段天空被整条反射进来——子采样一平均，后缘就成了一串亮点。边缘处按 n·v ≥ 0.3 算菲涅尔
+  float nvF = w.edge ? max(nv, 0.3) : nv;
+  vec3 fEnv = f0 + (max(vec3(1.0 - m.rough), f0) - f0) * pow(1.0 - nvF, 5.0);
+  float fEnvCoat = 0.04 + 0.96 * pow(1.0 - nvF, 5.0);
   // 反射方向朝向机翼自己（比如小翼内侧反射到翼面）时，被自己挡住的部分按天空光的一半估计
   vec3 envSpec = envBase * fEnv * (m.metal > 0.5 ? 1.0 : 0.3) + envSharp * coat * fEnvCoat;
 
@@ -108,9 +117,12 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTrace w, vec3 sunC, vec3 eSky, vec3 eDown, 
     vec3 hL = normalize(lC + v);
     float nhL = max(dot(n, hL), 0.0);
     float fL = 0.04 + 0.96 * pow(1.0 - max(dot(v, hL), 0.0), 5.0);
+    // 镜面项 D·F·G / (4·n·v)：G 在掠射时和 n·v 同阶，两者相消。之前漏了 G、直接除以 n·v，
+    // 轮廓上 n·v → 0.001 时灯的镜面被放大几百倍，边缘超采样的子射线一碰上就是一颗白点（后缘一串亮珠）
+    float gv = 1.0 / (4.0 * max(nv, 0.25));
     lampLit += e * (m.albedo * (1.0 - m.metal) / M_PI
-      + coat * fL * ggxD(nhL, 0.02) * 0.25 / nv
-      + mix(vec3(0.04), m.albedo, m.metal) * ggxD(nhL, max(aBase, 0.02)) * 0.25 / nv);
+      + coat * fL * ggxD(nhL, max(A_COAT, 0.02)) * gv
+      + mix(vec3(0.04), m.albedo, m.metal) * ggxD(nhL, max(aBase, 0.02)) * gv);
   }
   return diffuse + spec + envSpec + lampLit + m.emit;
 }
@@ -123,10 +135,12 @@ vec2 rgss(int k) {
 // 视线打到机翼：返回 (颜色 × 窗板透射率之前的辐亮度, 覆盖率)。
 // 覆盖率 < 1 的是轮廓上的像素，调用方按它和窗外混合。cloud 是这条视线上的云（半分辨率云层纹理）
 //
-// 抗锯齿：先打一条中心射线，判断这个像素是不是「边缘像素」——
-// - 擦边没打中（解析覆盖率介于 0 和 1 之间）：外轮廓外侧；
-// - 打中了但表面斜对视线（|n·v| < 0.3）：外轮廓内侧、薄的后缘、小翼的边；
+// 抗锯齿：先打一条中心射线——
+// - 擦边没打中：外轮廓外侧，用解析覆盖率（最近距离 / 像素宽度）就够平滑。这里曾经也做子射线超采样，
+//   结果子射线在薄后缘外侧几毫米「命中」、法线指向后缘端面，夕阳下后缘成了一串亮珠，反而比解析法差；
+// - 打中了、按曲率估计离外轮廓不到 1.5 个像素：外轮廓内侧、薄的后缘、小翼的边；
 // - 打中之前先擦过另一处轮廓：内轮廓（襟翼压在主翼上、小翼和翼面、短舱和机翼）。
+// 后两种是「边缘像素」：
 // 边缘像素改成 4 条旋转网格（RGSS）子射线各自求交、着色再平均，每条子射线自己的覆盖率按半个像素的斜坡算。
 // 只用中心射线的解析覆盖率时，轮廓只有外侧半个像素有过渡、内侧是硬的，距离场又常高估距离，斜边上还是一级级的台阶。
 // 开销只落在边缘像素上（回归场景里约占 1% 以下）。
@@ -148,15 +162,17 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     // 子射线：从中心射线命中点前一段开始走（挡在前面的部件一般在几米之内），不带自阴影（沿用中心射线的）
     WingTrace w = traceWing(ro, rdk, t0, lA, k == 0 ? uWingSteps : uWingSteps / 4, k == 0 ? uWingShadowSteps : 0);
     if (k > 0) w.shadow = sh0;
-    if (k == 0 && uWingEdgeAA > 0 && ((w.cov > 0.0 && w.cov < 1.0) || w.edge)) {
+    if (k == 0 && uWingEdgeAA > 0 && w.cov >= 1.0 && w.edge) {
       n = uWingEdgeAA == 3 ? 1 : 5;   // 3：只判断不超采样（测开销用）
       single = 0.0;
       t0 = max(tStart, w.t * 0.85);
       sh0 = w.shadow;
       continue;
     }
-    // 中心射线用解析覆盖率；子射线的斜坡收窄到半个像素（子射线之间相距约半个像素）
-    float c = single > 0.5 ? w.cov : clamp(2.0 * w.cov - 1.0, 0.0, 1.0);
+    // 中心射线用解析覆盖率；子射线只算真正打中的（擦边没打中的算窗外）。
+    // 之前子射线也按擦边的斜坡计入，着色点落在薄后缘外侧几毫米的空中，那里的距离场法线指向后缘端面，
+    // 夕阳下每隔几个像素就冒一个亮点（一串亮珠）
+    float c = single > 0.5 ? w.cov : step(1.0, w.cov);
     if (c <= 0.0) continue;
     vec3 col = shadeWing(ro + rdk * w.t, rdk, w, sunC, eSky, eDown, belowAlbedo);
     // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度
