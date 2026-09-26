@@ -191,17 +191,19 @@ float wipeMarks(vec2 q, float pix) {
   return cov;
 }
 
-// 油污与指纹：平时看不见，阳光从附近照过来时发出朦胧的散射光
+// 油污与指纹：平时看不见，阳光从附近照过来时发出朦胧的散射光。
+// T20（高端机舱「刚清洁过」）：擦拭后残留的油膜只剩很淡的几片；只有一枚极淡的半个指纹——
+// 脊线是短而断续、被扭曲的弧段，只占一侧（手指斜着碰上去），不是完整的同心圆（完整圆环读成「靶心」，还像远处云的重影）
 float smudges(vec2 q) {
-  float haze = smoothstep(0.45, 0.8, fbm2(q * 18.0)) * 0.6;
-  // 两个指纹：椭圆形的一圈圈纹路，被噪声扭曲
-  for (int i = 0; i < 2; i++) {
-    vec2 c = i == 0 ? vec2(0.07, -0.11) : vec2(-0.085, -0.02);
-    vec2 d = (q - c) * vec2(1.0, 1.35);
-    float r = length(d);
-    float mask = 1.0 - smoothstep(0.006, 0.011, r);
-    float ridges = 0.5 + 0.5 * sin(r * 2600.0 + fbm2(q * 300.0) * 6.0);
-    haze += mask * ridges * 0.9;
+  float haze = smoothstep(0.55, 0.85, fbm2(q * 18.0)) * 0.25;
+  vec2 c = vec2(0.072, -0.118);
+  vec2 d = mat2(0.93, 0.37, -0.37, 0.93) * (q - c) * vec2(1.0, 1.4);
+  float r = length(d + vec2(0.0, 0.003 * vnoise(q * 400.0)));
+  float mask = (1.0 - smoothstep(0.004, 0.009, r)) * smoothstep(-0.004, 0.003, d.x + 0.4 * d.y);
+  if (mask > 0.0) {
+    float ph = r * 2400.0 + vnoise(q * 700.0) * 5.0;
+    float ridge = smoothstep(0.35, 0.9, sin(ph)) * smoothstep(0.35, 0.65, vnoise(vec2(atan(d.y, d.x) * 9.0, floor(ph / 6.2832))));
+    haze += mask * ridge * 0.35;
   }
   return haze;
 }

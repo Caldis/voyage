@@ -1,5 +1,5 @@
 /**
- * 座椅的高端材质（GLSL）：细纹皮革（荔枝纹 + 细褶 + 天然的色差）、精密的双明线缝线、胡桃木饰条。
+ * 座椅的高端材质（GLSL）：细纹皮革（荔枝纹 + 泡棉起伏 + 天然的色差；不画褶线——细暗线读成「皮面开裂」，显旧）、精密的双明线缝线、胡桃木饰条。
  * 依赖 CABIN_COMMON（hash12 / vnoise）、PANE_COMMON（hash22）、CABIN_SHADING_COMMON（vnoiseD / lineCov）。
  *
  * 对标商务舱 / 头等舱套间（卡塔尔 Qsuite、达美 Delta One、新航 A350 商务舱）的做法：软包皮革 + 精密缝线 + 木饰 / 金属饰条。
@@ -33,18 +33,12 @@ Leather leatherSample(vec2 uv, float pix, float kind, float seed) {
           + mat2(0.6, 0.8, -0.8, 0.6) * g2.yz * 3300.0 * 0.000014 * fB;
     valley = (1.0 - smoothstep(0.2, 0.45, g1.x)) * fA;
   }
-  // 天然皮革的细褶：几条随机走向的浅褶线（约 4 mm 尺度），在头枕这种软包上更明显
-  float crease = 0.0;
-  {
-    float cn = vnoise(ua * vec2(260.0, 90.0) + seed * 3.0);
-    crease = (1.0 - smoothstep(0.0, 0.06, abs(cn - 0.5))) * (1.0 - smoothstep(0.0005, 0.0012, pix)) * mix(0.35, 0.7, kind);
-  }
   // 软包下的泡棉起伏：几厘米尺度的缓慢波动（皮面不是塑料那样的死平）
   vec3 wv = vnoiseD(ub * 22.0 + seed * 1.7);
   slope += wv.yz * 22.0 * mix(0.0018, 0.003, kind);
   // 天然色差：厘米级的轻微深浅，每张皮不同
   float hide = 0.6 * vnoise(ua * 14.0 + seed * 9.0) + 0.4 * vnoise(ub * 47.0 + seed);
-  lt.albedo = base * (0.94 + 0.12 * hide) * (1.0 - 0.1 * valley - 0.12 * crease);
+  lt.albedo = base * (0.94 + 0.12 * hide) * (1.0 - 0.08 * valley);
   lt.slope = slope;
   // 皮纹淡出后，没画出来的起伏折算成粗糙度，远处高光变宽而不是闪
   lt.rough = mix(0.36, 0.44, kind) + 0.06 * valley + 0.08 * (1.0 - fA);

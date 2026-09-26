@@ -21,7 +21,7 @@
 export const CABIN_SHADING_COMMON = /* glsl */ `
 const float WINDOW_PITCH = 0.533;                 // 舷窗间距 ≈ A320 的框距（21 英寸）
 const vec3 CABIN_LIGHT_DIR = vec3(0.0, 0.8, -0.6); // 行李架下 / 舱顶灯带大致在上方、偏过道一侧
-const vec3 LINING_ALBEDO = vec3(0.83, 0.80, 0.745); // 侧壁内饰板：暖白柔光饰面（略带香槟调）
+const vec3 LINING_ALBEDO = vec3(0.84, 0.80, 0.735); // 侧壁内饰板：暖白柔光饰面（略带香槟调）
 const vec3 REVEAL_ALBEDO = vec3(0.86, 0.845, 0.81); // 窗罩（单独的注塑件，珍珠白，比侧壁略冷、略亮）
 const vec3 GASKET_ALBEDO = vec3(0.045, 0.045, 0.048); // 新的石墨色硅胶密封条
 const vec3 CHAMPAGNE_F0 = vec3(0.90, 0.80, 0.63);   // 香槟色阳极氧化铝的镜面反射色（示意值）
@@ -48,8 +48,8 @@ void cabinMoodScene(float cabinLight, float sunY, float moodOn, out vec3 mainTin
   float dayF = smoothstep(-0.06, 0.08, sunY);
   float on = smoothstep(0.005, 0.05, cabinLight);
   mainTint = mix(vec3(1.08, 0.89, 0.65), vec3(0.95, 0.91, 0.85), dayF);
-  vec3 moodCol = mix(vec3(1.02, 0.93, 1.55), mix(vec3(1.35, 0.94, 0.54), vec3(1.0, 0.955, 0.89), dayF), on);
-  moodI = moodCol * mix(0.035, 0.26, on) * moodOn;
+  vec3 moodCol = mix(vec3(1.0, 0.86, 1.8), mix(vec3(1.35, 0.94, 0.54), vec3(1.0, 0.955, 0.89), dayF), on);
+  moodI = moodCol * mix(0.035, mix(0.3, 0.45, dayF), on) * moodOn;
 }
 
 // 值噪声及其解析梯度：x = 值，yz = 对 p 的偏导
@@ -211,7 +211,7 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
     vec2 pr = mat2(0.8, 0.6, -0.6, 0.8) * p.xy;
     vec3 nA = vnoiseD(pr * 420.0);
     vec3 nB = vnoiseD(pr * 1100.0 + 3.1);
-    slope = mat2(0.8, -0.6, 0.6, 0.8) * (nA.yz * 420.0 * 0.000032 * fA + nB.yz * 1100.0 * 0.000011 * fB);
+    slope = mat2(0.8, -0.6, 0.6, 0.8) * (nA.yz * 420.0 * 0.00002 * fA + nB.yz * 1100.0 * 0.000007 * fB);
     albedo *= 1.0 + 0.02 * (nA.x - 0.5) * fA;
   }
 

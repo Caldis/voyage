@@ -114,10 +114,10 @@ float seatAO(vec3 p, vec3 n) {
 vec4 seatSeams(vec3 q, float fr, float wz, float pix, float coverZone) {
   float ys, singleH;
   if (fr > 0.45) {
-    // 正面：头枕底边一道双明线，往上两道单线的绗缝通道（间距 7.5 cm）
+    // 正面：头枕底边一道缝，往上两道绗缝通道（间距 7.5 cm），都是双明线（缝在凹槽里的单线藏在阴影里看不见）
     float k = clamp(floor((q.y - (SEAT_TOP - 0.25)) / 0.075 + 0.5), 0.0, 2.0);
     ys = SEAT_TOP - 0.25 + k * 0.075;
-    singleH = k > 0.5 ? 1.0 : 0.0;
+    singleH = 0.0;
   } else {
     // 背面：头枕包下来的下沿
     ys = SEAT_TOP - 0.065;
@@ -200,7 +200,7 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
     rough = lt.rough;
     vec4 sm = seatSeams(q, fr, wz, pix, coverZone);
     // 缝线：深色皮上是暖灰的撞色线，浅色皮上是同色系略深的线
-    vec3 threadC = kind > 0.5 ? vec3(0.40, 0.37, 0.33) : vec3(0.30, 0.275, 0.235);
+    vec3 threadC = kind > 0.5 ? vec3(0.34, 0.30, 0.25) : vec3(0.36, 0.33, 0.28);
     albedo = mix(albedo * (1.0 - sm.y), threadC, sm.x);
     rough = mix(rough, 0.55, sm.x);
     vec3 up = seatDirToCabin(vec3(0.0, 1.0, 0.0));

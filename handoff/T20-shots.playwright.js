@@ -1,7 +1,7 @@
 // T20 截图：5201 = 改前（基线副本），5200 = 改后。只跑某几个场景时改 ONLY；迭代中间版本改 SUFFIX
 async (page) => {
   const ONLY = null;
-  const SUFFIX = "";
+  const SUFFIX = "2";
   const current = page.url();
   const origin = (current.match(/^http:\/\/127\.0\.0\.1:52\d\d/) || ["http://127.0.0.1:5200"])[0];
   const tag = (origin.endsWith("5201") ? "before" : "after") + SUFFIX;
@@ -10,8 +10,8 @@ async (page) => {
   const NOON = { preset: "wpac", time: 720, "wing-pos": "8" };
   const SUNSET = { preset: "wpac", time: 1040, "wing-pos": "8" };
   const NIGHT = { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": false };
-  const FWD = { x: -0.42, y: 0.02, z: -0.6 };
-  const OWN = { x: 0.42, y: 0.02, z: -0.6 };
+  const FWD = { x: -0.42, y: 0.1, z: -0.5 }; // 视角预设「看前方」
+  const OWN = { x: 0.42, y: 0.1, z: -0.5 };  // 视角预设「看后方」
   const SHOTS = [
     { name: "noon", p: NOON, head: D },
     { name: "noon-near", p: NOON, head: { x: 0, y: 0.02, z: -0.3 } },
@@ -25,6 +25,10 @@ async (page) => {
     { name: "sunset-fwd", p: SUNSET, head: FWD },
     { name: "night-fwd", p: NIGHT, offset: [0, -25], head: FWD },
     { name: "night-own", p: NIGHT, offset: [0, -25], head: OWN },
+    { name: "noon-fwdback", p: NOON, head: { x: -0.42, y: 0.1, z: -0.75 } },
+    { name: "night-fwdback", p: NIGHT, offset: [0, -25], head: { x: -0.42, y: 0.1, z: -0.75 } },
+    { name: "sunset-near", p: SUNSET, head: { x: 0, y: 0.02, z: -0.25 } },
+    { name: "storm-day", p: { preset: "wpac", time: 900, coverage: 0.3, weather: "storm", "wing-pos": "-4" }, head: D },
   ];
   const errs = [];
   const onMsg = (m) => { if (m.type() === "error" || /CONTEXT_LOST/.test(m.text())) errs.push(m.text().slice(0, 400)); };
