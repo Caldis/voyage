@@ -14,8 +14,8 @@ import { WING_SHADING_COMMON } from "./wing-shading.glsl";
  * （FXC 编译时间随单个着色器的规模超线性增长）。拆成独立的程序后，两个程序靠 KHR_parallel_shader_compile 并行编译，各自规模也小一半。
  *
  * 合成：场景输出的 alpha 是「这个像素有多少是窗外」（本窗、窗板以内、没被遮光板和座椅挡住），记作 m；
- * 场景输出的 alpha 里还打包了窗外加窗板效果之前的颜色 O（见 scene.ts 的 packWingRef），窗板效果的乘性系数 k 在这里重算。
- *   结果 = 场景 + 机翼覆盖率 × m × (机翼 × 窗板透射率 − O) × k，再加上翼尖灯本身（亮点 + 云雾里的光晕）× m。
+ * 场景输出的 alpha 里还打包了「与窗外颜色无关的部分」A = 场景 − m·k·O（见 scene.ts 的 packWingRef），窗板乘性系数 k 在这里重算。
+ *   结果 = (1 − a)·场景 + a·(A + m·k·机翼 × 窗板透射率)，a 是机翼覆盖率；再加上翼尖灯本身（亮点 + 云雾里的光晕）× m。
  * 窗板的附加亮度（划痕、擦痕、水珠、舱内反射）与窗外无关，增量合成时原样保留在机翼上。
  */
 const WING_FRAG = /* glsl */ `
@@ -36,7 +36,7 @@ varying vec2 vUv;
 const float WING_PANE_T = 0.85;  // 窗板透射率，和 scene.ts 的 PANE_TRANSMITTANCE 一致
 ${WING_SHADING_COMMON}
 
-// 解包 scene.ts 的 packWingRef：返回窗外遮罩 m，o 是窗外加窗板效果之前的颜色
+// 解包 scene.ts 的 packWingRef：返回窗外遮罩 m，o 是场景结果里「与窗外颜色无关的部分」A
 float unpackWingRef(float a, out vec3 o) {
   o = vec3(0.0);
   if (uHdrMax < 1e10) return a;
@@ -84,7 +84,7 @@ void main() {
     float k = (1.0 - 0.1 * smudges(q)) * (1.0 - 0.3 * edge) * (1.0 - 0.12 * wc)
       * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
     vec3 w = wing.rgb * WING_PANE_T;
-    col = uHdrMax < 1e10 ? mix(col, w * k, wing.a * m) : max(col + wing.a * m * (w - o) * k, vec3(0.0));
+    col = uHdrMax < 1e10 ? mix(col, w * k, wing.a * m) : (1.0 - wing.a) * col + wing.a * (o + m * k * w);
   }
   col += wingLights(ro, rd) * WING_PANE_T * m;
   gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);

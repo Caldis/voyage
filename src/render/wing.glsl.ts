@@ -296,11 +296,12 @@ float wingCanoe(float u, float yRel, float zRel, float len) {
   // 细长的独木舟：头部椭圆，最宽处（约 28 cm 宽、48 cm 高）在前 1/3，往后宽度收到 30%、高度收到 40%，
   // 轴线在尾段向上翘，尾部成扁的「刀背」；尾端斜切（下缘比上缘短）
   float head = uc < 0.2 ? sqrt(max(1.0 - pow((0.2 - uc) / 0.2, 2.0), 0.0)) : 1.0;
-  head *= sqrt(max(1.0 - pow(max(uc - 0.95, 0.0) / 0.05, 2.0), 0.0));   // 尾端小圆角
-  float tail = smoothstep(0.35, 1.0, uc);
-  float wz = max(0.14 * head * mix(1.0, 0.3, tail), 0.004);
-  float hy = max(0.24 * head * mix(1.0, 0.4, tail), 0.004);
-  float yc = 0.14 * smoothstep(0.4, 1.0, uc);          // 尾段上翘
+  head *= sqrt(max(1.0 - pow(max(uc - 0.97, 0.0) / 0.03, 2.0), 0.0));   // 尾端小圆角
+  // 收细主要发生在伸出后缘的那一段（u ≈ 0.75 以后）：从上面看是一条逐渐变尖的刀背，不是等粗的「手指」
+  float tail = smoothstep(0.45, 1.0, uc);
+  float wz = max(0.13 * head * mix(1.0, 0.2, tail * tail), 0.004);
+  float hy = max(0.22 * head * mix(1.0, 0.3, tail), 0.004);
+  float yc = 0.2 * smoothstep(0.35, 1.0, uc);          // 尾段上翘：下缘斜着收上去，尾部成扁的刀背
   vec2 q = vec2(zRel / wz, (yRel - yc) / hy);
   float d = (length(q) - 1.0) * min(wz, hy);
   return max(d, max(-u, u - 1.0) * len);

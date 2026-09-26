@@ -58,8 +58,11 @@ ${TRAFFIC_COMMON}
 const float PANE_TRANSMITTANCE = 0.85;
 
 // 输出的 alpha 只给机翼 pass 读（它再把窗外遮罩写回自己的输出给曝光用），所以这里把两样东西打包进 alpha 的 32 位里：
-// 窗外遮罩 m（5 位）和窗外那一路「加窗板效果之前」的颜色 O（RGB 各 6 位 + 共享指数 5 位）。
-// 机翼 pass 按 场景 + 机翼覆盖率 × m × (机翼 − O) × 窗板乘性系数 做增量合成：划痕、水痕、舱内反射照样叠在机翼上。
+// 窗外遮罩 m（5 位）和「与窗外颜色无关的部分」A = 结果 − m·k·O（RGB 各 6 位 + 共享指数），
+// O 是窗外加窗板效果之前的颜色，k 是窗板效果的乘性系数（油污、水珠暗边与透镜化、透气孔，机翼 pass 按同一公式重算）。
+// 机翼 pass 合成：(1 − a)·场景 + a·(A + m·k·机翼)，a 是机翼覆盖率。划痕、水痕、舱内反射都在 A 里，照样叠在机翼上。
+// 为什么存 A 而不是 O：量化误差按所存量的大小走。O 是明亮的天空，6 位量化的误差（约 1%）换到暗的机翼上就是满屏彩色噪点；
+// A 在窗内只是窗板的附加亮度，很小，误差可以忽略。
 // 为什么不用第二个渲染目标（MRT）：Windows 上 ANGLE 的 D3D 后端链接时只按单目标生成像素着色器，
 // 画进两张目标时要在首帧同步重编整个场景着色器（实测首帧卡 50 秒、有时丢上下文）；也不能给场景加 sampler（已 16/16）。
 // 位布局：0–4 m，5–10 R，11–16 G，17–22 B，23 恒为 1，24–28 指数 + 20，29–31 为 0——浮点指数域落在 1..63，
@@ -138,6 +141,7 @@ ${SEATS_COMMON}
 
 void main() {
   vec3 viewPre = vec3(0.0);   // 窗外加窗板效果之前的颜色，打包给机翼 pass
+  float paneK = 1.0;          // 窗板效果的乘性系数（和 wing-pass.ts 的公式一致）
   vec3 rd = cabinRay(gl_FragCoord.xy);
   vec3 ro = uHead;
 
@@ -271,6 +275,8 @@ void main() {
   // 窗板反射舱内：正对时约 4%，斜看时更多（菲涅尔）
   float fr = 0.04 + 0.96 * pow(1.0 - clamp(rd.z, 0.0, 1.0), 5.0);
   view += fr * wallRefl * 1.5;
+  paneK = (1.0 - 0.1 * sm) * (1.0 - 0.3 * edge) * (1.0 - 0.12 * wc)
+    * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
   }
   vec3 col = mix(wall, mix(mix(reveal, view, inPane), shade, shaded), inBezel);
   col = mix(col, seatCol, seat.cov);
@@ -280,7 +286,8 @@ void main() {
   // HDR 目标是 32 位浮点时可以原样存下太阳的辐亮度（约 1.8e6 kcd/m²），眩光的能量才对。
   // alpha 存「这个像素有多少是窗外」，曝光时窗外和舱内分开适应
   float outsideMask = isMain * inBezel * inPane * (1.0 - shaded) * (1.0 - seat.cov);
-  gl_FragColor = vec4(min(col, vec3(uHdrMax)), packWingRef(outsideMask, viewPre));
+  col = min(col, vec3(uHdrMax));
+  gl_FragColor = vec4(col, packWingRef(outsideMask, max(col - outsideMask * paneK * viewPre, vec3(0.0))));
 }
 `;
 
