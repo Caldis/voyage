@@ -55,11 +55,13 @@ async (page) => {
       }
       v.snapAll();
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
-      // 适应亮度：exposure.adapted[0] 是最近一帧写入的 1×1 目标（rg = 窗外、舱内的 log2 亮度，单位 kcd/m²）
+      // 适应亮度：exposure.adapted[0] 是最近一帧写入的 1×1 目标（rgb = 窗外、舱内（中心加权）、舱内（按面积）的 log2 亮度，单位 kcd/m²）
       const ex = v.exposure;
       const px = new Float32Array(4);
       ex.pass.renderer.readRenderTargetPixels(ex.adapted[0], 0, 0, 1, 1, px);
-      return { adaptedOutCd: 1000 * 2 ** px[0], adaptedCabinCd: 1000 * 2 ** px[1], info: document.getElementById("info").textContent };
+      const cd = (x) => +(1000 * 2 ** x).toPrecision(4);
+      // 旧版（改前）只有 rg 两路；新版 b 是按面积平均的舱内亮度
+      return { outCd: cd(px[0]), cabinCenterCd: cd(px[1]), cabinAreaCd: cd(px[2]), uLegacy: ex.finalMat.uniforms.uLegacy?.value ?? null };
     }, sc);
     await page.screenshot({ path: `${outDir}/${sc.name}.png`, timeout: 60000 });
     await page.evaluate(() => (window.__voyage.exposure.finalMat.uniforms.uDebugMask.value = true));

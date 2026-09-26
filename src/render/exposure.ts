@@ -5,11 +5,14 @@ import type { FullscreenPass } from "./pass";
 
 /**
  * 人眼式自动曝光：
- * 1. 测光：在 HDR 图上取 32×32 个点，窗外和舱内分开求中心加权的对数平均亮度（HDR 的 alpha 是窗外遮罩）
- * 2. 适应：在对数域里向测光值靠拢，变亮时快、变暗时慢，和人眼的明暗适应一致
- * 3. 局部适应：窗外按窗外的亮度曝光；舱内只「部分」适应到舱内亮度（β = 0.5，档位差减半）。
- *    人眼看窗外时，余光里的舱内也看得清，但不会和窗外一样亮。因为遮罩是解析算出来的，交界处没有光晕。
- * 4. 输出：曝光 × HDR → AgX 色调映射 → sRGB，最后加抖动避免天空渐变出现色带
+ * 1. 测光：在 HDR 图上取 32×32 个点（HDR 的 alpha 是窗外遮罩）。
+ *    窗外：中心加权的对数平均亮度（视线落在窗上）。
+ *    舱内：按面积平均的对数亮度（舱内在余光里，周边视网膜适应的是它看到的整片舱壁，不是窗洞内衬上那一小块光斑）。
+ * 2. 适应：在对数域里向测光值靠拢，变亮时快、变暗时慢，和人眼的明暗适应一致。
+ * 3. 双区曝光（T23，「人眼式」，公式与理由见 Exposure 类上方的注释）：
+ *    窗外永远按窗外的亮度曝光（和改前一致）；舱内的曝光由窗外的曝光出发，
+ *    按绝对亮度决定能独立适应多少，并且不许比窗外还亮。因为遮罩是解析算出来的，交界处没有光晕。
+ * 4. 输出：曝光 × HDR → 浦肯野 → AgX 色调映射 → sRGB，最后加抖动避免天空渐变出现色带。
  */
 
 const METER_FRAG = /* glsl */ `
@@ -17,8 +20,8 @@ uniform sampler2D uHdr;
 varying vec2 vUv;
 void main() {
   const float N = 32.0;
-  vec2 sum = vec2(0.0);   // 窗外、舱内
-  vec2 wsum = vec2(0.0);
+  vec3 sum = vec3(0.0);   // 窗外（中心加权）、舱内（中心加权，旧口径，仅作对照）、舱内（按面积）
+  vec3 wsum = vec3(0.0);
   for (float i = 0.0; i < N; i += 1.0) {
     for (float j = 0.0; j < N; j += 1.0) {
       vec2 uv = (vec2(i, j) + 0.5) / N;
@@ -26,16 +29,16 @@ void main() {
       float w = exp(-dot(d, d) / 0.045);
       vec4 c = texture(uHdr, uv);
       float l = log2(max(dot(c.rgb, vec3(0.2126, 0.7152, 0.0722)), 1e-7));
-      vec2 ww = w * vec2(c.a, 1.0 - c.a);
+      vec3 ww = vec3(w * c.a, w * (1.0 - c.a), 1.0 - c.a);
       sum += ww * l;
       wsum += ww;
     }
   }
-  vec2 avg = sum / max(wsum, vec2(1e-6));
+  vec3 avg = sum / max(wsum, vec3(1e-6));
   // 窗外几乎看不到（遮光板拉下）时，窗外那一路跟随舱内，反之亦然
-  if (wsum.x < 1e-3) avg.x = avg.y;
-  if (wsum.y < 1e-3) avg.y = avg.x;
-  gl_FragColor = vec4(avg, 0.0, 1.0);
+  if (wsum.x < 1e-3) avg.x = avg.z;
+  if (wsum.z < 1e-3) avg.yz = avg.xx;
+  gl_FragColor = vec4(avg, 0.0);
 }
 `;
 
@@ -46,12 +49,12 @@ uniform float uDt;
 uniform bool uReset;
 varying vec2 vUv;
 void main() {
-  vec2 target = texture(uMeter, vec2(0.5)).rg;
-  vec2 prev = texture(uPrev, vec2(0.5)).rg;
+  vec3 target = texture(uMeter, vec2(0.5)).rgb;
+  vec3 prev = texture(uPrev, vec2(0.5)).rgb;
   // 适应速度（1/秒）：亮适应约 0.5 s，暗适应这里取 2.5 s（真实的完全暗适应要几十分钟，不照搬）
-  vec2 rate = mix(vec2(0.4), vec2(2.0), step(prev, target));
-  vec2 next = uReset ? target : prev + (target - prev) * (1.0 - exp(-uDt * rate));
-  gl_FragColor = vec4(next, 0.0, 1.0);
+  vec3 rate = mix(vec3(0.4), vec3(2.0), step(prev, target));
+  vec3 next = uReset ? target : prev + (target - prev) * (1.0 - exp(-uDt * rate));
+  gl_FragColor = vec4(next, 0.0);
 }
 `;
 
@@ -64,37 +67,68 @@ uniform float uEvComp;
 uniform sampler2D uBloom;
 uniform float uBloomLevels;
 uniform float uGlare;       // 被眼睛和窗板散射到周围的能量比例
-uniform bool uDebugMask;      // 调试：输出窗外遮罩
-uniform float uCabinAdaptation; // 舱内向自身亮度适应的程度，0 = 跟窗外一样曝光，1 = 完全按舱内曝光
+uniform bool uDebugMask;    // 调试：输出窗外遮罩
+uniform bool uLegacy;       // 调试：改前的公式（β = 0.5），A/B 对照用
+uniform vec2 uCabinBeta;    // 舱内局部适应比例：x = 暗处（中间视 / 暗视），y = 白天（明视）
+uniform vec2 uCabinCapEv;   // 舱内均值的显示亮度相对窗外均值的上限（EV）：x = 暗处，y = 白天
+uniform float uCabinWhiteEv;// 白天舱内的明度恒常补偿（EV）
+uniform float uCabinMaxBoostEv; // 舱内曝光最多比窗外高多少 EV（局部适应的幅度上限）
+uniform vec2 uPhotopicRange;// 「白天」判定：窗外适应亮度的 log10(cd/m²) 区间
 #include <common>
 #include <dithering_pars_fragment>
 varying vec2 vUv;
+
+// 目标中灰：亮度低于 100 cd/m² 后逐渐降低（暗处人眼看到的整体更暗；经验近似）
+float exposureKey(float logCd10) { return 0.18 * clamp((logCd10 + 2.0) / 4.0, 0.12, 1.0); }
+
 void main() {
   vec4 src = texture(uHdr, vUv);
-  float exposure;
+  float logExposure;  // log2 曝光（HDR 单位 kcd/m²）
+  float logAdapt;     // 这个像素的适应亮度，log2 kcd/m²（浦肯野用）
   if (uAuto) {
-    vec2 adapted = texture(uAdapted, vec2(0.5)).rg; // log2 亮度：窗外、舱内
-    // 舱内只部分适应：在对数域里取窗外和舱内的中点（β = 0.5）
-    float logCabin = mix(adapted.x, adapted.y, uCabinAdaptation);
-    float logL = mix(logCabin, adapted.x, src.a);
-    // 场景单位是 kcd/m²，换算到 cd/m²
-    float cd = max(exp2(logL) * 1000.0, 1e-3);
-    // 暗处人眼看到的整体更暗：亮度低于 100 cd/m² 后逐渐降低目标中灰（经验近似）
-    float key = 0.18 * clamp((log(cd) / log(10.0) + 2.0) / 4.0, 0.12, 1.0);
-    exposure = key / (cd / 1000.0);
+    vec3 adapted = texture(uAdapted, vec2(0.5)).rgb; // log2 亮度（kcd/m²）：窗外、舱内（中心加权）、舱内（按面积）
+    const float L2_10 = 0.30103;                     // log10(2)
+    const float LOG2_1000 = 9.965784;                // kcd → cd
+    float o = adapted.x;
+    // 窗外：按窗外自身的适应亮度曝光（和改前一致）
+    float keyO = exposureKey((o + LOG2_1000) * L2_10);
+    float eO = log2(keyO) - o;
+    float eC, aC;
+    if (uLegacy) {
+      aC = mix(o, adapted.y, 0.5);
+      eC = log2(exposureKey((aC + LOG2_1000) * L2_10)) - aC;
+    } else {
+      float c = adapted.z;
+      // 白天程度：窗外适应亮度从 uPhotopicRange.x 到 .y（log10 cd/m²）之间由 0 过渡到 1
+      float day = smoothstep(uPhotopicRange.x, uPhotopicRange.y, (o + LOG2_1000) * L2_10);
+      // ① 局部适应：舱内的适应亮度从窗外出发，向舱内自身的亮度靠拢一部分；明视时周边视网膜能独立适应得更多
+      float beta = mix(uCabinBeta.x, uCabinBeta.y, day);
+      aC = o + beta * (c - o);
+      eC = log2(exposureKey((aC + LOG2_1000) * L2_10)) - aC;
+      // ② 明度恒常：白天舱内大多是浅色饰面，人眼把它看成「白墙在阴影里」而不是中灰，所以舱内的中灰锚点上调
+      eC += uCabinWhiteEv * day;
+      // ③ 上限：舱内均值在屏幕上的亮度不超过窗外均值 + cap（暗处 cap < 0：舱内一定比窗外暗）
+      //    舱内均值的显示亮度 = eC + c，窗外均值 = eO + o
+      float cap = mix(uCabinCapEv.x, uCabinCapEv.y, day);
+      eC = min(eC, eO + o - c + cap);
+      // ④ 局部适应的幅度有限：余光里的舱内最多比注视的窗外多提亮 uCabinMaxBoostEv 档
+      eC = min(eC, eO + uCabinMaxBoostEv);
+      aC = log2(exposureKey((aC + LOG2_1000) * L2_10)) - eC; // 等效适应亮度（浦肯野用），与曝光一致
+    }
+    logExposure = mix(eC, eO, src.a);
+    logAdapt = mix(aC, o, src.a);
   } else {
     // EV100 曝光：H = L(cd/m²) / (1.2 · 2^EV)
-    exposure = 1000.0 / (1.2 * exp2(uManualEv));
+    logExposure = log2(1000.0 / (1.2 * exp2(uManualEv)));
+    logAdapt = 0.0;
   }
-  exposure *= exp2(uEvComp);
+  float exposure = exp2(logExposure + uEvComp);
   vec3 hdr = src.rgb;
   vec3 glare = texture(uBloom, vUv).rgb / uBloomLevels;
   vec3 c = mix(hdr, glare, uGlare);
   // 浦肯野效应：暗处视杆细胞接管，看不出颜色、对蓝绿光敏感（峰值 507 nm），月夜因此是银蓝色的。
   // 按这个像素的适应亮度在明视觉（> 3 cd/m²）和暗视觉（< 0.01 cd/m²）之间过渡（经验近似，参考 Jensen 2000）
   if (uAuto) {
-    vec2 adapted = texture(uAdapted, vec2(0.5)).rg;
-    float logAdapt = mix(mix(adapted.x, adapted.y, uCabinAdaptation), adapted.x, src.a);
     float cdAdapt = exp2(logAdapt) * 1000.0;
     float scotopic = 1.0 - smoothstep(-2.0, 0.5, log(max(cdAdapt, 1e-6)) / log(10.0));
     // 像素本身够亮（夜里的灯）就能刺激视锥细胞，保留颜色
@@ -104,7 +138,6 @@ void main() {
     c = mix(c, rod * vec3(0.66, 0.82, 1.0), scotopic * 0.8);
   }
   gl_FragColor = vec4(c * exposure, 1.0);
-  // 调试：直接输出窗外遮罩（统计脚本用它区分窗外 / 舱内像素），不走色调映射
   if (uDebugMask) { gl_FragColor = vec4(vec3(src.a), 1.0); return; }
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -157,8 +190,13 @@ export class Exposure {
       uBloom: { value: null },
       uBloomLevels: { value: Bloom.WEIGHT_SUM },
       uGlare: { value: 0.04 },
-      uCabinAdaptation: { value: 0.5 },
       uDebugMask: { value: false },
+      uLegacy: { value: false },
+      uCabinBeta: { value: new THREE.Vector2(0.3, 0.8) },
+      uCabinCapEv: { value: new THREE.Vector2(-0.75, 2.0) },
+      uCabinWhiteEv: { value: 2.2 },
+      uCabinMaxBoostEv: { value: 4.0 },
+      uPhotopicRange: { value: new THREE.Vector2(1.5, 3.0) },
     },
     true,
   );
