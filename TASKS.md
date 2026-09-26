@@ -10,10 +10,10 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | T20 | 第 3 波（提前） | 5200 | `worktree-agent-ac9a71af767a7991c`（dab9f4d） | Opus（已交付；需接入氛围灯开关 4 处） | Opus 审查中（兼美术总监，5188） | 待审查 |
 | T04 | 第 3 波（提前） | 5204 | worktree（交付时回填） | Opus（含 T13 低云横纹 / 重影，优先） | 待派 | 进行中 |
-| T16 | 第 3 波（路线图） | 5216 | worktree（交付时回填） | Sonnet | 待派 | 进行中 |
-| T21 | 第 3 波（用户插单） | 5221 | worktree（交付时回填） | Opus（先研究再实现：俯视海面重复） | 待派 | 进行中 |
+| T16 | 第 3 波（路线图） | 5216 | `worktree-agent-ac7bb298863ae910f`（54f3835） | Sonnet（已交付） | Sonnet 审查中（5186） | 待审查 |
+| T21 | 第 3 波（用户插单） | 5221 | `worktree-agent-a512e3f8df8e4b800`（4e1359d） | Opus（已交付） | Opus 审查中（兼美术总监，5189） | 待审查 |
 | T23 | 第 3 波（审查发现，阻塞 T20） | 5223 | worktree（交付时回填） | Opus（舱内曝光改人眼式） | 待派 | 进行中 |
-| DX-01~03 | 第 3 波（开发体验官） | 5230 | worktree（交付时回填） | Sonnet（私有 headless 联调、离线 GLSL 检查、回归脚本加固） | 待派 | 进行中 |
+| DX-01~03 | 第 3 波（开发体验官） | 5230 | `worktree-agent-a60f028cdce61a8da`（989326a） | Sonnet（已交付） | Sonnet 审查中 | 待审查 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
