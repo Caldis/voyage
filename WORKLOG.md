@@ -297,3 +297,6 @@ pnpm --filter voyage typecheck && pnpm --filter voyage build
 - **第 4 波派发**：主干 SC-5（+SC-3b，拆窗外 / 舱内 pass，独占 scene.ts / main.ts / ground.glsl）、T18（低空霾 / 限高：flight / ui / state / index / ground/* / atmosphere/* / 新 haze.glsl；着色器接入以片段交付，SC-5 合并后协调者接）；插单 T22（机翼表面）、T26（台风第二轮）。同时首次派性能工程师（research/PERF_REPORT_wave3.md）与美术总监第二次观感检查（research/ART_REVIEW_wave3.md）；开发体验官本波已产出两份报告（DX_REPORT_wave2、DX_SHADER_COMPILE），本次收尾不再单派。
 - **用户定：不许因等回复停工**（上一次阻塞式提问让进度卡了一整晚）。SOP 新增一节：取向性选择按推荐 / 可逆方案直接执行、汇报里写明可改，记入「待用户确认」；只有不可逆 / 对外动作才停下问，且等待期间继续推进其他工作。
 - 用户放权：推送 / 发布不用等；非关键内容删除不用等。已写进 SOP「不许因等用户回复而停工」与授权记录，并更新根目录 AGENTS.md 的仓库状态（远程仍须私有、netscope/dist 不推送）。
+- 合并 SC-5（af551cf）、T22（9aa3915，README 冲突两边保留）、T26（21ff82d）。**待用户确认**：T26 的 `HUR_BACKLIT_AP_CUT=0.5`（有意偏离物理让逆光眼壁可见，设 0 回到纯物理）——按「不许等」规则先保留 0.5。
+- 性能工程师首份报告（research/PERF_REPORT_wave3.md）：13 场景预算；雷暴 / 台风云步进占整帧 81–87%（主步进逐步求完整密度）；机翼边缘超采样 0.3–0.47 ms 只落 0.2–0.4% 像素；**冷启动首次 draw 4.7 s 冻结的根因坐实为云步进 MRT 在 ANGLE / D3D11 上首次 draw 同步重编**。美术总监第二份（ART_REVIEW_wave3.md）：海面耀斑被云影切成硬边阶梯、舱内缺人眼白平衡（**用户拍板人眼式色适应**）、窗上水痕像铅笔画；遮光板全放夜景舱壁 25–43 达标；胡桃木提亮并入 T25。
+- 第 4 波追加派发：云 PERF-1+2+T27、T28 色适应、T24 结构化倒影、PERF-3 机翼降本。T18 自行合并 master 并接入。看板新增 T29、PERF-5/6/8、W01（奇观首批按推荐选天梯 / 建木，待 T18 / T19 之后）。
