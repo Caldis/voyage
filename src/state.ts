@@ -53,7 +53,16 @@ export interface VoyageState {
   wingRootLE: number;
   /** 真实地理数据（联网拉取卫星影像、地形、水体） */
   groundOn: boolean;
+  /** 增升装置（襟翼手柄 / 减速板）的设定：auto 按高度和飞行阶段自动 */
+  highLift: HighLiftSetting;
+  /** 此刻的缝翼 / 襟翼 / 扰流板偏角（度），朝设定值按作动速度平滑运动 */
+  slatDeg: number;
+  flapDeg: number;
+  spoilerDeg: number;
 }
+
+/** 增升装置设定：Airbus 襟翼手柄的档位（0 / 1 / 1+F / 2 / 3 / FULL），或减速板，或按高度自动 */
+export type HighLiftSetting = "auto" | "0" | "1" | "1+F" | "2" | "3" | "full" | "speedbrake";
 
 /** 按 id 取 DOM 元素：main.ts（渲染器挂载点、加载遮罩）和 ui.ts（面板控件）共用的小工具 */
 export const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { Preset, VoyageState } from "./state";
+import type { HighLiftSetting, Preset, VoyageState } from "./state";
 import { CRUISE_PITCH_DEG } from "./state";
 
 /**
@@ -153,4 +153,50 @@ export function advanceFlight(state: VoyageState, input: AdvanceFlightInput): Ad
   const outwardW = new THREE.Vector3(Math.cos(h), 0, Math.sin(h)).multiplyScalar(state.seat === "right" ? 1 : -1);
 
   return { climbing, motion, ownDir, outwardW, speedKms };
+}
+
+// ---------- 增升装置：缝翼、襟翼、扰流板 ----------
+
+/** A320 襟翼手柄各档位的 [缝翼, 襟翼] 偏角（度），按公开的 A320 飞行机组操作手册（FCOM）数据 */
+export const HIGH_LIFT_CONF: Record<"0" | "1" | "1+F" | "2" | "3" | "full", [number, number]> = {
+  "0": [0, 0],
+  "1": [18, 0],
+  "1+F": [18, 10],
+  "2": [22, 15],
+  "3": [22, 20],
+  full: [27, 40],
+};
+
+/** 自动档：按高度排的简化进近程序（真实程序按速度和离跑道的距离放襟翼，这里用高度代替） */
+function autoConf(altKm: number): keyof typeof HIGH_LIFT_CONF {
+  if (altKm >= 2.4) return "0";
+  if (altKm >= 1.9) return "1";
+  if (altKm >= 1.2) return "2";
+  if (altKm >= 0.7) return "3";
+  return "full";
+}
+
+/** 设定 → 目标偏角（度）：[缝翼, 襟翼, 扰流板] */
+export function highLiftTarget(setting: HighLiftSetting, state: VoyageState): [number, number, number] {
+  if (setting === "speedbrake") return [0, 0, 30]; // 空中减速板：扰流板 2–5 上翻，最大约 25–40°
+  const conf = setting === "auto" ? autoConf(state.altitudeKm) : setting;
+  const [slat, flap] = HIGH_LIFT_CONF[conf];
+  // 自动档：快速下降（离目标高度还远）且还没放襟翼时，打开一半减速板
+  const descending = setting === "auto" && state.targetAltKm < state.altitudeKm - 0.3 && flap === 0 && state.altitudeKm > 2;
+  return [slat, flap, descending ? 20 : 0];
+}
+
+/** 作动速度（度/秒）：真实 A320 襟翼从 0 放到 FULL 约 30–40 秒，缝翼略快，扰流板几秒内到位 */
+const SLAT_RATE = 1.5;
+const FLAP_RATE = 1.3;
+const SPOILER_RATE = 10;
+
+/** 每帧让缝翼 / 襟翼 / 扰流板朝目标偏角匀速运动；snap = true 时直接到位（换场景、拖动高度滑块时） */
+export function updateHighLift(state: VoyageState, dt: number, snap = false) {
+  const [slat, flap, spoiler] = highLiftTarget(state.highLift, state);
+  const step = (cur: number, target: number, rate: number) =>
+    snap ? target : cur + THREE.MathUtils.clamp(target - cur, -rate * dt, rate * dt);
+  state.slatDeg = step(state.slatDeg, slat, SLAT_RATE);
+  state.flapDeg = step(state.flapDeg, flap, FLAP_RATE);
+  state.spoilerDeg = step(state.spoilerDeg, spoiler, SPOILER_RATE);
 }
