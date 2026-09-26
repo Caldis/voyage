@@ -13,7 +13,6 @@
 | T16 | 第 3 波（路线图） | 5216 | `worktree-agent-ac7bb298863ae910f`（54f3835） | Sonnet（已交付） | Sonnet 审查中（5186） | 待审查 |
 | T21 | 第 3 波（用户插单） | 5221 | `worktree-agent-a512e3f8df8e4b800`（4e1359d） | Opus（已交付） | Opus 审查中（兼美术总监，5189） | 待审查 |
 | T23 | 第 3 波（审查发现，阻塞 T20） | 5223 | `worktree-agent-a0f2bb46a59f2a419`（2701234） | Opus（已交付） | Opus 审查中（兼美术总监，5185） | 待审查 |
-| DX-01~03 | 第 3 波（开发体验官） | 5230 | `worktree-agent-a60f028cdce61a8da`（989326a） | Sonnet（已交付） | Sonnet 审查中 | 待审查 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -60,6 +59,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 合并日期 | 备注 |
 | --- | --- | --- | --- |
+| DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T01 | 拆分热点文件（main.ts → state / flight / ui；scene.ts → ocean / terrain-shading / wing-shading / lightning） | 2026-09-25 | Sonnet 实现，Opus 审查通过 |
 | T02 | 低空近景地面细节：GROUND_DETAIL 变体（4 km 以下后台 compileAsync，田块 / 树冠 / 街区 / 楼影 / 碎浪）、内陆水面（去河湖摩尔纹）、z14 最细级 + 缺瓦片回退粗一级、地形求交防漏山脊 | 2026-09-26 | Opus 实现，审查返工 → 复审 → 最后一项协调者核验。冷编译与 master 持平（57 s）。下一轮：近处影像沿视线的「刷子拖痕」、田间道路排楼 |
 | T03 | 雷暴打磨：透镜状砧、SDF 塔身 + 球冠隆起、上冲云顶、连成一片的云底、倾斜雨幡、乳状云、闪电通道化 | 2026-09-26 | Opus 实现，审查有条件通过 → 返工 → 聚焦复审：画面与帧时间达标（非雷暴 +4–12%，storm-day −17%）；**冷编译 45 → 59 s（+30%）超 20% 线，协调者接受为已知代价**（只影响首次启动，之后命中缓存；用户可否决），系统性治理交性能工程师。下一轮打磨：塔身背光面偏平偏蓝、伴生小塔成团、夜间闪电过曝、近处云地闪被眩光糊 |
