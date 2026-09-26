@@ -48,10 +48,12 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
   vec3 L = vec3(0.0);
   // 陆地
   vec3 eFlash = flashIlluminance(P);
+  // 云影只算一次，陆地和内陆水面共用：cloudShadow 里有展开的固定次数循环，FXC 每个调用点内联一份，冷编译很贵
+  float csG = cloudShadow(P, uKeyDir);
   if (wat.r < 0.999) {
     vec3 n = terrainNormal(g, up, lod);
     float ndl = dot(n, uKeyDir);
-    vec3 eKey = keyLight(BOTTOM + h, up) * cloudShadow(P, uKeyDir);
+    vec3 eKey = keyLight(BOTTOM + h, up) * csG;
     if (ndl > 0.0) eKey *= terrainShadow(P, uKeyDir, lod);
     vec3 eSky = skyIrradiance(BOTTOM + h, up);
     vec3 albMul = vec3(1.0);
@@ -111,23 +113,18 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
   if (wat.r > 0.001) {
     vec3 nView;
     // 海洋用海面模型（涌浪 + 风浪）；湖泊、河流用只有细碎涟漪的内陆水面（海面的长波放在河上会出现摩尔纹）
-    // 河口、港湾里两种水面相接的地方（遮罩的海洋通道在 0..1 之间）两个模型都算、按比例混合，免得出现一条硬接缝
-    vec3 water = vec3(0.0);
-    // 内陆水面和碎浪共用的照度，只算一次
-    vec3 eSunW = keyLight(BOTTOM, up) * cloudShadow(P, uKeyDir);
+    // 每个像素只算其中一个（按遮罩的海洋通道 0.5 分界）。两个都算再按比例混合能消掉河口的接缝，
+    // 但 FXC 要同时保留两份内联代码，冷编译多出十几秒（T02 实测），不值得
+    vec3 water;
+    // 主光源（含云影）与天空光的照度：内陆水面、碎浪共用，只算一次
+    vec3 eSunW = keyLight(BOTTOM, up) * csG;
     vec3 eSkyW = skyIrradiance(BOTTOM, up);
-    if (wat.g > 0.001) water = oceanRadiance(P, rd, tT, alb.rgb * 0.7, 1.0, fView, nView);
-    if (wat.g < 0.999) {
-      float fI;
-      vec3 nI;
-      vec3 wI = inlandWaterRadiance(P, rd, fpM, alb.rgb * 0.7, eSunW, eSkyW, fI, nI);
-      float m = wat.g > 0.001 ? 1.0 - wat.g : 1.0;
-      water = mix(water, wI, m);
-      fView = mix(fView, fI, m);
-      nView = m >= 1.0 ? nI : normalize(mix(nView, nI, m));
-    }
+    if (wat.g > 0.5) water = oceanRadiance(P, rd, tT, alb.rgb * 0.7, 1.0, fView, nView);
+    else water = inlandWaterRadiance(P, rd, fpM, alb.rgb * 0.7, eSunW, eSkyW, fView, nView);
     water += alb.rgb * 0.7 / M_PI * eFlash;
-    // 海岸的碎浪：只在海洋（不是湖、河）的岸边。离岸距离用粗三级（近处约 60 m 像素）的水体遮罩估计，
+#ifdef GROUND_DETAIL
+    // 海岸的碎浪（只在低空细节变体里：巡航时它只是一条细淡的线，却让默认着色器冷编译多出好几秒）。
+    // 只在海洋（不是湖、河）的岸边。离岸距离用粗三级（近处约 60 m 像素）的水体遮罩估计，
     // 浪线平行于岸、朝岸推进，沿岸的强弱用噪声打散。浪线比像素细时按均值画
     // 足迹 20–40 m 之间平滑淡出（远处浪线细于像素，而且粗级遮罩给出的「离岸距离」已经不准）
     float foamFade = 1.0 - smoothstep(20.0, 40.0, fpM);
@@ -147,6 +144,7 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
         fView *= 1.0 - foam;
       }
     }
+#endif
     vec3 skyCam = skyRadiance(reflect(rd, nView), false);
     L = L * apT + wat.r * (water * apT + fView * max(skyCam - apL, vec3(0.0)));
     return vec4(L + apL, 1.0);
