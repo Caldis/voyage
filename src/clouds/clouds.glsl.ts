@@ -74,7 +74,9 @@ Weather sampleWeather(vec2 xz) {
   w.coverage = clamp(c, 0.0, 1.0);
   w.top = mix(0.45, 1.0, smoothstep(0.2, 0.8, w1.b * 0.6 + w2.b * 0.4));
   w.scaleMix = smoothstep(0.35, 0.65, w3.b * 0.5 + w2.r * 0.5);
-  w.warp = (vec2(w2.b, w1.a) - 0.5) * 3.0;
+  // 扭曲场必须平缓（梯度远小于 1）：旧版用了 5 km 的 Worley 小单体（带尖锐折痕），扭曲的梯度 > 1，
+  // 噪声被沿某个方向拉长、折叠，云上满是斜向的拖影和一圈椭圆形的「分身」（T13）
+  w.warp = (vec2(w1.b, w3.r) - 0.5) * 2.0;
   return w;
 }
 
