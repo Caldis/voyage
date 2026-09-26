@@ -55,6 +55,9 @@ uniform int uDebug;
 varying vec2 vUv;
 ${TRAFFIC_COMMON}
 
+// 第二个输出（MRT，不占纹理单元）：窗外那一路「加窗板效果之前」的颜色（rgb）和窗板效果对它的乘性系数（a）。
+// 机翼 pass 按 场景 + 机翼覆盖率 × 窗外遮罩 × (机翼 − 窗外) × 系数 做增量合成：窗板上的划痕、水痕、舱内反射照样叠在机翼上
+layout(location = 1) out highp vec4 outWingRef;
 const float PANE_TRANSMITTANCE = 0.85;      // 两层亚克力 + 内层防刮板
 const vec3 PLASTIC_ALBEDO = vec3(0.78, 0.76, 0.72);
 
@@ -121,6 +124,7 @@ ${FABRIC_COMMON}
 ${SEATS_COMMON}
 
 void main() {
+  outWingRef = vec4(0.0);
   vec3 rd = cabinRay(gl_FragCoord.xy);
   vec3 ro = uHead;
 
@@ -221,6 +225,7 @@ void main() {
   // 远处的飞机和航迹云在云层之上，挡在海面和云前面
   vec4 tr = trafficRadiance(rdW);
   view = (view * tr.a + tr.rgb + boltRadiance(rdW)) * PANE_TRANSMITTANCE;
+  vec3 viewPre = view;
 
   // ---- 窗板上的细节 ----
   vec2 q = pPane.xy;
@@ -253,6 +258,11 @@ void main() {
   // 窗板反射舱内：正对时约 4%，斜看时更多（菲涅尔）
   float fr = 0.04 + 0.96 * pow(1.0 - clamp(rd.z, 0.0, 1.0), 5.0);
   view += fr * wallRefl * 1.5;
+  // 窗板效果里和窗外亮度成正比的部分（油污、水珠暗边、透镜化、透气孔）；附加的亮度（划痕、擦痕、反射）与窗外无关，增量合成时自然保留
+  float paneMul = (1.0 - 0.1 * sm) * (1.0 - 0.3 * edge)
+    * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
+  if (any(greaterThan(lensed, viewPre))) paneMul *= 1.0 - wc * 0.12;
+  outWingRef = vec4(viewPre, paneMul);
   }
   vec3 col = mix(wall, mix(mix(reveal, view, inPane), shade, shaded), inBezel);
   col = mix(col, seatCol, seat.cov);

@@ -13,10 +13,10 @@ import { WING_SHADING_COMMON } from "./wing-shading.glsl";
  * 为什么拆出来：机翼的距离场、材质和边缘超采样放在场景着色器里时，Windows 上 ANGLE → FXC 的冷编译从约 57 秒涨到 104 秒
  * （FXC 编译时间随单个着色器的规模超线性增长）。拆成独立的程序后，两个程序靠 KHR_parallel_shader_compile 并行编译，各自规模也小一半。
  *
- * 合成：场景输出的 alpha 是「这个像素有多少是窗外」（本窗、窗板以内、没被遮光板和座椅挡住），记作 m。
- *   结果 = mix(场景, 机翼 × 窗板透射率 × 油污衰减, 机翼覆盖率 × m)，再加上翼尖灯本身（亮点 + 云雾里的光晕）× m。
- * 窗板上附加的亮度（划痕、擦痕、窗板反射舱内）在机翼像素上按场景里窗外那一路的值被替换掉了，这是和旧做法（在场景里合成）的唯一差别；
- * 窗板油污的乘性衰减这里照做。
+ * 合成：场景输出的 alpha 是「这个像素有多少是窗外」（本窗、窗板以内、没被遮光板和座椅挡住），记作 m；
+ * 场景的第二个输出（MRT）是窗外加窗板效果之前的颜色 O 和窗板效果的乘性系数 k。
+ *   结果 = 场景 + 机翼覆盖率 × m × (机翼 × 窗板透射率 − O) × k，再加上翼尖灯本身（亮点 + 云雾里的光晕）× m。
+ * 窗板的附加亮度（划痕、擦痕、水珠、舱内反射）与窗外无关，增量合成时原样保留在机翼上。
  */
 const WING_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
@@ -27,6 +27,7 @@ ${PANE_COMMON}
 ${WING_COMMON}
 ${LIGHTS_COMMON}
 uniform sampler2D uScene;        // 场景 pass 的 HDR 结果（alpha = 窗外遮罩）
+uniform sampler2D uSceneRef;     // 场景 pass 的第二个输出：窗外加窗板效果之前的颜色（rgb）与窗板效果的乘性系数（a）
 uniform sampler2D uClouds;       // 半分辨率云层（雾色用）
 uniform float uCameraFog;
 uniform float uHdrMax;
@@ -54,9 +55,10 @@ void main() {
   vec4 wing = wingView(ro, rd, (PANE_DEPTH - ro.z) / rd.z, sunC, eSkyH, eDown, belowAlbedo, cloud, refL);
   vec3 col = sc.rgb;
   if (wing.a > 0.0) {
-    vec3 pPane = ro + rd * ((PANE_DEPTH - ro.z) / rd.z);
-    vec3 w = wing.rgb * WING_PANE_T * (1.0 - 0.1 * smudges(pPane.xy));
-    col = mix(col, w, wing.a * m);
+    // 增量合成：只把「窗外 → 机翼」的差换进去，窗板上的划痕、水痕、舱内反射都留着；
+    // 窗框 / 座椅部分覆盖的像素按 m 加权，交界处不再漏出一条天空色细线
+    vec4 ref = texelFetch(uSceneRef, ivec2(gl_FragCoord.xy), 0);
+    col = max(col + wing.a * m * (wing.rgb * WING_PANE_T - ref.rgb) * ref.a, vec3(0.0));
   }
   col += wingLights(ro, rd) * WING_PANE_T * m;
   gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);
@@ -71,6 +73,6 @@ export function createWingMaterial(sceneUniforms: Record<string, THREE.IUniform>
     depthTest: false,
     depthWrite: false,
     toneMapped: false,
-    uniforms: { ...sceneUniforms, uScene: { value: null } },
+    uniforms: { ...sceneUniforms, uScene: { value: null }, uSceneRef: { value: null } },
   });
 }

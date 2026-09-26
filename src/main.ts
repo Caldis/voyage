@@ -71,16 +71,23 @@ const floatHdr = renderer.extensions.has("OES_texture_float_linear");
 const hdrType = floatHdr ? THREE.FloatType : THREE.HalfFloatType;
 const bloom = new Bloom(pass, hdrType);
 sceneMat.uniforms.uHdrMax.value = floatHdr ? 1e20 : 6e4;
+// 场景 pass 画两个输出（MRT）：0 = 场景 HDR；1 = 窗外加窗板效果之前的颜色 + 窗板乘性系数（给机翼 pass 做增量合成）
 const hdr = new THREE.WebGLRenderTarget(1, 1, {
   type: hdrType,
   minFilter: THREE.LinearFilter,
   magFilter: THREE.LinearFilter,
   depthBuffer: false,
+  count: 2,
 });
 // 机翼 pass（wing-pass.ts）：读场景的 hdr，把机翼合成上去写到 hdrWing；后面的眩光、曝光都读 hdrWing。
 // 必须在所有 Object.assign(sceneMat.uniforms, …) 之后创建：它复用的是创建那一刻场景材质里的 uniform 对象
 const wingMat = createWingMaterial(sceneMat.uniforms);
-const hdrWing = hdr.clone();
+const hdrWing = new THREE.WebGLRenderTarget(1, 1, {
+  type: hdrType,
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  depthBuffer: false,
+});
 
 const state: VoyageState = {
   preset: PRESETS[0],
@@ -328,7 +335,8 @@ function renderFrame(now: number) {
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
   // 场景（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdr，机翼 pass 再读实际画出来的 hdr 合成
   pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : sceneMat, hdr);
-  wingMat.uniforms.uScene.value = hdr.texture;
+  wingMat.uniforms.uScene.value = hdr.textures[0];
+  wingMat.uniforms.uSceneRef.value = hdr.textures[1];
   pass.render(wingMat, hdrWing);
   exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
 

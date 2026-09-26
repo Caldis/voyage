@@ -293,14 +293,18 @@ float sdWingSlat(vec3 P) {
 // 截面是椭圆（半宽 W、半高 H）；u 是沿轴线的相对位置，r(u) 是截面缩放：椭圆头 → 等粗 → 收细到钝尾
 float wingCanoe(float u, float yRel, float zRel, float len) {
   float uc = clamp(u, 0.0, 1.0);
-  float r = uc < 0.25 ? sqrt(max(1.0 - pow((0.25 - uc) / 0.25, 2.0), 0.0)) : mix(1.0, 0.55, smoothstep(0.55, 0.95, uc));
-  // 尾端最后 6% 收成圆角的钝头（不是一刀切的平面）
-  r *= sqrt(max(1.0 - pow(max(uc - 0.94, 0.0) / 0.06, 2.0), 0.0));
-  const float W = 0.16;
-  const float H = 0.28;
-  vec2 q = vec2(zRel / W, yRel / H);
-  float d = (length(q) - r) * W;
-  return max(d, max(-u, u - 1.0) * len);
+  // 细长的独木舟：头部椭圆，最宽处（约 28 cm 宽、48 cm 高）在前 1/3，往后宽度收到 30%、高度收到 40%，
+  // 轴线在尾段向上翘，尾部成扁的「刀背」；尾端斜切（下缘比上缘短）
+  float head = uc < 0.2 ? sqrt(max(1.0 - pow((0.2 - uc) / 0.2, 2.0), 0.0)) : 1.0;
+  float tail = smoothstep(0.35, 1.0, uc);
+  float wz = max(0.14 * head * mix(1.0, 0.3, tail), 0.004);
+  float hy = max(0.24 * head * mix(1.0, 0.4, tail), 0.004);
+  float yc = 0.14 * smoothstep(0.4, 1.0, uc);          // 尾段上翘
+  vec2 q = vec2(zRel / wz, (yRel - yc) / hy);
+  float d = (length(q) - 1.0) * min(wz, hy);
+  // 斜切的尾端：越靠下越早结束
+  float cut = (u - 1.0) * len + max(-(yRel - yc), 0.0) * 0.8;
+  return max(d, max(-u * len, cut));
 }
 
 float sdWingFairing(vec3 P) {
@@ -713,17 +717,17 @@ WingSurface wingNacelleSurface(vec3 P, float pix) {
       m.albedo *= 0.35 + 0.65 * smoothstep(0.05, 0.2, blade);
     } else if (rr < 0.31) {
       // 整流锥：深色，带一道白色螺旋标记
-      m = wingPaint(vec3(0.03), 0.35);
+      m = wingPaint(vec3(0.03), 0.5);
       float spiral = abs(fract(ang / (2.0 * M_PI) + rr * 1.5) - 0.5);
       m.albedo = mix(m.albedo, vec3(0.7), 1.0 - smoothstep(0.03, 0.05, spiral));
-      m.coat = 0.3;
+      m.coat = 0.1;
     } else {
       m = wingPaint(vec3(0.22, 0.225, 0.23), 0.55);                        // 进气道内壁（吸音衬里）
       m.coat = 0.0;
     }
     m.albedo *= inside;
   } else if (u < 0.28) {
-    m = wingBareMetal(0.85, 0.14);                                          // 进气道唇口：抛光铝
+    m = wingBareMetal(0.8, 0.28);                                           // 进气道唇口：铝，有风蚀，不是镜面
   } else if (u > 3.75) {
     m = wingBareMetal(0.12, 0.45);                                          // 尾锥：高温发黑
   } else if (u > 2.62) {
