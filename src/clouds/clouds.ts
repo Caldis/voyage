@@ -78,7 +78,7 @@ vec3 hurricaneShadowedInscatter(vec3 ro, vec3 rd, float depth, vec3 full) {
   const float N = 8.0;
   for (int k = 1; k < 9 + min(uStormCount, 0); k++) {
     float fk = float(k);
-    vec3 Lk = fk >= N ? full : texture(uAerialInscatter, aerialPerspectiveUvw(rd, uSunDir, depth * fk / N)).rgb;
+    vec3 Lk = fk >= N ? full : textureLod(uAerialInscatter, aerialPerspectiveUvw(rd, uSunDir, depth * fk / N), 0.0).rgb;
     float vis = hurricaneSunVis(ro + rd * (depth * (fk - 0.5) / N), uSunDir, 0.0);
     // 影子里的空气仍被天空光照着（多次散射）；眼里低处四周是眼壁，看得到的天空只有头顶一块，取约 12%
     acc += max(Lk - prev, vec3(0.0)) * mix(0.12, 1.0, vis);
