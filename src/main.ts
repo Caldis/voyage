@@ -4,6 +4,7 @@ import { buildStarMap, loadMoonTexture } from "./sky-assets";
 import { Traffic } from "./traffic";
 import { WeatherSystem } from "./weather";
 import { Atmosphere } from "./atmosphere/luts";
+import { HazeModel } from "./atmosphere/haze";
 import { CLOUD_PRESETS, Clouds, createCloudUniforms } from "./clouds/clouds";
 import { generateCloudNoise } from "./clouds/noise";
 import { Bloom } from "./render/bloom";
@@ -14,7 +15,7 @@ import { GroundDetailVariant, createOutsideMaterial, createOutsideTarget } from 
 import { createWingMaterial } from "./render/wing-pass";
 import { GroundClipmap } from "./ground/clipmap";
 import { OceanWaves } from "./ocean/waves";
-import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateHighLift, updateTurbulence } from "./flight";
+import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateAltitudeFloor, updateHighLift, updateTurbulence } from "./flight";
 import { $, CRUISE_PITCH_DEG, type Preset, type VoyageState } from "./state";
 import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
 import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets";
@@ -52,6 +53,9 @@ tick("云噪声");
 boot.finish("cloudNoise");
 const ground = new GroundClipmap(PRESETS[0].lat, PRESETS[0].lon);
 const sceneMat = createSceneMaterial(atmosphere, cloudUniforms, ground);
+// 低空障眼法（T18）：边界层霾进大气 LUT，谷地雾的 uniform 进场景 / 窗外共用的 uniforms（只有窗外程序用到）
+const haze = new HazeModel(atmosphere);
+Object.assign(sceneMat.uniforms, haze.sceneUniforms);
 // 机翼增升装置的 uniform（声明在 wing.glsl.ts）。在首次渲染前加进材质即可生效；以后可以挪进 createSceneMaterial
 // uWingSteps / uWingShadowSteps 是机翼光线步进和自阴影的最大步数：用 uniform 而不是常量，FXC 就不会把循环展开，冷编译不会翻倍
 Object.assign(sceneMat.uniforms, {
@@ -261,6 +265,11 @@ function renderFrame(now: number) {
   head.x += (head.tx - head.x) * k;
   head.y += (head.ty - head.y) * k;
   head.z += (head.tz - head.z) * k;
+
+  // 高度下限与霾（T18）：都要在大气 LUT 更新之前
+  const offT18 = cloudUniforms.uCloudOffset.value;
+  updateAltitudeFloor(state, ground, offT18.x, offT18.y);
+  haze.update({ state, ground, x: offT18.x, z: offT18.y, lon: curLon, sunAltDeg: sun.altitude, coverage: cloudUniforms.uCoverage.value, dt });
 
   const moon = moonState(new Date(state.simTime), curLat, curLon, state.altitudeKm * 1000);
   const moonDir = directionFromAzAlt(moon.azimuth, moon.altitude);
@@ -510,4 +519,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot };

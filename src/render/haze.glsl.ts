@@ -12,7 +12,7 @@ import { GROUND_LEVELS } from "../ground/clipmap";
  *   低于 hS 超过「下沉量」的地方就在雾里；雾的厚度 = hS − 下沉量 − h，按光学厚度（e 折 30 m）转成覆盖率。
  *   雾越强下沉量越小，雾积得越高；强雾时平原上也按 9 km 尺度的噪声出几块浅雾。
  *   雾顶当作厚层云的顶：反照率 0.85 的朗伯面，受主光源（含云影）和天空光照射。
- * 依赖：ATMOSPHERE_COMMON（BOTTOM、M_PI）、CABIN_COMMON（vnoise）、GROUND_COMMON（levelCovers / levelUv / uGroundHeight）、
+ * 依赖：ATMOSPHERE_COMMON（BOTTOM、M_PI）、NOISE_COMMON（vnoise）、GROUND_COMMON（levelCovers / levelUv / uGroundHeight）、
  *       LIGHTS_COMMON（uKeyDir）。函数名一律带 haze 前缀（GLSL 没有命名空间）。
  */
 export const HAZE_COMMON = /* glsl */ `

@@ -13,6 +13,7 @@ import { STARS_COMMON } from "./stars.glsl";
 import { TERRAIN_SHADING_COMMON } from "./terrain-shading.glsl";
 import { TRAFFIC_COMMON } from "./traffic.glsl";
 import { VIEW_COMMON } from "./view.glsl";
+import { HAZE_COMMON } from "./haze.glsl";
 
 /**
  * 窗外 pass（SC-5）：只算「穿过本窗窗板看出去」的 HDR 辐亮度（天空、太阳月亮星星、云的合成、真实地面、海面、
@@ -58,6 +59,7 @@ ${LIGHTNING_COMMON}
 ${GROUND_DETAIL_COMMON}
 ${INLAND_WATER_COMMON}
 ${TERRAIN_SHADING_COMMON}
+${HAZE_COMMON}
 
 // 窗外辐亮度。重函数在这里各只有一个调用点（SC-3）：真实地面上的海洋和开阔海面共用同一个 oceanRadiance，
 // 命中点的云影、水面照度、闪光照度也只算一次，陆地、湖河、海面共用。FXC 会把每个调用点整份内联，
@@ -114,6 +116,12 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
       skyCam = skyRadiance(reflect(rd, nView), false);
     }
     if (onGround) {
+      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，
+      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）
+      vec4 vf = hazeValleyFog(P, gh.g, gh.fpM, gh.wat.g, eSunW, eSkyW);
+      land = mix(land, vf.rgb, vf.a);
+      water = mix(water, vf.rgb, vf.a);
+      fView *= 1.0 - vf.a;
       L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);
     } else {
       // 开阔海面：相机到海面的透射率 = T(海面→层顶) / T(相机→层顶)，两段都是朝上的射线
@@ -148,8 +156,9 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
     vec3 tUp = sunTransmittance(uCamR, rd.y);
     L += (moonDisk(rd) + starRadiance(rd)) * tUp;
   }
-  // 【大气合成接入点（T18 低空霾）】到这里 L 是云层背后的背景辐亮度：地面 / 海面已含空气透视，天空含内散射。
-  // 低空霾要叠在这里（云之前），只写一个调用点，例如 L = lowHaze(L, rd, hitGround ? tGround : -1.0)；
+  // 【大气合成接入点】到这里 L 是云层背后的背景辐亮度：地面 / 海面已含空气透视，天空含内散射。
+  // T18 的边界层霾不在这里叠：它是大气里的一层气溶胶，已经进了透射率 / 天空视图 / 空气透视 LUT（atmosphere/haze.ts），
+  // 上面三条路径取 LUT 时就带上了，不需要逐像素步进；谷地雾贴着地形，在上面 groundFinish 之前合成。
   // 所有路径（真实地面、开阔海面、天空）都会经过这一行，调试 21–23 的提前返回除外。
   // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光
   return L * cloud.a + cloud.rgb;
