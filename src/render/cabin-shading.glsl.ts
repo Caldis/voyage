@@ -243,7 +243,7 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
     float mr = mix(0.22, 0.12, worn);
     vec3 mcol = vec3(0.86, 0.87, 0.89);
     float Fm = fresnelRough(nv, 0.85, mr);
-    vec3 metalCol = mcol * 0.05 / M_PI * e + Fm * mcol * cabinEnv(reflect(rd, n), cl) * ao * mix(0.7, 1.1, worn);
+    vec3 metalCol = mcol * 0.3 / M_PI * e + Fm * mcol * cabinEnv(reflect(rd, n), cl) * ao * mix(0.9, 1.3, worn);
     // 上方灯带（当成一个方向光，照度取舱内环境光的量级）在圆截面上的窄高光
     metalCol += mcol * keySpec(n, -rd, normalize(CABIN_LIGHT_DIR), mr * mr, 0.85, cl.eCabin * 1.5) * ao;
     metalCol *= 1.0 - 0.8 * screwSlot;

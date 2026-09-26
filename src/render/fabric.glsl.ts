@@ -58,9 +58,9 @@ float jacquardMotif(vec2 uv, float aa) {
 // kind：0 座椅面料（提花斜纹），1 头枕套（细平纹）。pix：像素足迹（米）
 Fabric fabricSample(vec2 uv, float pix, float kind) {
   Fabric fb;
-  float pitch = kind < 0.5 ? 0.0011 : 0.0006;
-  vec3 warpC = kind < 0.5 ? vec3(0.028, 0.034, 0.060) : vec3(0.60, 0.60, 0.58);
-  vec3 weftC = kind < 0.5 ? vec3(0.15, 0.165, 0.205) : vec3(0.53, 0.55, 0.56);
+  float pitch = kind < 0.5 ? 0.0011 : 0.0009;
+  vec3 warpC = kind < 0.5 ? vec3(0.050, 0.058, 0.095) : vec3(0.60, 0.60, 0.58);
+  vec3 weftC = kind < 0.5 ? vec3(0.085, 0.095, 0.135) : vec3(0.54, 0.555, 0.56);
   float motif = kind < 0.5 ? jacquardMotif(uv, pix / 0.013 * 1.5) : 0.0;
   float twill = kind < 0.5 ? 1.0 : 0.0;
 
@@ -103,7 +103,7 @@ Fabric fabricSample(vec2 uv, float pix, float kind) {
 
   // 更粗一级的纱线粗细不匀（条干），几毫米尺度，在更远处才淡出
   float slub = vnoise(uv * vec2(90.0, 700.0)) - 0.5;
-  fb.albedo *= 1.0 + (kind < 0.5 ? 0.12 : 0.06) * slub * (1.0 - smoothstep(0.0008, 0.003, pix));
+  fb.albedo *= 1.0 + 0.12 * slub * (1.0 - smoothstep(0.0008, 0.003, pix));
   // 几厘米尺度的绒面明暗：绒毛倒向不一、坐久了压出来的发亮 / 发暗块（不随像素足迹淡出，本身就是低频）
   float nap = 0.6 * vnoise(uv * 35.0 + kind * 9.0) + 0.4 * vnoise(uv * 90.0 + 3.0);
   fb.albedo *= 0.9 + 0.2 * nap;
