@@ -20,7 +20,11 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
-| DX-SC | **着色器编译时间专项（用户 2026-09-26 定为最高优先）**：先由开发体验官实测 ANGLE 后端 / 特性隔离 / 拆分收益（`research/DX_SHADER_COMPILE.md`），报告一出立即按其拆分并行派实现 | **最高** | 视报告拆分 | 视拆分 | 日常改一处着色器后看到效果的时间显著下降（目标：秒级到十几秒）；首次冷编译下降；画面与帧时间不变 |
+| SC-1+2 | dev-browser `--angle` 参数 + 离线 fxc 编译预算工具 shader-budget.mjs | 最高 | scripts/* | 否 | 见 research/DX_SHADER_COMPILE.md |
+| SC-3 | 海面着色只内联一次（场景编译预计 −60%） | 最高 | terrain-shading、scene.ts outsideRadiance | 碰 scene | 场景冷编译 ≤40 s，5 场景逐像素一致 |
+| SC-4 | 云程序与场景并行编译 | 最高 | main.ts 启动段、boot/* | 碰 main | 冷启动 −约 6 s，无 ≥1 s 冻结 |
+| SC-5 | 拆出「窗外」pass（窗外 / 舱内合成两个程序并行编译，改舱内只重编约 5 s，舱内程序空出 sampler） | 最高（SC-3 合并后） | 新 outside-pass.ts、scene.ts、main.ts | 碰 scene / main | 冷编译 ≤25 s；改舱内 ≤8 s |
+| SC-6 | （可选）`?dev=` 特性隔离 | 低 | scene.ts、main.ts | 碰 | dev=cabin 场景编译 ≤8 s |
 | T07 | 光学细节：太阳附近的眼睛衍射星芒；窗板边缘色散；高空低温时内层窗板透气孔周围的冰晶 | 中 | `src/render/bloom.ts`、`src/render/exposure.ts`、`src/render/cabin.glsl.ts`（窗板部分） | 否 | sunset-wing、noon-cumulus |
 | T08 | 道路灯带：OSM transportation 图层，夜里的主干道与高速公路成为连续的灯带 | 中 | `src/ground/tiles.ts`、`src/ground/clipmap.ts`、地面着色模块 | 否（T01 后） | night-city、route-hnd-cts 夜间版（新增） |
 | T09 | 银河：先调研许可合适的全天星空图（优先公有领域），再接入 | 低 | `src/sky-assets.ts`、`src/render/stars.glsl.ts`、`public/data/` | 否 | 夜间无月、关舱灯的场景（新增） |
