@@ -41,6 +41,8 @@ const browser = await launchBrowser(chromium, { angle });
 try {
   const context = await browser.newContext({ viewport: { width: 1600, height: 1200 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
+  page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") console.log(`[控制台 ${m.type()}] ${m.text()}`); });
+  page.on("pageerror", (e) => console.log(`[页面异常] ${e.message}`));
   await page.goto(`http://127.0.0.1:${port}/?dev=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 500 });
   // 机翼程序是后台 compileAsync，等它真正出图
