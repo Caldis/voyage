@@ -37,3 +37,8 @@
 ### T03 审查（Opus）
 - 卡：browser_navigate 首次打开常 30 s 超时（其实页面在编译，可忽略继续）；分支与 master 之间隔着 T14，直接比会混进海浪开销，只能临时合并 + 装依赖 + 另起端口（多约 3 分钟）；addInitScript 注入在页面里累积（冷编译注入残留会让之后每次都冷启动），测量之间必须 browser_close；外部 GPU 负载让同场景从 10 ms 跳到 120 ms。
 - 希望：SOP 规定审查一律用「master 合并分支」构建对比（已补进 SOP 第 5 节）或给现成脚本；回归脚本自带多轮交替测量与离群剔除；`__voyageStartup` 按程序分别列出编译耗时（能直接看出是云程序还是场景程序变慢）。脚本在 `tmp/review-t03/`。
+
+### T06 审查（Opus，兼美术总监）
+- 慢：等锁 30 分钟以上。
+- 卡：实现者用 rAF 中位数自测性能，被垂直同步掩盖——第二次同类误判（已写进 SOP 实现代理守则）；`git worktree add <path> master` 在 master 已检出时失败，要 `--detach`（已写进 SOP）。
+- 希望：锁文件带过期时间 / 预计释放时间；批渲测法收进 `apps/voyage/scripts/`；审查脚本 `tmp/review-t06/`（shots / perf / cold / pair / crop）可复用。
