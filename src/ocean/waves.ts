@@ -6,7 +6,8 @@ import { buildSpectrum, type CascadeBand, coxMunkVariance, normalTailInverse, wh
 
 /**
  * FFT 海浪（Tessendorf 2001），三个级联：
- * - 平铺尺寸约 1531 m / 211 m / 29 m，互不成整数比，叠在一起看不出平铺周期；
+ * - 平铺尺寸约 1531 m / 211 m / 29 m，互不成整数比；每级在着色器里再按世界坐标做随机六边形平铺（T21，见 ocean.glsl.ts），
+ *   单级内部也没有周期（只互不成比例还不够：俯视时 211 m 那一级会铺成约 17 像素的规则格子）；
  * - 每级只保留自己的波数段（上一级到 L/6 的波长为止），不重叠、不重复计数；
  * - 每帧：相位推进 1 次 + 逆 FFT 16 次（每次三级一起）+ 写入纹理数组 3 次 + 生成 mip，全部是 256² 量级的小 pass。
  *
@@ -147,7 +148,7 @@ export class OceanWaves {
 
   /**
    * 每帧调用。timeSec：秒（与场景 uTime 同源即可）；wind：海面风速 m/s；offsetKm：飞机累计位移（km，即 uCloudOffset）。
-   * 位移在 CPU 上用双精度对各级平铺尺寸取余，着色器里只剩小数，飞得再远纹理坐标也不丢精度。
+   * 位移在 CPU 上用双精度换算成各级随机平铺格子的斜格坐标（整数 + 小数），着色器里只加相对相机的小量，飞得再远也不丢精度。
    */
   update(timeSec: number, wind: number, offsetKm?: THREE.Vector2) {
     if (Math.abs(wind - this.wind) > 1e-3) this.rebuild(wind);
