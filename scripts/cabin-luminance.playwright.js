@@ -61,7 +61,7 @@ async (page) => {
       ex.pass.renderer.readRenderTargetPixels(ex.adapted[0], 0, 0, 1, 1, px);
       const cd = (x) => +(1000 * 2 ** x).toPrecision(4);
       // 旧版（改前）只有 rg 两路；新版 b 是按面积平均的舱内亮度
-      return { outCd: cd(px[0]), cabinCenterCd: cd(px[1]), cabinAreaCd: cd(px[2]), uLegacy: ex.finalMat.uniforms.uLegacy?.value ?? null };
+      return { outCd: cd(px[0]), cabinCenterCd: cd(px[1]), cabinAreaCd: cd(px[2]), outLinCd: cd(px[3]), uLegacy: ex.finalMat.uniforms.uLegacy?.value ?? null };
     }, sc);
     await page.screenshot({ path: `${outDir}/${sc.name}.png`, timeout: 60000 });
     await page.evaluate(() => (window.__voyage.exposure.finalMat.uniforms.uDebugMask.value = true));

@@ -22,6 +22,7 @@ void main() {
   const float N = 32.0;
   vec3 sum = vec3(0.0);   // 窗外（中心加权）、舱内（中心加权，旧口径，仅作对照）、舱内（按面积）
   vec3 wsum = vec3(0.0);
+  float linSum = 0.0;     // 窗外的线性平均亮度（中心加权）：比对数平均更偏向亮处，用来估计窗外高光有多亮
   for (float i = 0.0; i < N; i += 1.0) {
     for (float j = 0.0; j < N; j += 1.0) {
       vec2 uv = (vec2(i, j) + 0.5) / N;
@@ -32,13 +33,15 @@ void main() {
       vec3 ww = vec3(w * c.a, w * (1.0 - c.a), 1.0 - c.a);
       sum += ww * l;
       wsum += ww;
+      linSum += ww.x * min(exp2(l), 1e3);
     }
   }
   vec3 avg = sum / max(wsum, vec3(1e-6));
   // 窗外几乎看不到（遮光板拉下）时，窗外那一路跟随舱内，反之亦然
   if (wsum.x < 1e-3) avg.x = avg.z;
   if (wsum.z < 1e-3) avg.yz = avg.xx;
-  gl_FragColor = vec4(avg, 0.0);
+  float hi = wsum.x < 1e-3 ? avg.x : max(log2(max(linSum / wsum.x, 1e-7)), avg.x);
+  gl_FragColor = vec4(avg, hi);
 }
 `;
 
@@ -49,12 +52,12 @@ uniform float uDt;
 uniform bool uReset;
 varying vec2 vUv;
 void main() {
-  vec3 target = texture(uMeter, vec2(0.5)).rgb;
-  vec3 prev = texture(uPrev, vec2(0.5)).rgb;
+  vec4 target = texture(uMeter, vec2(0.5));
+  vec4 prev = texture(uPrev, vec2(0.5));
   // 适应速度（1/秒）：亮适应约 0.5 s，暗适应这里取 2.5 s（真实的完全暗适应要几十分钟，不照搬）
-  vec3 rate = mix(vec3(0.4), vec3(2.0), step(prev, target));
-  vec3 next = uReset ? target : prev + (target - prev) * (1.0 - exp(-uDt * rate));
-  gl_FragColor = vec4(next, 0.0);
+  vec4 rate = mix(vec4(0.4), vec4(2.0), step(prev, target));
+  vec4 next = uReset ? target : prev + (target - prev) * (1.0 - exp(-uDt * rate));
+  gl_FragColor = next;
 }
 `;
 
@@ -73,6 +76,7 @@ uniform vec2 uCabinBeta;    // 舱内局部适应比例：x = 暗处（中间视
 uniform vec2 uCabinCapEv;   // 舱内均值的显示亮度相对窗外均值的上限（EV）：x = 暗处，y = 白天
 uniform float uCabinWhiteEv;// 白天舱内的明度恒常补偿（EV）
 uniform float uCabinMaxBoostEv; // 舱内曝光最多比窗外高多少 EV（局部适应的幅度上限）
+uniform float uCabinHiMarginEv; // 舱内均值的显示亮度最多比窗外高光（线性平均）高多少 EV
 uniform vec2 uPhotopicRange;// 「白天」判定：窗外适应亮度的 log10(cd/m²) 区间
 #include <common>
 #include <dithering_pars_fragment>
@@ -86,7 +90,7 @@ void main() {
   float logExposure;  // log2 曝光（HDR 单位 kcd/m²）
   float logAdapt;     // 这个像素的适应亮度，log2 kcd/m²（浦肯野用）
   if (uAuto) {
-    vec3 adapted = texture(uAdapted, vec2(0.5)).rgb; // log2 亮度（kcd/m²）：窗外、舱内（中心加权）、舱内（按面积）
+    vec4 adapted = texture(uAdapted, vec2(0.5)); // log2 亮度（kcd/m²）：窗外、舱内（中心加权）、舱内（按面积）、窗外线性平均
     const float L2_10 = 0.30103;                     // log10(2)
     const float LOG2_1000 = 9.965784;                // kcd → cd
     float o = adapted.x;
@@ -110,6 +114,8 @@ void main() {
       // ③ 上限：舱内均值在屏幕上的亮度不超过窗外均值 + cap（暗处 cap < 0：舱内一定比窗外暗）
       //    舱内均值的显示亮度 = eC + c，窗外均值 = eO + o
       float cap = mix(uCabinCapEv.x, uCabinCapEv.y, day);
+      //    白天再看窗外有没有「更亮的东西」：窗外是一片均匀的雾（云中）时，高光 ≈ 均值，舱内不许比这片雾亮太多
+      cap = min(cap, adapted.w - o + uCabinHiMarginEv);
       eC = min(eC, eO + o - c + cap);
       // ④ 局部适应的幅度有限：余光里的舱内最多比注视的窗外多提亮 uCabinMaxBoostEv 档
       eC = min(eC, eO + uCabinMaxBoostEv);
@@ -167,6 +173,25 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
   });
 }
 
+/**
+ * 双区曝光的公式（T23，用户定「人眼式」）。记号：o = 窗外适应亮度、c = 舱内适应亮度（按面积）、
+ * h = 窗外线性平均亮度（都是 log2），key(L) = 目标中灰（暗处更低），曝光 e = log2(key / L)。
+ *   窗外：eO = log2 key(o) − o                                       （和改前一致，窗外观感不变）
+ *   白天程度 day = smoothstep(1.5, 3.0, log10 o[cd/m²])              （约 30 → 1000 cd/m²，中间视 → 明视）
+ *   ① 局部适应：aC = o + β·(c − o)，β = mix(0.3, 0.8, day)，eC = log2 key(aC) − aC
+ *      明视时周边视网膜能独立适应得多（白天余光里的舱内看得清）；暗处视杆主导、适应是全局的，舱内只能跟着窗外。
+ *   ② 明度恒常：eC += 2.2·day。测光把均值压成 18% 中灰，但舱内大多是浅色饰面（反照率 0.6–0.8），
+ *      白天人眼看到的是「阴影里的白墙」，所以舱内锚点上调约 2 档；暗处明度恒常失效，不补。
+ *   ③ 不许反超：舱内均值的显示亮度 ≤ 窗外均值 + cap，cap = min(mix(−0.75, 2.0, day), h − o + 1.4)。
+ *      暗处 cap < 0：舱内一定比窗外暗（关灯的夜里舱壁 ≈ 屏幕 Y 30，窗外的城市灯 / 月光是最亮的）；
+ *      白天放宽到 +2 档（窗外的对数均值被深蓝天空拉低，白墙本来就比蓝天「亮」），
+ *      但窗外是一片均匀的雾（云中、h ≈ o）或遮光板全放下时收紧到 +1.4 档。
+ *   ④ 幅度上限：eC ≤ eO + 4（局部适应最多把余光里的舱内提亮 4 档；日落逆光时舱内因此比正午暗）。
+ * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
+ * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
+ * 目标是用户给的屏幕亮度（白天舱壁 150–185、关灯夜里 25–45、窗最亮）。这是经验模型，不是视觉科学的定量结果。
+ * 调试：finalMat.uniforms.uLegacy = true 切回改前的 β = 0.5 公式做对照。
+ */
 export class Exposure {
   private readonly meter = tinyTarget();
   private adapted = [tinyTarget(), tinyTarget()];
@@ -196,6 +221,7 @@ export class Exposure {
       uCabinCapEv: { value: new THREE.Vector2(-0.75, 2.0) },
       uCabinWhiteEv: { value: 2.2 },
       uCabinMaxBoostEv: { value: 4.0 },
+      uCabinHiMarginEv: { value: 1.4 },
       uPhotopicRange: { value: new THREE.Vector2(1.5, 3.0) },
     },
     true,

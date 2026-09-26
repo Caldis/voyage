@@ -21,7 +21,7 @@ async (page) => {
       const ex = v.exposure;
       const px = new Float32Array(4);
       ex.pass.renderer.readRenderTargetPixels(ex.adapted[0], 0, 0, 1, 1, px);
-      return [+(1000 * 2 ** px[0]).toPrecision(4), +(1000 * 2 ** px[2]).toPrecision(4)];
+      return [+(1000 * 2 ** px[0]).toPrecision(4), +(1000 * 2 ** px[2]).toPrecision(4), +(1000 * 2 ** px[3]).toPrecision(4)];
     };
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const defaults = { preset: "wpac", seat: "right", weather: "fair", "cloud-preset": "cumulus", altitude: 10.7, shade: 0, wind: 7, "wing-pos": "8", coverage: 0.42 };
