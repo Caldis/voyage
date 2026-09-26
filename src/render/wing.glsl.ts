@@ -22,6 +22,7 @@ uniform float uSlat;           // 缝翼偏角（弧度）
 uniform float uSpoiler;        // 扰流板偏角（弧度）
 uniform int uWingSteps;        // 机翼光线步进的最大步数（128）。用 uniform 做循环上限，FXC 就不会展开循环（展开后冷编译时间翻倍）
 uniform int uWingShadowSteps;  // 机翼自阴影的最大步数（24）
+uniform int uWingDebug;        // 调试开关（按位）：1 去掉油罐鼓包，2 去掉翼尖灯照明，4 去掉环境反射，8 去掉自阴影，16 只看漫反射的反照率
 uniform int uWingEdgeAA;       // 内轮廓 / 薄边超采样：0 关，1 开，2 开并把超采样的像素标成品红（调试）
 
 const float CABIN_WALL_RADIUS = 1.85;  // 窗口内饰面到机身轴线的距离
@@ -399,6 +400,7 @@ struct WingTraceResult {
   float t;       // 命中距离（座舱系，米）；擦边时是离机翼最近的地方；没打到是 −1
   float cov;     // 覆盖率：打中 1，擦边按「最近距离 / 像素宽度」解析算出（轮廓抗锯齿，不用屏幕导数），没打到 0
   vec3 nA;       // 法线（机体系），已经掰到朝向视线的一侧
+  vec3 nGeo;     // 不带油罐鼓包的几何法线（翼尖灯照明用，见 shadeWing）
   float shadow;  // 机翼自身的软阴影（小翼、短舱、扰流板、整流罩投到翼面上），1 = 不挡
   int part;      // 部件编号（见 gWingPart）
   bool edge;     // 打中之前先擦过另一处轮廓（襟翼压在主翼上、小翼压在翼面上这类「内轮廓」），或者打中的是几乎侧对视线的薄边
@@ -420,6 +422,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
   w.t = -1.0;
   w.cov = 0.0;
   w.nA = vec3(0.0, 1.0, 0.0);
+  w.nGeo = w.nA;
   w.shadow = 1.0;
   w.part = 0;
   w.edge = false;
@@ -504,7 +507,8 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
           sin(6.2832 * fc.x) * (1.0 - cos(6.2832 * fc.y)) * 6.2832 / 0.6,
           (1.0 - cos(6.2832 * fc.x)) * sin(6.2832 * fc.y) * 6.2832 / 0.2) * amp * 0.25;
         // 只作用在主翼上下表面（法线大致朝上 / 朝下时），g = (∂h/∂z, ∂h/∂x)
-        float flatness = w.part == 0 ? abs(n.y) : 0.0;   // 只作用在主翼蒙皮上：圆弧前缘、襟翼、小翼上会被拉成一块块的斑
+        float flatness = (w.part == 0 && (uWingDebug & 1) == 0) ? abs(n.y) : 0.0;   // 只作用在主翼蒙皮上：圆弧前缘、襟翼、小翼上会被拉成一块块的斑
+        vec3 nFlat = n;
         n = normalize(n - vec3(g.y, 0.0, g.x) * flatness * sign(n.y));
         // 背向视线的法线（轮廓上、后缘这种薄边上常见）掰到略微朝向视线，而不是整个翻过来：
         // 翻转会让相邻像素在上、下表面的法线之间跳，后缘成了一串亮点
@@ -519,6 +523,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         if (silPx < 1.5) w.edge = true;
         if (ndv < 0.05) n = normalize(n - dA * (0.05 - ndv));
         w.nA = n;
+        w.nGeo = nFlat;
         phase = 2;
         gWingSkip = w.part <= 1 ? 0 : w.part;
         // 背光面不用算阴影
@@ -534,7 +539,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
     }
   }
   gWingSkip = -1;
-  w.shadow = smoothstep(0.0, 1.0, res);
+  w.shadow = (uWingDebug & 8) != 0 ? 1.0 : smoothstep(0.0, 1.0, res);
   return w;
 }
 

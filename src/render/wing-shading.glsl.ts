@@ -104,18 +104,23 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 e
   // 反射方向朝向机翼自己（比如小翼内侧反射到翼面）时，被自己挡住的部分按天空光的一半估计
   vec3 envSpec = envBase * fEnv * (m.metal > 0.5 ? 1.0 : 0.3) + envSharp * coat * fEnvCoat;
 
-  // 翼尖的灯照到翼面上：点光源，照度 = I·cosθ / d²（lux → klux）
+  // 翼尖的灯照到翼面上：点光源，照度 = I·cosθ / d²（lux → klux）。
+  // 用不带油罐鼓包的几何法线：灯在翼尖、几乎贴着翼面照过来（掠射），鼓包 1° 左右的起伏就让 n·l 和镜面在 0 附近大幅跳动，
+  // 夜里频闪一亮，翼面上满是一团团云状的暗斑（审查返工项）。鼓包只留给天空反射和太阳
+  vec3 nG = w.nGeo;
+  if (dot(nG, nA) < 0.0) nG = -nG;
+  vec3 nGc = vec3(uSeatSign * nG.x, nG.y, nG.z);
   vec3 lampLit = vec3(0.0);
   for (int i = min(uWingSteps, 0); i < 3; i++) {  // 起点依赖 uniform：不让 FXC 展开成三份
     vec3 d = wingLampPos(i) - P;
     float dist2 = max(dot(d, d), 0.04);
     vec3 l = d * inversesqrt(dist2);
-    float nlL = dot(nA, l);
+    float nlL = dot(nG, l);
     if (nlL <= 0.0) continue;
     vec3 e = wingLampIntensity(i, -l) / dist2 * 1e-3 * nlL;
     vec3 lC = vec3(uSeatSign * l.x, l.y, l.z);
     vec3 hL = normalize(lC + v);
-    float nhL = max(dot(n, hL), 0.0);
+    float nhL = max(dot(nGc, hL), 0.0);
     float fL = 0.04 + 0.96 * pow(1.0 - max(dot(v, hL), 0.0), 5.0);
     // 镜面项 D·F·G / (4·n·v)：G 在掠射时和 n·v 同阶，两者相消。之前漏了 G、直接除以 n·v，
     // 轮廓上 n·v → 0.001 时灯的镜面被放大几百倍，边缘超采样的子射线一碰上就是一颗白点（后缘一串亮珠）
@@ -124,6 +129,9 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 e
       + coat * fL * ggxD(nhL, max(WING_A_COAT, 0.02)) * gv
       + mix(vec3(0.04), m.albedo, m.metal) * ggxD(nhL, max(aBase, 0.02)) * gv);
   }
+  if ((uWingDebug & 2) != 0) lampLit = vec3(0.0);
+  if ((uWingDebug & 4) != 0) envSpec = vec3(0.0);
+  if ((uWingDebug & 16) != 0) return m.albedo * 1e-3 * dot(eSky, vec3(0.3333)) * 50.0;
   return diffuse + spec + envSpec + lampLit + m.emit;
 }
 

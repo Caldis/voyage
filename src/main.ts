@@ -53,6 +53,7 @@ Object.assign(sceneMat.uniforms, {
   uWingSteps: { value: 128 },
   uWingShadowSteps: { value: 24 },
   uWingEdgeAA: { value: 1 },
+  uWingDebug: { value: 0 },
 });
 // 海浪：GPU FFT 三级级联（T14），每帧在场景 pass 之前更新
 // 低空地面细节（T02）：海拔 4 km 以下后台编译 GROUND_DETAIL 变体，编好才切换
