@@ -27,6 +27,74 @@ varying vec2 vUv;
 // 交错梯度噪声：每个像素的步进起点错开，时间累积后抹平成平滑结果
 float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 
+// 眼里逆光看眼壁时额外压掉的空气透视内散射比例（美术取向，见 main 里的说明）
+const float HUR_BACKLIT_AP_CUT = 0.5;
+
+// 投影用的台风大形（只在云步进里用）：眼壁（含台阶平台、各扇区顶高、外卷）和卷云盖。
+// 比 hurricaneShadowDensity 多了台阶与顶高起伏；眼壁内缘整体往外让 1.5 km，凹进去的表面点不会被自己的大形误判成在影子里
+float hurricaneCasterDensity(vec2 xz, float alt) {
+  if (alt > HUR_TOP + 1.8 || alt < 0.3) return 0.0;
+  vec2 d2 = xz - uHurricane.xy;
+  float r = length(d2);
+  float Re = uHurricane.z;
+  if (r > Re * 9.0) return 0.0;
+  // 方位角的正余弦直接由方向向量得到，倍角公式展开 sin(nθ + φ)：这个函数每像素要求值几十次，省掉 atan 和一串 sin（帧时间）
+  vec2 cs = d2 / max(r, 1e-3);                  // (cos θ, sin θ)
+  vec2 cs2 = vec2(cs.x * cs.x - cs.y * cs.y, 2.0 * cs.x * cs.y);
+  vec2 cs3 = vec2(cs2.x * cs.x - cs2.y * cs.y, cs2.x * cs.y + cs2.y * cs.x);
+  vec2 cs4 = vec2(cs2.x * cs2.x - cs2.y * cs2.y, 2.0 * cs2.x * cs2.y);
+  // sin(nθ + φ) = sin nθ cos φ + cos nθ sin φ
+  #define HSIN(c, ph) ((c).y * cos(ph) + (c).x * sin(ph))
+  float slopeK = 0.95 + 0.35 * HSIN(cs, 1.3) + 0.12 * HSIN(cs4, 0.5);
+  float l1 = 4.5 + 1.3 * HSIN(cs2, 0.4);
+  float l2 = 8.5 + 1.6 * HSIN(cs3, 1.9);
+  float fl = smoothstep(HUR_FLARE_START, HUR_TOP, alt);
+  float rIn = Re * (1.0 + 0.10 * HSIN(cs2, 0.6)) + slopeK * (0.55 * alt + 0.045 * alt * alt)
+            + 1.6 * smoothstep(l1 - 0.35, l1 + 0.35, alt) * smoothstep(-0.3, 0.5, HSIN(cs3, 0.8))
+            + 2.0 * smoothstep(l2 - 0.4, l2 + 0.4, alt) * smoothstep(-0.4, 0.4, HSIN(cs2, 2.6))
+            + HUR_FLARE * fl * fl + 1.5;
+  float top = HUR_TOP - 0.5 + 1.2 * HSIN(cs, 0.4) + 0.45 * HSIN(cs3, 1.7) + 0.5;   // = hurricaneRimTop(θ) + 0.5
+  #undef HSIN
+  float wall = smoothstep(rIn, rIn + 2.0, r) * (1.0 - smoothstep(top - 0.6, top, alt));
+  float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * smoothstep(12.0, 12.8, alt) * (1.0 - smoothstep(HUR_TOP - 1.0, HUR_TOP, alt));
+  return max(wall, canopy);
+}
+
+// 台风里某点沿 dir 方向的阳光可见度（0..1）：用解析大形估计光学厚度（便宜，不采样纹理）。
+// start：从离开该点多远处开始算（km）。云里的点只算远处的遮挡（对面的眼壁），近处 15 km 由受光步进负责，
+// 而且解析大形没有隆起，凹进去的表面点会被误判在大形里面
+float hurricaneSunVis(vec3 p, vec3 dir, float start) {
+  float alt = length(p) - BOTTOM;
+  float len = clamp((HUR_TOP + 1.8 - alt) / max(dir.y, 0.05), 0.0, 70.0) - start;
+  if (len <= 0.0 || dir.y < 0.0) return 1.0;
+  float dt = len / 5.0;
+  float od = 0.0;
+  // 上界依赖 uniform，FXC 不展开
+  for (int i = 0; i < 5 + min(uStormCount, 0); i++) {
+    vec3 q = p + dir * (start + (float(i) + 0.5) * dt);
+    od += hurricaneCasterDensity(q.xz + uCloudOffset, length(q) - BOTTOM);
+  }
+  // 光学厚度按「穿过遮挡物的公里数」算、系数取得很小：解析大形和真实表面差几公里，影子边缘要留出几公里的半影，
+  // 否则影子是一刀切的，落在眼壁上像一个个破洞
+  return exp(-od * dt * 0.6);
+}
+
+// 带体积阴影的空气透视内散射（未乘太阳照度）。full：不考虑阴影时整段的值（LUT 直接查出来的）
+vec3 hurricaneShadowedInscatter(vec3 ro, vec3 rd, float depth, vec3 full) {
+  vec3 acc = vec3(0.0);
+  vec3 prev = vec3(0.0);
+  const float N = 6.0;
+  for (int k = 1; k < 7 + min(uStormCount, 0); k++) {
+    float fk = float(k);
+    vec3 Lk = fk >= N ? full : textureLod(uAerialInscatter, aerialPerspectiveUvw(rd, uSunDir, depth * fk / N), 0.0).rgb;
+    float vis = hurricaneSunVis(ro + rd * (depth * (fk - 0.5) / N), uSunDir, 0.0);
+    // 影子里的空气仍被天空光照着（多次散射）；眼里低处四周是眼壁，看得到的天空只有头顶一块，取约 12%
+    acc += max(Lk - prev, vec3(0.0)) * mix(0.12, 1.0, vis);
+    prev = Lk;
+  }
+  return acc;
+}
+
 float hg(float c, float g) {
   float g2 = g * g;
   return (1.0 - g2) / (4.0 * M_PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
@@ -62,14 +130,28 @@ void main() {
   int fine = 0;
   float fineDt = 0.03;
   bool wasEmpty = true;
+  float hurVis = 1.0;         // 台风长影的缓存（见下）
+  float hurVisT = -1e9;
   float lastEmpty = seg.x;   // 最近一个空白采样点的位置：表面一定在它和第一个有云的采样点之间
   // 闪电放电通道（线段）：两端换到相机坐标
   vec3 fA = vec3(uFlash.x - uCloudOffset.x, BOTTOM + uFlash.y, uFlash.z - uCloudOffset.y);
   vec3 fAB = vec3(uFlashB.x - uCloudOffset.x, BOTTOM + uFlashB.y, uFlashB.z - uCloudOffset.y) - fA;
   float flashI = uFlash.w / (1.0 + 0.25 * length(fAB)); // 总能量摊到整条通道上
   // 下方（海面 / 低云）反射上来的光的反照率：有低云时明显更亮
-  // 台风眼里脚下和对面是被照亮的云，不是海面（取 0.35：再高背光的眼壁被照得和天空一样亮，失去明暗）
-  float albedoBelow = uHurricane.w > 0.5 ? 0.35 : 0.06 + 0.5 * uCoverage;
+  // 台风眼里脚下是眼底的云，不是海面（晴天取 0.35），再按眼底受光的比例打折（见下）
+  float albedoBelow = 0.06 + 0.5 * uCoverage;
+  if (uHurricane.w > 0.5) {
+    // 反射光来自眼底和对面的眼壁，随受光几何变：太阳低的时候眼底大半在向阳一侧眼壁的影子里（「井底」），
+    // 反射光跟着变弱，背光的眼壁不再被统一提亮到天空的亮度（T26）。取眼底中心和沿太阳方位前后各一点的平均
+    vec2 hc = uHurricane.xy - uCloudOffset;
+    vec2 sh = normalize(uKeyDir.xz + vec2(1e-5)) * uHurricane.z * 0.6;
+    float fv = 0.0;
+    for (int k = -1; k < 2 + min(uStormCount, 0); k++) {
+      vec2 f = hc + sh * float(k);
+      fv += hurricaneSunVis(vec3(f.x, BOTTOM + 1.6, f.y), uKeyDir, 0.0);
+    }
+    albedoBelow = 0.35 * mix(0.25, 1.0, fv / 3.0);
+  }
   // 次数上限：从相机空步走到 60 km 外本身就要约 190 步，细化还要额外的步数（每进一次云 9 步）
   for (int i = 0; i < 256; i++) {
     // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）
@@ -143,6 +225,14 @@ void main() {
       // Beer-Powder：云团边缘朝向太阳的地方偏暗，看起来更有体积（Schneider 2015）
       float powder = 1.0 - exp(-2.0 * od - 0.5);
       vec3 sunLight = keyLight(r, up) * sunScatter * mix(1.0, powder, 0.5);
+      // 台风：对面眼壁投下的长影（几十公里，受光步进只走 15 km 够不着）。太阳不高时眼壁下半截和眼底都在影子里，
+      // 上亮下暗，「体育场」的碗形靠这个读出来
+      // 只在眼和眼壁附近算（外围雨带头顶的卷云盖由受光步进负责，这里再算一遍会重复压暗）
+      // 长影在空间上变化很慢（半影几公里）：同一条视线上离上次求值不到 2 km 就沿用，省掉大部分求值（帧时间）
+      if (uHurricane.w > 0.5 && stormW > 0.5 && length(p.xz + uCloudOffset - uHurricane.xy) < uHurricane.z * 3.5) {
+        if (abs(t - hurVisT) > 2.0) { hurVis = hurricaneSunVis(p, uKeyDir, 3.0); hurVisT = t; }
+        sunLight *= hurVis;
+      }
       // 环境光：上半球的天空光，云顶亮、云底暗
       float h01 = clamp((r - BOTTOM - uShellBottom) / (uShellTop - uShellBottom), 0.0, 1.0);
       vec3 eSky = skyIrradiance(r, up);
@@ -155,6 +245,16 @@ void main() {
         // 台风眼里，背光的眼壁对面就是被太阳直射的眼壁和眼底：反射光在各个高度都很强，不只是下半截
         float hBelow = uHurricane.w > 0.5 ? 1.0 - 0.4 * h01 : 1.0 - h01;
         ambient += eBelow / (2.0 * M_PI) * 0.5 * hBelow * stormAO;
+        if (uHurricane.w > 0.5) {
+          // 眼里的互相照亮：向阳一侧的眼壁（内表面背着太阳）对面就是被太阳直射的眼壁，占了它小半个视野，
+          // 补光是中性的灰白。只按「内表面朝向」算：朝太阳的受光面对面是背光的暗壁，几乎没有补光。
+          // 量级：对面受光壁辐亮度约 0.25 E，占视野约 1/3，反照率 0.8，取一半（对面下半截在影子里）≈ 0.035 E
+          vec2 toC = (uHurricane.xy - uCloudOffset) - p.xz;
+          float rc = length(toC);
+          float away = -dot(toC / max(rc, 1e-3), normalize(uKeyDir.xz + vec2(1e-6)));
+          float opp = smoothstep(-0.2, 0.6, away) * (1.0 - smoothstep(uHurricane.z * 2.2, uHurricane.z * 3.0, rc));
+          ambient += keyLight(r, uKeyDir) * 0.035 * opp * mix(0.15, 1.0, stormAO) * smoothstep(0.02, 0.2, uKeyDir.y);
+        }
       }
       vec3 S = sunLight + ambient;
       // 闪电：云里一段几公里长的放电通道，光在云里多次散射后向外扩散（扩散长度约 2 km），
@@ -184,8 +284,24 @@ void main() {
   float depth = depthSum / wSum;
   // 相机到云之间的空气透视：远处的云被大气染蓝、变淡，融进地平线
   vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, depth);
-  vec3 apL = texture(uAerialInscatter, uvw).rgb * uSunIlluminance;
+  vec3 apL = texture(uAerialInscatter, uvw).rgb;
   vec3 apT = texture(uAerialTransmittance, uvw).rgb;
+  // 台风：视线上被眼壁 / 卷云盖挡住阳光的那几段空气不散射阳光（体积阴影）。
+  // 下午逆光看远处眼壁时，40 km 的空气透视内散射是眼壁自身亮度的约 10 倍（T26 实测：0.9/1.9/4.5 对 0.2/0.2/0.24），
+  // 背光的眼壁整面被刷成天空蓝；而真实的眼里，靠近向阳一侧眼壁的空气正处在它的影子里。
+  // 分段累加：L(0, b) − L(0, a) ≈ 段 [a, b] 的内散射（已含到相机的透射），乘这一段中点的受光比例
+  if (uHurricane.w > 0.5 && uSunDir.y > 0.02) {
+    apL = hurricaneShadowedInscatter(ro, rd, depth, apL);
+    // 美术取向（有意偏离物理，T26 协调者 / 美术总监的要求）：物理上从 10.7 km 隔 40 km 看逆光的眼壁，空气透视
+    // 和眼壁顶上方 8° 的天空几乎一样亮（两条视线穿过的空气柱相当），背光的眼壁整面融进天空；
+    // 外卷的「看台」又让低太阳照进眼里，体积阴影只减掉约 5–20%。这里在眼里朝太阳方向看时再压掉一部分内散射，
+    // 让背光面读成深灰蓝。只作用于台风眼附近、朝太阳、太阳不高的时候；要回到纯物理把 HUR_BACKLIT_AP_CUT 设 0
+    vec2 hcC = uHurricane.xy - uCloudOffset;
+    float inEye = 1.0 - smoothstep(uHurricane.z * 2.0, uHurricane.z * 3.0, length(hcC));
+    float toward = max(dot(normalize(rd.xz + vec2(1e-6)), normalize(uSunDir.xz + vec2(1e-6))), 0.0);
+    apL *= 1.0 - HUR_BACKLIT_AP_CUT * inEye * toward * toward * (1.0 - smoothstep(0.35, 0.8, uSunDir.y));
+  }
+  apL *= uSunIlluminance;
   L = L * apT + apL * (1.0 - T);
   gl_FragColor = vec4(min(L, vec3(60000.0)), T);
   outDepth = vec4(depth, 0.0, 0.0, 1.0);
