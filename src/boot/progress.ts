@@ -29,7 +29,6 @@ export class BootProgress {
 
   private stageStart = this.startedAt;
   private cursor = 0;
-  private confirmedMs = 0;
   private revealed = false;
   private finished = false;
   private revealTimer = 0;
@@ -65,7 +64,6 @@ export class BootProgress {
     const now = performance.now();
     const dur = Math.max(0, Math.round(now - this.stageStart));
     this.actual[id] = dur;
-    this.confirmedMs += dur;
     this.stageStart = now;
     this.stepEls[id]?.classList.remove("active");
     this.stepEls[id]?.classList.add("done");
@@ -79,20 +77,28 @@ export class BootProgress {
     const now = performance.now();
     if (this.revealed && this.container) {
       const idx = this.cursor;
-      let simulated = this.confirmedMs;
+      // 已完成阶段一律按「估算份额」累计，不按真实耗时——某阶段实测远超估算时（例如场景着色器冷编译
+      // 有时到 80–90 秒，比默认估算的一半还多），真实耗时会让进度立刻顶到头、显示「剩 0 秒」，
+      // 后面几个阶段却还没开始（审查 T16 时发现）。改成用 cumEstimate，单个阶段超时也只封在它自己的估算份额里，
+      // 不会侵占后面阶段的进度空间，冷启动实测下总能保持单调递增、不提前封顶。
+      const baseline = idx > 0 ? this.cumEstimate[idx - 1] : 0;
+      let simulated = baseline;
       if (idx < BOOT_STAGE_IDS.length) {
         const id = BOOT_STAGE_IDS[idx];
         const est = num(this.estimate[id], num(DEFAULT_TIMINGS[id], 1000));
         const inStage = now - this.stageStart;
-        // 指数缓动到这一阶段估算耗时的 92%：真实完成前不到头（免得看起来卡住），完成那一刻由 finish() 直接跳满
+        // 指数缓动到这一阶段估算耗时的 92%（在它自己的份额内）：真实完成前不到头，完成那一刻由 finish() 直接跳到 cumEstimate[idx]
         simulated += est * 0.92 * (1 - Math.exp(-inStage / (est * 0.6)));
+      } else {
+        simulated = this.totalEstimate;
       }
       const frac = Math.min(simulated / this.totalEstimate, 0.995);
       if (this.barFill) this.barFill.style.width = `${(frac * 100).toFixed(1)}%`;
       if (this.elapsedEl) this.elapsedEl.textContent = `已用 ${((now - this.startedAt) / 1000).toFixed(1)} 秒`;
       if (this.etaEl) {
+        // 剩余时间按「后面还没跑的阶段的估算份额」算，不会因为当前阶段超时就归零
         const remain = Math.max(this.totalEstimate - simulated, 0) / 1000;
-        this.etaEl.textContent = idx < BOOT_STAGE_IDS.length ? `约剩 ${Math.max(remain, 0.2).toFixed(0)} 秒` : "";
+        this.etaEl.textContent = idx < BOOT_STAGE_IDS.length ? `约剩 ${Math.max(remain, 1).toFixed(0)} 秒` : "";
       }
     }
     this.rafId = requestAnimationFrame(this.tick);

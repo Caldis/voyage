@@ -12,12 +12,14 @@ export type BootTimings = Record<string, number>;
 
 /**
  * 首次没有历史记录时的默认估算（毫秒），量级参考 README「坑点」的实测数据：
- * 场景 + 机翼着色器冷编译占大头，常见 45–55 秒，复杂时可到 80–90 秒；其余阶段是次要开销。
+ * 场景 + 机翼着色器冷编译占大头，常见 45–55 秒，复杂时可到 80–90 秒（T16 审查时并行 GPU 争抢下实测到过 96 秒），
+ * 默认值取得偏高一点（约 80 秒）：估太低会导致这一阶段的进度条提前顶到自己份额的上限，后面几个阶段还没开始时
+ * 就显得快到头了；其余阶段是次要开销。
  */
 export const DEFAULT_TIMINGS: BootTimings = {
   atmosphere: 300,
   cloudNoise: 200,
-  shaders: 50000,
+  shaders: 80000,
   cloudMarch: 2000,
   oceanFft: 400,
   post: 300,
