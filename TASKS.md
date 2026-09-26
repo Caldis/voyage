@@ -9,6 +9,7 @@
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | T05 | 第 2 波 | 5195 | `worktree-agent-a0195720b2e30539f`（0e425c9） | Opus | 审查：返工（后缘超采样白点、整流罩像刀片、看机翼预设方向反、近看碎面、函数前缀、冷编译 104 s） | 返工中（本次允许直接提交接入后的 scene.ts） |
+| T20 | 第 3 波（提前） | 5200 | worktree（交付时回填） | Opus | 待派 | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
