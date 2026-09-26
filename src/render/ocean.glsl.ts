@@ -1,6 +1,5 @@
 /**
- * 海面（GLSL）：波面斜率场、耀斑、离水辐亮度。依赖 ATMOSPHERE_COMMON / CLOUD_COMMON（uCloudOffset）/
- * LIGHTS_COMMON（keyLight / skyIrradiance）/ ISLANDS_COMMON（程序生成岛屿）/ PANE_COMMON（fbm2 / hash12）。
+ * 海面（GLSL）：波面斜率场、耀斑、离水辐亮度。依赖 ATMOSPHERE_COMMON / CLOUD_COMMON（uCloudOffset）/ ISLANDS_COMMON（程序生成岛屿）/ PANE_COMMON（fbm2 / hash12）。
  *
  * 斜率来源（T14）：FFT 海浪（src/ocean/waves.ts）三个级联的纹理数组。
  * 每级存 (∂h/∂x, ∂h/∂z, 斜率二阶矩, Σ|k|h)，用解析的像素足迹做 textureGrad（各向异性过滤 + mip），
@@ -140,14 +139,14 @@ float slickFactor(vec2 xzKm) {
 // 海面在海面处的辐亮度，不含天空反射（天空反射在 outsideRadiance 里单独算）。
 // nView 输出带波浪扰动的平均法线，给天空反射用
 // body：水体本身的反射率（< 0 用开阔大洋的默认值；真实地面时取卫星影像的水色）；calm：风浪系数（湖泊河流 < 1）
-vec3 oceanRadiance(vec3 P, vec3 rd, float tGround, vec3 body, float calm, out float fView, out vec3 nView) {
+// eSun：主光源（太阳或月亮）在海面处垂直于光线的直射照度，已乘云影，即 keyLight(BOTTOM, n) · cloudShadow(P, uKeyDir)；
+// eSky：海面处的天空光照度 skyIrradiance(BOTTOM, n)。两者由调用处算好传进来（和地面、内陆水面共用一份）：
+// cloudShadow 很重，FXC 在每个调用点整份内联。本函数在整个场景程序里也只能有一个调用点（SC-3，见 scene.ts 的 outsideRadiance）
+vec3 oceanRadiance(vec3 P, vec3 rd, float tGround, vec3 body, float calm, vec3 eSun, vec3 eSky, out float fView, out vec3 nView) {
   vec3 n = normalize(P);
   vec3 v = -rd;
   float cosV = max(dot(n, v), 1e-3);
   float cosS = dot(n, uKeyDir);
-  // 主光源（太阳或月亮）垂直于光线的直射照度，被云挡住的地方打折扣
-  vec3 eSun = keyLight(BOTTOM, n) * cloudShadow(P, uKeyDir);
-  vec3 eSky = skyIrradiance(BOTTOM, n);
 
   // 海面坐标随飞机前进平移（和云场用同一个位移），海面才会从窗外流过
   vec2 xzKm = P.xz + uCloudOffset;
