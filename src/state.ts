@@ -48,6 +48,8 @@ export interface VoyageState {
   shade: number; // 0 = 全开，1 = 全关
   wind: number;
   cabinLight: boolean;
+  /** 氛围洗墙灯（舱灯「全关」时才关） */
+  moodLight: boolean;
   cloudPreset: CloudPreset;
   /** 翼根前缘在机头方向上相对窗口的距离（米）：座位在机翼前方时为负 */
   wingRootLE: number;

@@ -117,6 +117,7 @@ const state: VoyageState = {
   shade: 0, // 0 = 全开，1 = 全关
   wind: 7,
   cabinLight: true,
+  moodLight: true,
   cloudPreset: CLOUD_PRESETS[0],
   /** 翼根前缘在机头方向上相对窗口的距离（米）：座位在机翼前方时为负 */
   wingRootLE: 8,
@@ -335,6 +336,7 @@ function renderFrame(now: number) {
   u.uSpoiler.value = THREE.MathUtils.degToRad(state.spoilerDeg);
   // 舱灯开：约 200 lux；关：只剩地板灯带和零星阅读灯，约 1 lux
   u.uCabinLight.value = state.cabinLight ? 0.2 : 0.001;
+  u.uMoodLight.value = state.moodLight ? 1 : 0;
   clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
