@@ -8,19 +8,24 @@
 // （开发体验官实测结论，见 apps/voyage/research/DX_REPORT_wave2.md §1.1）。
 //
 // 用法：
-//   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--out tmp/screenshot/dev-5230]
-//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2]
-//   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5]
+//   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--out tmp/screenshot/dev-5230] [--angle d3d11|vulkan]
+//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--angle d3d11|vulkan]
+//   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
+//
+// --angle：ANGLE 图形后端，默认 d3d11（Windows 上与生产环境一致，**这是交付验收的口径，不要改**）。
+//   vulkan 只用于开发内循环：真冷启动快约 18 倍（无 FXC 优化器），但会藏住 D3D11 专属问题
+//   （sampler 上限 16 vs 32、FXC 编译暴涨、X3595 屏幕导数报错），验收前一定要在默认 d3d11 上再跑一次
+//   （见 research/DX_SHADER_COMPILE.md 第二节的差异表）。
 //
 // 固定视口 1600×1200、deviceScaleFactor 1（和 regression.playwright.js 的截图基线一致，DX-03 也把 MCP 版对齐到了这个尺寸）。
 
 import { chromium } from "playwright-core";
-import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULTS, applyScene, pickScenes } from "./scenarios.mjs";
+import { launchBrowser as launchBrowserAngle, closeBrowserSafely } from "./lib/chrome.mjs";
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
@@ -43,71 +48,13 @@ function parseArgs(argv) {
   return out;
 }
 
-// ---------- 定位本机缓存的完整版 chrome.exe ----------
-function candidateRoots() {
-  const home = os.homedir();
-  const roots = [];
-  if (process.env.PLAYWRIGHT_BROWSERS_PATH) roots.push(process.env.PLAYWRIGHT_BROWSERS_PATH);
-  if (process.platform === "win32") roots.push(path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "ms-playwright"));
-  else if (process.platform === "darwin") roots.push(path.join(home, "Library", "Caches", "ms-playwright"));
-  else roots.push(path.join(home, ".cache", "ms-playwright"));
-  return roots.filter((r) => fs.existsSync(r));
-}
-function findChromeExecutable() {
-  for (const root of candidateRoots()) {
-    let dirs;
-    try {
-      // 只要 chromium-<数字>，排除 chromium_headless_shell-*（会退化成 SwiftShader，见文件头注释）
-      dirs = fs
-        .readdirSync(root)
-        .filter((d) => /^chromium-\d+$/.test(d))
-        .sort((a, b) => Number(b.split("-")[1]) - Number(a.split("-")[1]));
-    } catch {
-      continue;
-    }
-    for (const d of dirs) {
-      const candidates = [
-        path.join(root, d, "chrome-win64", "chrome.exe"),
-        path.join(root, d, "chrome-win", "chrome.exe"),
-        path.join(root, d, "chrome-linux", "chrome"),
-        path.join(root, d, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"),
-      ];
-      const found = candidates.find((c) => fs.existsSync(c));
-      if (found) return found;
-    }
+// ---------- 定位并启动本机缓存的完整版 chrome.exe（两个脚本共用，见 lib/chrome.mjs） ----------
+const VALID_ANGLES = ["d3d11", "vulkan"];
+function launchBrowser(angle) {
+  if (!VALID_ANGLES.includes(angle)) {
+    throw new Error(`--angle 只接受 ${VALID_ANGLES.join(" | ")}，收到 "${angle}"（gl 后端场景程序链接失败，见 research/DX_SHADER_COMPILE.md）`);
   }
-  return null;
-}
-
-/** browser.close() 在渲染进程已经崩溃（Target crashed）之后可能永远等不到 CDP 握手回来，
- * 用超时 race，超时就直接杀掉底层进程，避免脚本挂死（多个代理同时抢 GPU 时会撞上，见 README 坑点） */
-async function closeBrowserSafely(browser, timeoutMs = 5000) {
-  try {
-    await Promise.race([browser.close(), new Promise((_, reject) => setTimeout(() => reject(new Error("close timeout")), timeoutMs))]);
-  } catch {
-    try {
-      browser.process()?.kill("SIGKILL");
-    } catch {
-      /* 尽力而为 */
-    }
-  }
-}
-
-async function launchBrowser() {
-  const executablePath = findChromeExecutable();
-  if (!executablePath) {
-    throw new Error(
-      "找不到本机缓存的完整版 chrome.exe（<ms-playwright 缓存>/chromium-<版本>/…），已排除 chromium_headless_shell-*。\n" +
-        "本机没缓存时可以先 `npx --yes playwright install chromium` 下载一次（约 150MB，只需要一次）。",
-    );
-  }
-  return chromium.launch({
-    executablePath,
-    headless: true,
-    // 防御性钉死：Playwright 默认新版 headless 已经走 D3D11（实测 MAX_TEXTURE_IMAGE_UNITS=16，和生产环境一致），
-    // 这里显式指定防止未来 Chromium 改默认值
-    args: ["--use-angle=d3d11"],
-  });
+  return launchBrowserAngle(chromium, { angle });
 }
 
 /** 起一个临时 canvas 探测真实渲染器；不是 SwiftShader 就说明走的是真 GPU（见文件头注释） */
@@ -165,7 +112,7 @@ function originFor(port) {
   return `http://127.0.0.1:${port}`;
 }
 
-async function openPage(browser, port) {
+async function openPage(browser, port, angle) {
   const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
   const page = await context.newPage();
   await installGlProbe(page);
@@ -173,21 +120,22 @@ async function openPage(browser, port) {
   await page.goto(`${originFor(port)}/?dev=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 180000, polling: 500 });
-  return { context, page, renderer };
+  return { context, page, renderer, angle };
 }
 
 // ---------- shots：跑回归场景表，截图 + 每场景一份同名 JSON ----------
 async function cmdShots(args) {
   const port = args.port;
   if (!port) throw new Error("shots 需要 --port <端口>");
+  const angle = String(args.angle || "d3d11");
   const only = args.only ? String(args.only).split(",") : null;
   const outDir = path.join(REPO_ROOT, args.out || `tmp/screenshot/dev-${port}`);
   fs.mkdirSync(outDir, { recursive: true });
 
-  const browser = await launchBrowser();
+  const browser = await launchBrowser(angle);
   try {
-    const { page, renderer } = await openPage(browser, port);
-    console.log(`[dev-browser] GL_RENDERER = ${renderer}`);
+    const { page, renderer } = await openPage(browser, port, angle);
+    console.log(`[dev-browser] --angle=${angle}  GL_RENDERER = ${renderer}`);
     const scenes = pickScenes(only);
     const results = [];
     for (const sc of scenes) {
@@ -201,6 +149,7 @@ async function cmdShots(args) {
         info,
         head,
         viewport: VIEWPORT,
+        angle,
         renderer,
         frameMs: +frameMs.toFixed(3),
         origin: originFor(port),
@@ -220,9 +169,10 @@ async function cmdShots(args) {
 async function cmdCold(args) {
   const port = args.port;
   if (!port) throw new Error("cold 需要 --port <端口>");
+  const angle = String(args.angle || "d3d11");
   const repeat = Number(args.repeat || 1);
   const origin = originFor(port);
-  const browser = await launchBrowser();
+  const browser = await launchBrowser(angle);
   const results = [];
   try {
     for (let i = 0; i < repeat; i++) {
@@ -249,9 +199,9 @@ async function cmdCold(args) {
         await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 250 });
         const startup = await page.evaluate(() => window.__voyageStartup);
         const totalMs = Date.now() - t0;
-        const entry = { origin, nonce, totalMs, startup, renderer };
+        const entry = { origin, angle, nonce, totalMs, startup, renderer };
         results.push(entry);
-        console.log(`[dev-browser] cold #${i + 1}/${repeat}: totalMs=${totalMs}  renderer=${renderer}`);
+        console.log(`[dev-browser] cold #${i + 1}/${repeat}: --angle=${angle}  totalMs=${totalMs}  renderer=${renderer}`);
         console.log(
           Object.entries(startup)
             .map(([k, v]) => `    ${k}: ${v}`)
@@ -273,21 +223,22 @@ async function cmdCold(args) {
 async function cmdBench(args) {
   const port = String(args.port || "");
   if (!port) throw new Error("bench 需要 --port <端口>");
+  const angle = String(args.angle || "d3d11");
   const baseline = args.baseline ? String(args.baseline) : null;
   const only = args.only ? String(args.only).split(",") : null;
   const frames = Number(args.frames || 30);
   const rounds = Number(args.rounds || 5);
   const ports = baseline ? [port, baseline] : [port];
 
-  const browser = await launchBrowser();
+  const browser = await launchBrowser(angle);
   try {
     const pages = {};
     const renderers = {};
     for (const p of ports) {
-      const { page, renderer } = await openPage(browser, p);
+      const { page, renderer } = await openPage(browser, p, angle);
       pages[p] = page;
       renderers[p] = renderer;
-      console.log(`[dev-browser] ${p}: GL_RENDERER = ${renderer}`);
+      console.log(`[dev-browser] ${p}: --angle=${angle}  GL_RENDERER = ${renderer}`);
     }
 
     const scenes = pickScenes(only);
@@ -332,7 +283,7 @@ async function cmdBench(args) {
       console.log(`  ${sc.name}: ` + ports.map((p) => `${p}=${row[p]}ms`).join("  ") + (baseline ? `  Δ=${row.deltaPct}%` : "") + gpuNote);
     }
     console.log(`[dev-browser] renderer: ${JSON.stringify(renderers)}`);
-    if (args.out) fs.writeFileSync(path.join(REPO_ROOT, args.out), JSON.stringify({ renderers, table }, null, 2));
+    if (args.out) fs.writeFileSync(path.join(REPO_ROOT, args.out), JSON.stringify({ angle, renderers, table }, null, 2));
     return table;
   } finally {
     await closeBrowserSafely(browser);
@@ -347,7 +298,9 @@ async function main() {
   else if (sub === "cold") await cmdCold(args);
   else if (sub === "bench") await cmdBench(args);
   else {
-    console.error("用法：node scripts/dev-browser.mjs <shots|cold|bench> --port <端口> [--only a,b] [--out 路径] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]");
+    console.error(
+      "用法：node scripts/dev-browser.mjs <shots|cold|bench> --port <端口> [--angle d3d11|vulkan] [--only a,b] [--out 路径] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
+    );
     process.exit(1);
   }
   // playwright-core 有时会留一些内部句柄没清干净（尤其是 GPU 争用导致渲染进程中途崩溃过一次的情况），

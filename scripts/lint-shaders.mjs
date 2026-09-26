@@ -79,7 +79,7 @@ function capturingPass() {
 
 // ---------- 枚举全部程序 ----------
 
-async function collectPrograms(server) {
+export async function collectPrograms(server) {
   const programs = [];
   const add = (id, mat) => {
     if (!mat || typeof mat.fragmentShader !== "string") throw new Error(`${id}：拿到的不是一个 ShaderMaterial`);
@@ -171,7 +171,7 @@ async function collectPrograms(server) {
 
 // ---------- glslangValidator 语法校验 ----------
 
-const INCLUDE_STUBS = {
+export const INCLUDE_STUBS = {
   // THREE 的 #include <chunk> 由渲染器编译期注入，这里手写桩替换（原因见文件头注释）
   common: "",
   dithering_pars_fragment: "",
@@ -180,7 +180,7 @@ const INCLUDE_STUBS = {
   dithering_fragment: "#ifdef DITHERING\n  gl_FragColor.rgb = dithering(gl_FragColor.rgb);\n#endif",
 };
 const INCLUDE_RE = /^[ \t]*#include +<([\w.\/]+)>/gm;
-function resolveIncludes(src, unknown) {
+export function resolveIncludes(src, unknown) {
   return src.replace(INCLUDE_RE, (m, name) => {
     if (!(name in INCLUDE_STUBS)) {
       unknown.add(name);
@@ -190,12 +190,16 @@ function resolveIncludes(src, unknown) {
   });
 }
 
-const FRAG_PREFIX = `#version 300 es
+// layout(location = 0) 是必须的：cloud-march 之类的 MRT 程序自己额外声明了 layout(location = 1)
+// out outDepth，GLSL ES 3.00 规定一旦有多个片元输出，全部输出都要显式给 location（否则 ANGLE 真实
+// 编译会报 EXT_blend_func_extended 相关错误；glslangValidator 不检查这条，check:glsl 一直没发现，
+// 是 shader-budget.mjs 翻译 cloud-march 时才暴露的，见 apps/voyage/handoff/SC-12.md）。
+export const FRAG_PREFIX = `#version 300 es
 precision highp float;
 precision highp int;
 precision highp sampler3D;
 precision highp sampler2DArray;
-out highp vec4 pc_fragColor;
+layout(location = 0) out highp vec4 pc_fragColor;
 #define gl_FragColor pc_fragColor
 #define varying in
 #define texture2D texture
@@ -617,7 +621,13 @@ async function main() {
   process.exit(exitCode);
 }
 
-main().catch((err) => {
-  console.error("lint-shaders 运行失败：", err);
-  process.exit(1);
-});
+// 只在直接执行本文件（`node scripts/lint-shaders.mjs`）时跑 main()；被 shader-budget.mjs 之类的脚本
+// `import { collectPrograms } from "./lint-shaders.mjs"` 时不能自动触发（否则会重复起一次 vite server、
+// 多跑一遍语法校验，还会在检查完后 process.exit() 把调用方一起杀掉）。
+const isMain = path.resolve(process.argv[1] || "") === fileURLToPath(import.meta.url);
+if (isMain) {
+  main().catch((err) => {
+    console.error("lint-shaders 运行失败：", err);
+    process.exit(1);
+  });
+}
