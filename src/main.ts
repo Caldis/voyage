@@ -11,6 +11,7 @@ import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
 import { createSceneMaterial } from "./render/scene";
 import { GroundClipmap } from "./ground/clipmap";
+import { OceanWaves } from "./ocean/waves";
 import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateHighLift, updateTurbulence } from "./flight";
 import { $, CRUISE_PITCH_DEG, type Preset, type VoyageState } from "./state";
 import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
@@ -52,6 +53,9 @@ Object.assign(sceneMat.uniforms, {
   uWingShadowSteps: { value: 24 },
   uWingEdgeAA: { value: 1 },
 });
+// 海浪：GPU FFT 三级级联（T14），每帧在场景 pass 之前更新
+const ocean = new OceanWaves(renderer);
+Object.assign(sceneMat.uniforms, ocean.uniforms);
 const clouds = new Clouds(pass, atmosphere, cloudUniforms, sceneMat.uniforms);
 const exposure = new Exposure(pass);
 const traffic = new Traffic();
@@ -312,6 +316,7 @@ function renderFrame(now: number) {
   u.uCabinLight.value = state.cabinLight ? 0.2 : 0.001;
   clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
+  ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
   pass.render(sceneMat, hdr);
   exposure.render(hdr.texture, bloom.render(hdr), dt);
 
@@ -375,4 +380,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, wingDebug, benchScene, benchFrame };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean, wingDebug, benchScene, benchFrame };
