@@ -286,3 +286,11 @@ pnpm --filter voyage typecheck && pnpm --filter voyage build
 - **T04 合并**（2b05b7e）：协调者补 typhoon-bands / typhoon-outer 回归场景、README 两条坑点、清交接文档冲突标记。审查指出逆光背光眼壁融进天空最出戏、碗形与雨带仍不够——记为 T26。
 - **SC-1+2 合并**（6557adb）：vulkan 冷启动 7.7 s vs d3d11 117 s；离线 fxc 编译预算工具可按模块二分编译贡献，不占 GPU。README 调试与坑点已写入。
 - **SC-3 合并**（204b946）：场景冷编译 71 → 19 s，32 位浮点逐像素与 master 一致。协调者在合并后的主分支实测 d3d11 真冷启动 **30.9 s**（场景 18.6 s、云 9.6 s 串行），此前 84–117 s。SC-3 的临时逐像素对比工具备份到 tmp/dx/sc3-tools/（建议做成 dev-browser pixeldiff 子命令）。剩余重复内联记为 SC-3b；SC-4（云并行）完成后冷启动应再降约 9 s。
+
+## 2026-09-27 · 第 3 波收尾
+
+- 合并：DX-01~03、T13、T21、T23、T16、T20（+ 舱灯三档）、T04、SC-1+2、SC-3、SC-4。
+- **编译专项成果**：主分支 d3d11 真冷启动从 84–117 s 降到约 31 s（SC-3 后），SC-4 再省约 4 s；开发时用 Vulkan 约 5–8 s。
+- 收尾回归（私有 headless，d3d11，13 场景，`tmp/screenshot/wave3-final/`）：全部正常；帧时间 noon 2.3 ms、台风 9 ms、storm-day 7.6 ms。协调者目视 noon-cumulus（亮白舱壁、机翼反射正常）、night-city（睡眠氛围光、城市灯火清楚）。
+- 清理了 8 个已合并 worktree 与 t04-base；两个仍被代理锁住的 worktree（DX、T16，均已合并）待其进程结束后再清。
+- 第 3 波插单占比偏高（用户反馈集中），第 4 波按「路线图主干占多数」排：SC-5（拆窗外 / 舱内 pass，含 SC-3b）与 T18（低空霾 / 限高）为主干，T22（机翼表面）与 T26（台风第二轮）为插单。
