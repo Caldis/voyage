@@ -123,7 +123,7 @@ void main() {
         // 雷暴 / 台风：上界依赖 uniform，FXC 不展开（展开成 8 份雷暴密度时冷编译很慢）
         for (int j = 0; j < lightSteps; j++) {
           lt += ls;
-          od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
+          od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3, true) * ls;
           ls *= 2.0;
         }
       }
@@ -245,7 +245,7 @@ varying vec2 vUv;
 void main() {
   vec3 p0 = vec3(0.0, uCamR, 0.0);
   float d = 0.0;
-  for (int k = 0; k < 4; k++) d += cloudDensityLite(p0 + uProbeDir * (float(k) * 0.12), 1.0, false);
+  for (int k = 0; k < 4; k++) d += cloudDensityLite(p0 + uProbeDir * (float(k) * 0.12), 1.0, false, false);
   gl_FragColor = vec4(d * 0.25, 0.0, 0.0, 1.0);
 }
 `;
