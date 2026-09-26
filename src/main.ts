@@ -37,6 +37,8 @@ const tick = (() => {
   };
 })();
 tick("模块加载到这里");
+/** 等浏览器画完当前这一帧再继续：两次 rAF 保证真的过了一次绘制，不只是排上队（启动阶段之间用它让加载遮罩的更新先上屏） */
+const nextPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 // 加载遮罩的分阶段清单 + 总进度条（真正驱动进度的是下面各阶段实际完成的时刻，见 boot.finish 调用）
 const boot = new BootProgress();
 const pass = new FullscreenPass(renderer);
@@ -376,10 +378,13 @@ requestAnimationFrame(() =>
     }
     tick("场景着色器编译（后台）");
     boot.finish("shaders");
+    await nextPaint();
 
     // 云光线步进、海面 FFT、曝光 / 眩光各自还有一批小着色器：原来只在下面第一次真正渲染时才编译，
     // 会挡住主线程（虽然比场景 / 机翼小得多）。这里提前各触发一次、单独计时，
-    // 编完立刻用 snap() 撤销这次「假」调用在时间累积 / 曝光适应历史上留下的痕迹，真正的首帧仍是干净的第一帧
+    // 编完立刻用 snap() 撤销这次「假」调用在时间累积 / 曝光适应历史上留下的痕迹，真正的首帧仍是干净的第一帧。
+    // 这几个调用本身仍是同步的（three 没有给普通 render() 提供后台编译版本），会各自卡一下主线程；
+    // 每个之间插一次 nextPaint()，让清单打勾 / 进度条在卡顿前先画出来，不会把好几个阶段的卡顿叠成一整段看不出进度的空白
     {
       const camBasis = cameraBasis();
       const c2w = cabinToWorld();
@@ -388,10 +393,12 @@ requestAnimationFrame(() =>
     }
     tick("云光线步进程序编译");
     boot.finish("cloudMarch");
+    await nextPaint();
 
     ocean.update(0, state.wind, cloudUniforms.uCloudOffset.value);
     tick("海面 FFT 程序编译");
     boot.finish("oceanFft");
+    await nextPaint();
 
     {
       const bloomTex = bloom.render(hdrWing);
@@ -400,6 +407,7 @@ requestAnimationFrame(() =>
     }
     tick("曝光与眩光程序编译");
     boot.finish("post");
+    await nextPaint();
 
     frame(performance.now());
     renderer.getContext().finish();
