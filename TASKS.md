@@ -12,6 +12,7 @@
 | T28 | 第 4 波（插单，用户拍板人眼式色适应） | 5228 | worktree | Opus（exposure.ts） | — | 进行中 |
 | T24 | 第 4 波（插单） | 5224 | worktree | Opus（结构化舱内倒影） | — | 进行中 |
 | PERF-3 | 第 4 波（性能） | 5243 | worktree | Opus（机翼边缘超采样降本） | — | 进行中 |
+| T19a | 第 4 波（主干） | 5219 | worktree | Opus（连续航程第一阶段：航线接力、时间流逝、导演骨架、背景板模式） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
