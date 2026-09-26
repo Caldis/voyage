@@ -74,6 +74,9 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **私有 headless 联调**（不用共享浏览器锁）：`node scripts/dev-browser.mjs shots --port <端口> [--only a,b]`（跑回归场景表 + 截图 + 帧时间）、`cold --port <端口>`（真冷启动）、`bench --port <端口> --baseline <对照端口>`（批渲帧时间两端口对照，附 GPU timer query）。脚本会自动找本机 `ms-playwright` 缓存的完整版 `chrome.exe`，启动后校验渲染器不是 SwiftShader（用了 `chrome-headless-shell.exe` 或 `--use-angle=swiftshader` 会静默退化，见下面「坑点」）。GPU 被其他代理占满时可能报 `Target crashed`（等一等或换个时间再跑，`pnpm run` 套一层时偶发挂起，直接 `node scripts/dev-browser.mjs ...` 更稳，见 `handoff/DX.md`）。
 - **离线 GLSL 检查**：`pnpm --filter voyage check:glsl`，不开浏览器，几秒内跑完，能抓住 GLSL 保留字、同一程序内的同签名函数重名、场景程序 sampler 数超 16（已用真实 GPU 交叉验证过一次，`scene-default` / `scene-ground-detail` 都是 16/16，见 `handoff/DX.md`「返工记录」）。提交前跑一次比等冷编译报错快得多。`node scripts/lint-shaders.mjs --self-test` 单独测检查逻辑本身，不用起 vite。
 
+- **ANGLE 后端切换**：`dev-browser.mjs` 的 `shots` / `cold` / `bench` 都支持 `--angle d3d11|vulkan`，默认 `d3d11`（Windows 上与生产环境一致，**这是交付验收的口径，不要改**）。日常改代码想快速看效果，开一个专用的 vulkan 窗口：`node scripts/dev-browser.mjs cold --port <端口> --angle vulkan`或直接用桌面浏览器 `chrome.exe --use-angle=vulkan`（真冷启动能从约 100 秒降到几秒，见`research/DX_SHADER_COMPILE.md`）。vulkan 会藏住 D3D11 专属问题（sampler 上限 16 vs 32、FXC 编译暴涨、X3595 屏幕导数报错），**验收前一定要在默认 d3d11 上再跑一次**。
+- **离线着色器编译预算**：`node scripts/shader-budget.mjs`（或 `pnpm --filter voyage shader-budget --<参数>`），不开完整浏览器场景、不占 GPU，用 ANGLE 的翻译器 + Windows SDK 的 `fxc.exe` 离线算出每个程序的真实编译时间和 sampler 数。`--only <程序>` 只测一个，`--quick` 用 `/Od` 几十秒内出「能不能编过」，`--bisect <模块>` 把场景程序里的某段换成桩，看它占了多少编译时间（`--bisect list` 看可换的模块）。和浏览器真冷编译对照过一次，误差 5.4%，在 ≤15% 的可信范围内（见 `handoff/SC-12.md`）。
+
 ## 物理依据
 
 | 部分 | 依据 |
@@ -151,3 +154,5 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **海面着色被内联了两次**：`terrain-shading.glsl.ts` 的地面水体又调用一次整个 `oceanRadiance`，场景编译 82.8 s 中约 51 s 来自这份重复（SC-3 在修）。`clouds.glsl.ts` 同时拼进场景、机翼、云三个程序，改它三个都会重编。
 - **台风云影用的是解析大形，不是真实密度**（T04）：完整台风密度进场景程序会让场景冷编译 65 → 103 s，所以云影 / 探针只用不采样纹理的大形。已知偏差：雨带阴影缺相位扰动与断续遮罩（偏约 ±1/4 带间距、断处仍有影），眼壁阴影缺 shape / bump（几公里），眼底层积云无阴影。巡航高度基本看不出；改云影时别把完整密度塞回场景程序。
 - **表面细化必须退回到最近一个空白采样点**（T04 修 T03）：固定退回 2dt 会反复「撞上 → 退回」到步数上限，远处出现等高线条纹；完全不退回又会漏检成平行明暗条纹。另：高度场只能用水平切片噪声（3D 噪声会让塔身上下断开成漂浮团块）；按固定高度间距量化的台阶从高处看是等高线地图。
+- **`FRAG_PREFIX`（`lint-shaders.mjs`）的片元输出必须写 `layout(location = 0)`**：不写的话`glslangValidator` 不会报错（`check:glsl` 测不出来），但真实 ANGLE 编译 `cloud-march` 这类自己声明了 `layout(location = 1) out ...`（MRT）的程序会报 `EXT_blend_func_extended` 相关错误——GLSLES 3.00 规定一旦有多个片元输出，全部输出都要显式给 location。这也说明「静态语法校验通过」不能100% 代表「真实浏览器编译一定过」，MRT 相关的坑目前只能靠真实浏览器验证一次来兜底。
+- **离线 fxc 计时对系统负载很敏感**：同一份程序在不同时刻测，`/O1` 编译时间可能差 20% 以上（本机被其他代理占用 GPU/CPU 时更明显）。用 `shader-budget.mjs` 的数字和浏览器冷编译对照时，两次测量要紧挨着做，中间不要插其它重活；同一个 `--bisect` 批次内部的相对比较不受影响（都在同一时刻测）。
