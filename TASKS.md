@@ -9,7 +9,7 @@
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | T02 | 第 2 波 | 5192 | `worktree-agent-a611f3799d938f8bb`（842eb24） | Opus | 审查：返工（冷启动 +85% 且丢上下文、农田紫色、碎浪硬截断） | 返工中 |
-| T05 | 第 2 波 | 5195 | `worktree-agent-a0195720b2e30539f`（0e425c9） | Opus（已交付，scene.ts 接入见 handoff/T05.md） | Opus 审查中（兼美术总监，5187） | 待审查 |
+| T05 | 第 2 波 | 5195 | `worktree-agent-a0195720b2e30539f`（0e425c9） | Opus | 审查：返工（后缘超采样白点、整流罩像刀片、看机翼预设方向反、近看碎面、函数前缀、冷编译 104 s） | 返工中（本次允许直接提交接入后的 scene.ts） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
