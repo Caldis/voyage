@@ -19,8 +19,8 @@ export type BootTimings = Record<string, number>;
 export const DEFAULT_TIMINGS: BootTimings = {
   atmosphere: 300,
   cloudNoise: 200,
+  // SC-4 以后云光线步进程序并进这一批后台编译，不再单列 cloudMarch 阶段，估算份额留在这里
   shaders: 80000,
-  cloudMarch: 2000,
   oceanFft: 400,
   post: 300,
   firstFrame: 150,
