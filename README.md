@@ -133,3 +133,5 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **测帧时间**：本机 GPU 远快于刷新率，rAF 间隔被锁在约 6.2 ms，看不出着色器代价；`gl.finish()` 在 Chrome 里也不等 GPU。用 `EXT_disjoint_timer_query_webgl2`，或「一个 rAF 里连渲染 N 帧后 readPixels 1 像素」。多个代理同时占 GPU 时任何计时都不可信。
 - **真冷启动**：同一端口的着色器缓存会让「冷启动」其实是热的；测编译时间要用 addInitScript 往着色器注入随机数强制缓存不命中（审查脚本 `tmp/review-t02/cold.js`）。
 - **海平面近处求交**：从 r≈6360 km 出发的通用球面求交在近处有约半米误差，会让海浪纹理出现与视角相关的颗粒噪点；`oceanRadiance` 里用 t = c / (−b + √(b²−c)) 重算。
+- **GLSL 没有命名空间**：所有 `*.glsl.ts` 拼进同一个程序，同签名函数重名会编译失败；而且只在某个变体把相关模块凑齐时才暴露（T02 的细节变体与 T06 的 `lineCov` 撞名）。**新增 GLSL 函数一律带模块前缀**（如 `detailLineCov`、`seatSdf`）。`renderer.compileAsync` 失败也会 resolve，切换变体前要检查程序是否有效。
+- **重函数只调用一次、结果复用**：FXC 会把被多处调用的函数在每个调用点整份内联，冷编译随调用点线性变长。已知重函数：`cloudShadow`、`sampleGround`、`keyLight`、`marchFunnel`、`windowIrradiance`、`cloudDensity`（及雷暴部分）。新代码需要它们时先找现成结果，不要再调一次（T02 多调一次 cloudShadow 就多约 15 s）。定位法：真冷启动脚本 + `#if 0` 逐段二分。
