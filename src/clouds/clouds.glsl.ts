@@ -293,7 +293,9 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
   // 主塔（穹顶就是上冲云顶）+ 伴生的浓积云小塔（顶只有主塔的 35–60%，和主塔平滑地连成一体）
   float aoT;
   float sdf = towerSdf(xz, alt, c.xy, R, top + STORM_OVERSHOOT, 0.72, lod, aoT);
-  for (int k = 0; k < 3; k++) {
+  // 伴生塔数量写成「3 + 一个恒为 0 的 uniform 表达式」，FXC 就不会把塔身 SDF 展开 3 份
+  int nSat = 3 + min(uStormCount, 0);
+  for (int k = 0; k < nSat; k++) {
     float ang = float(k) * 2.1 + c.x * 0.37;
     vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.5 + 0.3 * float(k));
     float tk = STORM_BASE + (top - STORM_BASE) * (0.35 + 0.12 * float(k));
@@ -377,7 +379,9 @@ float stormDensityLite(vec4 c, vec2 xz, float alt, float lod) {
   if (alt < STORM_BASE - 0.1 || alt > top + STORM_OVERSHOOT + 0.7) return 0.0;
   float ao;
   float sdf = towerSdf(xz, alt, c.xy, R, top + STORM_OVERSHOOT, 0.72, lod, ao);
-  for (int k = 0; k < 3; k++) {
+  // 伴生塔数量写成「3 + 一个恒为 0 的 uniform 表达式」，FXC 就不会把塔身 SDF 展开 3 份
+  int nSat = 3 + min(uStormCount, 0);
+  for (int k = 0; k < nSat; k++) {
     float ang = float(k) * 2.1 + c.x * 0.37;
     vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.5 + 0.3 * float(k));
     float tk = STORM_BASE + (top - STORM_BASE) * (0.35 + 0.12 * float(k));
@@ -395,8 +399,8 @@ float cloudDensityLite(vec3 p, float lod, bool detail) {
   float d = layerDensity(p, lod, detail);
   if (uStormCount > 0 || uHurricane.w > 0.5) {
     vec2 xz = p.xz + uCloudOffset;
-    for (int i = 0; i < 4; i++) {
-      if (i >= uStormCount) break;
+    // 循环上界用 uniform（最多 4 个）：常量上界会被 FXC 展开成 4 份完整的雷暴密度，冷编译大幅变慢
+    for (int i = 0; i < uStormCount; i++) {
       vec4 c = uStorms[i];
       vec2 dd = xz - c.xy;
       if (dot(dd, dd) > c.z * c.z * 56.0) continue;
@@ -416,8 +420,8 @@ float cloudDensity(vec3 p, float lod, bool detail) {
   gStormAO = 1.0;
   if (uStormCount > 0 || uHurricane.w > 0.5) {
     vec2 xz = p.xz + uCloudOffset;
-    for (int i = 0; i < 4; i++) {
-      if (i >= uStormCount) break;
+    // 循环上界用 uniform（最多 4 个）：常量上界会被 FXC 展开成 4 份完整的雷暴密度，冷编译大幅变慢
+    for (int i = 0; i < uStormCount; i++) {
       vec4 c = uStorms[i];
       vec2 dd = xz - c.xy;
       if (dot(dd, dd) > c.z * c.z * 56.0) continue; // 砧状云加上下风偏移最远约 7 倍塔身半径（1.5R + 2.6R × 1.7 × 1.25）

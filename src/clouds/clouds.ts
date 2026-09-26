@@ -98,8 +98,8 @@ void main() {
       float ls = 0.06;
       float lt = 0.0;
       int lightSteps = (uStormCount > 0 || uHurricane.w > 0.5) ? 8 : 6;
-      for (int j = 0; j < 8; j++) {
-        if (j >= lightSteps) break;
+      // 上界直接用 lightSteps（依赖 uniform）：常量上界 8 会被 FXC 展开成 8 份云密度，冷编译很慢
+      for (int j = 0; j < lightSteps; j++) {
         lt += ls;
         od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
         ls *= lightSteps == 8 ? 2.0 : 1.9;

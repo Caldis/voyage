@@ -35,7 +35,10 @@ vec3 boltRadiance(vec3 rd) {
   float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
   float coreMax = 0.0;
   float haloSum = 0.0;
-  for (int i = 0; i < 15; i++) {
+  // 上界写成依赖 uniform 的表达式（值不变），防止 FXC 把 15 × 8 次线段距离全部展开（冷编译很慢）
+  int nSeg = 15 + min(int(uBoltIntensity), 0);
+  int nSub = 8 + min(int(uBoltIntensity), 0);
+  for (int i = 0; i < nSeg; i++) {
     int ia = i < 10 ? i : (i == 10 ? 3 : i);
     int ib = i == 10 ? 11 : i + 1;
     vec3 a = uBolt[ia] - ro;
@@ -53,7 +56,7 @@ vec3 boltRadiance(vec3 rd) {
     // 分叉越往外越暗
     float branch = i >= 10 ? 0.45 * (1.0 - 0.12 * float(i - 10)) : 1.0;
     vec3 prev = a;
-    for (int k = 1; k <= 8; k++) {
+    for (int k = 1; k <= nSub; k++) {
       float u = float(k) / 8.0;
       // 两个频率的扭折，两端为 0（和相邻段连续）
       float env = sin(u * 3.14159);
