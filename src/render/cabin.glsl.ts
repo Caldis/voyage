@@ -191,19 +191,11 @@ float wipeMarks(vec2 q, float pix) {
   return cov;
 }
 
-// 油污与指纹：平时看不见，阳光从附近照过来时发出朦胧的散射光
+// 油污：平时看不见，阳光从附近照过来时发出朦胧的散射光。
+// T20（高端机舱「刚清洁过」）：去掉了指纹——原来两枚指纹画成完整的同心圆环，在至少 6 个场景里读成「靶心」、
+// 还像远处小云的重影；擦拭后残留的油膜也只剩很淡、稀疏的几片
 float smudges(vec2 q) {
-  float haze = smoothstep(0.45, 0.8, fbm2(q * 18.0)) * 0.6;
-  // 两个指纹：椭圆形的一圈圈纹路，被噪声扭曲
-  for (int i = 0; i < 2; i++) {
-    vec2 c = i == 0 ? vec2(0.07, -0.11) : vec2(-0.085, -0.02);
-    vec2 d = (q - c) * vec2(1.0, 1.35);
-    float r = length(d);
-    float mask = 1.0 - smoothstep(0.006, 0.011, r);
-    float ridges = 0.5 + 0.5 * sin(r * 2600.0 + fbm2(q * 300.0) * 6.0);
-    haze += mask * ridges * 0.9;
-  }
-  return haze;
+  return smoothstep(0.55, 0.85, fbm2(q * 18.0)) * 0.25;
 }
 
 // 窗板外侧的水：巡航速度下水不会往下流，而是被气流沿水平方向往机尾拖成细长、弯曲、粗细不均的水线；

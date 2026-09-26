@@ -1,24 +1,35 @@
 /**
- * 舱内着色（GLSL）：侧壁、窗框（装饰边 + 窗洞内衬）、遮光板、相邻的舷窗。座椅在 seats.glsl.ts，织物在 fabric.glsl.ts。
+ * 舱内着色（GLSL）：侧壁、窗框（装饰边 + 窗洞内衬）、遮光板、相邻的舷窗、舱内灯光（主灯 + 氛围洗墙灯 + 阅读灯）。
+ * 座椅在 seats.glsl.ts，皮革 / 木饰 / 金属饰条在 cabin-leather.glsl.ts。
  * 依赖 VIEW_COMMON、CABIN_COMMON、PANE_COMMON、WING_COMMON（ggxD / smithG）、LIGHTS_COMMON，
  * 以及 scene.ts 里声明的 uCabinLight / uShadeBottom / uSeatSign。
+ *
+ * 审美定位（用户 2026-09-26 定）：「高级、先进、奢华」的真实感，不要「廉价」的真实感——
+ * 对标 787 / A350 宽体机与商务舱套间：暖白的柔光饰面带极细压纹、香槟色阳极氧化的拉丝金属收边、精密均匀的接缝、
+ * 行李架下的 LED 洗墙氛围灯。痕迹只留「刚清洁过的高端机舱」会有的：亮面上只在掠射角看得见的淡指纹、极少的浮尘。
  *
  * 所有函数都在 main() 的分支里调用，所以这里一律不用屏幕导数：像素足迹 = 命中距离 × 像素张角 / |cos|（解析）。
  *
  * 光照（都是绝对量，照度 klux、辐亮度 kcd/m²）：
- * - 舱内环境光：顶灯 + 满舱窗户进来的光来回反射（scene.ts 里算的 eCabin），按法线朝向上方灯带的程度加权；
+ * - 舱内环境光：主灯 + 满舱窗户进来的光来回反射（scene.ts 里算的 eCabin），按法线朝向上方灯带的程度加权；
+ * - 氛围洗墙灯：行李架下沿一条沿机身的 LED 线光源，斜向下打在侧壁上（掠射，压纹在它里面显形），也照到座椅与窗罩；
+ *   色温随场景变：白天中性白，夜里开灯暖琥珀，关灯（睡眠）时 787 式的淡紫蓝、照度只有几 lux；
  * - 本窗的窗板当面光源（windowIrradiance，解析）；穿过窗板的直射光（sunThroughWindow，逐点判断）；
  * - 舱灯关掉时：一盏前排上方的阅读灯（示例设定：邻座有人开着阅读灯），暖白，照度只有几 lux。
- * 高光：塑料用 GGX；环境高光用一个粗略的「舱内环境」函数（上方灯带亮、过道对面一排窗户亮）。
+ * 高光：塑料 / 金属用 GGX；环境高光用一个粗略的「舱内环境」函数（上方灯带与被洗亮的上墙亮、过道对面一排窗户亮）。
  */
 export const CABIN_SHADING_COMMON = /* glsl */ `
 const float WINDOW_PITCH = 0.533;                 // 舷窗间距 ≈ A320 的框距（21 英寸）
 const vec3 CABIN_LIGHT_DIR = vec3(0.0, 0.8, -0.6); // 行李架下 / 舱顶灯带大致在上方、偏过道一侧
-const vec3 LINING_ALBEDO = vec3(0.80, 0.78, 0.73);  // 侧壁内饰板：偏暖的米白
-const vec3 REVEAL_ALBEDO = vec3(0.80, 0.79, 0.76);  // 窗罩（单独的注塑件，比侧壁略白、略亮）
-const vec3 DUST_ALBEDO = vec3(0.40, 0.37, 0.32);
-const vec3 GASKET_ALBEDO = vec3(0.06, 0.055, 0.045); // 老化略泛黄的灰黑橡胶
+// 反照率按真实饰面取（暖白涂层约 0.6–0.75）；不为当前曝光补偿亮度（曝光另有任务）
+const vec3 LINING_ALBEDO = vec3(0.74, 0.70, 0.635); // 侧壁内饰板：暖白柔光饰面（略带香槟调）
+const vec3 REVEAL_ALBEDO = vec3(0.77, 0.755, 0.72); // 窗罩（单独的注塑件，珍珠白，比侧壁略冷、略亮）
+const vec3 GASKET_ALBEDO = vec3(0.045, 0.045, 0.048); // 新的石墨色硅胶密封条
+const vec3 CHAMPAGNE_F0 = vec3(0.90, 0.80, 0.63);   // 香槟色阳极氧化铝的镜面反射色（示意值）
 const vec3 READING_LIGHT_COLOR = vec3(1.0, 0.8, 0.58);
+// 氛围洗墙灯：行李架下沿的线光源（座舱系 y、z，米），灯头朝下、略朝侧壁
+const vec2 MOOD_POS = vec2(0.62, -0.08);
+const vec3 MOOD_AIM = vec3(0.0, -0.553, 0.833);
 // 相邻的舷窗：遮光板拉到底（窗外那一路只为本窗算，云也只算了本窗附近，所以邻窗不开）。下沿的把手还露在窗洞里
 const float NB_SHADE = -0.178;
 
@@ -28,8 +39,19 @@ struct CabinLights {
   vec3 lWin;        // 窗板当面光源时的平均辐亮度
   vec3 eCabin;      // 舱内环境照度
   vec3 lGlow;       // 相邻舷窗（遮光板放下）透过来的辐亮度
+  vec3 moodI;       // 氛围洗墙灯的线强度（klux·m，带颜色）
   float readOn;     // 阅读灯 0..1（舱灯关掉时才亮）
 };
+
+// 灯光场景：返回主灯的颜色（亮度归一）和氛围灯的线强度。sunY：太阳高度角的正弦；moodOn：面板开关 0..1。
+// 白天中性白（约 4300 K）；夜里开灯暖琥珀；关灯是睡眠模式：787 式淡紫蓝的低照度洗墙光。数值是示意，不是某航司的实测
+void cabinMoodScene(float cabinLight, float sunY, float moodOn, out vec3 mainTint, out vec3 moodI) {
+  float dayF = smoothstep(-0.06, 0.08, sunY);
+  float on = smoothstep(0.005, 0.05, cabinLight);
+  mainTint = mix(vec3(1.08, 0.89, 0.65), vec3(0.95, 0.91, 0.85), dayF);
+  vec3 moodCol = mix(vec3(1.0, 0.9, 1.5), mix(vec3(1.35, 0.94, 0.54), vec3(1.0, 0.955, 0.89), dayF), on);
+  moodI = moodCol * mix(0.035, mix(0.3, 0.45, dayF), on) * moodOn;
+}
 
 // 值噪声及其解析梯度：x = 值，yz = 对 p 的偏导
 vec3 vnoiseD(vec2 p) {
@@ -43,7 +65,7 @@ vec3 vnoiseD(vec2 p) {
               du * vec2(b - a + k * u.y, c - a + k * u.x));
 }
 
-// 环境光的方向性：朝上方灯带的表面更亮。按竖直侧壁（法线 −z）归一化，侧壁的亮度和改前一致
+// 环境光的方向性：朝上方灯带的表面更亮。按竖直侧壁（法线 −z）归一化
 float hemiCabin(vec3 n) {
   return (0.35 + 0.65 * max(dot(n, normalize(CABIN_LIGHT_DIR)), 0.0)) / 0.74;
 }
@@ -58,22 +80,38 @@ vec3 readingLight(vec3 p, vec3 n, float on) {
   return on * READING_LIGHT_COLOR * 0.004 * cone * max(dot(n, l), 0.0) / r2; // 1 m 处约 4 lux
 }
 
-vec3 cabinIrradiance(vec3 p, vec3 n, CabinLights cl) {
-  return cl.eCabin * hemiCabin(n) + readingLight(p, n, cl.readOn);
+// 氛围洗墙灯到 p 的方向（yz 平面内；线光源沿 x 无限长）
+vec3 cabinMoodDir(vec3 p, out float r) {
+  vec2 d = MOOD_POS - p.yz;
+  r = max(length(d), 0.05);
+  return vec3(0.0, d / r);
 }
 
-// 舱内环境的辐亮度（给光滑表面的反射用）：上方灯带亮，过道对面同一高度有一排窗户
+// 线光源的照度 ∝ 强度 · cos / r；灯头有朝向（带遮光格栅），往上方和过道一侧几乎不出光
+vec3 cabinMoodWash(vec3 p, vec3 n, vec3 moodI) {
+  float r;
+  vec3 l = cabinMoodDir(p, r);
+  float lobe = pow(max(dot(-l, MOOD_AIM), 0.0), 1.5);
+  // 高过灯的地方（行李架里）照不到
+  return moodI * max(dot(n, l), 0.0) * lobe / r * step(p.y, MOOD_POS.x - 0.02);
+}
+
+vec3 cabinIrradiance(vec3 p, vec3 n, CabinLights cl) {
+  return cl.eCabin * hemiCabin(n) + readingLight(p, n, cl.readOn) + cabinMoodWash(p, n, cl.moodI);
+}
+
+// 舱内环境的辐亮度（给光滑表面的反射用）：上方灯带亮、被洗墙灯照亮的上墙发着氛围灯的颜色，过道对面同一高度有一排窗户
 vec3 cabinEnv(vec3 r, CabinLights cl) {
   vec3 base = cl.eCabin / M_PI * (0.45 + 0.9 * smoothstep(-0.3, 0.9, dot(r, normalize(CABIN_LIGHT_DIR))));
   float opp = step(r.z, 0.0) * exp(-r.y * r.y / 0.02) * 0.3; // 对面窗户约占那一条的 30%
-  return base + opp * cl.lWin;
+  return base + opp * cl.lWin + cl.moodI * 0.13 * smoothstep(0.1, 0.75, r.y);
 }
 
 float fresnelRough(float nv, float f0, float rough) {
   return f0 + (max(1.0 - rough, f0) - f0) * pow(1.0 - clamp(nv, 0.0, 1.0), 5.0);
 }
 
-// 直射光在光滑塑料上的高光（GGX）
+// 直射光在光滑表面上的高光（GGX）
 vec3 keySpec(vec3 n, vec3 v, vec3 l, float a, float f0, vec3 e) {
   float nl = dot(n, l);
   if (nl <= 0.0) return vec3(0.0);
@@ -82,6 +120,46 @@ vec3 keySpec(vec3 n, vec3 v, vec3 l, float a, float f0, vec3 e) {
   float nh = max(dot(n, hv), 0.0);
   float f = f0 + (1.0 - f0) * pow(1.0 - max(dot(hv, v), 0.0), 5.0);
   return e * nl * f * ggxD(nh, a) * smithG(nv, nl, a) / (4.0 * nv * nl);
+}
+
+// 氛围洗墙灯在光滑表面上的高光（当成方向光，照度取垂直于光线方向的量）
+vec3 cabinMoodSpec(vec3 p, vec3 n, vec3 v, float a, float f0, vec3 moodI) {
+  float r;
+  vec3 l = cabinMoodDir(p, r);
+  float lobe = pow(max(dot(-l, MOOD_AIM), 0.0), 1.5);
+  return keySpec(n, v, l, a, f0, moodI * lobe / r);
+}
+
+// 金属件的着色（香槟色阳极氧化铝，缎面 / 拉丝）：暗的漫反射 + 带颜色的镜面反射
+vec3 cabinChampagne(vec3 p, vec3 n, vec3 rd, float mr, float ao, vec3 e, CabinLights cl) {
+  float nv = max(dot(n, -rd), 1e-3);
+  vec3 F = CHAMPAGNE_F0 + (vec3(max(1.0 - mr, 0.9)) - CHAMPAGNE_F0) * pow(1.0 - nv, 5.0);
+  vec3 col = CHAMPAGNE_F0 * 0.12 / M_PI * e + F * cabinEnv(reflect(rd, n), cl) * ao;
+  // 金属的颜色只乘一次：keySpec 的 f0 取 1（菲涅尔 ≡ 1），颜色由 CHAMPAGNE_F0 给
+  col += CHAMPAGNE_F0 * keySpec(n, -rd, normalize(CABIN_LIGHT_DIR), mr * mr, 1.0, cl.eCabin * 1.5) * ao;
+  col += CHAMPAGNE_F0 * cabinMoodSpec(p, n, -rd, mr * mr, 1.0, cl.moodI);
+  return col;
+}
+
+// 淡指纹：只改变光泽（油膜让亮面在掠射角发雾），正面看几乎看不见。脊线约 0.45 mm，比像素细时淡成一层均匀的薄油膜
+float cabinPrint(vec2 q, vec2 c, float ang, float pix) {
+  vec2 d = mat2(cos(ang), sin(ang), -sin(ang), cos(ang)) * (q - c) * vec2(1.0, 1.35);
+  float r = length(d);
+  float mask = 1.0 - smoothstep(0.0045, 0.0085, r);
+  if (mask <= 0.0) return 0.0;
+  float ridges = 0.5 + 0.5 * sin(r * 14000.0 + vnoise(q * 900.0) * 5.0);
+  float fr = 1.0 - smoothstep(0.00012, 0.0003, pix);
+  return mask * mix(0.5, ridges, fr) * (0.6 + 0.4 * vnoise(q * 1500.0 + c * 50.0));
+}
+
+// 极少量的浮尘：约 9 mm 一格，百分之几的格子里有一粒 0.1–0.2 mm 的灰点；按面积摊薄，远处不闪
+float cabinSpeck(vec2 q, float seed, float pix) {
+  vec2 cell = floor(q / 0.009);
+  vec2 h = hash22(cell + seed * 5.3 + 0.7);
+  if (h.x > 0.035) return 0.0;
+  vec2 c = (cell + 0.2 + 0.6 * hash22(cell + 9.1)) * 0.009;
+  float r = mix(0.00005, 0.0001, h.y);
+  return (1.0 - smoothstep(r - pix * 0.5, r + pix * 0.5, length(q - c))) * min(1.0, r * r / max(pix * pix, 1e-12));
 }
 
 // ---- 侧壁轮廓 ----
@@ -123,17 +201,20 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   vec3 n0 = normalize(vec3(0.0, wallSlope(p.y), -1.0));
   float pix = t * pixAng / max(-dot(n0, rd), 0.2);
   vec3 albedo = LINING_ALBEDO;
-  float rough = 0.55;
+  float rough = 0.62;
   float ao = seatAO;
 
-  // 1. 橘皮纹：约 1 mm 的起伏、十几微米高，主要在高光里看得出；比像素细时淡出
-  float fPeel = 1.0 - smoothstep(0.00025, 0.0005, pix);
+  // 1. 柔光饰面的细压纹：约 2.4 mm 的柔和颗粒 + 0.9 mm 的细颗粒（软触感涂层压纹），起伏只有几微米，
+  //    主要在掠射的洗墙光里显形；网格转一个角度，免得值噪声的轴向痕迹；比像素细时逐级淡出
+  float fA = 1.0 - smoothstep(0.0006, 0.0012, pix);
+  float fB = 1.0 - smoothstep(0.00025, 0.0005, pix);
   vec2 slope = vec2(0.0);
-  if (fPeel > 0.0) {
-    vec3 nA = vnoiseD(p.xy * 700.0);
-    vec3 nB = vnoiseD(p.xy * 1600.0 + 3.1);
-    slope = (nA.yz * 700.0 + 0.5 * nB.yz * 1600.0) * 0.00005 * fPeel;
-    albedo *= 1.0 + 0.06 * (nA.x - 0.5) * fPeel;
+  if (fA > 0.0) {
+    vec2 pr = mat2(0.8, 0.6, -0.6, 0.8) * p.xy;
+    vec3 nA = vnoiseD(pr * 420.0);
+    vec3 nB = vnoiseD(pr * 1100.0 + 3.1);
+    slope = mat2(0.8, -0.6, 0.6, 0.8) * (nA.yz * 420.0 * 0.00002 * fA + nB.yz * 1100.0 * 0.000007 * fB);
+    albedo *= 1.0 + 0.02 * (nA.x - 0.5) * fA;
   }
 
   // 2. 装饰边：窗罩的翻边压在侧壁上，宽约 1.8 cm、高约 2 mm，外沿是圆角——窗框的「厚度」主要靠它
@@ -143,111 +224,46 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   float edge = clamp((dBez - (FL - 0.006)) / 0.006, 0.0, 1.0);         // 圆角外沿 0..1
   float tilt = sin(edge * M_PI) * 0.85 * step(dBez, FL);               // 外沿法线朝外翻
   slope += gB * tilt;
-  rough = mix(rough, 0.42, flange);
+  albedo = mix(albedo, REVEAL_ALBEDO, flange);
+  rough = mix(rough, 0.38, flange);
   // 翻边外侧贴着侧壁的一圈窄阴影
-  ao *= 1.0 - 0.35 * (1.0 - smoothstep(FL, FL + 0.005, dBez)) * step(FL - 0.0005, dBez);
+  ao *= 1.0 - 0.3 * (1.0 - smoothstep(FL, FL + 0.005, dBez)) * step(FL - 0.0005, dBez);
 
-  // 翻边与侧壁的接缝：一圈约 2.5 mm 的缎面铝收边条（截面是圆的，上沿迎着灯带发亮），外侧一道细阴影线。
-  // 下半圈被手蹭得更亮（粗糙度低）。数值是示意，不是某个机型的实测
+  // 翻边与侧壁的接缝：一圈约 2.5 mm 的香槟色阳极氧化收边条（截面是圆的，上沿迎着灯带发亮），外侧一道精密的细阴影线。
+  // 暗装卡扣，看不到螺丝。数值是示意，不是某个机型的实测
   float trimU = (dBez - FL) / 0.0025;                                  // 0..1 横跨收边条
   float trim = lineCov(abs(dBez - (FL + 0.00125)), 0.00125, pix);
   float trimTilt = (trimU - 0.5) * 1.6 * step(0.0, trimU) * step(trimU, 1.0);
-  float shadowLine = lineCov(abs(dBez - (FL + 0.0031)), 0.0004, pix);
-  ao *= 1.0 - 0.5 * shadowLine;
-  // 卡扣螺丝：沿翻边一圈 6 颗，直径约 2 mm 的圆头，中间十字槽
-  float screw = 0.0;
-  float screwSlot = 0.0;
-  vec2 screwN = vec2(0.0);
-  {
-    float ang = atan(wq.y * BEZEL_HALF.x / BEZEL_HALF.y, wq.x);
-    float k = floor(ang / (M_PI / 3.0)) + 0.5;
-    float a = k * (M_PI / 3.0);
-    vec2 dir = normalize(vec2(cos(a) * BEZEL_HALF.x, sin(a) * BEZEL_HALF.y));
-    float r = length(BEZEL_HALF);
-    for (int i = 0; i < 3; i++) r += (FL - 0.009) - sdRoundRect(dir * r, BEZEL_HALF, BEZEL_RADIUS);
-    vec2 d = wq - dir * r;
-    float rr = length(d);
-    // 直径约 2 mm：默认视距下只有一两个像素、一点高光（用户：看不清才真实，大了会糊）
-    screw = (1.0 - smoothstep(0.001 - pix * 0.5, 0.001 + pix * 0.5, rr)) * min(1.0, 0.001 * 0.001 / max(pix * pix, 1e-12) + 0.3);
-    vec2 dr = mat2(0.7071, 0.7071, -0.7071, 0.7071) * d; // 十字槽转 45°
-    screwSlot = max(lineCov(abs(dr.x), 0.0001, pix) * step(abs(dr.y), 0.0007),
-                    lineCov(abs(dr.y), 0.0001, pix) * step(abs(dr.x), 0.0007)) * screw;
-    screwN = d / 0.001 * 0.9 * screw;                                   // 圆头的法线
-  }
-  slope += gB * trimTilt * trim + screwN;
-  // 凹角积灰：窗下半圈、收边条外侧那道缝里
-  float cornerDust = lineCov(abs(dBez - (FL + 0.0035)), 0.0012, pix) * smoothstep(-0.12, -0.2, wq.y)
-                   * (0.6 + 0.4 * vnoise(p.xy * 300.0 + seed));
+  float shadowLine = lineCov(abs(dBez - (FL + 0.0031)), 0.00035, pix);
+  ao *= 1.0 - 0.45 * shadowLine;
+  slope += gB * trimTilt * trim;
 
-  // 3. 面板接缝：每两扇窗一块板，竖缝在两窗之间；上方一道横缝接行李架下的面板
+  // 3. 面板接缝：每两扇窗一块板，竖缝在两窗之间；上方一道横缝接行李架下的面板。缝宽 1 mm，均匀、精密
   float sx = abs(fract((p.x + 0.2665) / (2.0 * WINDOW_PITCH) + 0.5) - 0.5) * 2.0 * WINDOW_PITCH;
   float sy = abs(p.y - 0.42);
-  float groove = max(lineCov(sx, 0.0012, pix), lineCov(sy, 0.0012, pix));
+  float groove = max(lineCov(sx, 0.0005, pix), lineCov(sy, 0.0005, pix));
   // 接缝上沿有一道被灯带照亮的倒角
-  float bevel = lineCov(abs(p.y - 0.4222), 0.0008, pix) * step(0.42, p.y);
-  ao *= 1.0 - 0.6 * groove;
-
-  // 4. 脏污：大尺度的斑驳 + 窗下沿一带手经常扶的地方（发暗、发油光）+ 零星的鞋印 / 包蹭出的污痕
-  float mottle = 0.65 * vnoise(p.xy * 5.0 + seed * 7.0) + 0.35 * vnoise(p.xy * 23.0 + seed);
-  albedo *= 1.0 - 0.11 * smoothstep(0.35, 0.8, mottle);
-  // 越往下越灰（鞋、包、腿蹭的高度），很淡
-  albedo *= 1.0 - 0.06 * smoothstep(-0.1, -0.45, p.y) * (0.6 + 0.4 * vnoise(p.xy * 9.0 + seed));
-  float hand = exp(-pow((wq.y + 0.25) / 0.07, 2.0)) * exp(-pow(wq.x / 0.17, 2.0));
-  hand += 0.6 * exp(-pow((wq.y + 0.05) / 0.12, 2.0)) * exp(-pow((abs(wq.x) - 0.21) / 0.035, 2.0)); // 两侧推墙探头看的位置
-  float oil = hand > 0.02 ? hand * smoothstep(0.3, 0.7, 0.6 * vnoise(p.xy * 40.0 + seed) + 0.4 * vnoise(p.xy * 110.0 + seed)) : 0.0;
-  albedo *= 1.0 - 0.2 * oil;
-  albedo = mix(albedo, DUST_ALBEDO, cornerDust * 0.8);
-  albedo = mix(albedo, albedo * vec3(0.97, 0.95, 0.90), hand * 0.6);
-  rough = mix(rough, 0.25, clamp(oil * 1.4, 0.0, 1.0));
-  // 蹭痕：约 5 cm 一格，稀疏；越往下越多
-  vec2 sc = floor(p.xy / 0.05);
-  vec2 sh = hash22(sc + seed * 3.1);
-  if (sh.x < 0.10 * smoothstep(0.1, -0.35, p.y) + 0.02) {
-    vec2 c = (sc + 0.2 + 0.6 * hash22(sc + 1.7)) * 0.05;
-    float ang = sh.y * 3.0;
-    vec2 d = mat2(cos(ang), sin(ang), -sin(ang), cos(ang)) * (p.xy - c);
-    float len = mix(0.004, 0.02, fract(sh.y * 13.0));
-    float s = 1.0 - smoothstep(0.0, 1.0, length(d / vec2(len, 0.0012 + pix)));
-    albedo *= 1.0 - 0.25 * s * (1.0 - smoothstep(0.002, 0.01, pix));
-  }
-
-  // 5. 细划痕：窗下方、清洁时擦出的横向细纹，只在高光里闪
-  float scr = 0.0;
-  {
-    vec2 q = vec2(p.x, p.y + (vnoise(vec2(p.x * 15.0, seed)) - 0.5) * 0.006);
-    float row = floor(q.y / 0.004);
-    float h = hash12(vec2(row, seed));
-    float along = q.x + h * 3.0;
-    float segId = floor(along / 0.03);
-    float present = step(hash12(vec2(segId, row + seed)), 0.25) * smoothstep(-0.1, -0.3, wq.y);
-    float dy = abs(fract(q.y / 0.004) - 0.2 - 0.6 * fract(h * 17.0)) * 0.004;
-    scr = present * lineCov(dy, 0.00005, pix) * smoothstep(0.0, 0.2, fract(along / 0.03)) * (1.0 - smoothstep(0.7, 1.0, fract(along / 0.03)));
-  }
+  float bevel = lineCov(abs(p.y - 0.4212), 0.0006, pix) * step(0.42, p.y);
+  ao *= 1.0 - 0.55 * groove;
 
   vec3 n = normalize(n0 + vec3(slope, 0.0));
   vec3 v = -rd;
   float nv = max(dot(n, v), 1e-3);
-  // 上亮下暗：顶灯和行李架下的灯带从上方照下来（和改前一致）
+  // 上亮下暗：顶灯和行李架下的灯带从上方照下来
   float grad = 1.0 + 0.35 * clamp(p.y / 0.4, -1.0, 1.0);
   vec3 e = cabinIrradiance(p, n, cl) * grad * ao;
   vec3 col = albedo / M_PI * e;
   col += albedo / M_PI * e * 0.8 * bevel;
-  // 环境反射（油光、橘皮纹、翻边的圆角都靠它显形）
+  // 环境反射（柔光饰面只有很弱的光泽；翻边的圆角靠它显形）
   float F = fresnelRough(nv, 0.04, rough);
   col += F * cabinEnv(reflect(rd, n), cl) * ao * (1.0 - 0.5 * rough) * grad;
-  col += scr * 0.25 * cabinEnv(reflect(rd, n0), cl) * ao;
-  // 金属件（收边条、螺丝）：暗的漫反射 + 强的环境反射；下半圈手常摸的地方被磨亮
-  float metal = clamp(trim + screw, 0.0, 1.0);
-  if (metal > 0.0) {
-    float worn = smoothstep(-0.1, -0.22, wq.y);
-    float mr = mix(0.22, 0.12, worn);
-    vec3 mcol = vec3(0.86, 0.87, 0.89);
-    float Fm = fresnelRough(nv, 0.85, mr);
-    vec3 metalCol = mcol * 0.3 / M_PI * e + Fm * mcol * cabinEnv(reflect(rd, n), cl) * ao * mix(0.9, 1.3, worn);
-    // 上方灯带（当成一个方向光，照度取舱内环境光的量级）在圆截面上的窄高光
-    metalCol += mcol * keySpec(n, -rd, normalize(CABIN_LIGHT_DIR), mr * mr, 0.85, cl.eCabin * 1.5) * ao;
-    metalCol *= 1.0 - 0.8 * screwSlot;
-    col = mix(col, metalCol, metal);
+  // 金属收边条：拉丝的细纹沿着收边条走（同心），按像素足迹淡出成均匀的缎面
+  if (trim > 0.0) {
+    float fBr = 1.0 - smoothstep(0.00012, 0.0003, pix);
+    float brush = vnoise(vec2(dBez * 7000.0, (wq.x + wq.y) * 30.0 + seed));
+    float mr = 0.26 + 0.08 * (brush - 0.5) * fBr;
+    vec3 metalCol = cabinChampagne(p, n, rd, mr, ao, e, cl) * (1.0 + 0.12 * (brush - 0.5) * fBr);
+    col = mix(col, metalCol, trim);
   }
   return col;
 }
@@ -258,34 +274,30 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
 vec3 shadeReveal(vec3 h, vec3 n, vec3 rd, float t, float pixAng, CabinLights cl, vec3 lAperture, float sunOn, float shadeBottom, float seed) {
   float pix = t * pixAng / max(abs(dot(n, rd)), 0.25);
   float depth01 = clamp(h.z / PANE_DEPTH, 0.0, 1.0);
-  float ao = mix(1.0, 0.45, sqrt(depth01)); // 越深，看到的舱内越少
-  vec3 albedo = REVEAL_ALBEDO * (1.0 + 0.04 * (vnoise(h.xy * 900.0 + h.z * 500.0) - 0.5) * (1.0 - smoothstep(0.0003, 0.001, pix)));
-  float rough = 0.3;
+  float ao = mix(1.0, 0.5, sqrt(depth01)); // 越深，看到的舱内越少
+  // 珍珠白的细腻注塑面：只有极轻的颗粒，比像素细时淡出
+  vec3 albedo = REVEAL_ALBEDO * (1.0 + 0.02 * (vnoise(h.xy * 900.0 + h.z * 500.0) - 0.5) * (1.0 - smoothstep(0.0003, 0.001, pix)));
+  float rough = 0.28;
 
   // 遮光板的导轨槽：两侧、遮光板所在的深度上一道约 3 mm 的暗槽
   float side = smoothstep(0.55, 0.85, abs(n.x));
-  float slot = lineCov(abs(h.z - SHADE_DEPTH), 0.0016, pix) * side;
-  ao *= 1.0 - 0.75 * slot;
+  float slot = lineCov(abs(h.z - SHADE_DEPTH), 0.0014, pix) * side;
+  ao *= 1.0 - 0.7 * slot;
 
-  // 积灰：朝上的面（漏斗下半圈）、越深越多，窗板边角和导轨槽里最多；带细小颗粒
+  // 刚清洁过：朝上的面只有极少的浮尘颗粒
   float up = smoothstep(0.15, 0.7, n.y);
-  float grit = vnoise(h.xy * 2500.0 + seed) * (1.0 - smoothstep(0.0002, 0.0008, pix)) + 0.5 * smoothstep(0.0002, 0.0008, pix);
-  float dust = up * (0.2 + 0.8 * smoothstep(0.35, 0.95, depth01)) * (0.55 + 0.45 * vnoise(h.xy * 60.0 + seed));
-  dust = clamp(dust * (0.7 + 0.6 * grit) + slot * 0.5, 0.0, 1.0);
-  albedo = mix(albedo, DUST_ALBEDO, dust * 0.7);
-  rough = mix(rough, 0.85, dust);
+  float speck = up * cabinSpeck(h.xz * vec2(1.0, 1.6) + h.y, seed, pix);
+  albedo = mix(albedo, vec3(0.42, 0.40, 0.37), speck * 0.8);
 
-  // 窗口下沿靠近舱内的地方：手指油污（发暗、更亮的油光）
-  float lip = (1.0 - smoothstep(0.0, 0.35, depth01)) * smoothstep(-0.1, -0.2, h.y);
-  float oil = lip * smoothstep(0.35, 0.7, vnoise(h.xy * 50.0 + seed * 2.0));
-  albedo *= 1.0 - 0.1 * oil;
-  rough = mix(rough, 0.18, oil);
+  // 窗口下沿靠近舱内的地方：一枚淡指纹（位置每扇窗不同），只改光泽
+  vec2 fc = vec2((hash12(vec2(seed, 2.3)) - 0.5) * 0.16, -0.19);
+  float print = cabinPrint(vec2(h.x, h.y + h.z * 0.6), fc, hash12(vec2(seed, 7.7)) * 3.0, pix) * (1.0 - smoothstep(0.0, 0.4, depth01));
+  rough = mix(rough, 0.5, print * 0.8);
 
-  // 密封条：窗板四周最深的那约 1 cm（正面看约 3 mm 宽），老化的橡胶，颜色沿一圈略有变化
+  // 密封条：窗板四周最深的那约 1 cm（正面看约 3 mm 宽），新的石墨色硅胶，缎面
   float gasket = smoothstep(PANE_DEPTH - 0.0085, PANE_DEPTH - 0.0065, h.z);
-  float age = vnoise(vec2(atan(h.y, h.x) * 12.0, seed));
-  albedo = mix(albedo, GASKET_ALBEDO * (0.85 + 0.35 * age), gasket);
-  rough = mix(rough, 0.6, gasket);
+  albedo = mix(albedo, GASKET_ALBEDO, gasket);
+  rough = mix(rough, 0.45, gasket);
 
   vec3 v = -rd;
   float nv = max(dot(n, v), 1e-3);
@@ -296,7 +308,7 @@ vec3 shadeReveal(vec3 h, vec3 n, vec3 rd, float t, float pixAng, CabinLights cl,
 
   // 光滑塑料反射窗口：掠射角下窗框内侧有一圈亮边。反射方向能不能穿过窗口（且没被遮光板挡住）用 sunThroughWindow 判断
   vec3 r = reflect(rd, n);
-  float F = fresnelRough(nv, 0.04, rough);
+  float F = fresnelRough(nv, 0.04, rough) * (1.0 - 0.35 * print);
   float winVis = 0.0;
   if (r.z > 1e-3) {
     vec3 qr = h + r * ((PANE_DEPTH - h.z) / r.z);
@@ -305,9 +317,9 @@ vec3 shadeReveal(vec3 h, vec3 n, vec3 rd, float t, float pixAng, CabinLights cl,
     vec3 qs = h + r * ((SHADE_DEPTH - h.z) / r.z);
     if (h.z < SHADE_DEPTH) winVis *= 1.0 - smoothstep(-soft, soft, qs.y - shadeBottom);
   }
-  col += F * mix(cabinEnv(r, cl) * ao, lAperture * 0.6, winVis) * (1.0 - 0.6 * dust);
+  col += F * mix(cabinEnv(r, cl) * ao, lAperture * 0.6, winVis);
   // 太阳的高光
-  col += keySpec(n, v, cl.sunC, rough * rough, 0.04, cl.eSunNormal) * sunVis * (1.0 - dust);
+  col += keySpec(n, v, cl.sunC, rough * rough, 0.04, cl.eSunNormal) * sunVis;
   return col;
 }
 
@@ -325,19 +337,17 @@ vec3 shadeShade(vec3 p, vec3 rd, float pix, CabinLights cl, float shadeBottom, f
   // 把手上方一道窄阴影
   float ao = 1.0 - 0.3 * (1.0 - smoothstep(0.0, 0.004, yb - HB)) * step(HB, yb);
 
-  // 细磨砂纹理 + 很浅的横向注塑流痕
+  // 细磨砂纹理（柔光的哑光面）
   float fine = 1.0 - smoothstep(0.0003, 0.001, pix);
   vec3 nd = vnoiseD(p.xy * vec2(1400.0, 1100.0) + seed);
-  n = normalize(n + vec3(nd.yz * vec2(1400.0, 1100.0) * 0.00002 * fine, 0.0));
-  vec3 albedo = PLASTIC_ALBEDO * (1.0 + 0.03 * (nd.x - 0.5) * fine + 0.02 * sin(p.y * 900.0 + vnoise(p.xy * 40.0) * 3.0) * fine);
-
-  // 手拉的地方：把手中间一片发灰、发亮；下沿两角磨得发白
-  float grip = exp(-pow(p.x / 0.035, 2.0)) * (1.0 - smoothstep(0.0, 0.035, yb));
-  float gOil = grip * (0.5 + 0.5 * fbm2(p.xy * 60.0 + seed));
-  albedo *= 1.0 - 0.18 * gOil;
-  float rough = mix(0.45, 0.22, gOil);
-  float cornerWear = smoothstep(0.08, 0.11, abs(p.x)) * (1.0 - smoothstep(0.0, 0.004, yb));
-  albedo = mix(albedo, vec3(0.86, 0.85, 0.83), cornerWear * 0.5);
+  n = normalize(n + vec3(nd.yz * vec2(1400.0, 1100.0) * 0.000015 * fine, 0.0));
+  vec3 albedo = PLASTIC_ALBEDO * (1.0 + 0.02 * (nd.x - 0.5) * fine);
+  float rough = 0.42;
+  // 把手中间一条嵌入的香槟色金属拉手（宽约 7 cm、高约 5 mm，两端圆头）
+  float pull = 1.0 - smoothstep(-pix * 0.5, pix * 0.5, sdRoundRect(vec2(p.x, yb - 0.0068), vec2(0.035, 0.0025), 0.0025));
+  // 拉手旁边一枚淡指纹：只改光泽
+  float print = cabinPrint(p.xy, vec2(0.012 + 0.02 * (hash12(vec2(seed, 4.1)) - 0.5), shadeBottom + 0.011), 0.4, pix);
+  rough = mix(rough, 0.55, print * 0.8);
 
   vec3 v = -rd;
   float nv = max(dot(n, v), 1e-3);
@@ -354,11 +364,12 @@ vec3 shadeShade(vec3 p, vec3 rd, float pix, CabinLights cl, float shadeBottom, f
   vec2 sunShift = cl.sunC.xy / max(cl.sunC.z, 0.05) * (PANE_DEPTH - SHADE_DEPTH);
   float litSun = 1.0 - smoothstep(-0.002, 0.004, sdRoundRect(p.xy + sunShift, PANE_HALF, PANE_RADIUS));
   vec3 eOuter = M_PI * cl.lWin * mix(0.25, 1.0, litSky) + cl.eSunNormal * max(cl.sunC.z, 0.0) * litSun;
-  col += PLASTIC_ALBEDO / M_PI * 0.08 * eOuter * mix(1.0, 0.3, onHandle) * (0.92 + 0.16 * vnoise(p.xy * 25.0 + seed));
-  float F = fresnelRough(nv, 0.04, rough);
+  col += PLASTIC_ALBEDO / M_PI * 0.08 * eOuter * mix(1.0, 0.3, onHandle) * (1.0 - pull) * (0.95 + 0.1 * vnoise(p.xy * 25.0 + seed));
+  float F = fresnelRough(nv, 0.04, rough) * (1.0 - 0.3 * print);
   col += F * cabinEnv(reflect(rd, n), cl) * ao;
   // 把手上沿的圆棱迎着上方的灯带
   col += albedo / M_PI * cabinIrradiance(p, vec3(0.0, 1.0, 0.0), cl) * 0.5 * smoothstep(0.6, 1.0, n.y) * onHandle;
+  if (pull > 0.0) col = mix(col, cabinChampagne(p, n, rd, 0.3, ao, e, cl), pull);
   return col;
 }
 `;
