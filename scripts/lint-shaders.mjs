@@ -10,14 +10,20 @@
 //       而且只在某个变体把相关模块凑齐时才暴露（见 README 坑点，T02 × T06 的 lineCov 撞名就是这样漏过去的）。
 //       按「已拼好的程序」而不是「按源文件」扫，是为了避免不同程序各自的 main() 互相「撞名」的假阳性——
 //       它们从来不会被编进同一个程序，不是真的重名。
-//    b. 场景程序的 sampler 数（ANGLE 上 MAX_TEXTURE_IMAGE_UNITS = 16，见 README 坑点）。这里只能做「声明了但从没
-//       被引用过」这一层过滤（也处理了 GROUND_DETAIL 宏：默认变体会先把 #ifdef GROUND_DETAIL 块整体挖掉再数，
-//       不然会把只在低空细节变体里用到的 sampler 也算进默认变体），不是真正的链接期 active uniform 统计，
-//       所以只是比「原始声明数」更准的近似，不是 100%精确——真正精确的数字仍要用 dev-browser.mjs 起一个真实
-//       WebGL2 上下文，读 `gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS)`。
+//    b. 场景程序的 sampler 数（ANGLE 上 MAX_TEXTURE_IMAGE_UNITS = 16，见 README 坑点）。先用一个最小的条件
+//       编译展开器（resolveConditionals，支持 #ifdef/#ifndef/#if defined(...)/#else/#elif/嵌套）按「这个变体
+//       真正会编译到的文本」保留代码，再做一次「从 main() 出发的可达性分析」把定义了但从 main() 到不了的
+//       函数体整段剪掉（reachableFromMain / pruneUnreachable），最后数 sampler 引用次数。仍然是静态近似
+//       （不做跨函数的数据流分析），但已经用私有 headless 对主分支 5181 的真实
+//       `gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS)` 交叉验证过：scene-default / scene-ground-detail
+//       静态数字和真实链接后的 active uniform 数完全一致（16/16），按致命检查处理，见 handoff/DX.md「已验证」
+//       （2026-09-26 两轮审查返工：第一轮把 #ifdef…#endif 整段挖掉、连 #else 分支也删了；第二轮修好 #else 后
+//       静态数字仍然比真实值多 1——多算的是 uMultiScatteringLut，只被 LUT 预计算程序调用，场景程序的
+//       main() 从来到不了，靠可达性剪枝修正）。
 //
 // 用法（必须在 apps/voyage 目录树内跑，Node 的 ESM 解析从脚本所在目录向上找 node_modules 才能找到 vite）：
 //   pnpm --filter voyage check:glsl
+//   node scripts/lint-shaders.mjs --self-test   # 只测 samplerAudit / resolveConditionals 本身，不用 vite
 //
 // 已知局限（开发体验官 DX_REPORT_wave2.md §1.3 的结论，这里仍然成立）：
 // - glslangValidator 校验的是标准 GLSL ES 3.00 语义，不会重现 ANGLE → FXC 的 Windows 专属问题
@@ -251,16 +257,238 @@ function findDuplicatesInProgram(text) {
 }
 
 // ---------- 静态检查 b：场景程序的 sampler 数 ----------
+//
+// 2026-09-26 审查返工：旧版用 /#ifdef GROUND_DETAIL\b[\s\S]*?#endif\b/ 把整段挖掉再数，
+// 结果连 #else 分支也一起删了——真实预处理器在宏未定义时是「保留 #else、删掉 #ifdef 分支」，
+// 不是「整段都删」。terrain-shading.glsl.ts 第 25–29 行 `#ifdef GROUND_DETAIL … #else … #endif`
+// 里 uGroundAlbedo 在 #else 分支（默认变体真正会跑的那条路）里也有一次采样，旧版把这行也删了，
+// 导致默认变体的「16/16 与 README 吻合」是巧合而不是证据。改成下面这个支持 #else / #elif /
+// 嵌套 / #if defined(...) 的最小条件编译展开，按「这个变体真正会编译到的文本」来数。
 
-const GROUND_DETAIL_BLOCK_RE = /#ifdef\s+GROUND_DETAIL\b[\s\S]*?#endif\b/g;
-/** stripGroundDetail=true 时先把 #ifdef GROUND_DETAIL ... #endif 整段挖掉再数（给默认变体用），
- * 「引用次数 > 1」（declaration 本身算一次）近似「链接后仍是 active uniform」，见文件头注释的局限说明 */
-function samplerAudit(text, stripGroundDetail) {
-  const scanned = stripGroundDetail ? text.replace(GROUND_DETAIL_BLOCK_RE, "") : text;
-  const names = [...scanned.matchAll(/^\s*uniform\s+(sampler\w*)\s+(\w+)/gm)].map((m) => m[2]);
+/** 极简条件编译展开：按 defines（Set<宏名>）保留 #ifdef/#ifndef/#if defined(...)/#else/#elif/#endif
+ * 里真正会被编译进这个变体的那部分文本，指令行本身丢弃。支持任意深度嵌套。
+ * 只服务于「按文本数 sampler / 找重名」这类静态检查，不是真正的 GLSL 预处理器（不做宏替换、
+ * 不展开 #define 常量、不算 #if 的算术表达式）——glslangValidator 校验用的是原始文本 + 自己的真预处理器，
+ * 不经过这里。 */
+function resolveConditionals(text, defines) {
+  const lines = text.split("\n");
+  const out = [];
+  const stack = []; // { active: 这一层当前分支是否被编译, taken: 这条 #if/#elif 链是否已经有分支命中过 }
+  const allActive = () => stack.every((s) => s.active);
+  const evalCond = (expr) => {
+    const m = expr.trim().match(/^!?\s*defined\s*\(?\s*([A-Za-z_]\w*)\s*\)?$/);
+    const negate = expr.trim().startsWith("!");
+    const name = m ? m[1] : expr.trim().replace(/^!/, "").trim();
+    const v = defines.has(name);
+    return negate ? !v : v;
+  };
+  for (const line of lines) {
+    const t = line.trim();
+    let m;
+    if ((m = t.match(/^#ifdef\s+([A-Za-z_]\w*)/))) {
+      const cond = defines.has(m[1]);
+      stack.push({ active: cond, taken: cond });
+    } else if ((m = t.match(/^#ifndef\s+([A-Za-z_]\w*)/))) {
+      const cond = !defines.has(m[1]);
+      stack.push({ active: cond, taken: cond });
+    } else if ((m = t.match(/^#if\s+(.+)/))) {
+      const cond = evalCond(m[1]);
+      stack.push({ active: cond, taken: cond });
+    } else if ((m = t.match(/^#elif\s+(.+)/))) {
+      const top = stack[stack.length - 1];
+      if (top) {
+        if (top.taken) top.active = false;
+        else {
+          const cond = evalCond(m[1]);
+          top.active = cond;
+          top.taken = cond;
+        }
+      }
+    } else if (t === "#else") {
+      const top = stack[stack.length - 1];
+      if (top) {
+        top.active = !top.taken;
+        top.taken = true;
+      }
+    } else if (t === "#endif") {
+      stack.pop();
+    } else if (allActive()) {
+      out.push(line);
+    }
+  }
+  return out.join("\n");
+}
+
+// 2026-09-26 第二次审查返工：修好 #else 之后，scene-default 和 scene-ground-detail 静态都数出 17，
+// 但私有 headless 对主分支 5181 的真实 gl.getProgramParameter(ACTIVE_UNIFORMS) 读出来两个变体都是 16
+// （见 handoff/DX.md「已验证」）。根因：ATMOSPHERE_COMMON 里的 multiScattering()（读 uMultiScatteringLut）
+// 只被 luts.ts 的 IRRADIANCE_FRAG / SKY_VIEW_FRAG / AERIAL_FRAG（LUT 预计算，另外的程序）调用，
+// 从场景程序的 main() 顺着调用链走下去根本到不了这个函数——真实编译器的死代码消除会把它连同它读的
+// sampler 一起砍掉，纯文本「这个名字在哪都出现过」的计数看不出「这段代码是否真的从 main() 可达」。
+// 所以在数 sampler 之前先做一次「从 main() 出发的可达性分析」：不可达的函数体整段当作不存在。
+
+/** 提取顶层函数定义：{ name, bodyStart, bodyEnd }，bodyStart/bodyEnd 是 text 里函数体（花括号内部，
+ * 不含花括号本身）的字符下标，用花括号配对找函数体的真正结尾（FN_RE 只能定位到函数体开始的那个 `{`）。 */
+function extractFunctions(text) {
+  const fns = [];
+  const re = new RegExp(FN_RE.source, "gm");
+  let m;
+  while ((m = re.exec(text))) {
+    const [, type, name] = m;
+    if (KEYWORD_EXCLUDE.has(type) || KEYWORD_EXCLUDE.has(name)) continue;
+    const openBrace = m.index + m[0].length - 1; // m[0] 以 '{' 结尾
+    let depth = 1;
+    let i = openBrace + 1;
+    for (; i < text.length && depth > 0; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}") depth--;
+    }
+    fns.push({ name, bodyStart: openBrace + 1, bodyEnd: i - 1 });
+  }
+  return fns;
+}
+
+/** 从 main 出发，按「函数体里出现了另一个已知函数名 + 左括号」当作调用边，做一次可达性 BFS。
+ * 同名函数（本该被「同签名函数重名」检查抓住）按「名字可达就整批都算可达」处理，偏保守（宁可多算不漏算）。 */
+function reachableFromMain(text, fns) {
+  const byName = new Map();
+  for (const fn of fns) {
+    if (!byName.has(fn.name)) byName.set(fn.name, []);
+    byName.get(fn.name).push(fn);
+  }
+  const allNames = [...byName.keys()];
+  const reachable = new Set();
+  const queue = ["main"];
+  while (queue.length > 0) {
+    const cur = queue.pop();
+    if (reachable.has(cur) || !byName.has(cur)) continue;
+    reachable.add(cur);
+    for (const fn of byName.get(cur)) {
+      const body = text.slice(fn.bodyStart, fn.bodyEnd);
+      for (const other of allNames) {
+        if (reachable.has(other)) continue;
+        if (new RegExp(`\\b${other}\\b\\s*\\(`).test(body)) queue.push(other);
+      }
+    }
+  }
+  return { reachable, byName };
+}
+
+/** 把「定义了但从 main() 到不了」的函数体整段挖掉（只留函数体，签名行和花括号留着，反正只影响
+ * 函数体内部的 sampler 引用计数），返回剪掉死代码之后的文本。 */
+function pruneUnreachable(text, fns, reachable) {
+  const dead = fns.filter((f) => !reachable.has(f.name)).sort((a, b) => b.bodyStart - a.bodyStart);
+  let out = text;
+  for (const f of dead) out = out.slice(0, f.bodyStart) + out.slice(f.bodyEnd);
+  return out;
+}
+
+/** defines 决定这是哪个变体（默认变体传空 Set，GROUND_DETAIL 变体传 Set(["GROUND_DETAIL"])）。
+ * 先按变体展开条件编译，再把从 main() 到不了的函数体挖掉，最后数「引用次数 > 1」（declaration 本身
+ * 算一次）近似「链接后仍是 active uniform」。这样比单纯数文本引用更接近真实的死代码消除，
+ * 但仍然是静态近似——不做跨函数的数据流分析（例如一个可达函数把结果赋给一个从没被读过的变量，
+ * 这种情况这里看不出来）。真正精确的数字要用 dev-browser.mjs 起真实 WebGL2 上下文读
+ * gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS)（已经对主分支 5181 验证过，见 handoff/DX.md）。 */
+function samplerAudit(text, defines) {
+  const scanned = resolveConditionals(text, defines);
+  const fns = extractFunctions(scanned);
+  const { reachable } = reachableFromMain(scanned, fns);
+  const pruned = pruneUnreachable(scanned, fns, reachable);
+  const names = [...pruned.matchAll(/^\s*uniform\s+(sampler\w*)\s+(\w+)/gm)].map((m) => m[2]);
   const declared = [...new Set(names)];
-  const active = declared.filter((n) => (scanned.match(new RegExp(`\\b${n}\\b`, "g")) || []).length > 1);
+  const active = declared.filter((n) => (pruned.match(new RegExp(`\\b${n}\\b`, "g")) || []).length > 1);
   return { declaredCount: declared.length, activeCount: active.length, active };
+}
+
+// ---------- samplerAudit / resolveConditionals 自检（node scripts/lint-shaders.mjs --self-test） ----------
+
+function runSelfTest() {
+  const cases = [];
+  const check = (name, fn) => cases.push({ name, fn });
+
+  check("#ifdef/#else：未定义时走 #else 分支", () => {
+    const src = ["uniform sampler2D uA;", "#ifdef X", "foo(uA);", "#else", "bar(uA);", "#endif"].join("\n");
+    const r = samplerAudit(src, new Set());
+    if (r.activeCount !== 1) throw new Error(`期望 activeCount=1（#else 分支里的 uA 应该算 active），实际 ${r.activeCount}`);
+  });
+
+  check("#ifdef/#else：定义时走 #ifdef 分支，#else 分支不算数", () => {
+    const src = ["uniform sampler2D uA;", "uniform sampler2D uB;", "#ifdef X", "foo(uA);", "#else", "bar(uB);", "#endif"].join("\n");
+    const r = samplerAudit(src, new Set(["X"]));
+    if (!r.active.includes("uA") || r.active.includes("uB")) throw new Error(`期望只有 uA active，实际 ${JSON.stringify(r.active)}`);
+  });
+
+  check("只在 #ifdef 分支里用、没有 #else：未定义时不算 active", () => {
+    const src = ["uniform sampler2D uA;", "#ifdef X", "foo(uA);", "#endif"].join("\n");
+    const r = samplerAudit(src, new Set());
+    if (r.activeCount !== 0) throw new Error(`期望 activeCount=0，实际 ${r.activeCount}`);
+  });
+
+  check("同一个 uniform 在 #ifdef 和 #else 两个分支都用（terrain-shading.glsl.ts 的真实模式）", () => {
+    const src = ["uniform sampler2D uGroundAlbedo;", "#ifdef GROUND_DETAIL", "a(uGroundAlbedo);", "#else", "b(uGroundAlbedo);", "#endif"].join("\n");
+    const r0 = samplerAudit(src, new Set());
+    const r1 = samplerAudit(src, new Set(["GROUND_DETAIL"]));
+    if (r0.activeCount !== 1 || r1.activeCount !== 1) throw new Error(`两个变体都应该算 uGroundAlbedo active，实际 ${r0.activeCount} / ${r1.activeCount}`);
+  });
+
+  check("嵌套 #ifdef：两层都要满足", () => {
+    const src = ["uniform sampler2D uB;", "#ifdef X", "#ifdef Y", "use(uB);", "#endif", "#endif"].join("\n");
+    if (samplerAudit(src, new Set()).activeCount !== 0) throw new Error("defines={} 时应该是 0");
+    if (samplerAudit(src, new Set(["X"])).activeCount !== 0) throw new Error("defines={X} 时应该还是 0（Y 没定义）");
+    if (samplerAudit(src, new Set(["X", "Y"])).activeCount !== 1) throw new Error("defines={X,Y} 时应该是 1");
+  });
+
+  check("#if defined(X) 语法（不只是 #ifdef）", () => {
+    const src = ["uniform sampler2D uA;", "#if defined(X)", "use(uA);", "#endif"].join("\n");
+    if (samplerAudit(src, new Set()).activeCount !== 0) throw new Error("未定义时应该是 0");
+    if (samplerAudit(src, new Set(["X"])).activeCount !== 1) throw new Error("定义了应该是 1");
+  });
+
+  check("声明了但完全没被引用：不算 active", () => {
+    const src = ["uniform sampler2D uUnused;"].join("\n");
+    const r = samplerAudit(src, new Set());
+    if (r.declaredCount !== 1 || r.activeCount !== 0) throw new Error(`期望 declared=1 active=0，实际 ${JSON.stringify(r)}`);
+  });
+
+  check("sampler 只在一个从 main() 到不了的函数里用：不算 active（复现 uMultiScatteringLut 的真实情况——" +
+    "multiScattering() 只被 LUT 预计算程序调用，场景程序的 main() 从来不会走到它）", () => {
+    const src = [
+      "uniform sampler2D uLive;",
+      "uniform sampler2D uDead;",
+      "float helperUsed(float x) { return sampleStub(uLive, x); }",
+      "float helperUnused(float x) { return sampleStub(uDead, x); }", // 定义了但从没被任何可达函数调用过
+      "void main() { helperUsed(1.0); }",
+    ].join("\n");
+    const r = samplerAudit(src, new Set());
+    if (!r.active.includes("uLive") || r.active.includes("uDead")) {
+      throw new Error(`期望只有 uLive active（uDead 所在的 helperUnused 从 main() 到不了），实际 ${JSON.stringify(r.active)}`);
+    }
+  });
+
+  check("可达性支持链式调用（main → a → b）", () => {
+    const src = [
+      "uniform sampler2D uChained;",
+      "float b(float x) { return sampleStub(uChained, x); }",
+      "float a(float x) { return b(x); }",
+      "void main() { a(1.0); }",
+    ].join("\n");
+    const r = samplerAudit(src, new Set());
+    if (!r.active.includes("uChained")) throw new Error(`期望链式可达，uChained 应该 active，实际 ${JSON.stringify(r.active)}`);
+  });
+
+  let fail = 0;
+  console.log("== samplerAudit / resolveConditionals 自检 ==");
+  for (const { name, fn } of cases) {
+    try {
+      fn();
+      console.log(`  [OK]   ${name}`);
+    } catch (err) {
+      fail++;
+      console.log(`  [FAIL] ${name}：${err.message}`);
+    }
+  }
+  console.log(`\n${fail === 0 ? `全部 ${cases.length} 项通过。` : `${fail}/${cases.length} 项失败。`}`);
+  return fail === 0;
 }
 
 // ---------- 附带检查：scenarios.mjs 与 regression.playwright.js 的场景表是否同步 ----------
@@ -290,6 +518,10 @@ function checkScenariosSync() {
 // ---------- 主流程 ----------
 
 async function main() {
+  if (process.argv.includes("--self-test")) {
+    // 只测 samplerAudit / resolveConditionals 本身，不需要 vite / glslangValidator，几十毫秒跑完
+    process.exit(runSelfTest() ? 0 : 1);
+  }
   const bin = glslangBin();
   const server = await createServer({ root: VOYAGE_ROOT, server: { middlewareMode: true }, appType: "custom", logLevel: "error" });
   let programs;
@@ -355,15 +587,21 @@ async function main() {
   if (!anyDup) console.log("  [OK]   没有发现重名");
 
   // -- 2b. 场景程序 sampler 数 --
-  console.log("\n-- 场景程序 sampler 数（ANGLE 上限 16） --");
+  // 2026-09-26 审查返工：修好 #else 分支 + 加上「从 main() 可达性剪枝」之后，静态数字和私有 headless
+  // 对主分支 5181 实测的 gl.getProgramParameter(ACTIVE_UNIFORMS) 完全对上（scene-default /
+  // scene-ground-detail 都是 16/16，见 handoff/DX.md「已验证」）。结论已明确，恢复为致命检查。
+  // 仍然是静态近似（没有做跨函数数据流分析），只是现在经过了真实 GPU 交叉验证；以后这里报 FAIL
+  // 时先怀疑真的超限了，但如果怀疑是静态法的盲区，用 dev-browser.mjs 起 WebGL2 读
+  // gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) 复核一次再下结论。
+  console.log("\n-- 场景程序 sampler 数（ANGLE 上限 16，已用真实 GPU 交叉验证，见 handoff/DX.md） --");
   for (const prog of programs) {
     if (prog.id !== "scene-default" && prog.id !== "scene-ground-detail") continue;
-    const strip = prog.id === "scene-default"; // 默认变体不含 GROUND_DETAIL 代码，把那部分挖掉再数
-    const { declaredCount, activeCount, active } = samplerAudit(prog.fragmentShader, strip);
+    const defines = prog.id === "scene-ground-detail" ? new Set(["GROUND_DETAIL"]) : new Set();
+    const { declaredCount, activeCount, active } = samplerAudit(prog.fragmentShader, defines);
     const over = activeCount > 16;
     if (over) exitCode = 1;
     console.log(`  ${over ? "[FAIL]" : "[OK]  "} ${prog.id}: 引用中的 ${activeCount}/16（声明了 ${declaredCount} 个）`);
-    if (over) console.log(`         ${active.join(", ")}`);
+    if (over) console.log(`         ${active.join(", ")}（怀疑是静态法盲区的话，用 dev-browser.mjs 读真实 ACTIVE_UNIFORMS 复核）`);
   }
 
   // -- 2c. scenarios.mjs 与 regression.playwright.js 的场景表是否同步 --

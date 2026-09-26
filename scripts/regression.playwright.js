@@ -7,7 +7,12 @@
 // DX-03（第 3 波开发体验官报告 §2-C）：
 // - 开头固定 setViewportSize，避免「别的代理把窗口改成别的尺寸，帧时间涨几十倍且静默作废」这类事故
 //   （第 2 波 T03 返工报告的真实事故）。
-// - 返回值带 viewport / renderer / origin，方便核对这次跑的到底是哪个端口、哪个渲染器（不是 SwiftShader）。
+// - 返回值带 viewport / renderer / origin，方便核对这次跑的到底是哪个端口、哪个渲染器（不是 SwiftShader）；
+//   origin 额外在最开头 console.log 一次（即使后面步骤失败也已经能看到这次跑的是哪个端口）。
+// - 2026-09-26 审查追加返工：旧版端口正则只认 51\d\d（5100–5199），worktree 常用的 52xx 端口（例如
+//   T16、T23 用过的 5230）匹配不上，会静默退回默认值 http://127.0.0.1:5181，把截图写进主分支的
+//   tmp/screenshot/regression/、覆盖别人的基线（本波至少发生 3 次）。现在改成认任意 127.0.0.1:5\d{3}
+//   （5000–5999），并且当前页面不在这个范围时直接抛错退出，不再有「猜一个默认端口」这条路。
 // - only 现在可以从外部传入：优先读 globalThis.__regressionOnly（如果调用方在跑这个文件前预置了这个全局），
 //   否则从当前页面 URL 的 `?only=a,b` 查询参数读——这个执行环境没有全局 URL（ReferenceError），也没有
 //   Node 侧的 setTimeout，所以两处都用正则/page.evaluate 里的浏览器原生 setTimeout，不假设外层有这些全局。
@@ -24,8 +29,14 @@
 async (page) => {
   await page.setViewportSize({ width: 1600, height: 1200 });
   const current = page.url();
-  // 这里的执行环境没有全局 URL（ReferenceError），用正则取 origin
-  const origin = (current.match(/^http:\/\/127\.0\.0\.1:51\d\d/) || ["http://127.0.0.1:5181"])[0];
+  // 这里的执行环境没有全局 URL（ReferenceError），用正则取 origin；接受任意 127.0.0.1:5xxx（5000–5999），
+  // 不在这个范围就直接报错退出——不能猜一个默认端口，猜错了会把截图写进别人的目录、覆盖别人的基线
+  const m = current.match(/^http:\/\/127\.0\.0\.1:5\d{3}\b/);
+  if (!m) {
+    throw new Error(`当前页面不是 http://127.0.0.1:5\\d{3}（实际 URL：${current}）。回归脚本不会猜端口，先导航到要测的开发服务器再跑。`);
+  }
+  const origin = m[0];
+  console.log(origin); // 打在最前面：后面任何一步失败，这次跑的到底是哪个端口都已经看得到
   // 主分支（5181）写到 regression/，其他端口（worktree）写到 regression-<端口>/，并行的代理互不覆盖
   const port = origin.slice(-4);
   const outDir = port === "5181" ? "tmp/screenshot/regression" : `tmp/screenshot/regression-${port}`;
