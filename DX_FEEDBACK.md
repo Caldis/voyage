@@ -80,3 +80,13 @@
 - 慢：追后缘白点「改 → 截图 → 裁剪放大」3 轮（上轮 8 轮）；冷编译降到 55 s 后每轮都快了；本轮等锁只要几分钟（第 2 波后期并行任务变少）。
 - 卡：合并后 worktree 的 node_modules/.bin 缺 vite；隔离策略拒绝含命令替换的 sed 和 cd 到主仓库；上轮自报冷编译 70–80 s 是缓存命中后的时间（没破缓存）。
 - 希望：cold 脚本收进 scripts/，README 写明「冷编译必须破缓存测」；回归脚本支持横向头偏移 headX。
+
+### T20（实现，Opus）
+- 慢：冷编译 80–96 s；等锁三次约 6 分钟。
+- 卡：worktree 隔离下脚本、截图、锁都要写主仓库，每种操作单独绕路；Playwright 脚本只能放在 D:\Code\opus-test 下（scratchpad 被拒）；cold5181.js 端口正则只认 51xx，52xx 悄悄退回 5182；没有现成「启动改前基线」的方法；不知道共享浏览器的「默认视口」是多少（SOP 要求释放前恢复）。
+- 希望：带 --port 的冷编译 / 批渲脚本（DX-01 在做）；离线 glslang 检查收进 scripts/（DX-02 在做，这次在进浏览器前查出 `patch` 保留字）；SOP 写明 Playwright 允许读写的根目录与默认视口。
+
+### T21（实现，Opus）
+- 慢：等锁约 28 分钟（15 秒轮询总被抢，改 1 秒才拿到）；冷编译约 90 s。
+- 卡：worktree 隔离下 Bash 拒绝「太复杂」的命令（带 sed 的循环、heredoc 里写 Python）；browser_run_code_unsafe 用 filename 时回显整份脚本。TaskStop 停不掉 vite 的 node 子进程（端口占用、worktree 删不掉），要 netstat 查 PID 后 Stop-Process。
+- 希望：锁排队取号；统一的「按端口截图 + 自相关」工具；把**自相关检查加进回归**，把「有没有平铺重复」变成自动检查项（脚本 handoff/T21-autocorr.py）。
