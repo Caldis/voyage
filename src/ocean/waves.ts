@@ -18,6 +18,8 @@ const N = 256;
 const PERIOD = 512;
 
 const SIZES = [1531.1, 211.37, 29.17];
+/** 随机平铺的格子密度：每个平铺尺寸内的格点数（与 ocean.glsl.ts 的 OCEAN_HEX_SCALE 一致） */
+const HEX_SCALE = 2;
 const BANDS: CascadeBand[] = SIZES.map((size, i) => ({
   size,
   kLo: i === 0 ? 0 : (6 * 2 * Math.PI) / size,
@@ -51,7 +53,8 @@ export class OceanWaves {
   readonly uniforms: {
     uOceanWaves: THREE.IUniform<THREE.Texture>;
     uOceanTile: THREE.IUniform<THREE.Vector3>;
-    uOceanOrigin: THREE.IUniform<THREE.Vector2[]>;
+    uOceanHex: THREE.IUniform<THREE.Vector4[]>;
+    uOceanCam: THREE.IUniform<THREE.Vector4>;
     uOceanVar: THREE.IUniform<THREE.Vector3>;
     uOceanFoam: THREE.IUniform<THREE.Vector4>;
   };
@@ -111,7 +114,8 @@ export class OceanWaves {
     this.uniforms = {
       uOceanWaves: { value: this.waves.texture },
       uOceanTile: { value: size.clone() },
-      uOceanOrigin: { value: SIZES.map(() => new THREE.Vector2()) },
+      uOceanHex: { value: SIZES.map(() => new THREE.Vector4()) },
+      uOceanCam: { value: new THREE.Vector4() },
       uOceanVar: { value: new THREE.Vector3() },
       uOceanFoam: { value: new THREE.Vector4(1e3, 0, 0, 0) },
     };
@@ -173,11 +177,19 @@ export class OceanWaves {
     this.renderer.setRenderTarget(prevTarget);
 
     if (offsetKm) {
+      const xM = offsetKm.x * 1000;
+      const zM = offsetKm.y * 1000;
       SIZES.forEach((L, c) => {
-        const fx = (offsetKm.x * 1000) / L;
-        const fz = (offsetKm.y * 1000) / L;
-        this.uniforms.uOceanOrigin.value[c].set(fx - Math.floor(fx), fz - Math.floor(fz));
+        // 相机在随机平铺格子里的斜格坐标（与 ocean.glsl.ts 的 TriangleGrid 一致），双精度拆成整数 + 小数：
+        // 着色器里只加相对相机的小量，格点编号是精确整数
+        const sx = (xM / L) * HEX_SCALE;
+        const sz = (zM / L) * HEX_SCALE;
+        const a = sx - sz / Math.sqrt(3);
+        const b = (sz * 2) / Math.sqrt(3);
+        this.uniforms.uOceanHex.value[c].set(Math.floor(a), Math.floor(b), a - Math.floor(a), b - Math.floor(b));
       });
+      const mod = (v: number) => v - 4096 * Math.floor(v / 4096);
+      this.uniforms.uOceanCam.value.set(mod(xM), mod(zM), 0, 0);
     }
   }
 
