@@ -11,7 +11,6 @@
 | T20 | 第 3 波（提前） | 5200 | `worktree-agent-ac9a71af767a7991c`（dab9f4d） | Opus（已交付；需接入氛围灯开关 4 处） | Opus 审查中（兼美术总监，5188） | 待审查 |
 | T04 | 第 3 波（提前） | 5204 | `worktree-agent-a41612daaefd1b5f0`（台风进行中 72a4353） | Opus（T13 已拆出合并） | — | 进行中 |
 | T16 | 第 3 波（路线图） | 5216 | `worktree-agent-ac7bb298863ae910f`（54f3835） | Sonnet（已交付） | Sonnet 审查中（5186） | 待审查 |
-| T23 | 第 3 波（审查发现，阻塞 T20） | 5223 | `worktree-agent-a0f2bb46a59f2a419`（2701234） | Opus（已交付） | Opus 审查中（兼美术总监，5185） | 待审查 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -60,6 +59,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
+| T23 | 舱内曝光人眼式：面积测光、β 随窗外绝对亮度、白天明度恒常、舱内不反超窗外、穿云雪景补偿 +2 档（用户拍板）、遮光板全放暗处锚点 | 2026-09-26 | Opus 实现，审查有条件通过 → 协调者核验。**待收尾回归确认**：夜里关灯遮光板全放的舱壁（推算约 25，目标 25–45） |
 | T01 | 拆分热点文件（main.ts → state / flight / ui；scene.ts → ocean / terrain-shading / wing-shading / lightning） | 2026-09-25 | Sonnet 实现，Opus 审查通过 |
 | T02 | 低空近景地面细节：GROUND_DETAIL 变体（4 km 以下后台 compileAsync，田块 / 树冠 / 街区 / 楼影 / 碎浪）、内陆水面（去河湖摩尔纹）、z14 最细级 + 缺瓦片回退粗一级、地形求交防漏山脊 | 2026-09-26 | Opus 实现，审查返工 → 复审 → 最后一项协调者核验。冷编译与 master 持平（57 s）。下一轮：近处影像沿视线的「刷子拖痕」、田间道路排楼 |
 | T03 | 雷暴打磨：透镜状砧、SDF 塔身 + 球冠隆起、上冲云顶、连成一片的云底、倾斜雨幡、乳状云、闪电通道化 | 2026-09-26 | Opus 实现，审查有条件通过 → 返工 → 聚焦复审：画面与帧时间达标（非雷暴 +4–12%，storm-day −17%）；**冷编译 45 → 59 s（+30%）超 20% 线，协调者接受为已知代价**（只影响首次启动，之后命中缓存；用户可否决），系统性治理交性能工程师。下一轮打磨：塔身背光面偏平偏蓝、伴生小塔成团、夜间闪电过曝、近处云地闪被眩光糊 |
