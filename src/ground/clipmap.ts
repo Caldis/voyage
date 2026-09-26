@@ -115,7 +115,7 @@ export class GroundClipmap {
     l.building = true;
     try {
       const [albedo, water, height, night] = await Promise.all([
-        this.buildImagery(l.size, cx, cz),
+        this.buildImagery(l.size, cx, cz, i === GROUND_LEVELS - 1),
         this.buildWater(l.size, cx, cz),
         this.buildHeight(l.size, cx, cz),
         this.buildNight(l.size, cx, cz),
@@ -165,15 +165,20 @@ export class GroundClipmap {
     return { tiles, toPx, latC: this.frame.toGeo(cx, cz)[0] };
   }
 
-  private async buildImagery(size: number, cx: number, cz: number) {
+  /** coarsest：最粗一级。其他级别里没取到的瓦片留成透明（alpha = 0），着色器用粗一级补上；最粗一级没有更粗的，只能涂深海色 */
+  private async buildImagery(size: number, cx: number, cz: number, coarsest: boolean) {
     const [latC] = this.frame.toGeo(cx, cz);
     let zoom = zoomForResolution(size / RES, latC, IMAGERY_MAX_ZOOM);
     let cover = this.tileCover(size, cx, cz, zoom, RES);
     while (cover.tiles.length > 49 && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
     const ctx = makeCanvas(RES, RES);
-    // 没有瓦片的地方（加载失败）先涂成深海色
-    ctx.fillStyle = "rgb(8, 22, 40)";
-    ctx.fillRect(0, 0, RES, RES);
+    // 没有瓦片的地方（加载失败）：最粗一级涂成深海色；其他级别留透明，由着色器回退到粗一级。
+    // 以前一律涂深海色：一张 z14 瓦片偶发取不到，低空时陆地上就出现一块直边的深藏青多边形（T02 复审发现）
+    ctx.clearRect(0, 0, RES, RES);
+    if (coarsest) {
+      ctx.fillStyle = "rgb(8, 22, 40)";
+      ctx.fillRect(0, 0, RES, RES);
+    }
     this.pending += cover.tiles.length;
     await Promise.all(
       cover.tiles.map(async (t) => {

@@ -45,6 +45,9 @@ class Lru<V> {
     }
     return v;
   }
+  delete(k: string) {
+    this.map.delete(k);
+  }
   set(k: string, v: V) {
     this.map.set(k, v);
     if (this.map.size > this.cap) this.map.delete(this.map.keys().next().value as string);
@@ -62,6 +65,11 @@ export function loadBitmap(url: string): Promise<ImageBitmap | null> {
       .then((b) => (b ? createImageBitmap(b) : null))
       .catch(() => null);
     bitmaps.set(url, p);
+    // 失败（网络错误、限流）不要永久缓存成 null：下次重建这一级时再试
+    const key = url;
+    p.then((b) => {
+      if (!b) bitmaps.delete(key);
+    });
   }
   return p;
 }

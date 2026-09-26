@@ -56,8 +56,10 @@ vec4 sampleGround(sampler2DArray tex, vec2 g, float lod) {
   int L1 = usableLevel(L0 + 1, g);
   float f = L0 == int(floor(lod)) ? fract(lod) : 0.0;
   vec4 a = textureLod(tex, levelUv(L0, g), 0.0);
-  if (L1 < 0 || f <= 0.0) return vec4(a.rgb, 1.0);
+  if (L1 < 0) return vec4(a.rgb, 1.0);
   vec4 b = textureLod(tex, levelUv(L1, g), 0.0);
+  // 影像瓦片没取到的地方 alpha = 0（见 clipmap.buildImagery）：用粗一级补上。水体、高度纹理的 alpha 恒为 1，不受影响
+  a.rgb = mix(b.rgb, a.rgb, a.a);
   return vec4(mix(a.rgb, b.rgb, f), 1.0);
 }
 

@@ -40,6 +40,8 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
       wat.r = mix(wat.r, smoothstep(0.3 - k, 0.3 + k, wat.r + e), w);
     }
   }
+  // 调试 23：水体遮罩（红 = 水面，绿 = 海洋通道，蓝 = 夜光）
+  if (uDebug == 23) return vec4(wat * 20.0, 1.0);
   // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）
   vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);
   vec3 apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
@@ -73,9 +75,9 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
       float edge = landClasses(albSun).x * (1.0 - forestHere);
       gd.shadow *= 1.0 - 0.8 * edge * (1.0 - smoothstep(10.0, 20.0, fpM));
     }
-    // 调试（只在细节变体里有）：11 地表分类（红 树林、绿 农田、蓝 城区），12 像素足迹（红 = fp / 20 m，绿 = 影像像素 / 20 m）
-    if (uDebug == 11) return vec4(landClasses(alb.rgb) * 20.0, 1.0);
-    if (uDebug == 12) return vec4(vec3(fpM / 20.0, texelM / 20.0, 0.0) * 20.0, 1.0);
+    // 调试（只在细节变体里有）：21 地表分类（红 树林、绿 农田、蓝 城区），22 像素足迹（红 = fp / 20 m，绿 = 影像像素 / 20 m）
+    if (uDebug == 21) return vec4(landClasses(alb.rgb) * 20.0, 1.0);
+    if (uDebug == 22) return vec4(vec3(fpM / 20.0, texelM / 20.0, 0.0) * 20.0, 1.0);
     albMul = gd.albedoMul;
     nD = normalize(n - vec3(gd.slope.x, 0.0, gd.slope.y));
     shadowD = gd.shadow;
