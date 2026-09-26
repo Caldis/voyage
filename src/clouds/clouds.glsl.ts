@@ -468,6 +468,25 @@ float hurricaneDensity(vec2 xz, float alt, float lod, bool detail, out float ao)
   return d;
 }
 
+// 云影用的台风大形：只有眼壁（不含隆起）、卷云盖和雨带的解析形状，不采样纹理。
+// 完整的 hurricaneDensity 放进场景着色器（海面云影）后，FXC 编译场景着色器从约 2 s 涨到 130 s
+float hurricaneShadowDensity(vec2 xz, float alt) {
+  if (alt > HUR_TOP || alt < 0.5) return 0.0;
+  vec2 d2 = xz - uHurricane.xy;
+  float r = length(d2);
+  float Re = uHurricane.z;
+  if (r > Re * 16.0) return 0.0;
+  float theta = atan(d2.y, d2.x);
+  float slopeK = 0.95 + 0.35 * sin(theta + 1.3);
+  float rIn = Re + slopeK * (0.55 * alt + 0.045 * alt * alt) + 7.0 * pow(smoothstep(10.5, 16.2, alt), 2.0);
+  float core = smoothstep(rIn, rIn + 1.0, r) * (1.0 - smoothstep(Re * 3.0, Re * 3.8, r));
+  float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * (1.0 - smoothstep(Re * 9.0, Re * 16.0, r))
+               * smoothstep(12.0, 12.8, alt) * mix(0.9, 0.25, smoothstep(Re * 3.5, Re * 10.0, r));
+  float band = smoothstep(0.3, 0.8, cos(6.0 * theta - 18.5 * log(max(r, 1.0)))) * smoothstep(Re * 2.8, Re * 4.0, r)
+             * (1.0 - smoothstep(6.0, 10.0, alt)) * 0.6;
+  return max(max(core, canopy), band);
+}
+
 // 台风内部不要普通的晴天积云（眼里、眼壁、雨区都已由台风自己描述）：返回层状云的保留比例
 float hurricaneLayerMask(vec2 xz) {
   float r = length(xz - uHurricane.xy);
@@ -602,8 +621,7 @@ float cloudShadow(vec3 p, vec3 sunDir) {
         vec2 xz = q.xz + uCloudOffset;
         float d = layerDensity(q, 2.0, false) * hurricaneLayerMask(xz);
         float alt = length(q) - BOTTOM;
-        float hao;
-        if (alt >= uShellBottom && alt <= uShellTop) d = max(d, hurricaneDensity(xz, alt, 2.0, false, hao) * uCloudDensity);
+        if (alt >= uShellBottom && alt <= uShellTop) d = max(d, hurricaneShadowDensity(xz, alt) * uCloudDensity);
         od += d;
       }
     }
