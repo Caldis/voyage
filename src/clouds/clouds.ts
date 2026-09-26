@@ -99,10 +99,11 @@ void main() {
       float lt = 0.0;
       int lightSteps = (uStormCount > 0 || uHurricane.w > 0.5) ? 8 : 6;
       if (lightSteps == 6) {
-        // 普通云：常量上界，编译器展开后最快（和改动前一致）
+        // 普通云（没有雷暴、台风）：只有层状云，常量上界，编译器展开后最快（和改动前一致）。
+        // 这里只能调用层状云密度：展开的每一份都带上雷暴密度的话，冷编译会从 55 s 涨到 90 s
         for (int j = 0; j < 6; j++) {
           lt += ls;
-          od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
+          od += layerDensity(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
           ls *= 1.9;
         }
       } else {

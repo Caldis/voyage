@@ -480,7 +480,16 @@ float cloudShadow(vec3 p, vec3 sunDir) {
   float dt = (seg.y - seg.x) / N;
   if (!storms) {
     // 普通云：和改动前一样的常量 5 点（展开后最快）
-    for (float i = 0.0; i < 5.0; i += 1.0) od += cloudDensityLite(p + sunDir * (seg.x + (i + 0.5) * dt), 2.0, false);
+    // 只带层状云和台风（展开的每一份都带雷暴密度的话冷编译很慢）
+    for (float i = 0.0; i < 5.0; i += 1.0) {
+      vec3 q = p + sunDir * (seg.x + (i + 0.5) * dt);
+      float d = layerDensity(q, 2.0, false);
+      if (uHurricane.w > 0.5) {
+        float alt = length(q) - BOTTOM;
+        if (alt >= uShellBottom && alt <= uShellTop) d = max(d, hurricaneDensity(q.xz + uCloudOffset, alt, 2.0) * uCloudDensity);
+      }
+      od += d;
+    }
   } else {
     // 雷暴：点数依赖 uniform，不让 FXC 展开 12 份
     for (int i = 0; i < 12 + min(uStormCount - 1, 0); i++) {
