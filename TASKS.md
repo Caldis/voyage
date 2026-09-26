@@ -11,7 +11,6 @@
 | T02 | 第 2 波 | 5192 | `worktree-agent-a611f3799d938f8bb`（842eb24） | Opus | 审查：返工（冷启动 +85% 且丢上下文、农田紫色、碎浪硬截断） | 返工中 |
 | T03 | 第 2 波 | 5193 | `worktree-agent-acc7000a8fde79d57`（211bb12） | Opus | 审查：有条件通过（返工 3 项：非雷暴场景步进上限、飑线砧竖条纹、冷编译 +50%） | 返工中 |
 | T05 | 第 2 波 | 5195 | worktree（交付时回填） | Opus | 待派 | 进行中 |
-| T06 | 第 2 波（追加） | 5197 | `worktree-agent-a871b3ab05694440d`（b805f08） | Opus | 审查：返工（夜间划痕过多、GPU +0.9–2.6 ms、冷编译 +56%、织物像碳纤维、侧壁 / 收边条不够） | 返工中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -56,6 +55,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | 编号 | 任务 | 合并日期 | 备注 |
 | --- | --- | --- | --- |
 | T01 | 拆分热点文件（main.ts → state / flight / ui；scene.ts → ocean / terrain-shading / wing-shading / lightning） | 2026-09-25 | Sonnet 实现，Opus 审查通过 |
+| T06 | 舱内质感：侧壁弧面与脏污、窗框翻边 + 铝收边条 + 2 mm 螺丝、遮光板、窗板克制划痕（按窗外亮度封顶）、本排 / 前排座椅与斜纹织物 | 2026-09-26 | Opus 实现，审查返工一次后复审有条件通过（条件：座椅视角 GPU +13–17% 交性能工程师）。非阻塞：收边条高光再亮、头枕套格纹加随机、前排座椅待 T05 视角合并后验收 |
 | T14 | 海面去重复：GPU FFT 海浪（JONSWAP + 三级级联 + LEAN + 阵风斑 + Monahan 白浪） | 2026-09-25 | Opus 实现，Opus 审查有条件通过（条件：main.ts 接入由协调者完成；sampler 16/16 须拦住新增）。非阻塞遗留：风速重算加防抖、湖面第三级方差钳制、白浪覆盖率核对、缺 EXT_color_buffer_float 的退路 |
 
 ### 此前由协调者直接开发（未走本流程）
