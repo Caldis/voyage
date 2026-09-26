@@ -1,7 +1,7 @@
 // T20 截图：5201 = 改前（基线副本），5200 = 改后。只跑某几个场景时改 ONLY；迭代中间版本改 SUFFIX
 async (page) => {
   const ONLY = null;
-  const SUFFIX = "2";
+  const SUFFIX = "3";
   const current = page.url();
   const origin = (current.match(/^http:\/\/127\.0\.0\.1:52\d\d/) || ["http://127.0.0.1:5200"])[0];
   const tag = (origin.endsWith("5201") ? "before" : "after") + SUFFIX;

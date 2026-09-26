@@ -157,9 +157,11 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
 
   // 材质分区
   float top = smoothstep(SEAT_TOP - 0.05, SEAT_TOP - 0.03, q.y);
-  float coverZone = step(abs(wz), SEAT_HW - 0.03);
+  // 两块皮的交界按像素足迹做抗锯齿过渡（硬 step 在头枕侧边会出锯齿）
+  float coverZone = 1.0 - smoothstep(-pix, pix, abs(wz) - (SEAT_HW - 0.03));
   // 头枕（浅色皮）：正面上部 25 cm，翻过顶部，在背面包下约 6.5 cm；两侧 3 cm 是深色皮的撞色包边
-  float cover = coverZone * max(step(SEAT_TOP - 0.25, q.y) * step(0.45, fr), max(top, step(SEAT_TOP - 0.065, q.y) * step(fr, 0.45)));
+  float yF = smoothstep(-pix, pix, q.y - (SEAT_TOP - 0.25)), yB = smoothstep(-pix, pix, q.y - (SEAT_TOP - 0.065));
+  float cover = coverZone * max(yF * step(0.45, fr), max(top, yB * step(fr, 0.45)));
   // 背壳：背面那三分之一厚度，头枕包住的地方除外
   float shell = (1.0 - smoothstep(0.26, 0.34, fr)) * (1.0 - cover) * (1.0 - top);
   float seatId = front ? 1.0 : 0.0;
@@ -194,13 +196,13 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
     albedo = mix(albedo, vec3(0.006), glass);
     rough = mix(rough, 0.05, glass);
   } else {
-    float kind = cover > 0.5 ? 1.0 : 0.0;
+    float kind = cover;
     Leather lt = leatherSample(uv + seatId * 1.37, pix, kind, seatId * 3.1 + 1.0);
     albedo = lt.albedo;
     rough = lt.rough;
     vec4 sm = seatSeams(q, fr, wz, pix, coverZone);
     // 缝线：深色皮上是暖灰的撞色线，浅色皮上是同色系略深的线
-    vec3 threadC = kind > 0.5 ? vec3(0.34, 0.30, 0.25) : vec3(0.36, 0.33, 0.28);
+    vec3 threadC = mix(vec3(0.36, 0.33, 0.28), vec3(0.30, 0.265, 0.22), kind);
     albedo = mix(albedo * (1.0 - sm.y), threadC, sm.x);
     rough = mix(rough, 0.55, sm.x);
     vec3 up = seatDirToCabin(vec3(0.0, 1.0, 0.0));

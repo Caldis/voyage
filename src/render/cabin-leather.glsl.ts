@@ -15,10 +15,10 @@ struct Leather {
   float rough;
 };
 
-// 皮面：kind 0 = 靠背主体（深石板灰），1 = 头枕（暖灰白的纳帕皮）。seed：每张座椅不同
+// 皮面：kind 0 = 靠背主体（深石板灰），1 = 头枕（暖灰白的纳帕皮），中间值是两块皮交界处的抗锯齿过渡。seed：每张座椅不同
 Leather leatherSample(vec2 uv, float pix, float kind, float seed) {
   Leather lt;
-  vec3 base = kind < 0.5 ? vec3(0.052, 0.056, 0.064) : vec3(0.52, 0.49, 0.445);
+  vec3 base = mix(vec3(0.085, 0.09, 0.10), vec3(0.42, 0.395, 0.355), kind);
   // 荔枝纹：约 0.7 mm 和 0.3 mm 两级的圆润颗粒，网格各自转一个角度
   vec2 ua = mat2(0.866, 0.5, -0.5, 0.866) * uv;
   vec2 ub = mat2(0.6, -0.8, 0.8, 0.6) * uv;
