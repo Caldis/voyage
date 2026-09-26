@@ -293,15 +293,13 @@ float sdWingSlat(vec3 P) {
 // 截面是椭圆（半宽 W、半高 H）；u 是沿轴线的相对位置，r(u) 是截面缩放：椭圆头 → 等粗 → 收细到钝尾
 float wingCanoe(float u, float yRel, float zRel, float len) {
   float uc = clamp(u, 0.0, 1.0);
-  // 细长的独木舟：头部椭圆，最宽处（约 28 cm 宽、48 cm 高）在前 1/3，往后宽度收到 30%、高度收到 40%，
-  // 轴线在尾段向上翘，尾部成扁的「刀背」；尾端斜切（下缘比上缘短）
+  // 扁窄的独木舟（协调者定稿参数）：头部椭圆，最宽处约 18 cm 宽、40 cm 高；轴线顺着气流、整体略微上翘（不做下弯的弧）；
+  // 伸出后缘的那一小段收成窄的扁尾：宽收到 25%、高收到 45%，尾端平切（不是圆头）
   float head = uc < 0.2 ? sqrt(max(1.0 - pow((0.2 - uc) / 0.2, 2.0), 0.0)) : 1.0;
-  head *= sqrt(max(1.0 - pow(max(uc - 0.97, 0.0) / 0.03, 2.0), 0.0));   // 尾端小圆角
-  // 收细主要发生在伸出后缘的那一段（u ≈ 0.75 以后）：从上面看是一条逐渐变尖的刀背，不是等粗的「手指」
-  float tail = smoothstep(0.45, 1.0, uc);
-  float wz = max(0.13 * head * mix(1.0, 0.2, tail * tail), 0.004);
-  float hy = max(0.22 * head * mix(1.0, 0.3, tail), 0.004);
-  float yc = 0.2 * smoothstep(0.35, 1.0, uc);          // 尾段上翘：下缘斜着收上去，尾部成扁的刀背
+  float tail = smoothstep(0.55, 1.0, uc);
+  float wz = max(0.09 * head * mix(1.0, 0.25, tail), 0.004);
+  float hy = max(0.2 * head * mix(1.0, 0.45, tail), 0.004);
+  float yc = 0.1 * uc;                                   // 顺着气流、略微上翘（直线，不是弧）
   vec2 q = vec2(zRel / wz, (yRel - yc) / hy);
   float d = (length(q) - 1.0) * min(wz, hy);
   return max(d, max(-u, u - 1.0) * len);
@@ -316,7 +314,7 @@ float sdWingFairing(vec3 P) {
   float c = wingChordAt(sf);
   float xm = wingLeX(zf) - P.x;
   float x0 = 0.45 * c;
-  float len = 0.72 * c;
+  float len = 0.635 * c;   // 从 0.45c 到约 1.085c：只比后缘多出一小截（约 0.085c，旧版的一半）
   // 轴线：铰链处下表面往下 0.16 m，一条直线（不跟着翼型弯）
   float hx = WING_FLAP_LE * c;
   float hy = wingBaseY(zf, sf) + wingCamberAt(WING_FLAP_LE, c) - c * wingTcAt(sf) * wingNacaHalf(WING_FLAP_LE) - 0.16;
@@ -749,7 +747,9 @@ WingSurface wingNacelleSurface(vec3 P, float pix) {
 
 // 襟翼滑轨整流罩：和翼面同色，尾端被襟翼排出的气流熏黑
 WingSurface wingFairingSurface(vec3 P) {
-  WingSurface m = wingPaint(WING_PAINT * 0.9, 0.3);
+  // 与翼下表面一致的浅灰漆、半哑光，清漆很薄：不要比翼面更亮的镜面高光
+  WingSurface m = wingPaint(WING_PAINT * 0.9, 0.45);
+  m.coat = 0.25;
   float c = wingChordAt(wingSpanS(P.z));
   float xm = wingLeX(P.z) - P.x;
   m.albedo *= 1.0 - 0.3 * smoothstep(1.0 * c, 1.2 * c, xm);
