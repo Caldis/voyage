@@ -8,7 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| T04 | 第 3 波（提前） | 5204 | `worktree-agent-a41612daaefd1b5f0`（台风进行中 72a4353） | Opus（T13 已拆出合并） | — | 进行中 |
+| T04 | 第 3 波（提前） | 5204 | `worktree-agent-a41612daaefd1b5f0`（186d097） | Opus（已交付） | Opus 审查中（兼美术总监，私有 headless） | 待审查 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
