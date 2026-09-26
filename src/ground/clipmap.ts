@@ -3,15 +3,16 @@ import { LocalFrame, latToTileY, lonToTileX, tileXToLon, tileYToLat, zoomForReso
 import { DEM_MAX_ZOOM, DEM_URL, IMAGERY_MAX_ZOOM, IMAGERY_URL, NIGHT_MAX_ZOOM, NIGHT_URL, VECTOR_MAX_ZOOM, loadBitmap, loadWater } from "./tiles";
 
 /**
- * 地面的 clipmap：以飞机正下方为中心的 6 级方形区域，边长 16、32 … 512 km，
+ * 地面的 clipmap：以飞机正下方为中心的 7 级方形区域，边长 8、16 … 512 km，
  * 覆盖到巡航高度看得见的地平线（约 370 km）。每级三张图：影像（反照率）、水体遮罩（B 通道存夜光亮度）、地形高度，
  * 都已经换算到本地公里坐标（x 东、z 南），着色器里直接按公里采样，不用管墨卡托。
  *
  * 飞机移动超过该级边长的 1/8 时重建这一级；重建期间这一级仍用旧数据，着色器按 valid 标志回退到粗一级。
  */
 
-export const GROUND_LEVELS = 6;
-export const GROUND_BASE_KM = 16;
+// 最细一级 8 km / 1024 ≈ 7.8 m/像素，用 z14 影像（Sentinel-2 原生约 10 m）：低空时近处的影像清晰一倍
+export const GROUND_LEVELS = 7;
+export const GROUND_BASE_KM = 8;
 const RES = 1024; // 影像和水体
 const HRES = 256; // 地形高度
 
@@ -114,7 +115,7 @@ export class GroundClipmap {
     l.building = true;
     try {
       const [albedo, water, height, night] = await Promise.all([
-        this.buildImagery(l.size, cx, cz),
+        this.buildImagery(l.size, cx, cz, i === GROUND_LEVELS - 1),
         this.buildWater(l.size, cx, cz),
         this.buildHeight(l.size, cx, cz),
         this.buildNight(l.size, cx, cz),
@@ -164,15 +165,20 @@ export class GroundClipmap {
     return { tiles, toPx, latC: this.frame.toGeo(cx, cz)[0] };
   }
 
-  private async buildImagery(size: number, cx: number, cz: number) {
+  /** coarsest：最粗一级。其他级别里没取到的瓦片留成透明（alpha = 0），着色器用粗一级补上；最粗一级没有更粗的，只能涂深海色 */
+  private async buildImagery(size: number, cx: number, cz: number, coarsest: boolean) {
     const [latC] = this.frame.toGeo(cx, cz);
     let zoom = zoomForResolution(size / RES, latC, IMAGERY_MAX_ZOOM);
     let cover = this.tileCover(size, cx, cz, zoom, RES);
     while (cover.tiles.length > 49 && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
     const ctx = makeCanvas(RES, RES);
-    // 没有瓦片的地方（加载失败）先涂成深海色
-    ctx.fillStyle = "rgb(8, 22, 40)";
-    ctx.fillRect(0, 0, RES, RES);
+    // 没有瓦片的地方（加载失败）：最粗一级涂成深海色；其他级别留透明，由着色器回退到粗一级。
+    // 以前一律涂深海色：一张 z14 瓦片偶发取不到，低空时陆地上就出现一块直边的深藏青多边形（T02 复审发现）
+    ctx.clearRect(0, 0, RES, RES);
+    if (coarsest) {
+      ctx.fillStyle = "rgb(8, 22, 40)";
+      ctx.fillRect(0, 0, RES, RES);
+    }
     this.pending += cover.tiles.length;
     await Promise.all(
       cover.tiles.map(async (t) => {
