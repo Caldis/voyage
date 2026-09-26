@@ -12,7 +12,8 @@
     "check:glsl": "node scripts/lint-shaders.mjs",
     "shots": "node scripts/dev-browser.mjs shots",
     "cold": "node scripts/dev-browser.mjs cold",
-    "bench": "node scripts/dev-browser.mjs bench"
+    "bench": "node scripts/dev-browser.mjs bench",
+    "shader-budget": "node scripts/shader-budget.mjs"
   },
   "dependencies": {
     "@mapbox/vector-tile": "^3.0.0",

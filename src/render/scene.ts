@@ -84,30 +84,68 @@ ${GROUND_DETAIL_COMMON}
 ${INLAND_WATER_COMMON}
 ${TERRAIN_SHADING_COMMON}
 
+// 窗外辐亮度。重函数在这里各只有一个调用点（SC-3）：真实地面上的海洋和开阔海面共用同一个 oceanRadiance，
+// 命中点的云影、水面照度、闪光照度也只算一次，陆地、湖河、海面共用。FXC 会把每个调用点整份内联，
+// 原来地面水体和开阔海面各调一次 oceanRadiance，场景程序冷编译多出约 50 s。以后加分支时不要再在别处调这些函数，
+// 把输入交给这里唯一的调用点
 vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   vec3 ro = vec3(0.0, uCamR, 0.0);
-  if (uGroundOn > 0.5) {
-    vec4 gr = groundRadiance(ro, rd);
-    if (gr.w > 0.0) return gr.rgb * cloud.a + cloud.rgb;
-  }
-  float tGround = raySphere(ro, rd, BOTTOM);
+  // 真实地面：先求交（打不到或还没有数据时退回原来的海平面球）
+  GroundHit gh;
+  bool onGround = uGroundOn > 0.5 && groundHit(ro, rd, gh);
+  // 调试 23：水体遮罩（红 = 水面，绿 = 海洋通道，蓝 = 夜光）
+  if (onGround && uDebug == 23) return gh.wat * 20.0 * cloud.a + cloud.rgb;
+  float tGround;
+  if (onGround) tGround = gh.t;
+  else tGround = raySphere(ro, rd, BOTTOM);
   bool hitGround = tGround > 0.0;
-  // 天空视图 LUT 已经包含到地面为止的内散射（空气透视）
-  vec3 L = skyRadiance(rd, hitGround);
+  // 天空视图 LUT 已经包含到地面为止的内散射（空气透视）；真实地面用空气透视 LUT，不需要它
+  vec3 L = vec3(0.0);
+  if (!onGround) L = skyRadiance(rd, hitGround);
   if (hitGround) {
-    vec3 P = ro + rd * tGround;
-    // 相机到海面的透射率 = T(海面→层顶) / T(相机→层顶)，两段都是朝上的射线
-    vec3 tSurface = transmittanceToTop(BOTTOM, dot(normalize(P), -rd));
+    vec3 P;
+    if (onGround) P = gh.P;
+    else P = ro + rd * tGround;
+    vec3 n = normalize(P);
+    // 命中点的云影、水面处主光源（含云影）与天空光的照度、闪光照度：只算一次，陆地、湖河、海面共用
+    float cs = cloudShadow(P, uKeyDir);
+    vec3 eSunW = keyLight(BOTTOM, n) * cs;
+    vec3 eSkyW = skyIrradiance(BOTTOM, n);
+    vec3 eFlash = flashIlluminance(P);
+    vec3 land = vec3(0.0);
+    bool wet = true;          // 这个像素有水面（开阔海面恒为是）
+    vec3 body = vec3(-1.0);   // 水色：开阔海面用大洋默认值，真实地面取卫星影像
+    if (onGround) {
+      if (gh.wat.r < 0.999) {
+        vec4 lr = groundLand(gh, cs, eFlash);
+        if (lr.w > 0.5) return lr.rgb * cloud.a + cloud.rgb; // 调试 21 / 22
+        land = lr.rgb;
+      }
+      wet = gh.wat.r > 0.001;
+      body = gh.alb.rgb * 0.7;
+    }
+    // 水面：海洋按设定风速（涌浪 + 风浪），湖泊、河流用只有细碎涟漪的内陆水面（海面的长波放在河上会出现摩尔纹）。
+    // 每个像素只算其中一个（按遮罩的海洋通道 0.5 分界）。两个都算再按比例混合能消掉河口的接缝，
+    // 但 FXC 要同时保留两份内联代码，冷编译多出十几秒（T02 实测），不值得
+    float fView = 0.0;
+    vec3 nView = n;
+    vec3 water = vec3(0.0);
+    vec3 skyCam = vec3(0.0);
+    if (wet) {
+      if (!onGround || gh.wat.g > 0.5) water = oceanRadiance(P, rd, tGround, body, 1.0, eSunW, eSkyW, fView, nView);
+      else water = inlandWaterRadiance(P, rd, gh.fpM, body, eSunW, eSkyW, fView, nView);
+      // 天空反射：天空视图 LUT 是从相机算的，L相机(反射方向) ≈ 内散射(相机→水面) + 透射率 × L水面(反射方向)。
+      // 所以反射的贡献是 F·(L相机 − 内散射)，不能再乘一次透射率，否则地平线处会被衰减两次，出现一条暗线
+      skyCam = skyRadiance(reflect(rd, nView), false);
+    }
+    if (onGround) return groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash) * cloud.a + cloud.rgb;
+    // 开阔海面：相机到海面的透射率 = T(海面→层顶) / T(相机→层顶)，两段都是朝上的射线
+    vec3 tSurface = transmittanceToTop(BOTTOM, dot(n, -rd));
     vec3 tCamera = transmittanceToTop(uCamR, -rd.y);
     vec3 tView = min(tSurface / max(tCamera, vec3(1e-6)), vec3(1.0));
-    float fView;
-    vec3 nView;
     vec3 inscatter = L;
-    vec3 sea = tView * (oceanRadiance(P, rd, tGround, vec3(-1.0), 1.0, fView, nView) + vec3(0.02, 0.04, 0.05) / M_PI * flashIlluminance(P));
+    vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);
     L += sea;
-    // 天空反射：天空视图 LUT 是从相机算的，L相机(反射方向) ≈ 内散射(相机→海面) + 透射率 × L海面(反射方向)。
-    // 所以反射的贡献是 F·(L相机 − 内散射)，不能再乘一次透射率，否则地平线处会被衰减两次，出现一条暗线
-    vec3 skyCam = skyRadiance(reflect(rd, nView), false);
     vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));
     L += refl;
     if (uDebug == 5 || uDebug >= 8) L = sea;
