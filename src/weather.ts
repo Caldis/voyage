@@ -22,6 +22,7 @@ export const WEATHER_PRESETS: WeatherPreset[] = [
   { id: "squall", name: "飑线（一排雷暴）" },
   { id: "typhoon-bands", name: "台风外围螺旋雨带" },
   { id: "typhoon-eye", name: "台风眼内（体育场效应）" },
+  { id: "typhoon-outer", name: "台风外围（在卷云盖外缘下俯看雨带）" },
 ];
 
 interface Storm {
@@ -71,8 +72,11 @@ export class WeatherSystem {
       // 一排雷暴，和航线大致平行，间距约 12 km
       for (let i = 0; i < 4; i++) storm(-15 + i * 16, 55 + i * 5, 4 + Math.random() * 2, 11.5 + Math.random() * 3);
     }
+    // 台风眼：飞机在眼里偏向一侧（离中心约 12 km），窗外隔着整个眼看对面的眼壁，两侧的眼壁弧形地围过来
     if (id === "typhoon-bands") this.hurricane = { ...at(40, 180), eye: 20 };
-    if (id === "typhoon-eye") this.hurricane = { ...at(0, 0), eye: 30 };
+    if (id === "typhoon-eye") this.hurricane = { ...at(0, 12), eye: 20 };
+    // 外围：离中心约 220 km，卷云盖外缘只剩一层薄卷云，下面是一条条弯向中心的雨带
+    if (id === "typhoon-outer") this.hurricane = { ...at(30, 220), eye: 20 };
     this.syncUniforms();
   }
 
@@ -96,8 +100,8 @@ export class WeatherSystem {
       top = Math.max(top, ...this.storms.map((s) => s.top + 1.8));
     }
     if (this.hurricane) {
-      bottom = Math.min(bottom, 0.8);
-      top = Math.max(top, 15.5);
+      bottom = Math.min(bottom, 0.5);
+      top = Math.max(top, 16.7); // 卷云盖顶 16.2 km
     }
     u.uShellBottom.value = bottom;
     u.uShellTop.value = top;

@@ -54,25 +54,29 @@ void main() {
   float depthSum = 0.0;
   float wSum = 0.0;
   float t = seg.x;
-  // 有雷暴时：从空白进入云的那一步退回去，用 1/8 的小步走过这段，采样点才能落在云的表面附近。
+  // 有雷暴时：从空白进入云的那一步改用 1/4 的小步重新走一遍，采样点才能落在云的表面附近。
   // 否则远处步长几百米、云的消光又高（60 /km），第一个采样点可能已经在云里几百米深处，
   // 被阳光照亮的那层表面被跳过，受光面发灰、菜花状的隆起也看不出来
-  bool refineOn = uStormCount > 0;
+  // 台风的眼壁同理（远处的眼壁表面同样会被大步长跳过）
+  bool refineOn = uStormCount > 0 || uHurricane.w > 0.5;
   int fine = 0;
+  float fineDt = 0.03;
   bool wasEmpty = true;
+  float lastEmpty = seg.x;   // 最近一个空白采样点的位置：表面一定在它和第一个有云的采样点之间
   // 闪电放电通道（线段）：两端换到相机坐标
   vec3 fA = vec3(uFlash.x - uCloudOffset.x, BOTTOM + uFlash.y, uFlash.z - uCloudOffset.y);
   vec3 fAB = vec3(uFlashB.x - uCloudOffset.x, BOTTOM + uFlashB.y, uFlashB.z - uCloudOffset.y) - fA;
   float flashI = uFlash.w / (1.0 + 0.25 * length(fAB)); // 总能量摊到整条通道上
   // 下方（海面 / 低云）反射上来的光的反照率：有低云时明显更亮
-  float albedoBelow = 0.06 + 0.5 * uCoverage;
+  // 台风眼里四周和脚下都是被照亮的云（反照率约 0.8），不是海面
+  float albedoBelow = uHurricane.w > 0.5 ? 0.6 : 0.06 + 0.5 * uCoverage;
   // 次数上限：从相机空步走到 60 km 外本身就要约 190 步，细化还要额外的步数（每进一次云 9 步）
   for (int i = 0; i < 256; i++) {
     // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）
     if (t >= seg.y || T < 0.005 || (!refineOn && i >= 192)) break;
     // 步长随距离变长：近处 60 m，远处 2 km
     float dtBase = clamp(t * 0.008, 0.06, 2.0);
-    float dt = fine > 0 ? max(dtBase * 0.25, 0.03) : dtBase;
+    float dt = fine > 0 ? fineDt : dtBase;
     // 这一步代表的区间长度：空白处走 2 倍步长。抖动必须覆盖整个区间——旧版只抖动 dt、却走 2dt，
     // 每个区间的后一半永远采不到，远处的薄云被「同心球壳」切成一条条水平细纹（T13）
     float stepLen = (fine > 0 || !wasEmpty) ? dt : 2.0 * dt;
@@ -81,10 +85,16 @@ void main() {
     float dens = cloudDensity(p, lod, t < 150.0);
     float stormW = gStormW;
     float stormAO = gStormAO;
-    // 只在进入雷暴时细化（层状云不必，保持原样）；退回后这段会被小步重新采样，进云那一步的密度并没有丢
+    // 只在进入雷暴 / 台风时细化（层状云不必，保持原样）；这段会被小步重新采样，进云那一步的密度并没有丢
     if (dens > 0.002 && stormW > 0.5 && wasEmpty && fine == 0 && dtBase > 0.1 && t > seg.x) {
-      // 退回上一步（空白处走的是 2 倍步长），接下来 8 小步走完这 2 个大步
-      t = max(t - 2.0 * dtBase, seg.x);
+      // 表面夹在「上一个空白采样点」和「这个有云的采样点」之间：退回到上一个空白采样点，8 小步走完这段。
+      // 旧版一：固定退回一个区间 [t − 2dt, t]，那里是空的，8 小步白走后又回到空白状态，下一步再次撞上同一处表面、
+      //   再退回……反复直到用完步数上限，远处的云出现一圈圈等高线似的条纹。
+      // 旧版二：不退回、从 t 开始细化——带抖动的粗采样可能落在表面之前而漏检，下一个区间才检出时 t 已经在云里，
+      //   进云深度随「表面落在步进网格的哪个位置」周期变化，台风眼壁上一道道平行的明暗条纹（T04）
+      float tHit = t + stepLen * jitter;
+      t = max(lastEmpty, seg.x);
+      fineDt = max((tHit - t) * 0.125, 0.02);
       fine = 8;
       wasEmpty = false;
       continue;
@@ -142,7 +152,9 @@ void main() {
         // 塔身下半截还被下方的海面 / 低云反射的光照着（中性的灰白，冲淡天空光的蓝）
         ambient *= mix(0.3, 1.0, stormAO);
         vec3 eBelow = albedoBelow * keyLight(BOTTOM + 1.0, up) * max(dot(up, uKeyDir), 0.0);
-        ambient += eBelow / (2.0 * M_PI) * 0.5 * (1.0 - h01) * stormAO;
+        // 台风眼里，背光的眼壁对面就是被太阳直射的眼壁和眼底：反射光在各个高度都很强，不只是下半截
+        float hBelow = uHurricane.w > 0.5 ? 1.0 - 0.4 * h01 : 1.0 - h01;
+        ambient += eBelow / (2.0 * M_PI) * 0.5 * hBelow * stormAO;
       }
       vec3 S = sunLight + ambient;
       // 闪电：云里一段几公里长的放电通道，光在云里多次散射后向外扩散（扩散长度约 2 km），
@@ -164,6 +176,7 @@ void main() {
     } else {
       // 空白区域大步走（细化时仍用小步）
       wasEmpty = true;
+      lastEmpty = t + stepLen * jitter;
       t += stepLen;
     }
   }
