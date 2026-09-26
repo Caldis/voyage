@@ -127,11 +127,14 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   float ao = seatAO;
 
   // 1. 橘皮纹：约 1 mm 的起伏、十几微米高，主要在高光里看得出；比像素细时淡出
-  float fPeel = 1.0 - smoothstep(0.0003, 0.001, pix);
-  vec3 nA = vnoiseD(p.xy * 700.0);
-  vec3 nB = vnoiseD(p.xy * 1600.0 + 3.1);
-  vec2 slope = (nA.yz * 700.0 + 0.5 * nB.yz * 1600.0) * 0.00003 * fPeel;
-  albedo *= 1.0 + 0.035 * (nA.x - 0.5) * fPeel;
+  float fPeel = 1.0 - smoothstep(0.00025, 0.0005, pix);
+  vec2 slope = vec2(0.0);
+  if (fPeel > 0.0) {
+    vec3 nA = vnoiseD(p.xy * 700.0);
+    vec3 nB = vnoiseD(p.xy * 1600.0 + 3.1);
+    slope = (nA.yz * 700.0 + 0.5 * nB.yz * 1600.0) * 0.00005 * fPeel;
+    albedo *= 1.0 + 0.06 * (nA.x - 0.5) * fPeel;
+  }
 
   // 2. 装饰边：窗罩的翻边压在侧壁上，宽约 1.8 cm、高约 2 mm，外沿是圆角——窗框的「厚度」主要靠它
   const float FL = 0.018;
@@ -140,8 +143,7 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   float edge = clamp((dBez - (FL - 0.006)) / 0.006, 0.0, 1.0);         // 圆角外沿 0..1
   float tilt = sin(edge * M_PI) * 0.85 * step(dBez, FL);               // 外沿法线朝外翻
   slope += gB * tilt;
-  albedo = mix(albedo, REVEAL_ALBEDO, flange);
-  rough = mix(rough, 0.35, flange);
+  rough = mix(rough, 0.42, flange);
   // 翻边外侧贴着侧壁的一圈窄阴影
   ao *= 1.0 - 0.35 * (1.0 - smoothstep(FL, FL + 0.005, dBez)) * step(FL - 0.0005, dBez);
 
@@ -152,7 +154,7 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   float trimTilt = (trimU - 0.5) * 1.6 * step(0.0, trimU) * step(trimU, 1.0);
   float shadowLine = lineCov(abs(dBez - (FL + 0.0031)), 0.0004, pix);
   ao *= 1.0 - 0.5 * shadowLine;
-  // 卡扣螺丝：沿翻边一圈 6 颗，直径约 5 mm 的圆头，中间十字槽
+  // 卡扣螺丝：沿翻边一圈 6 颗，直径约 2 mm 的圆头，中间十字槽
   float screw = 0.0;
   float screwSlot = 0.0;
   vec2 screwN = vec2(0.0);
@@ -186,12 +188,14 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   ao *= 1.0 - 0.6 * groove;
 
   // 4. 脏污：大尺度的斑驳 + 窗下沿一带手经常扶的地方（发暗、发油光）+ 零星的鞋印 / 包蹭出的污痕
-  float mottle = fbm2(p.xy * 5.0 + seed * 7.0);
-  albedo *= 1.0 - 0.07 * smoothstep(0.35, 0.8, mottle);
+  float mottle = 0.65 * vnoise(p.xy * 5.0 + seed * 7.0) + 0.35 * vnoise(p.xy * 23.0 + seed);
+  albedo *= 1.0 - 0.11 * smoothstep(0.35, 0.8, mottle);
+  // 越往下越灰（鞋、包、腿蹭的高度），很淡
+  albedo *= 1.0 - 0.06 * smoothstep(-0.1, -0.45, p.y) * (0.6 + 0.4 * vnoise(p.xy * 9.0 + seed));
   float hand = exp(-pow((wq.y + 0.25) / 0.07, 2.0)) * exp(-pow(wq.x / 0.17, 2.0));
   hand += 0.6 * exp(-pow((wq.y + 0.05) / 0.12, 2.0)) * exp(-pow((abs(wq.x) - 0.21) / 0.035, 2.0)); // 两侧推墙探头看的位置
-  float oil = hand * smoothstep(0.3, 0.7, fbm2(p.xy * 40.0 + seed));
-  albedo *= 1.0 - 0.16 * oil;
+  float oil = hand > 0.02 ? hand * smoothstep(0.3, 0.7, 0.6 * vnoise(p.xy * 40.0 + seed) + 0.4 * vnoise(p.xy * 110.0 + seed)) : 0.0;
+  albedo *= 1.0 - 0.2 * oil;
   albedo = mix(albedo, DUST_ALBEDO, cornerDust * 0.8);
   albedo = mix(albedo, albedo * vec3(0.97, 0.95, 0.90), hand * 0.6);
   rough = mix(rough, 0.25, clamp(oil * 1.4, 0.0, 1.0));
@@ -210,7 +214,7 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   // 5. 细划痕：窗下方、清洁时擦出的横向细纹，只在高光里闪
   float scr = 0.0;
   {
-    vec2 q = p.xy;
+    vec2 q = vec2(p.x, p.y + (vnoise(vec2(p.x * 15.0, seed)) - 0.5) * 0.006);
     float row = floor(q.y / 0.004);
     float h = hash12(vec2(row, seed));
     float along = q.x + h * 3.0;
@@ -236,10 +240,12 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   float metal = clamp(trim + screw, 0.0, 1.0);
   if (metal > 0.0) {
     float worn = smoothstep(-0.1, -0.22, wq.y);
-    float mr = mix(0.32, 0.18, worn);
-    vec3 mcol = vec3(0.62, 0.62, 0.64);
-    float Fm = fresnelRough(nv, 0.55, mr);
-    vec3 metalCol = mcol * 0.15 / M_PI * e + Fm * mcol * cabinEnv(reflect(rd, n), cl) * ao * mix(1.0, 1.5, worn);
+    float mr = mix(0.22, 0.12, worn);
+    vec3 mcol = vec3(0.86, 0.87, 0.89);
+    float Fm = fresnelRough(nv, 0.85, mr);
+    vec3 metalCol = mcol * 0.05 / M_PI * e + Fm * mcol * cabinEnv(reflect(rd, n), cl) * ao * mix(0.7, 1.1, worn);
+    // 上方灯带（当成一个方向光，照度取舱内环境光的量级）在圆截面上的窄高光
+    metalCol += mcol * keySpec(n, -rd, normalize(CABIN_LIGHT_DIR), mr * mr, 0.85, cl.eCabin * 1.5) * ao;
     metalCol *= 1.0 - 0.8 * screwSlot;
     col = mix(col, metalCol, metal);
   }
@@ -264,14 +270,14 @@ vec3 shadeReveal(vec3 h, vec3 n, vec3 rd, float t, float pixAng, CabinLights cl,
   // 积灰：朝上的面（漏斗下半圈）、越深越多，窗板边角和导轨槽里最多；带细小颗粒
   float up = smoothstep(0.15, 0.7, n.y);
   float grit = vnoise(h.xy * 2500.0 + seed) * (1.0 - smoothstep(0.0002, 0.0008, pix)) + 0.5 * smoothstep(0.0002, 0.0008, pix);
-  float dust = up * (0.2 + 0.8 * smoothstep(0.35, 0.95, depth01)) * (0.55 + 0.45 * fbm2(h.xy * 60.0 + seed));
+  float dust = up * (0.2 + 0.8 * smoothstep(0.35, 0.95, depth01)) * (0.55 + 0.45 * vnoise(h.xy * 60.0 + seed));
   dust = clamp(dust * (0.7 + 0.6 * grit) + slot * 0.5, 0.0, 1.0);
   albedo = mix(albedo, DUST_ALBEDO, dust * 0.7);
   rough = mix(rough, 0.85, dust);
 
   // 窗口下沿靠近舱内的地方：手指油污（发暗、更亮的油光）
   float lip = (1.0 - smoothstep(0.0, 0.35, depth01)) * smoothstep(-0.1, -0.2, h.y);
-  float oil = lip * smoothstep(0.35, 0.7, fbm2(h.xy * 50.0 + seed * 2.0));
+  float oil = lip * smoothstep(0.35, 0.7, vnoise(h.xy * 50.0 + seed * 2.0));
   albedo *= 1.0 - 0.1 * oil;
   rough = mix(rough, 0.18, oil);
 
@@ -291,8 +297,15 @@ vec3 shadeReveal(vec3 h, vec3 n, vec3 rd, float t, float pixAng, CabinLights cl,
   // 光滑塑料反射窗口：掠射角下窗框内侧有一圈亮边。反射方向能不能穿过窗口（且没被遮光板挡住）用 sunThroughWindow 判断
   vec3 r = reflect(rd, n);
   float F = fresnelRough(nv, 0.04, rough);
-  float winVis = sunThroughWindow(h, r, shadeBottom);
-  col += F * mix(cabinEnv(r, cl) * ao, lAperture, winVis) * (1.0 - 0.6 * dust);
+  float winVis = 0.0;
+  if (r.z > 1e-3) {
+    vec3 qr = h + r * ((PANE_DEPTH - h.z) / r.z);
+    float soft = 0.004 + rough * rough * length(qr - h) * 2.0;
+    winVis = 1.0 - smoothstep(-soft, soft, sdRoundRect(qr.xy, PANE_HALF, PANE_RADIUS));
+    vec3 qs = h + r * ((SHADE_DEPTH - h.z) / r.z);
+    if (h.z < SHADE_DEPTH) winVis *= 1.0 - smoothstep(-soft, soft, qs.y - shadeBottom);
+  }
+  col += F * mix(cabinEnv(r, cl) * ao, lAperture * 0.6, winVis) * (1.0 - 0.6 * dust);
   // 太阳的高光
   col += keySpec(n, v, cl.sunC, rough * rough, 0.04, cl.eSunNormal) * sunVis * (1.0 - dust);
   return col;

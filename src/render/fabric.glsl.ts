@@ -70,14 +70,17 @@ Fabric fabricSample(vec2 uv, float pix, float kind) {
   float hx = weaveAt(u + vec2(e, 0.0), twill, motif).x;
   float hy = weaveAt(u + vec2(0.0, e), twill, motif).x;
   // 纱线起伏高度约为间距的 0.35 倍
-  vec2 slope = vec2(hx - w.x, hy - w.x) / e * 0.35;
+  vec2 slope = vec2(hx - w.x, hy - w.x) / e * 0.18;
 
   // 混纺：每根纱颜色略有深浅
   vec2 cell = floor(u);
   float jWarp = hash12(vec2(cell.x, 3.7)) - 0.5;
   float jWeft = hash12(vec2(11.3, cell.y)) - 0.5;
-  vec3 yarn = w.y > 0.5 ? warpC * (1.0 + 0.3 * jWarp) : weftC * (1.0 + 0.3 * jWeft);
-  vec3 detailed = yarn * (0.68 + 0.32 * clamp(w.x, 0.0, 1.0));
+  // 每根纱整体的深浅 + 沿纱线的一段段色差（混纺纤维）
+  float along = w.y > 0.5 ? u.y : u.x;
+  float seg = hash12(vec2(floor(along * 0.7), w.y > 0.5 ? cell.x : cell.y + 71.0)) - 0.5;
+  vec3 yarn = w.y > 0.5 ? warpC * (1.0 + 0.3 * jWarp + 0.18 * seg) : weftC * (1.0 + 0.3 * jWeft + 0.18 * seg);
+  vec3 detailed = yarn * (0.82 + 0.18 * clamp(w.x, 0.0, 1.0));
 
   // 平均值：露出经纱的面积占比 × 颜色，再乘上纱间缝隙的平均压暗
   float warpFrac = twill > 0.5 ? mix(0.5, 0.25, motif) : 0.5;
@@ -93,14 +96,17 @@ Fabric fabricSample(vec2 uv, float pix, float kind) {
   float rib = twill > 0.5 ? sin(rph) : 0.5 * (sin(rph) + sin(rph2));
   float ribPeriodM = pitch * period * (twill > 0.5 ? 0.7071 : 1.0);
   float coarse = (1.0 - detail) * (1.0 - smoothstep(0.15, 0.35, pix / ribPeriodM));
-  vec3 ribAlbedo = avg * (1.0 + 0.22 * rib);
+  vec3 ribAlbedo = avg * (1.0 + 0.1 * rib);
   vec2 ribSlope = (twill > 0.5 ? vec2(1.0, 1.0) * cos(rph) : vec2(cos(rph), cos(rph2)) * 0.5) * (2.0 * M_PI / period) * 0.35 * 0.5;
   fb.albedo = mix(mix(avg, ribAlbedo, coarse), detailed, detail);
   fb.slope = slope * detail + ribSlope * coarse;
 
   // 更粗一级的纱线粗细不匀（条干），几毫米尺度，在更远处才淡出
   float slub = vnoise(uv * vec2(90.0, 700.0)) - 0.5;
-  fb.albedo *= 1.0 + (kind < 0.5 ? 0.12 : 0.04) * slub * (1.0 - smoothstep(0.0008, 0.003, pix));
+  fb.albedo *= 1.0 + (kind < 0.5 ? 0.12 : 0.06) * slub * (1.0 - smoothstep(0.0008, 0.003, pix));
+  // 几厘米尺度的绒面明暗：绒毛倒向不一、坐久了压出来的发亮 / 发暗块（不随像素足迹淡出，本身就是低频）
+  float nap = 0.6 * vnoise(uv * 35.0 + kind * 9.0) + 0.4 * vnoise(uv * 90.0 + 3.0);
+  fb.albedo *= 0.9 + 0.2 * nap;
 
   // 起球：约 4 mm 一格，少数格子里有一个 0.4–0.8 mm 的小绒球；按面积摊薄，远处自然变成极轻的提亮
   vec2 pc = floor(uv / 0.004);
@@ -112,8 +118,8 @@ Fabric fabricSample(vec2 uv, float pix, float kind) {
     fb.albedo = mix(fb.albedo, weftC * 1.5 + 0.02, cov * 0.8);
   }
 
-  fb.sheen = kind < 0.5 ? vec3(0.11, 0.12, 0.15) : vec3(0.22, 0.22, 0.21);
-  fb.sheenRough = kind < 0.5 ? 0.45 : 0.6;
+  fb.sheen = (kind < 0.5 ? vec3(0.11, 0.12, 0.15) : vec3(0.30, 0.30, 0.29)) * (0.75 + 0.5 * nap);
+  fb.sheenRough = kind < 0.5 ? 0.45 : 0.5;
   return fb;
 }
 

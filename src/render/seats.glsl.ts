@@ -38,8 +38,9 @@ float sdSeatBack(vec3 q) {
   vec2 sz = vec2(q.y - 0.5 * (SEAT_TOP + SEAT_BOTTOM), q.z - SEAT_ZC);
   float d2 = sdRoundRect(sz, vec2(0.5 * (SEAT_TOP - SEAT_BOTTOM), SEAT_HW), SEAT_CORNER);
   // 挤出成有厚度的靠背，棱边倒圆 2.5 cm
-  const float r = 0.025;
-  vec2 w = vec2(d2 + r, abs(q.x) - th - bulge + r);
+  float r = mix(0.025, 0.034, smoothstep(SEAT_TOP - 0.12, SEAT_TOP, q.y));
+  float coverPuff = 0.003 * smoothstep(SEAT_TOP - 0.26, SEAT_TOP - 0.22, q.y) * (1.0 - wz * wz);
+  vec2 w = vec2(d2 + r, abs(q.x) - th - bulge - coverPuff + r);
   float d = min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - r;
   // 可调头枕与靠背之间的一道横缝
   d += 0.003 * (1.0 - smoothstep(0.0, 0.006, abs(q.y - (SEAT_TOP - 0.25))));
@@ -52,12 +53,13 @@ float sdSeats(vec3 p) {
 
 // 某一排靠背的包围盒（座舱系）
 bool seatBox(vec3 ro, vec3 rd, float row, out vec2 tt) {
-  float a0 = SEAT_PIVOT.x + row * SEAT_PITCH - SEAT_TOP * SEAT_S - 0.07;
-  float a1 = SEAT_PIVOT.x + row * SEAT_PITCH - SEAT_BOTTOM * SEAT_S + 0.07;
-  vec3 bmin = vec3(min(uSeatSign * a0, uSeatSign * a1), SEAT_PIVOT.y + SEAT_BOTTOM * SEAT_C - 0.03, SEAT_ZC - SEAT_HW - 0.01);
-  vec3 bmax = vec3(max(uSeatSign * a0, uSeatSign * a1), SEAT_PIVOT.y + SEAT_TOP * SEAT_C + 0.03, SEAT_ZC + SEAT_HW + 0.01);
-  vec3 inv = 1.0 / rd;
-  vec3 t0 = (bmin - ro) * inv, t1 = (bmax - ro) * inv;
+  vec3 o = seatFrame(ro, row);
+  vec2 ay = vec2(uSeatSign * rd.x, rd.y);
+  vec3 d = vec3(ay.x * SEAT_C + ay.y * SEAT_S, -ay.x * SEAT_S + ay.y * SEAT_C, rd.z);
+  vec3 bmin = vec3(-0.075, SEAT_BOTTOM - 0.01, SEAT_ZC - SEAT_HW - 0.01);
+  vec3 bmax = vec3(0.075, SEAT_TOP + 0.01, SEAT_ZC + SEAT_HW + 0.01);
+  vec3 inv = 1.0 / d;
+  vec3 t0 = (bmin - o) * inv, t1 = (bmax - o) * inv;
   vec3 tn = min(t0, t1), tf = max(t0, t1);
   tt = vec2(max(max(tn.x, tn.y), tn.z), min(min(tf.x, tf.y), tf.z));
   return tt.y > max(tt.x, 0.0);
@@ -78,7 +80,7 @@ SeatHit traceSeats(vec3 ro, vec3 rd, float tMax, float pixAng) {
   float tEnd = min(max(h0 ? b0.y : 0.0, h1 ? b1.y : 0.0), tMax);
   float best = 1e9;
   float tBest = t;
-  for (int i = 0; i < 48 + uLoopGuard; i++) {
+  for (int i = 0; i < 32 + uLoopGuard; i++) {
     if (t > tEnd) break;
     float d = sdSeats(ro + rd * t);
     float ratio = d / (t * pixAng);
@@ -91,36 +93,31 @@ SeatHit traceSeats(vec3 ro, vec3 rd, float tMax, float pixAng) {
   return sh;
 }
 
-vec3 seatNormal(vec3 p, float e) {
+vec3 seatNormal(vec3 p, float e, float row) {
   const vec2 k = vec2(1.0, -1.0);
-  return normalize(k.xyy * sdSeats(p + k.xyy * e) + k.yyx * sdSeats(p + k.yyx * e)
-                 + k.yxy * sdSeats(p + k.yxy * e) + k.xxx * sdSeats(p + k.xxx * e));
+  return normalize(k.xyy * sdSeatBack(seatFrame(p + k.xyy * e, row)) + k.yyx * sdSeatBack(seatFrame(p + k.yyx * e, row))
+                 + k.yxy * sdSeatBack(seatFrame(p + k.yxy * e, row)) + k.xxx * sdSeatBack(seatFrame(p + k.xxx * e, row)));
 }
 
 // 距离场 AO：沿法线取两个点，看离别的表面（另一排座椅、侧壁）有多近
 float seatAO(vec3 p, vec3 n) {
-  float ao = 1.0;
-  for (int i = 1; i <= 2; i++) {
-    float h = 0.035 * float(i * i);
-    vec3 x = p + n * h;
-    float d = min(sdSeats(x), wallZ(x.y) - x.z);
-    ao -= (h - d) / h * (i == 1 ? 0.35 : 0.25);
-  }
-  return clamp(ao, 0.25, 1.0);
+  const float h = 0.08;
+  vec3 x = p + n * h;
+  float d = min(sdSeats(x), wallZ(x.y) - x.z);
+  return clamp(1.0 - 0.6 * (h - d) / h, 0.25, 1.0);
 }
 
 vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float shadeBottom) {
   vec3 p = ro + rd * sh.t;
   float pixRaw = sh.t * pixAng;
-  vec3 n = seatNormal(p, max(0.0006, pixRaw * 0.7));
-  vec3 v = -rd;
-  float nvGeo = max(dot(n, v), 0.0);
-  float pix = pixRaw / max(nvGeo, 0.25);
-
   // 哪一排、局部坐标
   vec3 q0 = seatFrame(p, 0.0), q1 = seatFrame(p, 1.0);
   bool front = sdSeatBack(q1) < sdSeatBack(q0);
   vec3 q = front ? q1 : q0;
+  vec3 n = seatNormal(p, max(0.0006, pixRaw * 0.7), front ? 1.0 : 0.0);
+  vec3 v = -rd;
+  float nvGeo = max(dot(n, v), 0.0);
+  float pix = pixRaw / max(nvGeo, 0.25);
   float th = seatHalfThick(q.y);
   float fr = (q.x + th) / (2.0 * th);                 // 0 背面 … 1 正面
   float wz = q.z - SEAT_ZC;

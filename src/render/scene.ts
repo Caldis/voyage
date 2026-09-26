@@ -172,7 +172,8 @@ void main() {
 
   // ---- 舱壁（带弧度的内饰板、窗罩翻边、接缝、脏污；见 cabin-shading.glsl.ts） ----
   vec3 pW = ro + rd * tWall;
-  float wallSeatAO = mix(0.55, 1.0, smoothstep(0.0, 0.12, sdSeats(pW)));
+  // 座椅顶在窗中心以下约 5 cm，再往上 12 cm 以外不可能有接触阴影，省掉距离场
+  float wallSeatAO = pW.y < 0.08 ? mix(0.55, 1.0, smoothstep(0.0, 0.12, sdSeats(pW))) : 1.0;
   float seed = wi * 3.7 + 1.0;
   vec3 wall = shadeWall(pW, rd, tWall, pixAng, wq, dBezel, seed, wallSeatAO, cl);
   // 窗板反射舱内用的平滑版本（和改前的舱壁一致，不带细节）
@@ -236,11 +237,14 @@ void main() {
   // 油污的前向散射：视线离太阳越近越亮，散射角大约 10–20°
   float fwdLobe = exp(-(1.0 - dot(rd, sunC)) / 0.03);
   view *= 1.0 - 0.1 * sm;
-  view += sunLit * eSunNormal * (0.015 * sc.x + 0.004 * sm * fwdLobe);
+  // 划痕和擦痕的附加亮度按窗外亮度做相对上限：夜里窗外很暗、曝光拉高时，舱内光照亮的细纹不能反客为主。
+  // 直射光点亮的那一路（逆光、太阳在视野附近）上限放宽
+  vec3 viewRef = view;
+  view += min(sunLit * eSunNormal * (0.015 * sc.x + 0.004 * sm * fwdLobe), viewRef * 0.6);
   // 划痕 / 擦痕平时也能隐约看到：被舱内光和天空漫射照到，只有背景的百分之几
   float wm = wipeMarks(q, pixPane);
-  view += M_PI * lWin * (0.015 * sc.y + 0.006 * sm + 0.02 * wm) + eCabinRefl / M_PI * 0.1 * (sc.y + wm);
-  view += sunLit * eSunNormal * 0.006 * wm * fwdLobe;
+  view += min(M_PI * lWin * (0.015 * sc.y + 0.006 * sm + 0.02 * wm) + eCabinRefl / M_PI * 0.1 * (sc.y + wm), viewRef * 0.03);
+  view += min(sunLit * eSunNormal * 0.006 * wm * fwdLobe, viewRef * 0.3);
   // 窗板外侧的水：水线和水珠像小透镜，把周围一大片的光折射进来——亮度被「平均」成窗外的平均亮度，
   // 边缘因为全反射偏暗；迎着阳光时会闪亮
   vec2 wetCov = waterOnPane(q, pixPane, -uSeatSign, uTime, uWetness);
