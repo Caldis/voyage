@@ -296,15 +296,14 @@ float wingCanoe(float u, float yRel, float zRel, float len) {
   // 细长的独木舟：头部椭圆，最宽处（约 28 cm 宽、48 cm 高）在前 1/3，往后宽度收到 30%、高度收到 40%，
   // 轴线在尾段向上翘，尾部成扁的「刀背」；尾端斜切（下缘比上缘短）
   float head = uc < 0.2 ? sqrt(max(1.0 - pow((0.2 - uc) / 0.2, 2.0), 0.0)) : 1.0;
+  head *= sqrt(max(1.0 - pow(max(uc - 0.95, 0.0) / 0.05, 2.0), 0.0));   // 尾端小圆角
   float tail = smoothstep(0.35, 1.0, uc);
   float wz = max(0.14 * head * mix(1.0, 0.3, tail), 0.004);
   float hy = max(0.24 * head * mix(1.0, 0.4, tail), 0.004);
   float yc = 0.14 * smoothstep(0.4, 1.0, uc);          // 尾段上翘
   vec2 q = vec2(zRel / wz, (yRel - yc) / hy);
   float d = (length(q) - 1.0) * min(wz, hy);
-  // 斜切的尾端：越靠下越早结束
-  float cut = (u - 1.0) * len + max(-(yRel - yc), 0.0) * 0.8;
-  return max(d, max(-u * len, cut));
+  return max(d, max(-u, u - 1.0) * len);
 }
 
 float sdWingFairing(vec3 P) {
@@ -354,9 +353,13 @@ float sdWingNacelle(vec3 P) {
   float rCore = uk < 3.75 ? mix(0.66, 0.5, (uk - 2.5) / 1.25) : 0.36 * sqrt(max(1.0 - (uk - 3.75) / 0.65, 0.0));
   float dCore = max(rr - rCore, max(2.5 - u, u - 4.4));
   // 吊挂：短舱顶上的一道梁，一直伸到机翼下面
+  // 截面是圆角矩形（倒角 0.1 m），前端顺着短舱斜着降下去，后段收低成尖的整流尾，不是一块方盒
   vec3 pp = P - vec3(wingEngInletX() - 2.75, WING_ENG_Y + 0.95, WING_ENG_Z);
-  vec3 qb = abs(pp) - vec3(2.15, 0.3, 0.13);
-  float dPy = length(max(qb, 0.0)) + min(max(qb.x, max(qb.y, qb.z)), 0.0) - 0.04;
+  vec3 qb = abs(pp) - vec3(2.15, 0.3, 0.13) + vec3(0.1);
+  float dPy = length(max(qb, 0.0)) + min(max(qb.x, max(qb.y, qb.z)), 0.0) - 0.1;
+  float front = P.y - (WING_ENG_Y + 0.95 + 0.3 * clamp((u - 0.6) / 1.2, 0.0, 1.0));
+  float aft = P.y - (WING_ENG_Y + 1.25 - 0.55 * clamp((u - 3.4) / 1.5, 0.0, 1.0));
+  dPy = max(dPy, max(front, aft) * 0.8);
   return min(min(min(dCowl, dSpin), dCore), dPy) * 0.85;
 }
 
@@ -532,6 +535,9 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         gWingSkip = w.part <= 1 ? 0 : w.part;
         // 背光面不用算阴影
         if (dot(n, lA) <= 0.0 || wingFuselageShadow(P, lA) <= 0.0) break;
+        // 襟翼不算自阴影：它贴在整流罩下面，近似的距离场在那条缝里给出一片片硬边的「迷彩」暗斑（穿云时最明显）；
+        // 襟翼前段被整流罩挡住的部分已经在材质里按弦向位置压暗
+        if (w.part == 2) break;
       }
     } else {
       // 软阴影：半影按「最近距离 / 走过的距离」估计

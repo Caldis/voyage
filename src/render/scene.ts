@@ -55,10 +55,23 @@ uniform int uDebug;
 varying vec2 vUv;
 ${TRAFFIC_COMMON}
 
-// 第二个输出（MRT，不占纹理单元）：窗外那一路「加窗板效果之前」的颜色（rgb）和窗板效果对它的乘性系数（a）。
-// 机翼 pass 按 场景 + 机翼覆盖率 × 窗外遮罩 × (机翼 − 窗外) × 系数 做增量合成：窗板上的划痕、水痕、舱内反射照样叠在机翼上
-layout(location = 1) out highp vec4 outWingRef;
-const float PANE_TRANSMITTANCE = 0.85;      // 两层亚克力 + 内层防刮板
+const float PANE_TRANSMITTANCE = 0.85;
+
+// 输出的 alpha 只给机翼 pass 读（它再把窗外遮罩写回自己的输出给曝光用），所以这里把两样东西打包进 alpha 的 32 位里：
+// 窗外遮罩 m（5 位）和窗外那一路「加窗板效果之前」的颜色 O（RGB 各 6 位 + 共享指数 5 位）。
+// 机翼 pass 按 场景 + 机翼覆盖率 × m × (机翼 − O) × 窗板乘性系数 做增量合成：划痕、水痕、舱内反射照样叠在机翼上。
+// 为什么不用第二个渲染目标（MRT）：Windows 上 ANGLE 的 D3D 后端链接时只按单目标生成像素着色器，
+// 画进两张目标时要在首帧同步重编整个场景着色器（实测首帧卡 50 秒、有时丢上下文）；也不能给场景加 sampler（已 16/16）。
+// 位布局：0–4 m，5–10 R，11–16 G，17–22 B，23 恒为 1，24–28 指数 + 20，29–31 为 0——浮点指数域落在 1..63，
+// 既不是 0（非规格数可能被冲成 0）也不是全 1（NaN / Inf 可能被规范化），原样存得下。半精度目标存不下，uHdrMax 小于 1e10 时不打包
+float packWingRef(float m, vec3 o) {
+  if (uHdrMax < 1e10) return m;
+  float mx = max(max(o.r, o.g), max(o.b, 1e-30));
+  int e = clamp(int(floor(log2(mx))) + 1, -20, 11);
+  uvec3 q = uvec3(clamp(round(o / exp2(float(e)) * 63.0), 0.0, 63.0));
+  uint bits = uint(round(clamp(m, 0.0, 1.0) * 31.0)) | (q.r << 5) | (q.g << 11) | (q.b << 17) | (1u << 23) | (uint(e + 20) << 24);
+  return uintBitsToFloat(bits);
+}      // 两层亚克力 + 内层防刮板
 const vec3 PLASTIC_ALBEDO = vec3(0.78, 0.76, 0.72);
 
 ${OCEAN_COMMON}
@@ -124,7 +137,7 @@ ${FABRIC_COMMON}
 ${SEATS_COMMON}
 
 void main() {
-  outWingRef = vec4(0.0);
+  vec3 viewPre = vec3(0.0);   // 窗外加窗板效果之前的颜色，打包给机翼 pass
   vec3 rd = cabinRay(gl_FragCoord.xy);
   vec3 ro = uHead;
 
@@ -225,7 +238,7 @@ void main() {
   // 远处的飞机和航迹云在云层之上，挡在海面和云前面
   vec4 tr = trafficRadiance(rdW);
   view = (view * tr.a + tr.rgb + boltRadiance(rdW)) * PANE_TRANSMITTANCE;
-  vec3 viewPre = view;
+  viewPre = view;
 
   // ---- 窗板上的细节 ----
   vec2 q = pPane.xy;
@@ -258,11 +271,6 @@ void main() {
   // 窗板反射舱内：正对时约 4%，斜看时更多（菲涅尔）
   float fr = 0.04 + 0.96 * pow(1.0 - clamp(rd.z, 0.0, 1.0), 5.0);
   view += fr * wallRefl * 1.5;
-  // 窗板效果里和窗外亮度成正比的部分（油污、水珠暗边、透镜化、透气孔）；附加的亮度（划痕、擦痕、反射）与窗外无关，增量合成时自然保留
-  float paneMul = (1.0 - 0.1 * sm) * (1.0 - 0.3 * edge)
-    * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
-  if (any(greaterThan(lensed, viewPre))) paneMul *= 1.0 - wc * 0.12;
-  outWingRef = vec4(viewPre, paneMul);
   }
   vec3 col = mix(wall, mix(mix(reveal, view, inPane), shade, shaded), inBezel);
   col = mix(col, seatCol, seat.cov);
@@ -272,7 +280,7 @@ void main() {
   // HDR 目标是 32 位浮点时可以原样存下太阳的辐亮度（约 1.8e6 kcd/m²），眩光的能量才对。
   // alpha 存「这个像素有多少是窗外」，曝光时窗外和舱内分开适应
   float outsideMask = isMain * inBezel * inPane * (1.0 - shaded) * (1.0 - seat.cov);
-  gl_FragColor = vec4(min(col, vec3(uHdrMax)), outsideMask);
+  gl_FragColor = vec4(min(col, vec3(uHdrMax)), packWingRef(outsideMask, viewPre));
 }
 `;
 

@@ -71,13 +71,11 @@ const floatHdr = renderer.extensions.has("OES_texture_float_linear");
 const hdrType = floatHdr ? THREE.FloatType : THREE.HalfFloatType;
 const bloom = new Bloom(pass, hdrType);
 sceneMat.uniforms.uHdrMax.value = floatHdr ? 1e20 : 6e4;
-// 场景 pass 画两个输出（MRT）：0 = 场景 HDR；1 = 窗外加窗板效果之前的颜色 + 窗板乘性系数（给机翼 pass 做增量合成）
 const hdr = new THREE.WebGLRenderTarget(1, 1, {
   type: hdrType,
   minFilter: THREE.LinearFilter,
   magFilter: THREE.LinearFilter,
   depthBuffer: false,
-  count: 2,
 });
 // 机翼 pass（wing-pass.ts）：读场景的 hdr，把机翼合成上去写到 hdrWing；后面的眩光、曝光都读 hdrWing。
 // 必须在所有 Object.assign(sceneMat.uniforms, …) 之后创建：它复用的是创建那一刻场景材质里的 uniform 对象
@@ -335,8 +333,7 @@ function renderFrame(now: number) {
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
   // 场景（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdr，机翼 pass 再读实际画出来的 hdr 合成
   pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : sceneMat, hdr);
-  wingMat.uniforms.uScene.value = hdr.textures[0];
-  wingMat.uniforms.uSceneRef.value = hdr.textures[1];
+  wingMat.uniforms.uScene.value = hdr.texture;
   pass.render(wingMat, hdrWing);
   exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
 
@@ -354,15 +351,20 @@ requestAnimationFrame(() =>
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
       geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
-      // 场景和机翼两个程序放进同一次 compileAsync：驱动并行编译，总时间约等于较慢的那一个
-      const probe = new THREE.Scene();
-      for (const mat of [sceneMat, wingMat]) {
+      // 场景和机翼两个程序各自绑定自己真正要画进去的目标再发起编译（compileAsync 调用时就同步提交链接，之后只是轮询）：
+      // Windows 上 ANGLE 的 D3D 后端按「链接时绑定的帧缓冲」生成像素着色器的输出布局。场景画进两张目标（MRT）、机翼画进一张，
+      // 绑错的话首帧画的时候要按新布局同步重编一遍（实测首帧卡了 52 秒）。两个链接都提交后一起等，驱动并行编译
+      const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+      const jobs: Promise<unknown>[] = [];
+      for (const [mat, target] of [[sceneMat, hdr], [wingMat, hdrWing]] as const) {
+        const probe = new THREE.Scene();
         const mesh = new THREE.Mesh(geo, mat);
         mesh.frustumCulled = false;
         probe.add(mesh);
+        renderer.setRenderTarget(target);
+        jobs.push(renderer.compileAsync(probe, cam));
       }
-      renderer.setRenderTarget(hdr);
-      await renderer.compileAsync(probe, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
+      await Promise.all(jobs);
       renderer.setRenderTarget(null);
     } catch (err) {
       console.warn("场景着色器后台编译失败，改为首帧同步编译", err);

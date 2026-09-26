@@ -14,7 +14,7 @@ import { WING_SHADING_COMMON } from "./wing-shading.glsl";
  * （FXC 编译时间随单个着色器的规模超线性增长）。拆成独立的程序后，两个程序靠 KHR_parallel_shader_compile 并行编译，各自规模也小一半。
  *
  * 合成：场景输出的 alpha 是「这个像素有多少是窗外」（本窗、窗板以内、没被遮光板和座椅挡住），记作 m；
- * 场景的第二个输出（MRT）是窗外加窗板效果之前的颜色 O 和窗板效果的乘性系数 k。
+ * 场景输出的 alpha 里还打包了窗外加窗板效果之前的颜色 O（见 scene.ts 的 packWingRef），窗板效果的乘性系数 k 在这里重算。
  *   结果 = 场景 + 机翼覆盖率 × m × (机翼 × 窗板透射率 − O) × k，再加上翼尖灯本身（亮点 + 云雾里的光晕）× m。
  * 窗板的附加亮度（划痕、擦痕、水珠、舱内反射）与窗外无关，增量合成时原样保留在机翼上。
  */
@@ -26,8 +26,9 @@ ${CABIN_COMMON}
 ${PANE_COMMON}
 ${WING_COMMON}
 ${LIGHTS_COMMON}
-uniform sampler2D uScene;        // 场景 pass 的 HDR 结果（alpha = 窗外遮罩）
-uniform sampler2D uSceneRef;     // 场景 pass 的第二个输出：窗外加窗板效果之前的颜色（rgb）与窗板效果的乘性系数（a）
+uniform sampler2D uScene;        // 场景 pass 的 HDR 结果（alpha 里打包了窗外遮罩和窗外原色，见 scene.ts 的 packWingRef）
+uniform float uTime;
+uniform float uWetness;
 uniform sampler2D uClouds;       // 半分辨率云层（雾色用）
 uniform float uCameraFog;
 uniform float uHdrMax;
@@ -35,12 +36,29 @@ varying vec2 vUv;
 const float WING_PANE_T = 0.85;  // 窗板透射率，和 scene.ts 的 PANE_TRANSMITTANCE 一致
 ${WING_SHADING_COMMON}
 
+// 解包 scene.ts 的 packWingRef：返回窗外遮罩 m，o 是窗外加窗板效果之前的颜色
+float unpackWingRef(float a, out vec3 o) {
+  o = vec3(0.0);
+  if (uHdrMax < 1e10) return a;
+  uint bits = floatBitsToUint(a);
+  float m = float(bits & 31u) / 31.0;
+  float e = float(int((bits >> 24) & 31u) - 20);
+  o = vec3(float((bits >> 5) & 63u), float((bits >> 11) & 63u), float((bits >> 17) & 63u)) / 63.0 * exp2(e);
+  return m;
+}
+
 void main() {
   vec4 sc = texelFetch(uScene, ivec2(gl_FragCoord.xy), 0);
+  vec3 o;
+  float m = unpackWingRef(sc.a, o);
+  sc.a = m;                        // 写回真正的窗外遮罩，曝光要用
+  // 窗板平面上的像素足迹（屏幕导数要在分支之前取）
+  vec3 rd0 = cabinRay(gl_FragCoord.xy);
+  vec3 pPane0 = uHead + rd0 * ((PANE_DEPTH - uHead.z) / max(rd0.z, 1e-4));
+  float pixPane = max(length(fwidth(pPane0.xy)), 1e-5);
   vec4 cloud = texture(uClouds, gl_FragCoord.xy / uResolution);   // 隐式求导的采样放在分支之前
   gl_FragColor = sc;
-  float m = sc.a;
-  vec3 rd = cabinRay(gl_FragCoord.xy);
+  vec3 rd = rd0;
   vec3 ro = uHead;
   if (m <= 0.0 || rd.z < 1e-4) return;
 
@@ -56,9 +74,17 @@ void main() {
   vec3 col = sc.rgb;
   if (wing.a > 0.0) {
     // 增量合成：只把「窗外 → 机翼」的差换进去，窗板上的划痕、水痕、舱内反射都留着；
-    // 窗框 / 座椅部分覆盖的像素按 m 加权，交界处不再漏出一条天空色细线
-    vec4 ref = texelFetch(uSceneRef, ivec2(gl_FragCoord.xy), 0);
-    col = max(col + wing.a * m * (wing.rgb * WING_PANE_T - ref.rgb) * ref.a, vec3(0.0));
+    // 窗框 / 座椅部分覆盖的像素按 m 加权，交界处不再漏出一条天空色细线。
+    // 窗板效果里和窗外亮度成正比的部分（油污、水珠暗边与透镜化、透气孔）按 scene.ts 的公式重算
+    vec2 q = pPane0.xy;
+    vec2 wetCov = waterOnPane(q, pixPane, -uSeatSign, uTime, uWetness);
+    float wc = clamp(wetCov.x + wetCov.y, 0.0, 1.0);
+    float edge = clamp(4.0 * wc * (1.0 - wc) + 0.6 * wetCov.x, 0.0, 1.0);
+    float dHole = length(q - vec2(0.0, -0.145));
+    float k = (1.0 - 0.1 * smudges(q)) * (1.0 - 0.3 * edge) * (1.0 - 0.12 * wc)
+      * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
+    vec3 w = wing.rgb * WING_PANE_T;
+    col = uHdrMax < 1e10 ? mix(col, w * k, wing.a * m) : max(col + wing.a * m * (w - o) * k, vec3(0.0));
   }
   col += wingLights(ro, rd) * WING_PANE_T * m;
   gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);
@@ -73,6 +99,6 @@ export function createWingMaterial(sceneUniforms: Record<string, THREE.IUniform>
     depthTest: false,
     depthWrite: false,
     toneMapped: false,
-    uniforms: { ...sceneUniforms, uScene: { value: null }, uSceneRef: { value: null } },
+    uniforms: { ...sceneUniforms, uScene: { value: null } },
   });
 }
