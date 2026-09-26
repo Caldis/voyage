@@ -292,7 +292,9 @@ float sdWingSlat(vec3 P) {
 // 截面是椭圆（半宽 W、半高 H）；u 是沿轴线的相对位置，r(u) 是截面缩放：椭圆头 → 等粗 → 收细到钝尾
 float wingCanoe(float u, float yRel, float zRel, float len) {
   float uc = clamp(u, 0.0, 1.0);
-  float r = uc < 0.25 ? sqrt(max(1.0 - pow((0.25 - uc) / 0.25, 2.0), 0.0)) : mix(1.0, 0.5, smoothstep(0.55, 1.0, uc));
+  float r = uc < 0.25 ? sqrt(max(1.0 - pow((0.25 - uc) / 0.25, 2.0), 0.0)) : mix(1.0, 0.55, smoothstep(0.55, 0.95, uc));
+  // 尾端最后 6% 收成圆角的钝头（不是一刀切的平面）
+  r *= sqrt(max(1.0 - pow(max(uc - 0.94, 0.0) / 0.06, 2.0), 0.0));
   const float W = 0.16;
   const float H = 0.28;
   vec2 q = vec2(zRel / W, yRel / H);
@@ -497,12 +499,12 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         // 旧写法用值噪声直接当法线扰动：值噪声的导数不连续，近看时反射被切成一块块的「碎面台阶」
         vec2 cell = vec2(P.z / 0.6, P.x / 0.2);
         vec2 fc = fract(cell);
-        float amp = 0.0012 * (0.4 + 0.6 * hash12(floor(cell) + 7.1));   // 每格鼓得不一样（米）
+        float amp = 0.0005 * (0.4 + 0.6 * hash12(floor(cell) + 7.1));   // 每格鼓得不一样（米）
         vec2 g = vec2(
           sin(6.2832 * fc.x) * (1.0 - cos(6.2832 * fc.y)) * 6.2832 / 0.6,
           (1.0 - cos(6.2832 * fc.x)) * sin(6.2832 * fc.y) * 6.2832 / 0.2) * amp * 0.25;
         // 只作用在主翼上下表面（法线大致朝上 / 朝下时），g = (∂h/∂z, ∂h/∂x)
-        float flatness = abs(n.y);
+        float flatness = w.part == 0 ? abs(n.y) : 0.0;   // 只作用在主翼蒙皮上：圆弧前缘、襟翼、小翼上会被拉成一块块的斑
         n = normalize(n - vec3(g.y, 0.0, g.x) * flatness * sign(n.y));
         // 背向视线的法线（轮廓上、后缘这种薄边上常见）掰到略微朝向视线，而不是整个翻过来：
         // 翻转会让相邻像素在上、下表面的法线之间跳，后缘成了一串亮点
@@ -524,7 +526,8 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
       }
     } else {
       // 软阴影：半影按「最近距离 / 走过的距离」估计
-      res = min(res, 6.0 * d / ts);
+      // 半影系数取大一点（阴影边更硬）：距离场是近似的，系数小时襟翼、整流罩上的软阴影边缘被拉成一团团斑块
+      res = min(res, 14.0 * d / ts);
       if (res < 0.02) break;
       ts += clamp(d * 0.8, 0.05, 1.5);
       if (ts > 24.0) break;
@@ -763,9 +766,10 @@ WingSurface wingPanelSurface(vec3 P, float pix, float up, int part) {
     m.rough = 0.6;
   }
   // 襟翼放下后主翼整流罩的下表面（从后面能看到的「缝」）：结构件，深色
-  if (part == 0 && uFlap > 1e-3 && up < 0.0 && w.xi > 0.5 && w.s > WING_FLAP_S0 && w.s < WING_FLAP_S1) {
-    m.albedo *= 0.4;
-    m.coat = 0.1;
+  if (part == 0 && uFlap > 1e-3 && w.xi > 0.5 && w.s > WING_FLAP_S0 && w.s < WING_FLAP_S1) {
+    float under = smoothstep(0.2, -0.4, up);
+    m.albedo *= mix(1.0, 0.4, under);
+    m.coat = mix(m.coat, 0.1, under);
   }
   if (part == 3 && up < 0.0) { m.albedo *= 0.5; m.coat = 0.2; }
   return m;

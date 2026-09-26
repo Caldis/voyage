@@ -50,7 +50,8 @@ void main() {
   vec3 eDown = eSkyH + keyLight(uCamR, upW) * max(uKeyDir.y, 0.0);
   float belowAlbedo = mix(0.06, 0.7, clamp(uCoverage * 0.9, 0.0, 1.0));
 
-  vec4 wing = wingView(ro, rd, (PANE_DEPTH - ro.z) / rd.z, sunC, eSkyH, eDown, belowAlbedo, cloud);
+  float refL = dot(sc.rgb, vec3(0.2126, 0.7152, 0.0722)) / WING_PANE_T;
+  vec4 wing = wingView(ro, rd, (PANE_DEPTH - ro.z) / rd.z, sunC, eSkyH, eDown, belowAlbedo, cloud, refL);
   vec3 col = sc.rgb;
   if (wing.a > 0.0) {
     vec3 pPane = ro + rd * ((PANE_DEPTH - ro.z) / rd.z);

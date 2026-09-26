@@ -145,7 +145,8 @@ vec2 wingRgss(int k) {
 // 只用中心射线的解析覆盖率时，轮廓只有外侧半个像素有过渡、内侧是硬的，距离场又常高估距离，斜边上还是一级级的台阶。
 // 开销只落在边缘像素上（回归场景里约占 1% 以下）。
 // 求交和着色都放在同一个循环里、各只有一处调用，FXC 不会把它们内联成五份（冷编译时间不涨）。
-vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, float belowAlbedo, vec4 cloud) {
+// refL：这个像素背后窗外的亮度（场景 pass 的结果），给子样本去亮点用
+vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, float belowAlbedo, vec4 cloud, float refL) {
   vec3 lA = vec3(uSeatSign * sunC.x, sunC.y, sunC.z);
   vec3 right = uCamBasis[0];
   vec3 up = uCamBasis[1];
@@ -156,6 +157,9 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
   float single = 1.0;  // 1 = 只有中心射线（解析覆盖率），0 = 超采样
   float t0 = tStart;
   float sh0 = 1.0;
+  vec3 subCol[4];
+  float subCov[4];
+  for (int i = 0; i < 4; i++) { subCol[i] = vec3(0.0); subCov[i] = 0.0; }
   for (int k = min(uWingSteps, 0); k < 5; k++) {
     if (k >= n) break;
     vec3 rdk = k == 0 ? rd : normalize(rd + (right * wingRgss(k).x + up * wingRgss(k).y) * pa);
@@ -183,8 +187,29 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     }
     // 调试：超采样的像素染成品红（亮度不变，不影响自动曝光）
     if (uWingEdgeAA > 1 && single < 0.5) col = vec3(1.0, 0.0, 1.0) * dot(col, vec3(0.2126, 0.7152, 0.0722)) * 1.4;
-    acc += col * c;
-    covSum += c;
+    if (single > 0.5) {
+      acc += col * c;
+      covSum += c;
+    } else {
+      subCol[k - 1] = col;
+      subCov[k - 1] = c;
+    }
+  }
+  if (single < 0.5) {
+    // 子样本去亮点（firefly）：薄后缘这类地方偶尔有一条子射线打到一个法线极端的点（后缘端面、掠射的镜面），
+    // 亮度是周围的几十倍，平均后就是一颗白点，沿后缘排成虚线。把每个子样本的亮度限制在
+    // 「打中的子样本里最暗的 3 倍」和「背后窗外亮度的 1.2 倍」两者中较大的那个以内——真实的明暗交界不受影响
+    float lMin = 1e30;
+    for (int i = 0; i < 4; i++) {
+      if (subCov[i] > 0.0) lMin = min(lMin, dot(subCol[i], vec3(0.2126, 0.7152, 0.0722)));
+    }
+    float lCap = max(2.0 * lMin, 0.7 * refL);
+    for (int i = 0; i < 4; i++) {
+      if (subCov[i] <= 0.0) continue;
+      float l = dot(subCol[i], vec3(0.2126, 0.7152, 0.0722));
+      acc += subCol[i] * (l > lCap ? lCap / l : 1.0) * subCov[i];
+      covSum += subCov[i];
+    }
   }
   if (covSum <= 0.0) return vec4(0.0);
   return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.25);
