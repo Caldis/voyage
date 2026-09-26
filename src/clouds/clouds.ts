@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { ATMOSPHERE_COMMON, FULLSCREEN_VERT } from "../atmosphere/common.glsl";
+import { AERIAL_MAX_DISTANCE_KM, ATMOSPHERE_COMMON, FULLSCREEN_VERT } from "../atmosphere/common.glsl";
 import type { Atmosphere } from "../atmosphere/luts";
 import type { FullscreenPass } from "../render/pass";
 import { LIGHTS_COMMON } from "../render/lights.glsl";
@@ -10,6 +10,10 @@ import type { CloudNoise } from "./noise";
 /**
  * 体积云：半分辨率光线步进 + 时间累积。
  * 输出纹理 RGB = 已经加上空气透视的云辐亮度（预乘），A = 云的透射率（背景还剩多少）。
+ *
+ * 步进程序只有一个颜色输出，云的深度写进 gl_FragDepth（深度纹理，按 AERIAL_MAX_DISTANCE 归一化）（PERF-1）。
+ * 以前是 MRT（颜色 + 深度两个颜色输出）：ANGLE/D3D11 链接时只按第一个输出生成像素着色器，
+ * 并行编译完成后第一次 draw 到双附件帧缓冲时，还要在 GPU 线程上同步把整个步进像素着色器重编一遍（冷启动冻结约 4.7 s）。
  */
 
 const MARCH_FRAG = /* glsl */ `
@@ -21,7 +25,6 @@ uniform sampler3D uAerialInscatter;
 uniform sampler3D uAerialTransmittance;
 uniform float uFrame;
 uniform vec2 uCloudResolution;
-layout(location = 1) out highp vec4 outDepth;
 varying vec2 vUv;
 
 // 交错梯度噪声：每个像素的步进起点错开，时间累积后抹平成平滑结果
@@ -101,7 +104,8 @@ float hg(float c, float g) {
 }
 
 void main() {
-  outDepth = vec4(AERIAL_MAX_DISTANCE, 0.0, 0.0, 1.0);
+  // 深度写进深度附件（单输出，见文件头）。写了 gl_FragDepth 的程序每条路径都要写，否则深度未定义
+  gl_FragDepth = 1.0;
   gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
   vec2 fc = gl_FragCoord.xy * (uResolution / uCloudResolution);
   vec3 rdC = cabinRay(fc);
@@ -304,15 +308,16 @@ void main() {
   apL *= uSunIlluminance;
   L = L * apT + apL * (1.0 - T);
   gl_FragColor = vec4(min(L, vec3(60000.0)), T);
-  outDepth = vec4(depth, 0.0, 0.0, 1.0);
+  gl_FragDepth = clamp(depth / AERIAL_MAX_DISTANCE, 0.0, 1.0);
 }
 `;
 
 // 时间累积：把上一帧的结果按云的运动重投影过来，再和这一帧混合；用邻域夹取防止拖影
 const RESOLVE_FRAG = /* glsl */ `
 ${VIEW_COMMON}
+const float CLOUD_DEPTH_SCALE = ${AERIAL_MAX_DISTANCE_KM.toFixed(1)};  // 深度纹理里存的是 depth / 这个值（与步进程序的 AERIAL_MAX_DISTANCE 一致）
 uniform sampler2D uCurrent;
-uniform sampler2D uCurrentDepth;
+uniform sampler2D uCurrentDepth;   // 步进程序的深度附件（gl_FragDepth）
 uniform sampler2D uHistory;
 uniform mat3 uPrevCamBasis;
 uniform mat3 uPrevCabinToWorld;
@@ -334,7 +339,7 @@ void main() {
     mx = max(mx, s);
   }
 
-  float depth = texture(uCurrentDepth, uv).r;
+  float depth = texture(uCurrentDepth, uv).r * CLOUD_DEPTH_SCALE;
   vec3 rd = uCabinToWorld * cabinRay(gl_FragCoord.xy * (uResolution / uCloudResolution));
   vec3 prevDir = normalize(rd * depth + uMotion);
   vec3 v = transpose(uPrevCamBasis) * (transpose(uPrevCabinToWorld) * prevDir);
@@ -410,9 +415,8 @@ export function createCloudUniforms(noise: CloudNoise) {
 }
 export type CloudUniforms = ReturnType<typeof createCloudUniforms>;
 
-function target(w: number, h: number, count = 1) {
+function target(w: number, h: number) {
   return new THREE.WebGLRenderTarget(w, h, {
-    count,
     type: THREE.HalfFloatType,
     format: THREE.RGBAFormat,
     minFilter: THREE.LinearFilter,
@@ -421,8 +425,22 @@ function target(w: number, h: number, count = 1) {
   });
 }
 
+/** 步进的输出：颜色（RGB 辐亮度 + A 透射率）+ 深度附件（云的深度，gl_FragDepth） */
+function rawTarget(w: number, h: number) {
+  const depthTexture = new THREE.DepthTexture(w, h, THREE.FloatType);
+  depthTexture.format = THREE.DepthFormat;
+  return new THREE.WebGLRenderTarget(w, h, {
+    type: THREE.HalfFloatType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthBuffer: true,
+    depthTexture,
+  });
+}
+
 export class Clouds {
-  private raw = target(1, 1, 2);
+  private raw = rawTarget(1, 1);
   private history = [target(1, 1), target(1, 1)];
   private frame = 0;
   /** 云的渲染分辨率相对全屏的比例 */
@@ -450,6 +468,10 @@ export class Clouds {
     const common = { depthTest: false, depthWrite: false, toneMapped: false, vertexShader: FULLSCREEN_VERT };
     this.marchMat = new THREE.ShaderMaterial({
       ...common,
+      // 深度测试恒通过、写深度：云深度经 gl_FragDepth 写进 raw 的深度纹理（关掉深度测试时 GL 不写深度）
+      depthTest: true,
+      depthWrite: true,
+      depthFunc: THREE.AlwaysDepth,
       fragmentShader: MARCH_FRAG,
       uniforms: {
         ...atmosphere.sharedUniforms,
@@ -471,8 +493,8 @@ export class Clouds {
       fragmentShader: RESOLVE_FRAG,
       uniforms: {
         ...viewUniforms,
-        uCurrent: { value: null },
-        uCurrentDepth: { value: null },
+        uCurrent: { value: this.raw.texture },
+        uCurrentDepth: { value: this.raw.depthTexture },
         uHistory: { value: null },
         uPrevCamBasis: { value: this.prevCamBasis },
         uPrevCabinToWorld: { value: this.prevCabinToWorld },
@@ -533,8 +555,8 @@ export class Clouds {
 
     const [prev, next] = this.history;
     const r = this.resolveMat.uniforms;
-    r.uCurrent.value = this.raw.textures[0];
-    r.uCurrentDepth.value = this.raw.textures[1];
+    r.uCurrent.value = this.raw.texture;
+    r.uCurrentDepth.value = this.raw.depthTexture;
     r.uHistory.value = prev.texture;
     r.uMotion.value.copy(motion);
     r.uReset.value = this.reset;
