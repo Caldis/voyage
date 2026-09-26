@@ -397,7 +397,9 @@ vec3 tetraDir(int i) {
 // 求交、法线、阴影各调一处时整个场景着色器冷编译从约 40 秒涨到 85–95 秒，而且首次加载时出现过 VALIDATE_STATUS false + 上下文丢失。
 // 循环次数都依赖 uniform，FXC 也不会展开循环。
 // 求交的命中阈值取亚像素（旧版取 0.002·t，约两个像素，擦边的射线命中与否取决于步进落点，轮廓成了阶梯）。
-WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
+// marchSteps：求交最多走几步；shadowSteps：自阴影步数。边缘超采样的子射线从中心射线命中点附近出发，
+// 传较少的步数、不算阴影（沿用中心射线的）——一个 warp 里只要有一个边缘像素，整个 warp 都得等它走完
+WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int shadowSteps) {
   WingTrace w;
   w.t = -1.0;
   w.cov = 0.0;
@@ -432,14 +434,14 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
   vec3 n = vec3(0.0);
   float ts = 0.12;
   float res = 1.0;
-  int total = uWingSteps + 4 + uWingShadowSteps;
+  int total = marchSteps + 4 + shadowSteps;
   for (int i = min(uWingSteps, 0); i < total; i++) {
     vec3 q = phase == 0 ? oA + dA * t : (phase == 1 ? P + tetraDir(j) * 0.0023 : P + w.nA * 0.01 + lA * ts);
     float d = sdWing(q);
     if (phase == 0) {
       float fp = pa * t;                    // 这里一个像素多宽（米）
       bool done = false;
-      if (d < 0.25 * fp) {
+      if (d < 0.4 * fp) {
         w.t = t;
         w.cov = 1.0;
         w.part = gWingPart;
@@ -453,8 +455,8 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA) {
         rPrev = r;
         // 距离场只是近似（盒子式组合 + 翼型前缘陡），近处步长打六折保险；离得远（> 0.3 m）时相对误差小，打八五折省步数。
         // 最小步长取亚像素，免得穿过毫米级的后缘
-        t += max(d * (d > 0.3 ? 0.85 : 0.6), max(0.2 * fp, 0.002));
-        if (t > tExit || i >= uWingSteps - 1) {
+        t += max(d * (d > 0.3 ? 0.85 : 0.6), max(0.3 * fp, 0.002));
+        if (t > tExit || i >= marchSteps - 1) {
           // 像素中心离轮廓 best 个像素：覆盖率按一个像素宽的盒子滤波（轮廓整体外扩半个像素，看不出来）
           w.cov = clamp(1.0 - best, 0.0, 1.0);
           if (w.cov <= 0.0) return w;

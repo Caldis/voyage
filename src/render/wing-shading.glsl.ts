@@ -140,13 +140,19 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
   float covSum = 0.0;
   int n = 1;
   float single = 1.0;  // 1 = 只有中心射线（解析覆盖率），0 = 超采样
+  float t0 = tStart;
+  float sh0 = 1.0;
   for (int k = min(uWingSteps, 0); k < 5; k++) {
     if (k >= n) break;
     vec3 rdk = k == 0 ? rd : normalize(rd + (right * rgss(k).x + up * rgss(k).y) * pa);
-    WingTrace w = traceWing(ro, rdk, tStart, lA);
+    // 子射线：从中心射线命中点前一段开始走（挡在前面的部件一般在几米之内），不带自阴影（沿用中心射线的）
+    WingTrace w = traceWing(ro, rdk, t0, lA, k == 0 ? uWingSteps : uWingSteps / 4, k == 0 ? uWingShadowSteps : 0);
+    if (k > 0) w.shadow = sh0;
     if (k == 0 && uWingEdgeAA > 0 && ((w.cov > 0.0 && w.cov < 1.0) || w.edge)) {
-      n = 5;
+      n = uWingEdgeAA == 3 ? 1 : 5;   // 3：只判断不超采样（测开销用）
       single = 0.0;
+      t0 = max(tStart, w.t * 0.85);
+      sh0 = w.shadow;
       continue;
     }
     // 中心射线用解析覆盖率；子射线的斜坡收窄到半个像素（子射线之间相距约半个像素）
