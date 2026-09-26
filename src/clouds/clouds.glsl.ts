@@ -4,6 +4,16 @@
  * 坐标与大气一致：km，地心为原点，相机在 (0, uCamR, 0)，y 向上。
  * 云场随飞机前进整体向后平移：采样坐标 = 相机相对坐标 + uCloudOffset（飞机累计走过的水平位移）。
  */
+// ---- 雷暴 / 台风的占据网格（PERF-2）----
+// 一张粗的 3D 纹理（世界坐标，水平 OCC_N × OCC_N、竖直 OCC_LAYERS 层），格点上存「这里有没有雷暴 / 台风的云」（0 / 1）。
+// 由 clouds.ts 在天气变化或飞机走远时重建；云步进（主步进和受光步进）先查它，空白处不再求完整的雷暴 / 台风密度。
+// 查询时用 mip OCC_MIP 的三线性采样：mip 是 2×2×2 块的平均，只要块里有一个格点有云，采样值就 > 0，
+// 相当于把「有云」的范围向外膨胀了至少 2.5 个格距（mip 2），能盖住格点之间漏掉的小突起和不同 lod 噪声造成的表面差异
+export const OCC_N = 512;           // 水平格点数（每个方向）
+export const OCC_SPACING = 0.5;     // 水平格距，km：覆盖 ±128 km
+export const OCC_LAYERS = 84;       // 竖直层数：均分 [uShellBottom, uShellTop]
+export const OCC_MIP = 2.0;
+
 // 台风密度的两个版本共用同一段眼壁 / 眼底 / 卷云盖代码，只有雨带不同（见 CLOUD_COMMON 里的两处展开）
 function hurricaneDensityGlsl(name: string, bands: string): string {
   return /* glsl */ `
@@ -289,6 +299,28 @@ uniform vec2 uUpperWind;        // 高空风方向（砧状云被吹向下风方
 uniform vec4 uHurricane;        // 台风：(本地 x, 本地 z, 风眼半径 km, 是否启用)
 uniform vec4 uFlash;            // 闪电放电通道的一端（低端）：(本地 x, 高度 km, 本地 z, 强度)
 uniform vec3 uFlashB;           // 放电通道的另一端：(本地 x, 高度 km, 本地 z)；云内闪电是几公里长的一段
+
+// 雷暴 / 台风的占据网格（见文件头 OCC_*）。只有云步进程序定义 CLOUD_OCC：窗外程序的 sampler 已满 16/16，
+// 云影、探针照旧逐点求值
+#ifdef CLOUD_OCC
+uniform sampler3D uOcc;
+uniform vec2 uOccOrigin;        // 格点 (0, 0) 的世界坐标（km）
+uniform vec2 uOccAlt;           // (第 0 层的高度, 层距)，km
+uniform float uOccValid;        // 0：网格还没建好（程序还在后台编译），一律当作有云
+#endif
+// 这一点可能有雷暴 / 台风的云吗（false = 肯定没有，可以不求它们的密度）
+bool cloudWeatherMaybe(vec2 xz, float alt) {
+#ifdef CLOUD_OCC
+  if (uOccValid < 0.5) return true;
+  vec3 uvw = vec3((xz - uOccOrigin) / ${OCC_SPACING.toFixed(3)} + 0.5, (alt - uOccAlt.x) / uOccAlt.y + 0.5)
+           / vec3(${OCC_N.toFixed(1)}, ${OCC_N.toFixed(1)}, ${OCC_LAYERS.toFixed(1)});
+  // 网格外（离网格中心 128 km 以外）照旧逐点求值
+  if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return true;
+  return textureLod(uOcc, uvw, ${OCC_MIP.toFixed(1)}).r > 0.0;
+#else
+  return true;
+#endif
+}
 
 const float SHAPE_TILE = 7.0;     // 形状噪声一个周期覆盖的水平距离，km
 const float DETAIL_TILE = 0.9;
@@ -690,6 +722,9 @@ float cloudDensityLite(vec3 p, float lod, bool detail, bool fullHurricane) {
   float d = layerDensity(p, lod, detail);
   if (uStormCount > 0 || uHurricane.w > 0.5) {
     vec2 xz = p.xz + uCloudOffset;
+    if (uHurricane.w > 0.5) d *= hurricaneLayerMask(xz);
+    // 占据网格说这里没有雷暴 / 台风的云（只有云步进程序查网格，见 cloudWeatherMaybe）
+    if (!cloudWeatherMaybe(xz, alt)) return d;
     // 循环上界用 uniform（最多 4 个）：常量上界会被 FXC 展开成 4 份完整的雷暴密度，冷编译大幅变慢
     for (int i = 0; i < uStormCount; i++) {
       vec4 c = uStorms[i];
@@ -699,7 +734,6 @@ float cloudDensityLite(vec3 p, float lod, bool detail, bool fullHurricane) {
     }
     if (uHurricane.w > 0.5) {
       float hao;
-      d *= hurricaneLayerMask(xz);
       float hd = fullHurricane ? hurricaneDensityLight(xz, alt, lod, detail, hao) : hurricaneShadowDensity(xz, alt);
       d = max(d, hd * uCloudDensity);
     }
@@ -716,6 +750,10 @@ float cloudDensity(vec3 p, float lod, bool detail) {
   gStormAO = 1.0;
   if (uStormCount > 0 || uHurricane.w > 0.5) {
     vec2 xz = p.xz + uCloudOffset;
+    // 台风内部不要普通的层状云（和雷暴取最大之前先乘，与改动前的顺序等价：雷暴、台风不会同时出现）
+    if (uHurricane.w > 0.5) d *= hurricaneLayerMask(xz);
+    // 占据网格说这里没有雷暴 / 台风的云：只剩层状云（PERF-2：空白处占了雷暴 / 台风场景云步进的大半开销）
+    if (!cloudWeatherMaybe(xz, alt)) return d;
     // 循环上界用 uniform（最多 4 个）：常量上界会被 FXC 展开成 4 份完整的雷暴密度，冷编译大幅变慢
     for (int i = 0; i < uStormCount; i++) {
       vec4 c = uStorms[i];
@@ -728,7 +766,6 @@ float cloudDensity(vec3 p, float lod, bool detail) {
     if (uHurricane.w > 0.5) {
       // 台风的受光和雷暴一样处理（凹处遮蔽、下方反射光、表面细化）
       float hao;
-      d *= hurricaneLayerMask(xz);
       float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;
       if (hd > d) { d = hd; gStormW = 1.0; gStormAO = hao; }
     }

@@ -4,7 +4,7 @@ import type { Atmosphere } from "../atmosphere/luts";
 import type { FullscreenPass } from "../render/pass";
 import { LIGHTS_COMMON } from "../render/lights.glsl";
 import { VIEW_COMMON } from "../render/view.glsl";
-import { CLOUD_COMMON } from "./clouds.glsl";
+import { CLOUD_COMMON, OCC_LAYERS, OCC_N, OCC_SPACING } from "./clouds.glsl";
 import type { CloudNoise } from "./noise";
 
 /**
@@ -19,6 +19,7 @@ import type { CloudNoise } from "./noise";
 const MARCH_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
 ${VIEW_COMMON}
+#define CLOUD_OCC 1
 ${CLOUD_COMMON}
 ${LIGHTS_COMMON}
 uniform sampler3D uAerialInscatter;
@@ -371,6 +372,36 @@ void main() {
 }
 `;
 
+// 占据网格（PERF-2）：每个格点求一次雷暴 / 台风密度，有云写 1。只要大形，不做细节侵蚀（侵蚀只会让密度变小）。
+// 云步进远处用粗 mip 的噪声（lod 最大约 5）、近处用细的，两者的表面能差出一两公里：这里 lod 0 和 3.5 各求一次取并集，
+// 再靠查询时的 mip 膨胀兜住其余差异（见 clouds.glsl.ts 的 OCC_*）
+const OCC_FRAG = /* glsl */ `
+${ATMOSPHERE_COMMON}
+${CLOUD_COMMON}
+uniform vec2 uOccOrigin;
+uniform vec2 uOccAlt;
+uniform float uOccLayer;
+varying vec2 vUv;
+void main() {
+  vec2 xz = uOccOrigin + floor(gl_FragCoord.xy) * ${OCC_SPACING.toFixed(3)};
+  float alt = uOccAlt.x + uOccLayer * uOccAlt.y;
+  float d = 0.0;
+  float ao;
+  // 两个 lod 放进同一个循环（上界依赖 uniform，FXC 不展开）：雷暴 / 台风密度各只内联一份
+  for (int k = 0; k < 2 + min(uStormCount, 0); k++) {
+    float lod = float(k) * 3.5;
+    for (int i = 0; i < uStormCount; i++) {
+      vec4 c = uStorms[i];
+      vec2 dd = xz - c.xy;
+      if (dot(dd, dd) > c.z * c.z * 56.0) continue;
+      d = max(d, stormDensity(c, xz, alt, lod, false, ao));
+    }
+    if (uHurricane.w > 0.5) d = max(d, hurricaneDensity(xz, alt, lod, false, ao));
+  }
+  gl_FragColor = vec4(d > 0.0 ? 1.0 : 0.0, 0.0, 0.0, 1.0);
+}
+`;
+
 export interface CloudPreset {
   id: string;
   name: string;
@@ -439,6 +470,24 @@ function rawTarget(w: number, h: number) {
   });
 }
 
+/** 占据网格：水平 OCC_N × OCC_N、竖直 OCC_LAYERS 层的 R8 3D 纹理，带 mipmap（查询时用 mip 做膨胀） */
+function occTarget() {
+  const t = new THREE.WebGL3DRenderTarget(OCC_N, OCC_N, OCC_LAYERS, {
+    type: THREE.UnsignedByteType,
+    format: THREE.RedFormat,
+    minFilter: THREE.LinearMipmapLinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthBuffer: false,
+  });
+  t.texture.wrapS = t.texture.wrapT = t.texture.wrapR = THREE.ClampToEdgeWrapping;
+  // 只在画最后一层时生成 mipmap（three 每画一层都会按这个开关重新生成一遍，84 层就是 84 遍）
+  t.texture.generateMipmaps = false;
+  return t;
+}
+
+/** 飞机离网格中心超过这么远就重建（网格覆盖 ±128 km，步进最远约 170 km，网格外照旧逐点求值） */
+const OCC_RECENTER_KM = 24;
+
 export class Clouds {
   private raw = rawTarget(1, 1);
   private history = [target(1, 1), target(1, 1)];
@@ -457,6 +506,16 @@ export class Clouds {
   /** 飞机所在位置的云密度（0..1，几帧前的值） */
   cameraDensity = 0;
   private readonly resolveMat: THREE.ShaderMaterial;
+  // ---- 雷暴 / 台风的占据网格（PERF-2）----
+  private readonly occMat: THREE.ShaderMaterial;
+  private readonly occ = occTarget();
+  /** 上一次建网格时的天气签名（雷暴、台风、高空风、云壳高度）；变了就重建 */
+  private occKey = "";
+  private readonly occCenter = new THREE.Vector2(1e9, 1e9);
+  /** 网格程序是否已编译好（后台编译，没好之前步进照旧逐点求值，不卡主线程） */
+  private occState: "idle" | "compiling" | "ready" = "idle";
+  /** 调试 / 对照：false 时步进不查占据网格（逐点求完整密度，等于改动前的行为） */
+  occEnabled = true;
 
   constructor(
     private readonly pass: FullscreenPass,
@@ -481,6 +540,22 @@ export class Clouds {
         uAerialTransmittance: { value: atmosphere.aerialTransmittance.texture },
         uFrame: { value: 0 },
         uCloudResolution: { value: new THREE.Vector2(1, 1) },
+        uOcc: { value: this.occ.texture },
+        uOccOrigin: { value: new THREE.Vector2() },
+        uOccAlt: { value: new THREE.Vector2(0, 1) },
+        uOccValid: { value: 0 },
+      },
+    });
+    this.occMat = new THREE.ShaderMaterial({
+      ...common,
+      fragmentShader: OCC_FRAG,
+      uniforms: {
+        ...atmosphere.sharedUniforms,
+        ...this.uniforms,
+        // 网格的原点、层高和步进程序共用同一组对象：建网格与步进在同一帧里先后进行，值总是一致
+        uOccOrigin: this.marchMat.uniforms.uOccOrigin,
+        uOccAlt: this.marchMat.uniforms.uOccAlt,
+        uOccLayer: { value: 0 },
       },
     });
     this.probeMat = new THREE.ShaderMaterial({
@@ -505,8 +580,75 @@ export class Clouds {
     });
   }
 
+  /**
+   * 需要和其他着色器一起后台并行编译的材质与它们真正画进去的目标（启动时 main.ts 的 compileAsync 批次用）。
+   * 占据网格程序不在这批里也行：第一次需要时 ensureOccCompiled 会自己在后台编译，编好之前步进照旧逐点求值
+   */
+  compileTargets(): Array<readonly [THREE.ShaderMaterial, THREE.WebGLRenderTarget]> {
+    return [
+      [this.marchMat, this.raw],
+      [this.resolveMat, this.history[0]],
+      [this.occMat, this.occ],
+    ];
+  }
+
+  /** 占据网格程序后台编译（KHR_parallel_shader_compile），不阻塞主线程 */
+  private ensureOccCompiled(renderer: THREE.WebGLRenderer) {
+    if (this.occState !== "idle") return;
+    this.occState = "compiling";
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+    geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
+    const scene = new THREE.Scene();
+    const mesh = new THREE.Mesh(geo, this.occMat);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    const prev = renderer.getRenderTarget();
+    renderer.setRenderTarget(this.occ);
+    const job = renderer.compileAsync(scene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
+    renderer.setRenderTarget(prev);
+    job
+      .then(() => (this.occState = "ready"))
+      .catch(() => (this.occState = "ready"))
+      .finally(() => geo.dispose());
+  }
+
+  /**
+   * 雷暴 / 台风的占据网格：天气变了、或飞机离网格中心太远时重建（整张网格在一帧里画完：84 层，每层 512² 个格点）。
+   * 没有雷暴 / 台风时什么都不做（步进里也不查网格）
+   */
+  private updateOccupancy() {
+    const u = this.uniforms;
+    const mu = this.marchMat.uniforms;
+    const hasWeather = u.uStormCount.value > 0 || u.uHurricane.value.w > 0.5;
+    if (!hasWeather || this.occState !== "ready" || !this.occEnabled) {
+      mu.uOccValid.value = 0;
+      return;
+    }
+    const storms = u.uStorms.value.slice(0, u.uStormCount.value).map((v) => v.toArray().join(","));
+    const key = [storms.join(";"), u.uHurricane.value.toArray().join(","), u.uUpperWind.value.toArray().join(","), u.uShellBottom.value, u.uShellTop.value].join("|");
+    const off = u.uCloudOffset.value;
+    mu.uOccValid.value = 1;
+    if (key === this.occKey && off.distanceTo(this.occCenter) < OCC_RECENTER_KM) return;
+    this.occKey = key;
+    // 网格中心对齐到格点上，前后两次重建的格点位置一致
+    this.occCenter.set(Math.round(off.x / OCC_SPACING) * OCC_SPACING, Math.round(off.y / OCC_SPACING) * OCC_SPACING);
+    const half = ((OCC_N - 1) / 2) * OCC_SPACING;
+    mu.uOccOrigin.value.set(this.occCenter.x - half, this.occCenter.y - half);
+    const bottom = u.uShellBottom.value;
+    mu.uOccAlt.value.set(bottom, (u.uShellTop.value - bottom) / (OCC_LAYERS - 1));
+    const tex = this.occ.texture;
+    for (let k = 0; k < OCC_LAYERS; k++) {
+      this.occMat.uniforms.uOccLayer.value = k;
+      tex.generateMipmaps = k === OCC_LAYERS - 1;
+      this.pass.render(this.occMat, this.occ, k);
+    }
+    tex.generateMipmaps = false;
+  }
+
   /** 每几帧调用一次：在 GPU 上算飞机位置的云密度，异步读回（不阻塞渲染） */
   probe(renderer: THREE.WebGLRenderer, heading: THREE.Vector3) {
+    this.ensureOccCompiled(renderer);
     if (this.probeBusy) return;
     this.probeMat.uniforms.uProbeDir.value.copy(heading);
     this.pass.render(this.probeMat, this.probeTarget);
@@ -550,6 +692,7 @@ export class Clouds {
    * 所以同一朵云上一帧在「现在的位置 + 飞机位移」。
    */
   render(motion: THREE.Vector3, camBasis: THREE.Matrix3, cabinToWorld: THREE.Matrix3) {
+    this.updateOccupancy();
     this.marchMat.uniforms.uFrame.value = this.frame++ % 64;
     this.pass.render(this.marchMat, this.raw);
 
