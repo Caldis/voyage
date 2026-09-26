@@ -17,6 +17,7 @@ import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateHighLift, up
 import { $, CRUISE_PITCH_DEG, type Preset, type VoyageState } from "./state";
 import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
 import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets";
+import { BootProgress } from "./boot/progress";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
@@ -36,12 +37,18 @@ const tick = (() => {
   };
 })();
 tick("模块加载到这里");
+/** 等浏览器画完当前这一帧再继续：两次 rAF 保证真的过了一次绘制，不只是排上队（启动阶段之间用它让加载遮罩的更新先上屏） */
+const nextPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+// 加载遮罩的分阶段清单 + 总进度条（真正驱动进度的是下面各阶段实际完成的时刻，见 boot.finish 调用）
+const boot = new BootProgress();
 const pass = new FullscreenPass(renderer);
 const atmosphere = new Atmosphere(pass);
 renderer.getContext().finish();
 tick("大气 LUT");
+boot.finish("atmosphere");
 const cloudUniforms = createCloudUniforms(generateCloudNoise(renderer, pass));
 tick("云噪声");
+boot.finish("cloudNoise");
 const ground = new GroundClipmap(PRESETS[0].lat, PRESETS[0].lon);
 const sceneMat = createSceneMaterial(atmosphere, cloudUniforms, ground);
 // 机翼增升装置的 uniform（声明在 wing.glsl.ts）。在首次渲染前加进材质即可生效；以后可以挪进 createSceneMaterial
@@ -370,9 +377,43 @@ requestAnimationFrame(() =>
       console.warn("场景着色器后台编译失败，改为首帧同步编译", err);
     }
     tick("场景着色器编译（后台）");
+    boot.finish("shaders");
+    await nextPaint();
+
+    // 云光线步进、海面 FFT、曝光 / 眩光各自还有一批小着色器：原来只在下面第一次真正渲染时才编译，
+    // 会挡住主线程（虽然比场景 / 机翼小得多）。这里提前各触发一次、单独计时，
+    // 编完立刻用 snap() 撤销这次「假」调用在时间累积 / 曝光适应历史上留下的痕迹，真正的首帧仍是干净的第一帧。
+    // 这几个调用本身仍是同步的（three 没有给普通 render() 提供后台编译版本），会各自卡一下主线程；
+    // 每个之间插一次 nextPaint()，让清单打勾 / 进度条在卡顿前先画出来，不会把好几个阶段的卡顿叠成一整段看不出进度的空白
+    {
+      const camBasis = cameraBasis();
+      const c2w = cabinToWorld();
+      clouds.render(new THREE.Vector3(), camBasis, c2w);
+      clouds.snap();
+    }
+    tick("云光线步进程序编译");
+    boot.finish("cloudMarch");
+    await nextPaint();
+
+    ocean.update(0, state.wind, cloudUniforms.uCloudOffset.value);
+    tick("海面 FFT 程序编译");
+    boot.finish("oceanFft");
+    await nextPaint();
+
+    {
+      const bloomTex = bloom.render(hdrWing);
+      exposure.render(hdrWing.texture, bloomTex, 0);
+      exposure.snap();
+    }
+    tick("曝光与眩光程序编译");
+    boot.finish("post");
+    await nextPaint();
+
     frame(performance.now());
     renderer.getContext().finish();
-    tick("首帧（含着色器编译）");
+    tick("首帧渲染");
+    boot.finish("firstFrame");
+    boot.complete();
     // 场景材质名下编译过几个程序：1 说明后台编译的程序被首帧直接用上了；2 说明键不一致、首帧又同步编译了一遍
     const programs = (mat: THREE.Material) => (renderer.properties.get(mat) as { programs?: Map<string, unknown> }).programs?.size ?? -1;
     startup["场景材质的程序数"] = programs(sceneMat);
@@ -419,4 +460,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean, groundDetail, wingDebug, wingMat, benchScene, benchWing, benchFrame };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean, groundDetail, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot };
