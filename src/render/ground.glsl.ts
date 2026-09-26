@@ -1,7 +1,8 @@
 import { GROUND_BASE_KM, GROUND_LEVELS } from "../ground/clipmap";
 
 /**
- * 真实地面（GLSL）：clipmap 采样 + 高度场求交。依赖 ATMOSPHERE_COMMON / CLOUD_COMMON（uCloudOffset = 飞机的本地坐标）。
+ * 真实地面（GLSL）：clipmap 采样 + 高度场求交。依赖 ATMOSPHERE_COMMON / CLOUD_COMMON（uCloudOffset = 飞机的本地坐标）/
+ * NOISE_COMMON（uLoopGuard：循环上限写成「常数 + uLoopGuard」防止 FXC 展开）。
  * 本地坐标 g（km，x 东、z 南）= 相机相对坐标的水平分量 + uCloudOffset。
  * 级别选择是连续的：取「点离飞机的距离」和「像素覆盖范围」两者要求的级别里较粗的那个，在相邻两级之间线性混合，免得出现接缝。
  */
@@ -104,9 +105,10 @@ float terrainHit(vec3 ro, vec3 rd) {
   // 没打到：包括步数用完（uTerrainSteps）还没走到 tEnd 的情况——这时退化成「打在海平面球上」，
   // 远处极贴地平线的视线可能把山后的陆地画在海平面高度；96 步下实测场景里没有出现
   if (!hit) return tSea;
-  // 打到了：在上一步与这一步之间二分
+  // 打到了：在上一步与这一步之间二分。上限写成「6 + uLoopGuard」（恒为 6）：常量上限会被 FXC 展开成 6 份
+  // groundHeightAt → sampleGround（里面还有逐级查找循环），SC-3b
   float a = tPrev, b = t;
-  for (int k = 0; k < 6; k++) {
+  for (int k = 0; k < 6 + uLoopGuard; k++) {
     float m = 0.5 * (a + b);
     vec3 pm = ro + rd * m;
     float lm = groundLod(length(pm.xz), m * pixelAngle);
@@ -121,7 +123,8 @@ float terrainShadow(vec3 P, vec3 l, float lod) {
   float h0 = length(P) - BOTTOM;
   float shadow = 1.0;
   float t = 0.05;
-  for (int i = 0; i < 16; i++) {
+  // 上限「16 + uLoopGuard」（恒为 16）：常量上限会被 FXC 展开成 16 份 sampleGround（SC-3b）
+  for (int i = 0; i < 16 + uLoopGuard; i++) {
     vec3 q = P + l * t;
     float alt = length(q) - BOTTOM;
     if (alt > uTerrainMax) break;

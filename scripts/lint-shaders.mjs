@@ -86,18 +86,21 @@ export async function collectPrograms(server) {
     programs.push({ id, fragmentShader: mat.fragmentShader, vertexShader: mat.vertexShader });
   };
 
-  // 场景（默认变体）+ 场景的 GROUND_DETAIL 变体（同一份 fragmentShader 源码，GROUND_DETAIL 变体只是多一个
-  // three 在编译期注入的 #define GROUND_DETAIL 1，这里手动补上，不走 GroundDetailVariant.prepare()
-  // ——那个方法要真的调用 renderer.compileAsync，离线检查没有真实 GPU）
+  // 场景（SC-5 起只剩舱内合成）+ 窗外 pass（默认变体）+ 窗外的 GROUND_DETAIL 变体（同一份 fragmentShader 源码，
+  // GROUND_DETAIL 变体只是多一个 three 在编译期注入的 #define GROUND_DETAIL 1，这里手动补上，不走
+  // GroundDetailVariant.prepare()——那个方法要真的调用 renderer.compileAsync，离线检查没有真实 GPU）
   {
     const m = await server.ssrLoadModule("/src/render/scene.ts");
     const ground = { albedo: null, water: null, height: null, levelUniform: [] };
     const mat = m.createSceneMaterial(deepMock(), {}, ground);
     add("scene-default", mat);
+    const o = await server.ssrLoadModule("/src/render/outside-pass.ts");
+    const outside = o.createOutsideMaterial(mat.uniforms);
+    add("outside-default", outside);
     programs.push({
-      id: "scene-ground-detail",
-      fragmentShader: "#define GROUND_DETAIL 1\n" + mat.fragmentShader,
-      vertexShader: mat.vertexShader,
+      id: "outside-ground-detail",
+      fragmentShader: "#define GROUND_DETAIL 1\n" + outside.fragmentShader,
+      vertexShader: outside.vertexShader,
     });
   }
 
@@ -597,10 +600,10 @@ async function main() {
   // 仍然是静态近似（没有做跨函数数据流分析），只是现在经过了真实 GPU 交叉验证；以后这里报 FAIL
   // 时先怀疑真的超限了，但如果怀疑是静态法的盲区，用 dev-browser.mjs 起 WebGL2 读
   // gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) 复核一次再下结论。
-  console.log("\n-- 场景程序 sampler 数（ANGLE 上限 16，已用真实 GPU 交叉验证，见 handoff/DX.md） --");
+  console.log("\n-- 场景 / 窗外程序 sampler 数（ANGLE 上限 16，已用真实 GPU 交叉验证，见 handoff/DX.md） --");
   for (const prog of programs) {
-    if (prog.id !== "scene-default" && prog.id !== "scene-ground-detail") continue;
-    const defines = prog.id === "scene-ground-detail" ? new Set(["GROUND_DETAIL"]) : new Set();
+    if (prog.id !== "scene-default" && prog.id !== "outside-default" && prog.id !== "outside-ground-detail") continue;
+    const defines = prog.id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : new Set();
     const { declaredCount, activeCount, active } = samplerAudit(prog.fragmentShader, defines);
     const over = activeCount > 16;
     if (over) exitCode = 1;

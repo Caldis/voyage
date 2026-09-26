@@ -1,0 +1,290 @@
+import * as THREE from "three";
+import { ATMOSPHERE_COMMON, FULLSCREEN_VERT } from "../atmosphere/common.glsl";
+import { CLOUD_COMMON } from "../clouds/clouds.glsl";
+import { GROUND_COMMON } from "./ground.glsl";
+import { GROUND_DETAIL_COMMON } from "./ground-detail.glsl";
+import { INLAND_WATER_COMMON } from "./inland-water.glsl";
+import { ISLANDS_COMMON } from "./islands.glsl";
+import { LIGHTNING_COMMON } from "./lightning.glsl";
+import { LIGHTS_COMMON } from "./lights.glsl";
+import { NOISE_COMMON } from "./noise.glsl";
+import { OCEAN_COMMON } from "./ocean.glsl";
+import { STARS_COMMON } from "./stars.glsl";
+import { TERRAIN_SHADING_COMMON } from "./terrain-shading.glsl";
+import { TRAFFIC_COMMON } from "./traffic.glsl";
+import { VIEW_COMMON } from "./view.glsl";
+
+/**
+ * 窗外 pass（SC-5）：只算「穿过本窗窗板看出去」的 HDR 辐亮度（天空、太阳月亮星星、云的合成、真实地面、海面、
+ * 远处的飞机和航迹云、闪电），已乘窗板透射率，还没加窗板上的任何效果。写到一张全分辨率 HDR 目标，
+ * 由舱内合成程序（scene.ts）在窗板以内读回，再做划痕、油污、水珠、舱内反射与舱壁 / 座椅 / 遮光板的合成。
+ *
+ * 为什么拆：FXC（Windows 上 ANGLE 的 D3D 后端）的编译时间随单个程序的规模超线性增长。离线实测窗外单独约 15 s、
+ * 舱内单独约 5 s，合在一个程序里约 50–90 s。拆成两个程序后由 KHR_parallel_shader_compile 并行编译；
+ * 只改舱内时只重编舱内那个小程序（浏览器的程序缓存按各程序的源码文本命中）。见 research/DX_SHADER_COMPILE.md。
+ *
+ * 只在需要的像素上算：本窗（wi = 0）的窗洞开口以内、窗板开口以内（和 scene.ts 里 inBezel、inPane 的判定同一公式，
+ * 再放宽约半个像素防止两个程序的舍入差把边缘像素漏掉）。其余像素写 0 立刻返回，舱内程序在那里也不会读它。
+ *
+ * 输出：RGB = 窗外辐亮度 × 窗板透射率（kcd/m²）；A = 1 表示这个像素算过（调试用，舱内程序不读）。
+ * 半精度目标（没有 EXT_color_buffer_float 时）存不下太阳（约 1.8e6），这时截到 uHdrMax，和改前场景输出截断的位置一致。
+ *
+ * 依赖：舱内程序只包含 NOISE_COMMON 这一小段公共代码（hash / 噪声），不包含 cabin*.glsl.ts、seats.glsl.ts，
+ * 改那些文件不会让这个程序重编。反过来，这里包含的所有 *_COMMON 改了都会让它重编（约十几秒）。
+ */
+const OUTSIDE_FRAG = /* glsl */ `
+${ATMOSPHERE_COMMON}
+${VIEW_COMMON}
+${CLOUD_COMMON}
+${NOISE_COMMON}
+${LIGHTS_COMMON}
+${STARS_COMMON}
+${ISLANDS_COMMON}
+${GROUND_COMMON}
+uniform sampler2D uClouds;       // 半分辨率云层：RGB 预乘辐亮度，A 透射率
+uniform float uWind;
+uniform float uTime;            // 秒，给波浪和闪烁用
+uniform float uHdrMax;          // 窗外目标能存的最大值（半精度时是 6e4）
+// 调试可视化（编号含义见 scene.ts 的 uDebug 注释）：这里处理窗外的 5–13、21–23，舱内的 1–4 在 scene.ts
+uniform int uDebug;
+varying vec2 vUv;
+${TRAFFIC_COMMON}
+
+const float PANE_TRANSMITTANCE = 0.85; // 两层亚克力 + 内层防刮板（和 scene.ts 一致）
+const float OUTSIDE_WINDOW_PITCH = 0.533; // 舷窗间距（和 cabin-shading.glsl.ts 的 WINDOW_PITCH 一致，这里只用来判定本窗）
+
+${OCEAN_COMMON}
+${LIGHTNING_COMMON}
+${GROUND_DETAIL_COMMON}
+${INLAND_WATER_COMMON}
+${TERRAIN_SHADING_COMMON}
+
+// 窗外辐亮度。重函数在这里各只有一个调用点（SC-3）：真实地面上的海洋和开阔海面共用同一个 oceanRadiance，
+// 命中点的云影、水面照度、闪光照度也只算一次，陆地、湖河、海面共用。FXC 会把每个调用点整份内联，
+// 原来地面水体和开阔海面各调一次 oceanRadiance，场景程序冷编译多出约 50 s。以后加分支时不要再在别处调这些函数，
+// 把输入交给这里唯一的调用点
+vec3 outsideRadiance(vec3 rd, vec4 cloud) {
+  vec3 ro = vec3(0.0, uCamR, 0.0);
+  // 真实地面：先求交（打不到或还没有数据时退回原来的海平面球）
+  GroundHit gh;
+  bool onGround = uGroundOn > 0.5 && groundHit(ro, rd, gh);
+  // 调试 23：水体遮罩（红 = 水面，绿 = 海洋通道，蓝 = 夜光）
+  if (onGround && uDebug == 23) return gh.wat * 20.0 * cloud.a + cloud.rgb;
+  float tGround;
+  if (onGround) tGround = gh.t;
+  else tGround = raySphere(ro, rd, BOTTOM);
+  bool hitGround = tGround > 0.0;
+  // 天空视图 LUT 已经包含到地面为止的内散射（空气透视）；真实地面用空气透视 LUT，不需要它
+  vec3 L = vec3(0.0);
+  if (!onGround) L = skyRadiance(rd, hitGround);
+  if (hitGround) {
+    vec3 P;
+    if (onGround) P = gh.P;
+    else P = ro + rd * tGround;
+    vec3 n = normalize(P);
+    // 命中点的云影、水面处主光源（含云影）与天空光的照度、闪光照度：只算一次，陆地、湖河、海面共用
+    float cs = cloudShadow(P, uKeyDir);
+    vec3 eSunW = keyLight(BOTTOM, n) * cs;
+    vec3 eSkyW = skyIrradiance(BOTTOM, n);
+    vec3 eFlash = flashIlluminance(P);
+    vec3 land = vec3(0.0);
+    bool wet = true;          // 这个像素有水面（开阔海面恒为是）
+    vec3 body = vec3(-1.0);   // 水色：开阔海面用大洋默认值，真实地面取卫星影像
+    if (onGround) {
+      if (gh.wat.r < 0.999) {
+        vec4 lr = groundLand(gh, cs, eFlash);
+        if (lr.w > 0.5) return lr.rgb * cloud.a + cloud.rgb; // 调试 21 / 22
+        land = lr.rgb;
+      }
+      wet = gh.wat.r > 0.001;
+      body = gh.alb.rgb * 0.7;
+    }
+    // 水面：海洋按设定风速（涌浪 + 风浪），湖泊、河流用只有细碎涟漪的内陆水面（海面的长波放在河上会出现摩尔纹）。
+    // 每个像素只算其中一个（按遮罩的海洋通道 0.5 分界）。两个都算再按比例混合能消掉河口的接缝，
+    // 但 FXC 要同时保留两份内联代码，冷编译多出十几秒（T02 实测），不值得
+    float fView = 0.0;
+    vec3 nView = n;
+    vec3 water = vec3(0.0);
+    vec3 skyCam = vec3(0.0);
+    if (wet) {
+      if (!onGround || gh.wat.g > 0.5) water = oceanRadiance(P, rd, tGround, body, 1.0, eSunW, eSkyW, fView, nView);
+      else water = inlandWaterRadiance(P, rd, gh.fpM, body, eSunW, eSkyW, fView, nView);
+      // 天空反射：天空视图 LUT 是从相机算的，L相机(反射方向) ≈ 内散射(相机→水面) + 透射率 × L水面(反射方向)。
+      // 所以反射的贡献是 F·(L相机 − 内散射)，不能再乘一次透射率，否则地平线处会被衰减两次，出现一条暗线
+      skyCam = skyRadiance(reflect(rd, nView), false);
+    }
+    if (onGround) {
+      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);
+    } else {
+      // 开阔海面：相机到海面的透射率 = T(海面→层顶) / T(相机→层顶)，两段都是朝上的射线
+      vec3 tSurface = transmittanceToTop(BOTTOM, dot(n, -rd));
+      vec3 tCamera = transmittanceToTop(uCamR, -rd.y);
+      vec3 tView = min(tSurface / max(tCamera, vec3(1e-6)), vec3(1.0));
+      vec3 inscatter = L;
+      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);
+      L += sea;
+      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));
+      L += refl;
+      if (uDebug == 5 || uDebug >= 8) L = sea;
+      if (uDebug == 6) L = refl;
+      if (uDebug == 7) L = inscatter;
+    }
+  } else {
+    // 太阳圆盘：辐亮度 = 照度 / 立体角，带临边昏暗
+    float c = dot(rd, uSunDir);
+    if (c > 0.0) {
+      float ang = asin(min(length(cross(rd, uSunDir)), 1.0));
+      float x = ang / SUN_ANGULAR_RADIUS;
+      if (x < 1.2) {
+        float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
+        float coverage = clamp((SUN_ANGULAR_RADIUS - ang) / pixelAngle + 0.5, 0.0, 1.0);
+        float mu = sqrt(max(0.0, 1.0 - x * x));
+        float limb = (1.0 - 0.6 * (1.0 - mu)) / (1.0 - 0.6 / 3.0);
+        vec3 disk = uSunIlluminance / (M_PI * SUN_ANGULAR_RADIUS * SUN_ANGULAR_RADIUS) * limb;
+        L += disk * coverage * sunTransmittance(uCamR, rd.y);
+      }
+    }
+    // 月亮圆盘（白天也在，只是很淡）和星星；都要穿过相机上方的大气
+    vec3 tUp = sunTransmittance(uCamR, rd.y);
+    L += (moonDisk(rd) + starRadiance(rd)) * tUp;
+  }
+  // 【大气合成接入点（T18 低空霾）】到这里 L 是云层背后的背景辐亮度：地面 / 海面已含空气透视，天空含内散射。
+  // 低空霾要叠在这里（云之前），只写一个调用点，例如 L = lowHaze(L, rd, hitGround ? tGround : -1.0)；
+  // 所有路径（真实地面、开阔海面、天空）都会经过这一行，调试 21–23 的提前返回除外。
+  // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光
+  return L * cloud.a + cloud.rgb;
+}
+
+void main() {
+  vec3 rd = cabinRay(gl_FragCoord.xy);
+  vec3 ro = uHead;
+  // 本窗窗洞与窗板的覆盖判定：公式和 scene.ts 的 main() 一致（屏幕导数要在任何分支之前算）
+  float rdz = max(rd.z, 1e-4);
+  vec3 pWall = ro + rd * ((0.0 - ro.z) / rdz);
+  vec3 pPane = ro + rd * ((PANE_DEPTH - ro.z) / rdz);
+  float dBezel = sdRoundRect(pWall.xy, BEZEL_HALF, BEZEL_RADIUS);
+  float dPane = sdRoundRect(pPane.xy, PANE_HALF, PANE_RADIUS);
+  float wB = min(fwidth(dBezel), 0.005);
+  float wP = min(fwidth(dPane), 0.005);
+  bool isMain = floor(pWall.x / OUTSIDE_WINDOW_PITCH + 0.5) == 0.0;
+  // 舱内程序在 inBezel > 0 且 inPane > 0 的像素上才用得到窗外（smoothstep(-w, w, d) < 1 即 d < w）。
+  // 判定放宽到 1.5 倍宽度再加一点余量：两个程序各自编译，fwidth 和距离场的舍入可能差一两个 ulp，漏掉的像素会是一个黑点
+  if (rd.z < 1e-4 || !isMain || dBezel > 1.5 * wB + 1e-5 || dPane > 1.5 * wP + 1e-5) {
+    gl_FragColor = vec4(0.0);
+    return;
+  }
+  vec3 rdW = uCabinToWorld * rd;
+  vec4 cloud = texture(uClouds, gl_FragCoord.xy / uResolution);
+  vec3 view = outsideRadiance(rdW, cloud);
+  // 远处的飞机和航迹云在云层之上，挡在海面和云前面
+  vec4 tr = trafficRadiance(rdW);
+  view = (view * tr.a + tr.rgb + boltRadiance(rdW)) * PANE_TRANSMITTANCE;
+  gl_FragColor = vec4(min(view, vec3(uHdrMax)), 1.0);
+}
+`;
+
+/**
+ * 窗外材质。uniforms 直接用舱内材质（场景材质）的同一个对象：主循环、机翼、低空细节变体都改的是这一份，
+ * 之后再 Object.assign 进去的 uniform（海浪、机翼增升装置……）这里自动可见。
+ * 这个程序不声明 uOutside，所以同一份 uniforms 里有它也不会形成「读自己正在写的纹理」的反馈环。
+ */
+export function createOutsideMaterial(sharedUniforms: Record<string, THREE.IUniform>) {
+  return new THREE.ShaderMaterial({
+    vertexShader: FULLSCREEN_VERT,
+    fragmentShader: OUTSIDE_FRAG,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false,
+    uniforms: sharedUniforms,
+  });
+}
+
+/**
+ * 窗外 HDR 目标：32 位浮点能原样存下太阳；只用 texelFetch 读，不需要线性过滤（所以不要求 OES_texture_float_linear，
+ * 只要能渲染到浮点纹理，即 EXT_color_buffer_float）。
+ */
+export function createOutsideTarget(renderer: THREE.WebGLRenderer) {
+  const float = renderer.extensions.has("EXT_color_buffer_float");
+  return new THREE.WebGLRenderTarget(1, 1, {
+    type: float ? THREE.FloatType : THREE.HalfFloatType,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    depthBuffer: false,
+  });
+}
+
+/**
+ * 低空近景细节的着色器变体（带 GROUND_DETAIL 宏），落在窗外程序上（SC-5 之前落在整个场景程序上）。
+ * 细节层让 Windows 上的冷编译明显变长，而且只有离地几公里以内才看得出来，所以默认的窗外着色器不含它：
+ * 需要时（离地高度 < ENABLE_BELOW_KM）才用 renderer.compileAsync 在后台编译（KHR_parallel_shader_compile，不阻塞渲染），
+ * 编好之后才切过去。变体和默认材质共用同一份 uniforms，切换不需要同步任何状态。
+ */
+export class GroundDetailVariant {
+  static readonly ENABLE_BELOW_KM = 4;
+  /** 高于这个高度切回默认材质（带一点滞回，免得在门限附近来回切） */
+  static readonly DISABLE_ABOVE_KM = 4.5;
+  private material: THREE.ShaderMaterial | null = null;
+  private state: "idle" | "compiling" | "ready" | "failed" = "idle";
+  private active = false;
+
+  /** target：变体真正要画进去的目标。ANGLE 的 D3D 后端按链接时绑定的帧缓冲生成输出布局，绑错会在首次使用时同步重编 */
+  constructor(
+    private readonly base: THREE.ShaderMaterial,
+    private readonly target: THREE.WebGLRenderTarget | null = null,
+  ) {}
+
+  /** 每帧调用：给出离地高度（km），返回这一帧该用的材质 */
+  pick(renderer: THREE.WebGLRenderer, aglKm: number): THREE.ShaderMaterial {
+    if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM) this.prepare(renderer);
+    if (this.state !== "ready" || !this.material) return this.base;
+    if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM) this.active = true;
+    else if (aglKm > GroundDetailVariant.DISABLE_ABOVE_KM) this.active = false;
+    return this.active ? this.material : this.base;
+  }
+
+  get status() {
+    return this.state;
+  }
+
+  private prepare(renderer: THREE.WebGLRenderer) {
+    if (this.state !== "idle") return;
+    this.state = "compiling";
+    const b = this.base;
+    const m = new THREE.ShaderMaterial({
+      vertexShader: b.vertexShader,
+      fragmentShader: b.fragmentShader,
+      uniforms: b.uniforms, // 共用同一份 uniforms
+      defines: { ...b.defines, GROUND_DETAIL: 1 },
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const scene = new THREE.Scene();
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
+    const mesh = new THREE.Mesh(geometry, m);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    const prevTarget = renderer.getRenderTarget();
+    if (this.target) renderer.setRenderTarget(this.target);
+    const job = renderer.compileAsync(scene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
+    renderer.setRenderTarget(prevTarget);
+    job
+      .then(() => {
+        // compileAsync 只等「编译完成」，不管编译是否成功（例如函数重名）。取出程序、触发一次诊断，失败就不切换
+        const program = (renderer.properties.get(m) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
+        program?.getUniforms();
+        if (!program || program.diagnostics?.runnable === false) {
+          this.state = "failed";
+          return;
+        }
+        this.material = m;
+        this.state = "ready";
+      })
+      .catch(() => {
+        this.state = "failed";
+      })
+      .finally(() => geometry.dispose());
+  }
+}

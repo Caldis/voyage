@@ -266,7 +266,8 @@ function buildVariants(programs, bisectGroups) {
       variants.push({ id: prog.id, baseId: prog.id, label: null, fragmentShader: prog.fragmentShader, stubbed: [], missing: [] });
       continue;
     }
-    const isScene = prog.id.startsWith("scene");
+    // SC-5：原场景程序拆成了 scene-*（舱内合成）与 outside-*（窗外），模块表两边都试（锚点对不上的会跳过）
+    const isScene = prog.id.startsWith("scene") || prog.id.startsWith("outside");
     if (!isScene) {
       console.warn(`[shader-budget] --bisect 跳过 ${prog.id}：模块表是按场景程序（scene-*）的调用点建的，这个程序用不上。`);
       variants.push({ id: prog.id, baseId: prog.id, label: null, fragmentShader: prog.fragmentShader, stubbed: [], missing: [] });

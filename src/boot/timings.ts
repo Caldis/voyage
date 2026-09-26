@@ -19,8 +19,10 @@ export type BootTimings = Record<string, number>;
 export const DEFAULT_TIMINGS: BootTimings = {
   atmosphere: 300,
   cloudNoise: 200,
-  // SC-4 以后云光线步进程序并进这一批后台编译，不再单列 cloudMarch 阶段，估算份额留在这里
-  shaders: 80000,
+  // SC-4 以后云光线步进程序并进这一批后台编译，不再单列 cloudMarch 阶段，估算份额留在这里。
+  // SC-5 把场景拆成窗外 + 舱内合成两个程序并行编译后，RTX 5090 + d3d11 真冷实测这一阶段约 14 s
+  // （批次约 9 s + 批次后第一次 render 约 5 s）；默认仍取偏高的值，照顾慢机器和 GPU 争用
+  shaders: 30000,
   oceanFft: 400,
   post: 300,
   firstFrame: 150,
