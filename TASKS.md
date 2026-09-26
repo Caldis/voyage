@@ -8,6 +8,11 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| SC-5 (+SC-3b) | 第 4 波（主干） | 5241 | worktree（交付时回填） | Opus（拆窗外 / 舱内 pass） | 待派 | 进行中 |
+| T18 | 第 4 波（主干） | 5218 | worktree（交付时回填） | Opus（低空霾 / 限高；着色器接入以片段交付） | 待派 | 进行中 |
+| T22 | 第 4 波（插单） | 5222 | worktree（交付时回填） | Opus（机翼表面） | 待派 | 进行中 |
+| T26 | 第 4 波（插单） | 5226 | worktree（交付时回填） | Opus（台风第二轮） | 待派 | 进行中 |
+| 性能工程师 / 美术总监 | 第 3 波收尾检查 | — | — | Opus | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
