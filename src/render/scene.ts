@@ -17,7 +17,6 @@ import { STARS_COMMON } from "./stars.glsl";
 import { TERRAIN_SHADING_COMMON } from "./terrain-shading.glsl";
 import { TRAFFIC_COMMON } from "./traffic.glsl";
 import { WING_COMMON } from "./wing.glsl";
-import { WING_SHADING_COMMON } from "./wing-shading.glsl";
 
 /**
  * 场景着色器：从头部位置向屏幕每个像素发射线，先穿过按真实尺寸建模的舷窗，
@@ -110,7 +109,6 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   return L * cloud.a + cloud.rgb;
 }
 
-${WING_SHADING_COMMON}
 ${CABIN_SHADING_COMMON}
 ${FABRIC_COMMON}
 ${SEATS_COMMON}
@@ -210,24 +208,12 @@ void main() {
   // 邻窗遮光板下沿以下（窗洞最深处）：只有一点暗光
   vec3 view = reveal * 0.3;
   if (inBezel > 0.0 && isMain > 0.5) {
-  float tWing = wingHit(ro, rd, (PANE_DEPTH - ro.z) / rd.z);
-  if (tWing > 0.0) {
-    view = shadeWing(ro + rd * tWing, rd, sunC, eSkyH, eDown, belowAlbedo);
-    // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度
-    if (uCameraFog > 0.0) {
-      float tFog = exp(-uCameraFog * tWing * 0.001);
-      vec3 fogColor = cloud.rgb / max(1.0 - cloud.a, 0.05);
-      view = mix(fogColor, view, tFog);
-    }
-    view *= PANE_TRANSMITTANCE;
-  } else {
-    vec3 rdW = uCabinToWorld * rd;
-    view = outsideRadiance(rdW, cloud);
-    // 远处的飞机和航迹云在云层之上，挡在海面和云前面
-    vec4 tr = trafficRadiance(rdW);
-    view = (view * tr.a + tr.rgb + boltRadiance(rdW)) * PANE_TRANSMITTANCE;
-  }
-  view += wingLights(ro, rd) * PANE_TRANSMITTANCE;
+  // 机翼和翼尖灯不在这里画：由单独的机翼 pass（wing-pass.ts）读这张结果、按 alpha（窗外遮罩）合成上去
+  vec3 rdW = uCabinToWorld * rd;
+  view = outsideRadiance(rdW, cloud);
+  // 远处的飞机和航迹云在云层之上，挡在海面和云前面
+  vec4 tr = trafficRadiance(rdW);
+  view = (view * tr.a + tr.rgb + boltRadiance(rdW)) * PANE_TRANSMITTANCE;
 
   // ---- 窗板上的细节 ----
   vec2 q = pPane.xy;

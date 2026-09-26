@@ -1,6 +1,6 @@
 /**
  * 机翼着色（GLSL，座舱系）：漫反射 + 清漆镜面 + 环境反射 + 翼尖灯的照明，以及翼尖航行灯 / 频闪灯本身。
- * 依赖 WING_COMMON（cabinToAircraft / traceWing / wingSurface / fuselageShadow / ggxD / smithG）/
+ * 依赖 WING_COMMON（wingCabinToAircraft / wingTrace / wingSurface / wingFuselageShadow / ggxD / smithG）/
  * LIGHTS_COMMON（keyLight / skyRadiance）/ CLOUD_COMMON（uCoverage、uCloudBottom / uCloudTop）/
  * 场景着色器里的 uCameraFog（在本片段之前声明）。
  *
@@ -11,19 +11,19 @@
 export const WING_SHADING_COMMON = /* glsl */ `
 // ---- 翼尖的灯（机体坐标）----
 // 0：航行灯（右绿左红），装在翼尖弯折处前缘的透明罩里；1：白色频闪（防撞灯），同一个罩里；2：后缘的白色尾航行灯
-vec3 lampPos(int i) {
-  float arcLen = BEND_R * bendAngle();
+vec3 wingLampPos(int i) {
+  float arcLen = WING_BEND_R * wingBendAngle();
   float sg = arcLen * (i == 0 ? 0.35 : (i == 1 ? 0.6 : 0.5));
   float n = i == 1 ? -0.02 : 0.0;
-  float x = i == 2 ? tipLE(sg, arcLen) - tipChord(sg, arcLen, WINGLET_H - BEND_R) - 0.04   // 尾灯在后缘
-                   : tipLE(sg, arcLen) + (i == 0 ? 0.07 : 0.05);                              // 前缘的透明灯罩里
-  return tipToAircraft(sg, n, x);
+  float x = i == 2 ? wingTipLE(sg, arcLen) - wingTipChord(sg, arcLen, WINGLET_H - WING_BEND_R) - 0.04   // 尾灯在后缘
+                   : wingTipLE(sg, arcLen) + (i == 0 ? 0.07 : 0.05);                              // 前缘的透明灯罩里
+  return wingTipToAircraft(sg, n, x);
 }
 
 // 灯在 dir 方向（机体系，从灯出发）上的发光强度（cd）。
 // 航行灯按 FAR 25.1389–1391：正前方 0–10° 至少 40 cd，10–20° 30 cd，20–110°（朝外侧）5 cd；
 // 光区之外只剩灯罩的散射漏光（这里取 3 cd，经验值）。尾灯：向后 ±70° 内 20 cd。频闪：各向约 1500 cd（LED 防撞灯的峰值量级）。
-vec3 lampIntensity(int i, vec3 dir) {
+vec3 wingLampIntensity(int i, vec3 dir) {
   if (i == 1) return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe;
   vec2 hz = normalize(dir.xz + vec2(1e-5, 0.0));
   float ang = atan(hz.y, hz.x);   // 0 = 正前方，正值朝外侧（+Z）
@@ -51,9 +51,9 @@ vec3 wingEnv(vec3 rW, float rough, vec3 eSky, vec3 eDown, float belowAlbedo) {
   return mix(env, avg, smoothstep(0.12, 0.6, rough));
 }
 
-// 机翼着色（座舱系）。w 是 traceWing 的结果（法线、自阴影、部件已经算好）；eSky / eDown / belowAlbedo 是窗外的天空光、下方反射光
-vec3 shadeWing(vec3 pc, vec3 rd, WingTrace w, vec3 sunC, vec3 eSky, vec3 eDown, float belowAlbedo) {
-  vec3 P = cabinToAircraft(pc);
+// 机翼着色（座舱系）。w 是 wingTrace 的结果（法线、自阴影、部件已经算好）；eSky / eDown / belowAlbedo 是窗外的天空光、下方反射光
+vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 eDown, float belowAlbedo) {
+  vec3 P = wingCabinToAircraft(pc);
   vec3 nA = w.nA;
   vec3 n = vec3(uSeatSign * nA.x, nA.y, nA.z);          // 机体系 → 座舱系
   vec3 v = -rd;
@@ -64,7 +64,7 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTrace w, vec3 sunC, vec3 eSky, vec3 eDown, 
   WingSurface m = wingSurface(P, pix, nA.y, w.part);
   vec3 lA = vec3(uSeatSign * sunC.x, sunC.y, sunC.z);
   float nl = dot(n, sunC);
-  float shadow = fuselageShadow(P, lA) * step(0.0, nl) * w.shadow;
+  float shadow = wingFuselageShadow(P, lA) * step(0.0, nl) * w.shadow;
   vec3 eSun = keyLight(uCamR, vec3(0.0, 1.0, 0.0)) * shadow;
   float nv = max(dot(n, v), 1e-3);
   nl = max(nl, 0.0);
@@ -89,8 +89,8 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTrace w, vec3 sunC, vec3 eSky, vec3 eDown, 
   float coat = m.coat * (1.0 - m.metal);
   float fCoat = 0.04 + 0.96 * pow(1.0 - vhS, 5.0);
   // 清漆粗糙度 0.06（平方 0.004）；边缘处放宽
-  float A_COAT = w.edge ? 0.05 : 0.004;
-  spec += coat * fCoat * ggxD(nh, A_COAT) * smithG(nvS, max(nl, 1e-3), A_COAT) / (4.0 * nvS * max(nl, 1e-3)) * eSun * nl;
+  float WING_A_COAT = w.edge ? 0.05 : 0.004;
+  spec += coat * fCoat * ggxD(nh, WING_A_COAT) * smithG(nvS, max(nl, 1e-3), WING_A_COAT) / (4.0 * nvS * max(nl, 1e-3)) * eSun * nl;
 
   // 环境反射：清漆是镜面，基础层按粗糙度取模糊的平均
   vec3 r = uCabinToWorld * reflect(rd, n);
@@ -107,12 +107,12 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTrace w, vec3 sunC, vec3 eSky, vec3 eDown, 
   // 翼尖的灯照到翼面上：点光源，照度 = I·cosθ / d²（lux → klux）
   vec3 lampLit = vec3(0.0);
   for (int i = min(uWingSteps, 0); i < 3; i++) {  // 起点依赖 uniform：不让 FXC 展开成三份
-    vec3 d = lampPos(i) - P;
+    vec3 d = wingLampPos(i) - P;
     float dist2 = max(dot(d, d), 0.04);
     vec3 l = d * inversesqrt(dist2);
     float nlL = dot(nA, l);
     if (nlL <= 0.0) continue;
-    vec3 e = lampIntensity(i, -l) / dist2 * 1e-3 * nlL;
+    vec3 e = wingLampIntensity(i, -l) / dist2 * 1e-3 * nlL;
     vec3 lC = vec3(uSeatSign * l.x, l.y, l.z);
     vec3 hL = normalize(lC + v);
     float nhL = max(dot(n, hL), 0.0);
@@ -121,14 +121,14 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTrace w, vec3 sunC, vec3 eSky, vec3 eDown, 
     // 轮廓上 n·v → 0.001 时灯的镜面被放大几百倍，边缘超采样的子射线一碰上就是一颗白点（后缘一串亮珠）
     float gv = 1.0 / (4.0 * max(nv, 0.25));
     lampLit += e * (m.albedo * (1.0 - m.metal) / M_PI
-      + coat * fL * ggxD(nhL, max(A_COAT, 0.02)) * gv
+      + coat * fL * ggxD(nhL, max(WING_A_COAT, 0.02)) * gv
       + mix(vec3(0.04), m.albedo, m.metal) * ggxD(nhL, max(aBase, 0.02)) * gv);
   }
   return diffuse + spec + envSpec + lampLit + m.emit;
 }
 
 // 旋转网格（RGSS）的四个子像素偏移（单位：像素）
-vec2 rgss(int k) {
+vec2 wingRgss(int k) {
   return k == 1 ? vec2(0.125, 0.375) : (k == 2 ? vec2(-0.375, 0.125) : (k == 3 ? vec2(0.375, -0.125) : vec2(-0.125, -0.375)));
 }
 
@@ -149,7 +149,7 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
   vec3 lA = vec3(uSeatSign * sunC.x, sunC.y, sunC.z);
   vec3 right = uCamBasis[0];
   vec3 up = uCamBasis[1];
-  float pa = pixelAngle();
+  float pa = wingPixelAngle();
   vec3 acc = vec3(0.0);
   float covSum = 0.0;
   int n = 1;
@@ -158,14 +158,14 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
   float sh0 = 1.0;
   for (int k = min(uWingSteps, 0); k < 5; k++) {
     if (k >= n) break;
-    vec3 rdk = k == 0 ? rd : normalize(rd + (right * rgss(k).x + up * rgss(k).y) * pa);
+    vec3 rdk = k == 0 ? rd : normalize(rd + (right * wingRgss(k).x + up * wingRgss(k).y) * pa);
     // 子射线：从中心射线命中点前一段开始走（挡在前面的部件一般在几米之内），不带自阴影（沿用中心射线的）
-    WingTrace w = traceWing(ro, rdk, t0, lA, k == 0 ? uWingSteps : uWingSteps / 4, k == 0 ? uWingShadowSteps : 0);
+    WingTraceResult w = wingTrace(ro, rdk, t0, lA, k == 0 ? uWingSteps : uWingSteps / 2, k == 0 ? uWingShadowSteps : 0);
     if (k > 0) w.shadow = sh0;
     if (k == 0 && uWingEdgeAA > 0 && w.cov >= 1.0 && w.edge) {
       n = uWingEdgeAA == 3 ? 1 : 5;   // 3：只判断不超采样（测开销用）
       single = 0.0;
-      t0 = max(tStart, w.t * 0.85);
+      t0 = max(tStart, w.t * 0.5);   // 子射线从中心命中点的一半距离出发：更近的遮挡（邻近部件）也能打到
       sh0 = w.shadow;
       continue;
     }
@@ -197,13 +197,13 @@ vec3 wingLights(vec3 ro, vec3 rd) {
   float sigma = uCameraFog * 1e-3;   // 云雾的消光系数，1/m（云滴几乎不吸收，散射系数取同一个值）
   vec3 rdA = vec3(uSeatSign * rd.x, rd.y, rd.z);  // 机体系里的视线方向
   for (int i = min(uWingSteps, 0); i < 3; i++) {  // 起点依赖 uniform：不让 FXC 展开成三份
-    vec3 a = lampPos(i);
-    vec3 c = aircraftToCabin(a);
+    vec3 a = wingLampPos(i);
+    vec3 c = wingAircraftToCabin(a);
     vec3 d = c - ro;
     float t = dot(d, rd);
     float dist = length(d - rd * max(t, 0.0));
     vec3 toEye = -rdA;
-    vec3 I = lampIntensity(i, toEye);
+    vec3 I = wingLampIntensity(i, toEye);
     // 发光强度（cd）换算成一个 3 cm 光球的亮度
     if (t > 0.0) {
       float core = 1.0 - smoothstep(0.02, 0.03, dist);
@@ -212,7 +212,7 @@ vec3 wingLights(vec3 ro, vec3 rd) {
     // 云雾里的单次散射：沿视线积分 σ·I/(4π r²)，r² = h² + (s − t)²，有解析解。
     // 用灯的平均强度（各方向）近似；视线穿过的雾同时也衰减一部分
     if (sigma > 0.0) {
-      vec3 Iavg = i == 1 ? I : lampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;
+      vec3 Iavg = i == 1 ? I : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;
       float hh = max(dist, 0.05);
       float s1 = 60.0;
       float integ = (atan((s1 - t) / hh) - atan(-t / hh)) / hh;

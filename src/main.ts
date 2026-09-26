@@ -10,6 +10,7 @@ import { Bloom } from "./render/bloom";
 import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
 import { createSceneMaterial } from "./render/scene";
+import { createWingMaterial } from "./render/wing-pass";
 import { GroundClipmap } from "./ground/clipmap";
 import { OceanWaves } from "./ocean/waves";
 import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateHighLift, updateTurbulence } from "./flight";
@@ -73,6 +74,10 @@ const hdr = new THREE.WebGLRenderTarget(1, 1, {
   magFilter: THREE.LinearFilter,
   depthBuffer: false,
 });
+// 机翼 pass（wing-pass.ts）：读场景的 hdr，把机翼合成上去写到 hdrWing；后面的眩光、曝光都读 hdrWing。
+// 必须在所有 Object.assign(sceneMat.uniforms, …) 之后创建：它复用的是创建那一刻场景材质里的 uniform 对象
+const wingMat = createWingMaterial(sceneMat.uniforms);
+const hdrWing = hdr.clone();
 
 const state: VoyageState = {
   preset: PRESETS[0],
@@ -128,7 +133,7 @@ const head = { x: 0, y: 0.02, z: -0.42, tx: 0, ty: 0.02, tz: -0.42 };
 let viewPreset = VIEW_PRESETS[0];
 function setView(id: string) {
   viewPreset = VIEW_PRESETS.find((v) => v.id === id) ?? VIEW_PRESETS[0];
-  applyViewPreset(head, viewPreset, state.seat); // 只改目标位置，头会平滑挪过去
+  applyViewPreset(head, viewPreset, state.seat, state.wingRootLE); // 只改目标位置，头会平滑挪过去
 }
 // 按住拖动才转视角（面板上的操作不会带动画面）；滚轮前后挪头；双击回到当前预设
 setupViewControls(renderer.domElement, head, () => setView(viewPreset.id));
@@ -188,6 +193,7 @@ function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   hdr.setSize(size.x, size.y);
+  hdrWing.setSize(size.x, size.y);
   clouds.setSize(size.x, size.y);
   bloom.setSize(size.x, size.y);
   sceneMat.uniforms.uResolution.value.copy(size);
@@ -318,7 +324,9 @@ function renderFrame(now: number) {
   u.uClouds.value = clouds.texture;
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
   pass.render(sceneMat, hdr);
-  exposure.render(hdr.texture, bloom.render(hdr), dt);
+  wingMat.uniforms.uScene.value = hdr.texture;
+  pass.render(wingMat, hdrWing);
+  exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
 
   updateInfo(now, sun, moon, state, curLat, curLon, ground.pending);
 }
@@ -334,10 +342,13 @@ requestAnimationFrame(() =>
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
       geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
-      const mesh = new THREE.Mesh(geo, sceneMat);
-      mesh.frustumCulled = false;
+      // 场景和机翼两个程序放进同一次 compileAsync：驱动并行编译，总时间约等于较慢的那一个
       const probe = new THREE.Scene();
-      probe.add(mesh);
+      for (const mat of [sceneMat, wingMat]) {
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.frustumCulled = false;
+        probe.add(mesh);
+      }
       renderer.setRenderTarget(hdr);
       await renderer.compileAsync(probe, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
       renderer.setRenderTarget(null);
@@ -349,11 +360,25 @@ requestAnimationFrame(() =>
     renderer.getContext().finish();
     tick("首帧（含着色器编译）");
     // 场景材质名下编译过几个程序：1 说明后台编译的程序被首帧直接用上了；2 说明键不一致、首帧又同步编译了一遍
-    startup["场景材质的程序数"] = (renderer.properties.get(sceneMat) as { programs?: Map<string, unknown> }).programs?.size ?? -1;
+    const programs = (mat: THREE.Material) => (renderer.properties.get(mat) as { programs?: Map<string, unknown> }).programs?.size ?? -1;
+    startup["场景材质的程序数"] = programs(sceneMat);
+    startup["机翼材质的程序数"] = programs(wingMat);
     (window as unknown as { __voyageStartup: unknown }).__voyageStartup = startup;
     $("loading").classList.add("done");
   }, 50),
 );
+
+/** 调试：把机翼 pass 连续渲染 n 次并等 GPU 做完，返回每次的毫秒数 */
+function benchWing(n = 20) {
+  const px = new Float32Array(4);
+  const sync = () => renderer.readRenderTargetPixels(hdrWing, 0, 0, 1, 1, px);
+  pass.render(wingMat, hdrWing);
+  sync();
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) pass.render(wingMat, hdrWing);
+  sync();
+  return (performance.now() - t0) / n;
+}
 
 /** 调试：把场景 pass 连续渲染 n 次并等 GPU 做完，返回每次的毫秒数。比较着色器开销用（不受刷新率上限影响） */
 function benchScene(n = 20) {
@@ -380,4 +405,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean, wingDebug, benchScene, benchFrame };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean, wingDebug, wingMat, benchScene, benchWing, benchFrame };

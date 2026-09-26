@@ -29,7 +29,7 @@ const float WINDOW_HEIGHT = 0.25;      // 窗口中心高出机身轴线
 const float FUSELAGE_RADIUS = 1.98;
 const float ROOT_Z = 1.95;
 const float TIP_Z = 17.0;
-const float SPAN = TIP_Z - ROOT_Z;
+const float WING_SPAN = TIP_Z - ROOT_Z;
 const float ROOT_Y = -1.3;
 const float ROOT_CHORD = 6.0;
 const float TIP_CHORD = 1.6;
@@ -37,60 +37,60 @@ const float SWEEP = 0.436;     // 25°
 const float DIHEDRAL = 0.087;  // 5°
 const float WINGLET_H = 2.4;   // 小翼高度（A320 sharklet 约 2.4 m）
 const float WINGLET_SWEEP = 0.61; // 35°
-const float BEND_R = 0.55;     // 翼尖到小翼的弯折半径
-const float MAIN_END_Z = TIP_Z - BEND_R;              // 平直主翼到这里为止，之后是弯折段
-const float S_END = (MAIN_END_Z - ROOT_Z) / SPAN;
+const float WING_BEND_R = 0.55;     // 翼尖到小翼的弯折半径
+const float WING_MAIN_END_Z = TIP_Z - WING_BEND_R;              // 平直主翼到这里为止，之后是弯折段
+const float WING_S_END = (WING_MAIN_END_Z - ROOT_Z) / WING_SPAN;
 // 增升装置的展向范围（相对半展长 s）与弦向位置（相对弦长 xi）
-const float FLAP_S0 = 0.03;
-const float FLAP_SPLIT = 0.31;  // 内、外襟翼的分界
-const float FLAP_S1 = 0.72;     // 再往外是副翼
-const float FLAP_LE = 0.70;     // 襟翼前缘（收起时藏在整流罩下）
-const float SHROUD_TE = 0.74;   // 扰流板后缘 / 襟翼整流罩的末端
-const float SPOILER_XI = 0.60;  // 扰流板铰链
-const float SPOILER_S0 = 0.10;
-const float SPOILER_S1 = 0.70;
-const float SLAT_XI = 0.12;
-const float SLAT_S0 = 0.06;
-const float SLAT_S1 = 0.955;
+const float WING_FLAP_S0 = 0.03;
+const float WING_FLAP_SPLIT = 0.31;  // 内、外襟翼的分界
+const float WING_FLAP_S1 = 0.72;     // 再往外是副翼
+const float WING_FLAP_LE = 0.70;     // 襟翼前缘（收起时藏在整流罩下）
+const float WING_SHROUD_TE = 0.74;   // 扰流板后缘 / 襟翼整流罩的末端
+const float WING_SPOILER_XI = 0.60;  // 扰流板铰链
+const float WING_SPOILER_S0 = 0.10;
+const float WING_SPOILER_S1 = 0.70;
+const float WING_SLAT_XI = 0.12;
+const float WING_SLAT_S0 = 0.06;
+const float WING_SLAT_S1 = 0.955;
 // 发动机：CFM56-5 量级，短舱最大直径约 2.1 m、长约 4.4 m，中心线离机身轴线 5.75 m
-const float ENG_Z = 5.75;
-const float ENG_Y = -2.2;
+const float WING_ENG_Z = 5.75;
+const float WING_ENG_Y = -2.2;
 // 三个襟翼滑轨整流罩的展向位置
-const float FAIR_S1 = 0.30;
-const float FAIR_S2 = 0.49;
-const float FAIR_S3 = 0.68;
+const float WING_FAIR_S1 = 0.30;
+const float WING_FAIR_S2 = 0.49;
+const float WING_FAIR_S3 = 0.68;
 
-vec3 cabinToAircraft(vec3 p) {
+vec3 wingCabinToAircraft(vec3 p) {
   return vec3(uSeatSign * p.x - uWingRootLE, p.y + WINDOW_HEIGHT, p.z + CABIN_WALL_RADIUS);
 }
 
-vec3 aircraftToCabin(vec3 A) {
+vec3 wingAircraftToCabin(vec3 A) {
   return vec3(uSeatSign * (A.x + uWingRootLE), A.y - WINDOW_HEIGHT, A.z - CABIN_WALL_RADIUS);
 }
 
 // NACA 四位数翼型的半厚度分布（相对弦长 × 相对厚度）
-float nacaHalf(float xi) {
+float wingNacaHalf(float xi) {
   xi = clamp(xi, 0.0, 1.0);
   return 5.0 * (0.2969 * sqrt(xi) - 0.126 * xi - 0.3516 * xi * xi + 0.2843 * xi * xi * xi - 0.1036 * xi * xi * xi * xi);
 }
 
 // ---- 平直主翼的平面形状 ----
-float spanS(float z) { return (clamp(z, ROOT_Z, TIP_Z) - ROOT_Z) / SPAN; }
-float leX(float z) { return -(clamp(z, ROOT_Z, TIP_Z) - ROOT_Z) * tan(SWEEP); }
-float chordAt(float s) { return mix(ROOT_CHORD, TIP_CHORD, s); }
-float tcAt(float s) { return mix(0.14, 0.11, s); }
-float camberAt(float xi, float c) { float x = clamp(xi, 0.0, 1.0); return c * 0.08 * x * (1.0 - x); }
-float baseY(float z, float s) { return ROOT_Y + (clamp(z, ROOT_Z, TIP_Z) - ROOT_Z) * tan(DIHEDRAL) + uWingFlex * s * s; }
+float wingSpanS(float z) { return (clamp(z, ROOT_Z, TIP_Z) - ROOT_Z) / WING_SPAN; }
+float wingLeX(float z) { return -(clamp(z, ROOT_Z, TIP_Z) - ROOT_Z) * tan(SWEEP); }
+float wingChordAt(float s) { return mix(ROOT_CHORD, TIP_CHORD, s); }
+float wingTcAt(float s) { return mix(0.14, 0.11, s); }
+float wingCamberAt(float xi, float c) { float x = clamp(xi, 0.0, 1.0); return c * 0.08 * x * (1.0 - x); }
+float wingBaseY(float z, float s) { return ROOT_Y + (clamp(z, ROOT_Z, TIP_Z) - ROOT_Z) * tan(DIHEDRAL) + uWingFlex * s * s; }
 
 struct WingCoord { float xi; float s; float chord; float yMid; float halfT; };
 
 WingCoord wingCoord(vec3 P) {
   WingCoord w;
-  w.s = spanS(P.z);
-  w.chord = chordAt(w.s);
-  w.xi = (leX(P.z) - P.x) / w.chord;
-  w.yMid = baseY(P.z, w.s) + camberAt(w.xi, w.chord);
-  w.halfT = w.chord * tcAt(w.s) * nacaHalf(w.xi);
+  w.s = wingSpanS(P.z);
+  w.chord = wingChordAt(w.s);
+  w.xi = (wingLeX(P.z) - P.x) / w.chord;
+  w.yMid = wingBaseY(P.z, w.s) + wingCamberAt(w.xi, w.chord);
+  w.halfT = w.chord * wingTcAt(w.s) * wingNacaHalf(w.xi);
   return w;
 }
 
@@ -101,13 +101,13 @@ float sdWingMain(vec3 P) {
   float xiA = 0.0;
   float xiB = 1.0;
   // 襟翼放下：主翼在襟翼段只到整流罩末端，下表面向上收成一片薄的整流罩（襟翼收起时就藏在它下面）
-  if (uFlap > 1e-3 && w.s > FLAP_S0 && w.s < FLAP_S1) {
-    xiB = SHROUD_TE;
-    yL = mix(yL, yU - 0.04, smoothstep(0.52, SHROUD_TE, w.xi));
+  if (uFlap > 1e-3 && w.s > WING_FLAP_S0 && w.s < WING_FLAP_S1) {
+    xiB = WING_SHROUD_TE;
+    yL = mix(yL, yU - 0.04, smoothstep(0.52, WING_SHROUD_TE, w.xi));
   }
   // 缝翼伸出：主翼前缘退到缝翼后面，切口收圆（「D 形前缘」）
-  if (uSlat > 1e-3 && w.s > SLAT_S0 && w.s < SLAT_S1) {
-    xiA = SLAT_XI - 0.03;
+  if (uSlat > 1e-3 && w.s > WING_SLAT_S0 && w.s < WING_SLAT_S1) {
+    xiA = WING_SLAT_XI - 0.03;
     float k = sqrt(clamp((w.xi - xiA) / 0.05, 0.0, 1.0));
     float m = 0.5 * (yU + yL);
     float hh = 0.5 * (yU - yL) * k;
@@ -116,101 +116,101 @@ float sdWingMain(vec3 P) {
   }
   float dy = abs(P.y - 0.5 * (yU + yL)) - 0.5 * (yU - yL);
   float dx = max(xiA - w.xi, w.xi - xiB) * w.chord * cos(SWEEP);
-  float dz = max(ROOT_Z - P.z, P.z - (MAIN_END_Z + 0.04));
+  float dz = max(ROOT_Z - P.z, P.z - (WING_MAIN_END_Z + 0.04));
   return max(max(dy, dx), dz);
 }
 
 // ---- 翼尖弯折 + 鲨鳍小翼 ----
 // 在翼尖的横截面（z-y 平面）里取局部坐标 (a, b)：a 沿翼尖处的翼面坡度（上反 + 弯曲）向外，b 垂直于它向上。
-// 中面路径：a ≤ 0 是主翼的延长线；然后是半径 BEND_R 的圆弧，转过 bendAngle；之后是一段直的小翼。
-float tipTheta() { return atan(tan(DIHEDRAL) + 2.0 * uWingFlex * S_END / SPAN); }
+// 中面路径：a ≤ 0 是主翼的延长线；然后是半径 WING_BEND_R 的圆弧，转过 wingBendAngle；之后是一段直的小翼。
+float wingTipTheta() { return atan(tan(DIHEDRAL) + 2.0 * uWingFlex * WING_S_END / WING_SPAN); }
 // 小翼最终略向外倾约 3°：圆弧转过的角度 = 90° − 翼尖坡度 − 3°
-float bendAngle() { return 1.5708 - tipTheta() - 0.05; }
-float tipYEnd() { return ROOT_Y + (MAIN_END_Z - ROOT_Z) * tan(DIHEDRAL) + uWingFlex * S_END * S_END; }
+float wingBendAngle() { return 1.5708 - wingTipTheta() - 0.05; }
+float wingTipYEnd() { return ROOT_Y + (WING_MAIN_END_Z - ROOT_Z) * tan(DIHEDRAL) + uWingFlex * WING_S_END * WING_S_END; }
 
 // 沿路径的弧长 → 前缘位置、弦长。弯折段里后掠角从 25° 平滑过渡到 35°
-float tipLE(float sig, float arcLen) {
+float wingTipLE(float sig, float arcLen) {
   float t = clamp(sig / arcLen, 0.0, 1.0);
   float ss = sig <= arcLen ? arcLen * (t * t * t - 0.5 * t * t * t * t) : arcLen * 0.5 + (sig - arcLen);
-  return leX(MAIN_END_Z) - max(sig, 0.0) * tan(SWEEP) - (tan(WINGLET_SWEEP) - tan(SWEEP)) * ss;
+  return wingLeX(WING_MAIN_END_Z) - max(sig, 0.0) * tan(SWEEP) - (tan(WINGLET_SWEEP) - tan(SWEEP)) * ss;
 }
 // 后缘直接按一条折线定义（弯折段一段、小翼一段），弦长 = 前缘 − 后缘。
 // 旧写法分别插值前缘和弦长，两者变化快慢不同，后缘在弯折处出现一个凹口
-float tipChord(float sig, float arcLen, float wlLen) {
-  float teEnd = leX(MAIN_END_Z) - chordAt(S_END);
-  float teArc = tipLE(arcLen, arcLen) - 1.35;
-  float teTop = tipLE(arcLen + wlLen, arcLen) - 0.42;
+float wingTipChord(float sig, float arcLen, float wlLen) {
+  float teEnd = wingLeX(WING_MAIN_END_Z) - wingChordAt(WING_S_END);
+  float teArc = wingTipLE(arcLen, arcLen) - 1.35;
+  float teTop = wingTipLE(arcLen + wlLen, arcLen) - 0.42;
   float te = sig <= arcLen ? mix(teEnd, teArc, clamp(sig / arcLen, 0.0, 1.0))
                            : mix(teArc, teTop, clamp((sig - arcLen) / wlLen, 0.0, 1.0));
-  return max(tipLE(sig, arcLen) - te, 0.05);
+  return max(wingTipLE(sig, arcLen) - te, 0.05);
 }
 
 // 翼尖局部坐标：sig 沿路径弧长，n 离中面的距离（朝弯折内侧、也就是主翼上表面 / 小翼内侧为正）
-vec2 tipPath(vec3 P, out float arcLen) {
-  float th = tipTheta();
-  float ang = bendAngle();
-  arcLen = BEND_R * ang;
-  vec2 d = vec2(P.z - MAIN_END_Z, P.y - tipYEnd());
+vec2 wingTipPath(vec3 P, out float arcLen) {
+  float th = wingTipTheta();
+  float ang = wingBendAngle();
+  arcLen = WING_BEND_R * ang;
+  vec2 d = vec2(P.z - WING_MAIN_END_Z, P.y - wingTipYEnd());
   float cs = cos(th), sn = sin(th);
   vec2 ab = vec2(d.x * cs + d.y * sn, -d.x * sn + d.y * cs);
   // 三段中面，取最近的一段
   float d1 = ab.x <= 0.0 ? abs(ab.y) : length(ab);
-  vec2 v = ab - vec2(0.0, BEND_R);
+  vec2 v = ab - vec2(0.0, WING_BEND_R);
   float phi = atan(v.x, -v.y);
-  float d2 = (phi >= 0.0 && phi <= ang) ? abs(length(v) - BEND_R) : 1e5;
-  vec2 E = vec2(BEND_R * sin(ang), BEND_R - BEND_R * cos(ang));
+  float d2 = (phi >= 0.0 && phi <= ang) ? abs(length(v) - WING_BEND_R) : 1e5;
+  vec2 E = vec2(WING_BEND_R * sin(ang), WING_BEND_R - WING_BEND_R * cos(ang));
   vec2 t = vec2(cos(ang), sin(ang));
   vec2 nIn = vec2(-sin(ang), cos(ang));
   vec2 e = ab - E;
   float al = dot(e, t);
   float d3 = al >= 0.0 ? abs(dot(e, nIn)) : length(e);
   if (d1 <= d2 && d1 <= d3) return vec2(min(ab.x, 0.0), ab.y);
-  if (d2 <= d3) return vec2(BEND_R * phi, BEND_R - length(v));
+  if (d2 <= d3) return vec2(WING_BEND_R * phi, WING_BEND_R - length(v));
   return vec2(arcLen + al, dot(e, nIn));
 }
 
 // 小翼离中面的路径位置 → 机体坐标（给灯的位置用）
-vec3 tipToAircraft(float sig, float n, float x) {
-  float th = tipTheta();
-  float ang = bendAngle();
-  float arcLen = BEND_R * ang;
+vec3 wingTipToAircraft(float sig, float n, float x) {
+  float th = wingTipTheta();
+  float ang = wingBendAngle();
+  float arcLen = WING_BEND_R * ang;
   vec2 ab;
   if (sig <= arcLen) {
-    float phi = sig / BEND_R;
-    vec2 onArc = vec2(BEND_R * sin(phi), BEND_R - BEND_R * cos(phi));
-    ab = onArc + normalize(vec2(0.0, BEND_R) - onArc) * n;
+    float phi = sig / WING_BEND_R;
+    vec2 onArc = vec2(WING_BEND_R * sin(phi), WING_BEND_R - WING_BEND_R * cos(phi));
+    ab = onArc + normalize(vec2(0.0, WING_BEND_R) - onArc) * n;
   } else {
-    vec2 E = vec2(BEND_R * sin(ang), BEND_R - BEND_R * cos(ang));
+    vec2 E = vec2(WING_BEND_R * sin(ang), WING_BEND_R - WING_BEND_R * cos(ang));
     ab = E + vec2(cos(ang), sin(ang)) * (sig - arcLen) + vec2(-sin(ang), cos(ang)) * n;
   }
   float cs = cos(th), sn = sin(th);
-  return vec3(x, tipYEnd() + ab.x * sn + ab.y * cs, MAIN_END_Z + ab.x * cs - ab.y * sn);
+  return vec3(x, wingTipYEnd() + ab.x * sn + ab.y * cs, WING_MAIN_END_Z + ab.x * cs - ab.y * sn);
 }
 
-struct TipCoord { float sig; float n; float xi; float c; float halfT; float cam; float arcLen; float wlLen; };
+struct WingTipCoord { float sig; float n; float xi; float c; float halfT; float cam; float arcLen; float wlLen; };
 
-TipCoord tipCoord(vec3 P) {
-  TipCoord q;
-  vec2 sn = tipPath(P, q.arcLen);
-  q.wlLen = WINGLET_H - BEND_R;
+WingTipCoord wingTipCoord(vec3 P) {
+  WingTipCoord q;
+  vec2 sn = wingTipPath(P, q.arcLen);
+  q.wlLen = WINGLET_H - WING_BEND_R;
   q.sig = sn.x;
   q.n = sn.y;
-  q.c = tipChord(q.sig, q.arcLen, q.wlLen);
-  q.xi = (tipLE(q.sig, q.arcLen) - P.x) / q.c;
+  q.c = wingTipChord(q.sig, q.arcLen, q.wlLen);
+  q.xi = (wingTipLE(q.sig, q.arcLen) - P.x) / q.c;
   float bend = smoothstep(0.0, q.arcLen, q.sig);
   float h = clamp((q.sig - q.arcLen) / q.wlLen, 0.0, 1.0);
   // 顶端收圆
-  q.halfT = q.c * mix(tcAt(S_END), 0.09, bend) * nacaHalf(q.xi) * sqrt(1.0 - smoothstep(0.9, 1.0, h));
-  q.cam = camberAt(q.xi, q.c) * (1.0 - 0.6 * bend);
+  q.halfT = q.c * mix(wingTcAt(WING_S_END), 0.09, bend) * wingNacaHalf(q.xi) * sqrt(1.0 - smoothstep(0.9, 1.0, h));
+  q.cam = wingCamberAt(q.xi, q.c) * (1.0 - 0.6 * bend);
   return q;
 }
 
-float sdTip(vec3 P) {
+float sdWingTip(vec3 P) {
   // 包围：离翼尖很远时直接返回一个保守的距离，省掉 atan。
   // 只在离得足够远（> 0.5 m）时才用包围距离：包围面本身不是几何，射线贴近它时会被当成「擦边」甚至「命中」
-  float outside = (MAIN_END_Z - 1.7) - P.z;
+  float outside = (WING_MAIN_END_Z - 1.7) - P.z;
   if (outside > 0.0) return outside + 0.5;
-  TipCoord q = tipCoord(P);
+  WingTipCoord q = wingTipCoord(P);
   float dn = abs(q.n - q.cam) - q.halfT;
   float dx = max(-q.xi, q.xi - 1.0) * q.c * 0.8;
   float ds = max(-q.sig - 0.02, q.sig - (q.arcLen + q.wlLen));
@@ -218,38 +218,38 @@ float sdTip(vec3 P) {
 }
 
 // ---- Fowler 襟翼：先向后滑出（前 10° 主要是滑出），再绕铰链下偏 ----
-float sdFlap(vec3 P) {
+float sdWingFlap(vec3 P) {
   if (uFlap < 1e-3) return 1e3;
-  float s = spanS(P.z);
-  float c = chordAt(s);
-  float xm = leX(P.z) - P.x;                // 离前缘多少米（向后为正）
+  float s = wingSpanS(P.z);
+  float c = wingChordAt(s);
+  float xm = wingLeX(P.z) - P.x;                // 离前缘多少米（向后为正）
   float f = smoothstep(0.0, 0.3, uFlap);
-  float qa = xm - FLAP_LE * c - 0.22 * c * f;
-  float qb = P.y - (baseY(P.z, s) + camberAt(FLAP_LE, c)) + 0.03 * c * f;
+  float qa = xm - WING_FLAP_LE * c - 0.22 * c * f;
+  float qb = P.y - (wingBaseY(P.z, s) + wingCamberAt(WING_FLAP_LE, c)) + 0.03 * c * f;
   float cs = cos(uFlap), sn = sin(uFlap);
   float u = qa * cs - qb * sn;
   float v = qa * sn + qb * cs;
-  float cf = (1.0 - FLAP_LE) * c;
+  float cf = (1.0 - WING_FLAP_LE) * c;
   float xiF = u / cf;
-  float xiO = FLAP_LE + (1.0 - FLAP_LE) * clamp(xiF, 0.0, 1.0);  // 对应原翼型的弦向位置
-  float hF = c * tcAt(s) * nacaHalf(xiO) * sqrt(clamp(xiF / 0.12, 0.0, 1.0));
-  float cam = camberAt(xiO, c) - camberAt(FLAP_LE, c);
+  float xiO = WING_FLAP_LE + (1.0 - WING_FLAP_LE) * clamp(xiF, 0.0, 1.0);  // 对应原翼型的弦向位置
+  float hF = c * wingTcAt(s) * wingNacaHalf(xiO) * sqrt(clamp(xiF / 0.12, 0.0, 1.0));
+  float cam = wingCamberAt(xiO, c) - wingCamberAt(WING_FLAP_LE, c);
   float dv = abs(v - cam) - hF;
   float du = max(-xiF, xiF - 1.0) * cf;
-  float dz = max(ROOT_Z + FLAP_S0 * SPAN - P.z, P.z - (ROOT_Z + FLAP_S1 * SPAN));
-  dz = max(dz, 0.04 - abs(P.z - (ROOT_Z + FLAP_SPLIT * SPAN))); // 内外襟翼之间的缝
+  float dz = max(ROOT_Z + WING_FLAP_S0 * WING_SPAN - P.z, P.z - (ROOT_Z + WING_FLAP_S1 * WING_SPAN));
+  dz = max(dz, 0.04 - abs(P.z - (ROOT_Z + WING_FLAP_SPLIT * WING_SPAN))); // 内外襟翼之间的缝
   return max(max(dv, du), dz);
 }
 
 // 扰流板：主翼上表面的一块板，绕前缘铰链上翻
-float sdSpoiler(vec3 P) {
+float sdWingSpoiler(vec3 P) {
   if (uSpoiler < 1e-3) return 1e3;
-  float s = spanS(P.z);
-  float c = chordAt(s);
-  float xm = leX(P.z) - P.x;
-  float hy = baseY(P.z, s) + camberAt(SPOILER_XI, c) + c * tcAt(s) * nacaHalf(SPOILER_XI);
-  float L = (SHROUD_TE - SPOILER_XI) * c;
-  float qa = xm - SPOILER_XI * c;
+  float s = wingSpanS(P.z);
+  float c = wingChordAt(s);
+  float xm = wingLeX(P.z) - P.x;
+  float hy = wingBaseY(P.z, s) + wingCamberAt(WING_SPOILER_XI, c) + c * wingTcAt(s) * wingNacaHalf(WING_SPOILER_XI);
+  float L = (WING_SHROUD_TE - WING_SPOILER_XI) * c;
+  float qa = xm - WING_SPOILER_XI * c;
   float qb = P.y - hy;
   float cs = cos(uSpoiler), sn = sin(uSpoiler);
   float u = qa * cs + qb * sn;
@@ -257,69 +257,83 @@ float sdSpoiler(vec3 P) {
   float th = 0.03 * (1.0 - 0.6 * clamp(u / L, 0.0, 1.0));
   float dv = abs(v + th) - th;
   float du = max(-u, u - L);
-  float dz = max(ROOT_Z + SPOILER_S0 * SPAN - P.z, P.z - (ROOT_Z + SPOILER_S1 * SPAN));
+  float dz = max(ROOT_Z + WING_SPOILER_S0 * WING_SPAN - P.z, P.z - (ROOT_Z + WING_SPOILER_S1 * WING_SPAN));
   // 五块板之间的缝
-  float seg = fract((s - SPOILER_S0) / (SPOILER_S1 - SPOILER_S0) * 5.0);
-  dz = max(dz, 0.03 - min(seg, 1.0 - seg) * (SPOILER_S1 - SPOILER_S0) * SPAN / 5.0);
+  float seg = fract((s - WING_SPOILER_S0) / (WING_SPOILER_S1 - WING_SPOILER_S0) * 5.0);
+  dz = max(dz, 0.03 - min(seg, 1.0 - seg) * (WING_SPOILER_S1 - WING_SPOILER_S0) * WING_SPAN / 5.0);
   return max(max(dv, du), dz);
 }
 
 // 前缘缝翼：原翼型最前面 12%，下表面是凹进去的「缝翼槽」；伸出时向前、向下并低头
-float sdSlat(vec3 P) {
+float sdWingSlat(vec3 P) {
   if (uSlat < 1e-3) return 1e3;
-  float s = spanS(P.z);
-  float c = chordAt(s);
-  float xm = leX(P.z) - P.x;
-  float px = SLAT_XI * c;
+  float s = wingSpanS(P.z);
+  float c = wingChordAt(s);
+  float xm = wingLeX(P.z) - P.x;
+  float px = WING_SLAT_XI * c;
   float qa = xm - px + 0.12 * c * uSlat;
-  float qb = P.y - (baseY(P.z, s) + camberAt(SLAT_XI, c)) + 0.06 * c * uSlat;
+  float qb = P.y - (wingBaseY(P.z, s) + wingCamberAt(WING_SLAT_XI, c)) + 0.06 * c * uSlat;
   float cs = cos(uSlat), sn = sin(uSlat);
   float a = qa * cs + qb * sn;
   float b = -qa * sn + qb * cs;
   float xiL = (px + a) / c;
-  float mid = camberAt(xiL, c) - camberAt(SLAT_XI, c);
-  float hT = c * tcAt(s) * nacaHalf(xiL);
+  float mid = wingCamberAt(xiL, c) - wingCamberAt(WING_SLAT_XI, c);
+  float hT = c * wingTcAt(s) * wingNacaHalf(xiL);
   float up = mid + hT;
-  float lo = mid - hT * (1.0 - 1.8 * smoothstep(0.02, SLAT_XI, xiL));
+  float lo = mid - hT * (1.0 - 1.8 * smoothstep(0.02, WING_SLAT_XI, xiL));
   float dy = abs(b - 0.5 * (up + lo)) - 0.5 * (up - lo);
-  float dx = max(-xiL, xiL - SLAT_XI) * c;
-  float dz = max(ROOT_Z + SLAT_S0 * SPAN - P.z, P.z - (ROOT_Z + SLAT_S1 * SPAN));
+  float dx = max(-xiL, xiL - WING_SLAT_XI) * c;
+  float dz = max(ROOT_Z + WING_SLAT_S0 * WING_SPAN - P.z, P.z - (ROOT_Z + WING_SLAT_S1 * WING_SPAN));
   return max(max(dy, dx), dz);
 }
 
-// 襟翼滑轨整流罩：挂在下表面、伸出后缘的「独木舟」；襟翼放下时后半截跟着向下转
-float sdFairing(vec3 P) {
-  float s = spanS(P.z);
-  float sf = abs(s - FAIR_S1) < abs(s - FAIR_S2) ? FAIR_S1 : (abs(s - FAIR_S2) < abs(s - FAIR_S3) ? FAIR_S2 : FAIR_S3);
-  float zf = ROOT_Z + sf * SPAN;
-  float side = abs(P.z - zf) - 0.2;
-  if (side > 0.3) return side;
-  float c = chordAt(sf);
-  float xm = leX(zf) - P.x;
-  float x0 = 0.5 * c;
-  float len = 0.72 * c;
-  float u = (xm - x0) / len;
+// 襟翼滑轨整流罩（flap track fairing）：挂在下表面、伸出后缘的「独木舟」，钝尾。
+// 前半截固定在机翼上；后半截（铰链之后）跟着襟翼整体绕铰链转——刚体转动，不做剪切，放下时尾段不会拉成犄角、前段也不会鼓包
+// 截面是椭圆（半宽 W、半高 H）；u 是沿轴线的相对位置，r(u) 是截面缩放：椭圆头 → 等粗 → 收细到钝尾
+float wingCanoe(float u, float yRel, float zRel, float len) {
   float uc = clamp(u, 0.0, 1.0);
-  // 前 30% 是椭圆的头，后面逐渐收成尖尾
-  float r = uc < 0.3 ? sqrt(max(1.0 - pow((0.3 - uc) / 0.3, 2.0), 0.0)) : 1.0 - pow((uc - 0.3) / 0.7, 1.3);
-  float xiC = min(xm / c, 1.0);
-  float lower = baseY(zf, sf) + camberAt(xiC, c) - c * tcAt(sf) * nacaHalf(xiC);
-  float drop = max(xm - FLAP_LE * c, 0.0) * sin(uFlap) * 0.9;
+  float r = uc < 0.25 ? sqrt(max(1.0 - pow((0.25 - uc) / 0.25, 2.0), 0.0)) : mix(1.0, 0.5, smoothstep(0.55, 1.0, uc));
   const float W = 0.16;
-  const float H = 0.3;
-  vec2 q = vec2((P.z - zf) / W, (P.y - (lower - drop - 0.8 * H * r)) / H);
+  const float H = 0.28;
+  vec2 q = vec2(zRel / W, yRel / H);
   float d = (length(q) - r) * W;
   return max(d, max(-u, u - 1.0) * len);
 }
 
+float sdWingFairing(vec3 P) {
+  float s = wingSpanS(P.z);
+  float sf = abs(s - WING_FAIR_S1) < abs(s - WING_FAIR_S2) ? WING_FAIR_S1 : (abs(s - WING_FAIR_S2) < abs(s - WING_FAIR_S3) ? WING_FAIR_S2 : WING_FAIR_S3);
+  float zf = ROOT_Z + sf * WING_SPAN;
+  float side = abs(P.z - zf) - 0.2;
+  if (side > 0.3) return side;
+  float c = wingChordAt(sf);
+  float xm = wingLeX(zf) - P.x;
+  float x0 = 0.45 * c;
+  float len = 0.72 * c;
+  // 轴线：铰链处下表面往下 0.16 m，一条直线（不跟着翼型弯）
+  float hx = WING_FLAP_LE * c;
+  float hy = wingBaseY(zf, sf) + wingCamberAt(WING_FLAP_LE, c) - c * wingTcAt(sf) * wingNacaHalf(WING_FLAP_LE) - 0.16;
+  float uh = (hx - x0) / len;
+  // 前半截
+  float u0 = (xm - x0) / len;
+  float dFront = max(wingCanoe(u0, P.y - hy, P.z - zf, len), (u0 - uh - 0.03) * len);
+  // 后半截：转到襟翼的坐标里（和 sdWingFlap 一样的转法，只转不滑）
+  float cs = cos(uFlap), sn = sin(uFlap);
+  vec2 q = vec2(xm - hx, P.y - hy);
+  vec2 l = vec2(q.x * cs - q.y * sn, q.x * sn + q.y * cs);
+  float u1 = (hx + l.x - x0) / len;
+  float dAft = max(wingCanoe(u1, l.y, P.z - zf, len), (uh - 0.03 - u1) * len);
+  return min(dFront, dAft);
+}
+
 // 发动机短舱 + 吊挂。u = 从进气道唇口向后的距离
-float engInletX() { return leX(ENG_Z) + 2.6; }
-float sdNacelle(vec3 P) {
-  float u = engInletX() - P.x;
-  vec3 cen = vec3(engInletX() - 2.4, ENG_Y + 0.3, ENG_Z);
+float wingEngInletX() { return wingLeX(WING_ENG_Z) + 2.6; }
+float sdWingNacelle(vec3 P) {
+  float u = wingEngInletX() - P.x;
+  vec3 cen = vec3(wingEngInletX() - 2.4, WING_ENG_Y + 0.3, WING_ENG_Z);
   float bound = length(P - cen) - 3.3;
   if (bound > 0.3) return bound;
-  float rr = length(P.yz - vec2(ENG_Y, ENG_Z));
+  float rr = length(P.yz - vec2(WING_ENG_Y, WING_ENG_Z));
   // 风扇整流罩：唇口圆 → 最粗 → 向后收
   float uc = clamp(u, 0.0, 2.7);
   float rCowl = uc < 0.45 ? 0.9 + 0.15 * sqrt(uc / 0.45) : 1.05 - 0.13 * smoothstep(0.45, 2.7, uc);
@@ -333,7 +347,7 @@ float sdNacelle(vec3 P) {
   float rCore = uk < 3.75 ? mix(0.66, 0.5, (uk - 2.5) / 1.25) : 0.36 * sqrt(max(1.0 - (uk - 3.75) / 0.65, 0.0));
   float dCore = max(rr - rCore, max(2.5 - u, u - 4.4));
   // 吊挂：短舱顶上的一道梁，一直伸到机翼下面
-  vec3 pp = P - vec3(engInletX() - 2.75, ENG_Y + 0.95, ENG_Z);
+  vec3 pp = P - vec3(wingEngInletX() - 2.75, WING_ENG_Y + 0.95, WING_ENG_Z);
   vec3 qb = abs(pp) - vec3(2.15, 0.3, 0.13);
   float dPy = length(max(qb, 0.0)) + min(max(qb.x, max(qb.y, qb.z)), 0.0) - 0.04;
   return min(min(min(dCowl, dSpin), dCore), dPy) * 0.85;
@@ -348,25 +362,25 @@ int gWingSkip = -1;
 float sdWing(vec3 P) {
   float d = gWingSkip == 0 ? 1e3 : sdWingMain(P);
   int id = 0;
-  float x = gWingSkip == 0 ? 1e3 : sdTip(P);      if (x < d) { d = x; id = 1; }
-  x = gWingSkip == 2 ? 1e3 : sdFlap(P);           if (x < d) { d = x; id = 2; }
-  x = gWingSkip == 3 ? 1e3 : sdSpoiler(P);        if (x < d) { d = x; id = 3; }
-  x = gWingSkip == 4 ? 1e3 : sdSlat(P);           if (x < d) { d = x; id = 4; }
-  x = gWingSkip == 5 ? 1e3 : sdFairing(P);        if (x < d) { d = x; id = 5; }
-  x = gWingSkip == 6 ? 1e3 : sdNacelle(P);        if (x < d) { d = x; id = 6; }
+  float x = gWingSkip == 0 ? 1e3 : sdWingTip(P);      if (x < d) { d = x; id = 1; }
+  x = gWingSkip == 2 ? 1e3 : sdWingFlap(P);           if (x < d) { d = x; id = 2; }
+  x = gWingSkip == 3 ? 1e3 : sdWingSpoiler(P);        if (x < d) { d = x; id = 3; }
+  x = gWingSkip == 4 ? 1e3 : sdWingSlat(P);           if (x < d) { d = x; id = 4; }
+  x = gWingSkip == 5 ? 1e3 : sdWingFairing(P);        if (x < d) { d = x; id = 5; }
+  x = gWingSkip == 6 ? 1e3 : sdWingNacelle(P);        if (x < d) { d = x; id = 6; }
   gWingPart = id;
   return d;
 }
 
 // 一个像素在单位距离上对应的长度（弧度）
-float pixelAngle() { return 2.0 * uTanHalfFov / uResolution.y; }
+float wingPixelAngle() { return 2.0 * uTanHalfFov / uResolution.y; }
 
 // 整架机翼（含小翼、放下的襟翼、短舱）的包围盒，机体坐标（米），四周留了余量
 const vec3 WING_BOX_MIN = vec3(-10.0, -3.6, 1.8);
 const vec3 WING_BOX_MAX = vec3(1.4, 4.2, 17.6);
 
 // 机身挡住阳光：从 P 朝太阳的射线是否穿过机身圆柱（轴线沿 X）
-float fuselageShadow(vec3 P, vec3 l) {
+float wingFuselageShadow(vec3 P, vec3 l) {
   vec2 o = P.yz;
   vec2 d = l.yz;
   float a = dot(d, d);
@@ -379,7 +393,7 @@ float fuselageShadow(vec3 P, vec3 l) {
   return t > 0.0 ? 0.0 : 1.0;
 }
 
-struct WingTrace {
+struct WingTraceResult {
   float t;       // 命中距离（座舱系，米）；擦边时是离机翼最近的地方；没打到是 −1
   float cov;     // 覆盖率：打中 1，擦边按「最近距离 / 像素宽度」解析算出（轮廓抗锯齿，不用屏幕导数），没打到 0
   vec3 nA;       // 法线（机体系），已经掰到朝向视线的一侧
@@ -388,7 +402,7 @@ struct WingTrace {
   bool edge;     // 打中之前先擦过另一处轮廓（襟翼压在主翼上、小翼压在翼面上这类「内轮廓」），或者打中的是几乎侧对视线的薄边
 };
 
-vec3 tetraDir(int i) {
+vec3 wingTetraDir(int i) {
   return vec3(float(((i + 3) >> 1) & 1), float((i >> 1) & 1), float(i & 1)) * 2.0 - 1.0;
 }
 
@@ -399,16 +413,16 @@ vec3 tetraDir(int i) {
 // 求交的命中阈值取亚像素（旧版取 0.002·t，约两个像素，擦边的射线命中与否取决于步进落点，轮廓成了阶梯）。
 // marchSteps：求交最多走几步；shadowSteps：自阴影步数。边缘超采样的子射线从中心射线命中点附近出发，
 // 传较少的步数、不算阴影（沿用中心射线的）——一个 warp 里只要有一个边缘像素，整个 warp 都得等它走完
-WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int shadowSteps) {
-  WingTrace w;
+WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int shadowSteps) {
+  WingTraceResult w;
   w.t = -1.0;
   w.cov = 0.0;
   w.nA = vec3(0.0, 1.0, 0.0);
   w.shadow = 1.0;
   w.part = 0;
   w.edge = false;
-  float pa = pixelAngle();
-  vec3 oA = cabinToAircraft(ro);
+  float pa = wingPixelAngle();
+  vec3 oA = wingCabinToAircraft(ro);
   vec3 dA = vec3(uSeatSign * rd.x, rd.y, rd.z);
   // 先和包围盒求交：打不到盒子的视线（大半个天空、远处的海面）直接跳过，打得到的从盒子入口开始走
   vec3 inv = 1.0 / (dA + vec3(1e-7));
@@ -436,7 +450,7 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int
   float res = 1.0;
   int total = marchSteps + 4 + shadowSteps;
   for (int i = min(uWingSteps, 0); i < total; i++) {
-    vec3 q = phase == 0 ? oA + dA * t : (phase == 1 ? P + tetraDir(j) * 0.0023 : P + w.nA * 0.01 + lA * ts);
+    vec3 q = phase == 0 ? oA + dA * t : (phase == 1 ? P + wingTetraDir(j) * 0.0023 : P + w.nA * 0.01 + lA * ts);
     float d = sdWing(q);
     if (phase == 0) {
       float fp = pa * t;                    // 这里一个像素多宽（米）
@@ -462,7 +476,9 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int
           // 步数用完时还在包围盒里、离表面不到 3 个像素：多半是贴着表面掠射、一步步挪不完，算打中。
           // 否则边缘超采样的子射线（步数只有 1/4）会被误判成「没打中」，把背后更亮的天空 / 海面混进来，
           // 内轮廓和后缘上出现一串亮点
-          if (t <= tExit && best < 3.0) w.cov = 1.0;
+          // 只对中心射线这样做：边缘超采样的子射线一旦被「提升」成命中，着色点就落在薄后缘外的空中、
+          // 法线取的是后缘端面，夕阳下后缘成了一串白点（审查返工第 1 项的根因）
+          if (marchSteps == uWingSteps && t <= tExit && best < 3.0) w.cov = 1.0;
           if (w.cov <= 0.0) return w;
           w.t = tBest;
           w.part = partBest;
@@ -471,15 +487,23 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int
       }
       if (done) { P = oA + dA * w.t; phase = 1; }
     } else if (phase == 1) {
-      n += tetraDir(j) * d;
+      n += wingTetraDir(j) * d;
       sumD += d;
       j++;
       if (j == 4) {
         n = normalize(n);
-        // 蒙皮在肋和桁条之间会微微鼓起（「油罐效应」），天空的倒影因此轻轻起伏。扰动约 0.5°
-        vec2 qq = P.xz * vec2(1.6, 2.2);
-        vec2 wav = vec2(vnoise(qq) - 0.5, vnoise(qq + 17.3) - 0.5) * 0.018;
-        n = normalize(n + vec3(wav.x, 0.0, wav.y));
+        // 蒙皮在翼肋（展向约 0.6 m 一道）和桁条（弦向约 0.2 m 一道）之间微微鼓起（「油罐效应」），天空的倒影因此轻轻起伏。
+        // 用解析的鼓包 h = A·(1−cos 2πa)(1−cos 2πb)/4，梯度在格子边界处为零，法线处处连续。
+        // 旧写法用值噪声直接当法线扰动：值噪声的导数不连续，近看时反射被切成一块块的「碎面台阶」
+        vec2 cell = vec2(P.z / 0.6, P.x / 0.2);
+        vec2 fc = fract(cell);
+        float amp = 0.0012 * (0.4 + 0.6 * hash12(floor(cell) + 7.1));   // 每格鼓得不一样（米）
+        vec2 g = vec2(
+          sin(6.2832 * fc.x) * (1.0 - cos(6.2832 * fc.y)) * 6.2832 / 0.6,
+          (1.0 - cos(6.2832 * fc.x)) * sin(6.2832 * fc.y) * 6.2832 / 0.2) * amp * 0.25;
+        // 只作用在主翼上下表面（法线大致朝上 / 朝下时），g = (∂h/∂z, ∂h/∂x)
+        float flatness = abs(n.y);
+        n = normalize(n - vec3(g.y, 0.0, g.x) * flatness * sign(n.y));
         // 背向视线的法线（轮廓上、后缘这种薄边上常见）掰到略微朝向视线，而不是整个翻过来：
         // 翻转会让相邻像素在上、下表面的法线之间跳，后缘成了一串亮点
         float ndv = dot(n, -dA);
@@ -496,7 +520,7 @@ WingTrace traceWing(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int
         phase = 2;
         gWingSkip = w.part <= 1 ? 0 : w.part;
         // 背光面不用算阴影
-        if (dot(n, lA) <= 0.0 || fuselageShadow(P, lA) <= 0.0) break;
+        if (dot(n, lA) <= 0.0 || wingFuselageShadow(P, lA) <= 0.0) break;
       }
     } else {
       // 软阴影：半影按「最近距离 / 走过的距离」估计
@@ -525,14 +549,14 @@ float smithG(float nv, float nl, float a) {
 // 细线（面板缝、标线）：按像素宽度抗锯齿，返回覆盖率。
 // fw 是 x 在一个像素内的变化量——由命中距离 × 像素张角解析算出，不用屏幕导数：
 // 机翼着色发生在光线步进命中之后的分支里，那里的屏幕导数没有定义（D3D 会报 X3595 警告，机翼边缘可能闪烁）
-float seam(float x, float width, float fw) {
+float wingSeam(float x, float width, float fw) {
   float w = max(fw, 1e-5);
   return 1.0 - smoothstep(width * 0.5, width * 0.5 + w, abs(x));
 }
 
 // 按像素足迹淡出的 fbm：某个倍频的周期短于约两个像素时换成它的平均值（0.5），远处不闪、不出摩尔纹。
 // fw 是 p 在一个像素内的变化量（取变化最快的那个方向）
-float fbmAA(vec2 p, float fw) {
+float wingFbmAA(vec2 p, float fw) {
   float s = 0.0, a = 0.5;
   for (int i = min(uWingSteps, 0); i < 4; i++) {  // 起点依赖 uniform：不让 FXC 展开
     float keep = 1.0 - smoothstep(0.25, 0.5, fw);
@@ -548,9 +572,9 @@ struct WingSurface { vec3 albedo; float metal; float rough; vec3 emit; float coa
 
 // 翼面漆：浅灰、半光（清漆层），每块蒙皮板的漆色和光泽略有差别
 const vec3 WING_PAINT = vec3(0.70, 0.71, 0.72);
-const vec3 LIVERY = vec3(0.045, 0.10, 0.27);   // 小翼上的航司色（示例：深蓝，不对应真实航司）
+const vec3 WING_LIVERY = vec3(0.045, 0.10, 0.27);   // 小翼上的航司色（示例：深蓝，不对应真实航司）
 
-WingSurface paint(vec3 albedo, float rough) {
+WingSurface wingPaint(vec3 albedo, float rough) {
   WingSurface m;
   m.albedo = albedo;
   m.metal = 0.0;
@@ -560,7 +584,7 @@ WingSurface paint(vec3 albedo, float rough) {
   return m;
 }
 
-WingSurface bareMetal(float albedo, float rough) {
+WingSurface wingBareMetal(float albedo, float rough) {
   WingSurface m;
   m.albedo = vec3(albedo, albedo * 1.01, albedo * 1.03);
   m.metal = 1.0;
@@ -571,23 +595,23 @@ WingSurface bareMetal(float albedo, float rough) {
 }
 
 // 翼面（主翼、襟翼、扰流板共用）：xi 弦向（相对原翼型），zm 离翼根的展向米数，chord 当地弦长
-WingSurface skin(float xi, float zm, float s, float chord, float pix, int part) {
-  WingSurface m = paint(WING_PAINT, 0.25);
+WingSurface wingSkin(float xi, float zm, float s, float chord, float pix, int part) {
+  WingSurface m = wingPaint(WING_PAINT, 0.25);
   float xm = xi * chord;
   float fwX = pix / chord;
   // 前缘缝翼：裸铝，抛光后被雨蚀得略毛。缝翼伸出时还是它
-  if (xi < 0.1 || part == 4) m = bareMetal(0.86, 0.16 + 0.1 * vnoise(vec2(zm * 3.0, 1.7)));
+  if (xi < 0.1 || part == 4) m = wingBareMetal(0.86, 0.16 + 0.1 * vnoise(vec2(zm * 3.0, 1.7)));
   // 后缘襟翼、扰流板区域颜色略灰
   if (xi > 0.72 || part == 2) m.albedo *= 0.92;
   // 面板缝：展向（缝翼、前后梁、扰流板铰链、襟翼前缘）+ 弦向（每块扰流板 / 襟翼的分段）
   float lines = 0.0;
-  lines = max(lines, seam(xi - 0.1, 0.006 / chord, fwX));
-  lines = max(lines, seam(xi - 0.62, 0.004 / chord, fwX));
-  lines = max(lines, seam(xi - 0.72, 0.006 / chord, fwX));
-  if (xi > 0.62) lines = max(lines, seam(fract(zm / 1.6 + 0.5) - 0.5, 0.004 / 1.6, pix / 1.6));
-  if (xi < 0.1) lines = max(lines, seam(fract(zm / 2.4 + 0.5) - 0.5, 0.004 / 2.4, pix / 2.4));
+  lines = max(lines, wingSeam(xi - 0.1, 0.006 / chord, fwX));
+  lines = max(lines, wingSeam(xi - 0.62, 0.004 / chord, fwX));
+  lines = max(lines, wingSeam(xi - 0.72, 0.006 / chord, fwX));
+  if (xi > 0.62) lines = max(lines, wingSeam(fract(zm / 1.6 + 0.5) - 0.5, 0.004 / 1.6, pix / 1.6));
+  if (xi < 0.1) lines = max(lines, wingSeam(fract(zm / 2.4 + 0.5) - 0.5, 0.004 / 2.4, pix / 2.4));
   // 副翼：外侧 25% 展长、后 25% 弦长
-  if (s > 0.72) lines = max(lines, seam(s - 0.72, 0.005 / SPAN, pix / SPAN) * step(0.72, xi));
+  if (s > 0.72) lines = max(lines, wingSeam(s - 0.72, 0.005 / WING_SPAN, pix / WING_SPAN) * step(0.72, xi));
   m.albedo *= 1.0 - 0.55 * lines;
   // 每块蒙皮板的漆色、光泽略有差别（批次、补漆、老化程度不同）
   float zone = xi < 0.1 ? 0.0 : (xi < 0.62 ? 1.0 : (xi < 0.72 ? 2.0 : 3.0));
@@ -599,12 +623,12 @@ WingSurface skin(float xi, float zm, float s, float chord, float pix, int part) 
   float fade = 1.0 - smoothstep(0.004, 0.02, pix);
   for (int k = 0; k < 2; k++) {
     float spar = k == 0 ? 0.18 : 0.6;
-    float row = seam(xi - spar, 0.006 / chord, fwX);
+    float row = wingSeam(xi - spar, 0.006 / chord, fwX);
     float dots = 1.0 - smoothstep(0.002, 0.003, length(vec2(fract(zm / 0.12) - 0.5, 0.0)) * 0.12);
     m.albedo *= 1.0 - row * mix(0.05, 0.14 * dots, fade);
   }
   if (xi > 0.1 && xi < 0.62 && part == 0) {
-    float rib = seam(fract(zm / 0.6 + 0.5) - 0.5, 0.005 / 0.6, pix / 0.6);
+    float rib = wingSeam(fract(zm / 0.6 + 0.5) - 0.5, 0.005 / 0.6, pix / 0.6);
     m.albedo *= 1.0 - 0.05 * rib;
   }
   if (part == 0) {
@@ -612,7 +636,7 @@ WingSurface skin(float xi, float zm, float s, float chord, float pix, int part) 
     if (xi > 0.3 && xi < 0.55 && zm > 1.0 && zm < 13.0) {
       vec2 pc = vec2(xm - (0.42 * chord), fract(zm / 1.5 + 0.5) * 1.5 - 0.75);
       float e = length(pc / vec2(0.15, 0.225));
-      float ring = seam(e - 1.0, 0.012 / 0.2, pix / 0.2);
+      float ring = wingSeam(e - 1.0, 0.012 / 0.2, pix / 0.2);
       m.albedo *= 1.0 - 0.25 * ring;
       float ang = atan(pc.y / 0.225, pc.x / 0.15);
       float nearRing = 1.0 - smoothstep(0.0, 0.08, abs(e - 1.18));
@@ -620,8 +644,8 @@ WingSurface skin(float xi, float zm, float s, float chord, float pix, int part) 
       m.albedo *= 1.0 - 0.3 * screw * (1.0 - smoothstep(0.003, 0.012, pix));
     }
     // 翼根的走道：黑色边线围出的一块区域（写着 NO STEP 的那种）
-    float walk = seam(zm - 3.2, 0.05, pix) * step(0.25, xi) * step(xi, 0.6);
-    walk = max(walk, (seam(xi - 0.25, 0.05 / chord, fwX) + seam(xi - 0.6, 0.05 / chord, fwX)) * step(zm, 3.2));
+    float walk = wingSeam(zm - 3.2, 0.05, pix) * step(0.25, xi) * step(xi, 0.6);
+    walk = max(walk, (wingSeam(xi - 0.25, 0.05 / chord, fwX) + wingSeam(xi - 0.6, 0.05 / chord, fwX)) * step(zm, 3.2));
     m.albedo = mix(m.albedo, vec3(0.03), clamp(walk, 0.0, 1.0));
     // 防滑走道本身是哑光的深灰涂层
     float walkway = step(zm, 3.2) * step(0.25, xi) * step(xi, 0.6);
@@ -630,11 +654,11 @@ WingSurface skin(float xi, float zm, float s, float chord, float pix, int part) 
     m.coat *= 1.0 - 0.6 * walkway;
   }
   // 顺气流方向的污渍：后缘和扰流板附近多，沿弦向拉长（展向变化快，按展向的像素足迹淡出高频）
-  float grime = fbmAA(vec2(xm * 1.5, zm * 12.0), pix * 12.0) * smoothstep(0.5, 1.0, xi);
+  float grime = wingFbmAA(vec2(xm * 1.5, zm * 12.0), pix * 12.0) * smoothstep(0.5, 1.0, xi);
   m.albedo *= mix(vec3(1.0), vec3(0.86, 0.83, 0.78), clamp(grime * 1.3 - 0.35, 0.0, 1.0));
   m.rough = mix(m.rough, 0.45, grime);
   // 扰流板后面、襟翼上的深色排气 / 液压油污
-  float streak = fbmAA(vec2(xm * 0.6, zm * 25.0), pix * 25.0) * smoothstep(0.7, 0.95, xi);
+  float streak = wingFbmAA(vec2(xm * 0.6, zm * 25.0), pix * 25.0) * smoothstep(0.7, 0.95, xi);
   m.albedo *= 1.0 - 0.22 * smoothstep(0.5, 0.78, streak);
   // 前缘附近的雨蚀：漆面发乌、光泽变差
   float erosion = (1.0 - smoothstep(0.1, 0.2, xi)) * step(0.1, xi);
@@ -642,86 +666,118 @@ WingSurface skin(float xi, float zm, float s, float chord, float pix, int part) 
   return m;
 }
 
-// pix：命中点处一个像素对应的长度（米）；up：命中点的法线是否朝上（机体系 y）
-WingSurface wingSurface(vec3 P, float pix, float up, int part) {
-  if (part == 1) {
-    // 翼尖弯折 + 小翼：竖直段和弯折上半截涂航司色，弯折下半截是翼面灰；前缘一条裸金属防蚀条
-    TipCoord q = tipCoord(P);
-    float lw = pix / q.arcLen;
-    float liv = smoothstep(0.62 - lw, 0.62 + lw, q.sig / q.arcLen);
-    WingSurface m = paint(mix(WING_PAINT * 0.97, LIVERY, liv), 0.18);
-    // 小翼和翼尖的对接缝
-    m.albedo *= 1.0 - 0.5 * seam(q.sig - 0.12, 0.006, pix);
-    // 航司色的漆层里有细小的金属颗粒（金属漆），光泽更「深」
-    float flake = hash12(floor(P.xy * 900.0) + floor(P.z * 900.0)) - 0.5;
-    m.albedo *= 1.0 + 0.08 * flake * liv * (1.0 - smoothstep(0.0005, 0.002, pix));
-    if (q.xi < 0.035) m = bareMetal(0.8, 0.22);
-    // 后缘的静电放电刷底座：一小段深色
-    m.albedo *= 1.0 - 0.4 * seam(q.xi - 0.985, 0.03, pix / q.c) * step(q.arcLen, q.sig);
-    return m;
-  }
-  if (part == 6) {
-    float u = engInletX() - P.x;
-    float rr = length(P.yz - vec2(ENG_Y, ENG_Z));
-    bool pylon = rr > 1.06 || (P.y > ENG_Y + 0.7 && abs(P.z - ENG_Z) < 0.16);
-    if (pylon) return paint(WING_PAINT * 0.95, 0.3);
-    if (rr < 0.86 && u < 0.62) {
-      // 进气道里：整流锥（带一道白色螺旋标记的深色锥）、36 片风扇叶片（CFM56-5B 的叶片数）、进气道内壁
-      if (u > 0.5 && rr > 0.31) {
-        float ang = atan(P.y - ENG_Y, P.z - ENG_Z);
-        float blade = abs(fract(ang / (2.0 * M_PI) * 36.0 + rr * 0.6) - 0.5);
-        WingSurface f = bareMetal(0.35, 0.3);
-        f.albedo *= 0.25 + 0.75 * smoothstep(0.05, 0.2, blade);
-        return f;
-      }
-      if (rr < 0.31) {
-        float ang = atan(P.y - ENG_Y, P.z - ENG_Z);
-        WingSurface sp = paint(vec3(0.03), 0.3);
-        float spiral = abs(fract(ang / (2.0 * M_PI) + rr * 1.5) - 0.5);
-        sp.albedo = mix(sp.albedo, vec3(0.8), 1.0 - smoothstep(0.03, 0.05, spiral));
-        return sp;
-      }
-      return paint(vec3(0.3, 0.31, 0.32), 0.45);                        // 进气道内壁（吸音衬里）
+// 各部件的材质都写成「一个变量、末尾一次 return」：分支里提前 return 时 FXC 会报 X4000（返回值可能未初始化）
+
+// 翼尖弯折 + 小翼：竖直段和弯折上半截涂航司色，弯折下半截是翼面灰；前缘一条裸金属防蚀条
+WingSurface wingTipSurface(vec3 P, float pix) {
+  WingTipCoord q = wingTipCoord(P);
+  float lw = pix / q.arcLen;
+  float liv = smoothstep(0.62 - lw, 0.62 + lw, q.sig / q.arcLen);
+  WingSurface m = wingPaint(mix(WING_PAINT * 0.97, WING_LIVERY, liv), 0.18);
+  // 小翼和翼尖的对接缝
+  m.albedo *= 1.0 - 0.5 * wingSeam(q.sig - 0.12, 0.006, pix);
+  // 航司色的漆层里有细小的金属颗粒（金属漆），光泽更「深」
+  float flake = hash12(floor(P.xy * 900.0) + floor(P.z * 900.0)) - 0.5;
+  m.albedo *= 1.0 + 0.08 * flake * liv * (1.0 - smoothstep(0.0005, 0.002, pix));
+  if (q.xi < 0.035) m = wingBareMetal(0.8, 0.22);
+  // 后缘的静电放电刷底座：一小段深色
+  m.albedo *= 1.0 - 0.4 * wingSeam(q.xi - 0.985, 0.03, pix / q.c) * step(q.arcLen, q.sig);
+  return m;
+}
+
+// 短舱与吊挂。进气道里面照不到多少光：越往里越暗（环境光遮蔽的近似）；风扇叶片是钛合金，但有涂层、不抛光，不能像镀铬
+WingSurface wingNacelleSurface(vec3 P, float pix) {
+  float u = wingEngInletX() - P.x;
+  float rr = length(P.yz - vec2(WING_ENG_Y, WING_ENG_Z));
+  bool pylon = rr > 1.06 || (P.y > WING_ENG_Y + 0.7 && abs(P.z - WING_ENG_Z) < 0.16);
+  float ang = atan(P.y - WING_ENG_Y, P.z - WING_ENG_Z);
+  WingSurface m = wingPaint(vec3(0.8, 0.8, 0.81), 0.2);                    // 风扇整流罩：白漆
+  if (pylon) {
+    m = wingPaint(WING_PAINT * 0.95, 0.3);
+  } else if (rr < 0.86 && u < 0.62) {
+    float inside = 1.0 - 0.75 * smoothstep(0.0, 0.5, u);                    // 进气道深处压暗
+    if (u > 0.5 && rr > 0.31) {
+      // 36 片风扇叶片（CFM56-5B 的叶片数）：暗灰、半哑光
+      float blade = abs(fract(ang / (2.0 * M_PI) * 36.0 + rr * 0.6) - 0.5);
+      m = wingPaint(vec3(0.16, 0.165, 0.17), 0.45);
+      m.metal = 0.5;
+      m.coat = 0.0;
+      m.albedo *= 0.35 + 0.65 * smoothstep(0.05, 0.2, blade);
+    } else if (rr < 0.31) {
+      // 整流锥：深色，带一道白色螺旋标记
+      m = wingPaint(vec3(0.03), 0.35);
+      float spiral = abs(fract(ang / (2.0 * M_PI) + rr * 1.5) - 0.5);
+      m.albedo = mix(m.albedo, vec3(0.7), 1.0 - smoothstep(0.03, 0.05, spiral));
+      m.coat = 0.3;
+    } else {
+      m = wingPaint(vec3(0.22, 0.225, 0.23), 0.55);                        // 进气道内壁（吸音衬里）
+      m.coat = 0.0;
     }
-    if (u < 0.28) return bareMetal(0.88, 0.1);                          // 进气道唇口：抛光铝
-    if (u > 3.75) return bareMetal(0.12, 0.45);                         // 尾锥：高温发黑
-    if (u > 2.62) return bareMetal(0.42, 0.4);                          // 核心机整流罩
-    WingSurface m = paint(vec3(0.8, 0.8, 0.81), 0.2);                   // 风扇整流罩：白漆
-    m.albedo *= 1.0 - 0.5 * seam(u - 0.45, 0.006, pix);                 // 进气道与整流罩的对缝
-    m.albedo *= 1.0 - 0.5 * seam(u - 1.55, 0.006, pix);                 // 反推整流罩的分缝
-    m.albedo *= 1.0 - 0.35 * seam(u - 2.62, 0.02, pix);
-    return m;
+    m.albedo *= inside;
+  } else if (u < 0.28) {
+    m = wingBareMetal(0.85, 0.14);                                          // 进气道唇口：抛光铝
+  } else if (u > 3.75) {
+    m = wingBareMetal(0.12, 0.45);                                          // 尾锥：高温发黑
+  } else if (u > 2.62) {
+    m = wingBareMetal(0.42, 0.4);                                           // 核心机整流罩
+  } else {
+    m.albedo *= 1.0 - 0.5 * wingSeam(u - 0.45, 0.006, pix);                 // 进气道与整流罩的对缝
+    m.albedo *= 1.0 - 0.5 * wingSeam(u - 1.55, 0.006, pix);                 // 反推整流罩的分缝
+    m.albedo *= 1.0 - 0.35 * wingSeam(u - 2.62, 0.02, pix);
   }
-  if (part == 5) {
-    WingSurface m = paint(WING_PAINT * 0.9, 0.3);
-    float sf = spanS(P.z);
-    float c = chordAt(sf);
-    float xm = leX(P.z) - P.x;
-    // 尾端被襟翼排出的气流熏黑
-    m.albedo *= 1.0 - 0.3 * smoothstep(1.05 * c, 1.25 * c, xm);
-    return m;
-  }
+  return m;
+}
+
+// 襟翼滑轨整流罩：和翼面同色，尾端被襟翼排出的气流熏黑
+WingSurface wingFairingSurface(vec3 P) {
+  WingSurface m = wingPaint(WING_PAINT * 0.9, 0.3);
+  float c = wingChordAt(wingSpanS(P.z));
+  float xm = wingLeX(P.z) - P.x;
+  m.albedo *= 1.0 - 0.3 * smoothstep(1.0 * c, 1.2 * c, xm);
+  return m;
+}
+
+// 主翼、襟翼、扰流板、缝翼
+WingSurface wingPanelSurface(vec3 P, float pix, float up, int part) {
   WingCoord w = wingCoord(P);
   float zm = P.z - ROOT_Z;
   float xi = w.xi;
+  float f = smoothstep(0.0, 0.3, uFlap);
+  // 襟翼：按襟翼自己的弦向坐标映射回原翼型
+  if (part == 2) xi = clamp(WING_FLAP_LE + (w.xi - WING_FLAP_LE - 0.22 * f), WING_FLAP_LE, 1.0);
+  if (part == 4) xi = clamp(w.xi + 0.12 * uSlat, 0.0, WING_SLAT_XI);
+  WingSurface m = wingSkin(xi, zm, w.s, w.chord, pix, part);
   if (part == 2) {
-    // 襟翼：按襟翼自己的弦向坐标映射回原翼型
-    float f = smoothstep(0.0, 0.3, uFlap);
-    xi = FLAP_LE + (w.xi - FLAP_LE - 0.22 * f) * 1.0;
-    xi = clamp(xi, FLAP_LE, 1.0);
+    // 襟翼放下后露出的前缘：没有清漆的浅灰底漆；前段还压在扰流板 / 整流罩下面，越往前越暗（遮蔽）
+    float nose = 1.0 - smoothstep(WING_FLAP_LE + 0.02, WING_FLAP_LE + 0.07, xi);
+    m.albedo = mix(m.albedo, vec3(0.5, 0.53, 0.51), nose);
+    m.coat = mix(m.coat, 0.15, nose);
+    m.rough = mix(m.rough, 0.5, nose);
+    m.albedo *= mix(1.0, 0.45, (1.0 - smoothstep(WING_FLAP_LE, WING_FLAP_LE + 0.12, xi)) * f);
   }
-  if (part == 4) xi = clamp(w.xi + 0.12 * uSlat, 0.0, SLAT_XI);
-  WingSurface m = skin(xi, zm, w.s, w.chord, pix, part);
-  // 襟翼放下后露出的前缘和整流罩下的凹槽：没有清漆的浅灰底漆
-  if (part == 2 && xi < FLAP_LE + 0.05) { m.albedo = vec3(0.55, 0.58, 0.56); m.coat = 0.2; m.rough = 0.5; }
   // 扰流板翻起后露出的凹槽：结构件和作动筒，深灰
-  if (part == 0 && uSpoiler > 1e-3 && up > 0.0 && w.xi > SPOILER_XI && w.xi < SHROUD_TE
-      && w.s > SPOILER_S0 && w.s < SPOILER_S1) {
+  if (part == 0 && uSpoiler > 1e-3 && up > 0.0 && w.xi > WING_SPOILER_XI && w.xi < WING_SHROUD_TE
+      && w.s > WING_SPOILER_S0 && w.s < WING_SPOILER_S1) {
     m.albedo *= 0.35;
     m.coat = 0.1;
     m.rough = 0.6;
   }
+  // 襟翼放下后主翼整流罩的下表面（从后面能看到的「缝」）：结构件，深色
+  if (part == 0 && uFlap > 1e-3 && up < 0.0 && w.xi > 0.5 && w.s > WING_FLAP_S0 && w.s < WING_FLAP_S1) {
+    m.albedo *= 0.4;
+    m.coat = 0.1;
+  }
   if (part == 3 && up < 0.0) { m.albedo *= 0.5; m.coat = 0.2; }
+  return m;
+}
+
+// pix：命中点处一个像素对应的长度（米）；up：命中点的法线是否朝上（机体系 y）；part：wingTrace 给出的部件编号
+WingSurface wingSurface(vec3 P, float pix, float up, int part) {
+  WingSurface m;
+  if (part == 1) m = wingTipSurface(P, pix);
+  else if (part == 6) m = wingNacelleSurface(P, pix);
+  else if (part == 5) m = wingFairingSurface(P);
+  else m = wingPanelSurface(P, pix, up, part);
   return m;
 }
 `;

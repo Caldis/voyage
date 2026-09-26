@@ -15,13 +15,15 @@ export interface Head {
   tz: number;
 }
 
-/** 预设。fwd：头朝机头方向偏移（米，负数朝机尾），换成 x 时乘座位方向；y、z 同座舱坐标 */
+/** 预设。fwd：头朝机头方向偏移（米，负数朝机尾），换成 x 时乘座位方向；y、z 同座舱坐标。
+ *  towardWing：朝机翼看——机翼在前方（座位在机翼后面）时头往机尾挪、视线斜向机头，反之亦然，fwd 取绝对值 */
 export interface ViewPreset {
   id: string;
   name: string;
   fwd: number;
   y: number;
   z: number;
+  towardWing?: boolean;
 }
 
 /**
@@ -32,25 +34,28 @@ export interface ViewPreset {
 export const HEAD_Z_NEAR = -0.03;
 export const HEAD_Z_FAR = -0.75;
 /** 头在舱壁方向（x）、上下（y）能挪的范围 */
-export const HEAD_X_RANGE = 0.32;
+export const HEAD_X_RANGE = 0.45;
 export const HEAD_Y_MIN = -0.12;
 export const HEAD_Y_MAX = 0.18;
 
 export const VIEW_PRESETS: ViewPreset[] = [
   { id: "seated", name: "标准（坐姿看窗）", fwd: 0, y: 0.02, z: -0.42 },
   { id: "close", name: "贴窗（额头贴着窗）", fwd: 0, y: 0.0, z: HEAD_Z_NEAR },
-  { id: "wing", name: "看机翼（向后下方）", fwd: 0.2, y: 0.14, z: -0.26 },
-  { id: "ahead", name: "看前方（沿机身朝机头）", fwd: -0.3, y: 0.03, z: -0.24 },
-  { id: "behind", name: "看后方（沿机身朝机尾）", fwd: 0.3, y: 0.03, z: -0.24 },
+  { id: "wing", name: "看机翼（斜向下）", fwd: 0.2, y: 0.14, z: -0.26, towardWing: true },
+  // 沿机身斜看：头往反方向挪到窗边、稍微往后靠，前（后）排座椅靠背和头枕才能整个入镜
+  { id: "ahead", name: "看前方（沿机身朝机头）", fwd: -0.42, y: 0.1, z: -0.5 },
+  { id: "behind", name: "看后方（沿机身朝机尾）", fwd: 0.42, y: 0.1, z: -0.5 },
 ];
 
 
 const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
 
-/** 把预设换成头的目标位置（x 按座位方向换算） */
-export function applyViewPreset(head: Head, preset: ViewPreset, seat: "right" | "left") {
+/** 把预设换成头的目标位置（x 按座位方向换算）。wingRootLE > 0：翼根前缘在窗口前方，也就是机翼在前 */
+export function applyViewPreset(head: Head, preset: ViewPreset, seat: "right" | "left", wingRootLE: number) {
   const sign = seat === "right" ? 1 : -1;
-  head.tx = clamp(preset.fwd * sign, -HEAD_X_RANGE, HEAD_X_RANGE);
+  // 头往机尾挪（fwd < 0），视线就斜着朝机头看
+  const fwd = preset.towardWing ? (wingRootLE > 0 ? -Math.abs(preset.fwd) : Math.abs(preset.fwd)) : preset.fwd;
+  head.tx = clamp(fwd * sign, -HEAD_X_RANGE, HEAD_X_RANGE);
   head.ty = clamp(preset.y, HEAD_Y_MIN, HEAD_Y_MAX);
   head.tz = clamp(preset.z, HEAD_Z_FAR, HEAD_Z_NEAR);
 }

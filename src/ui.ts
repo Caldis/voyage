@@ -121,6 +121,7 @@ export function setupUi(deps: UiDeps) {
   });
   $<HTMLSelectElement>("wing-pos").addEventListener("change", (e) => {
     state.wingRootLE = Number((e.target as HTMLSelectElement).value);
+    if (currentView() === "wing") setView("wing"); // 「看机翼」的朝向跟着机翼在前还是在后
     snapAll();
   });
   $<HTMLSelectElement>("high-lift").addEventListener("change", (e) => {
