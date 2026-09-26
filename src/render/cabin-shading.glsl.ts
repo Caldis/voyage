@@ -2,7 +2,7 @@
  * 舱内着色（GLSL）：侧壁、窗框（装饰边 + 窗洞内衬）、遮光板、相邻的舷窗、舱内灯光（主灯 + 氛围洗墙灯 + 阅读灯）。
  * 座椅在 seats.glsl.ts，皮革 / 木饰 / 金属饰条在 cabin-leather.glsl.ts。
  * 依赖 VIEW_COMMON、CABIN_COMMON、PANE_COMMON、WING_COMMON（ggxD / smithG）、LIGHTS_COMMON，
- * 以及 scene.ts 里声明的 uCabinLight / uShadeBottom / uSeatSign。
+ * 以及 scene.ts 里声明的 uCabinLight / uShadeBottom / uSeatSign / uDebug。
  *
  * 审美定位（用户 2026-09-26 定）：「高级、先进、奢华」的真实感，不要「廉价」的真实感——
  * 对标 787 / A350 宽体机与商务舱套间：暖白的柔光饰面带极细压纹、香槟色阳极氧化的拉丝金属收边、精密均匀的接缝、
@@ -302,7 +302,10 @@ vec3 shadeReveal(vec3 h, vec3 n, vec3 rd, float t, float pixAng, CabinLights cl,
   vec3 v = -rd;
   float nv = max(dot(n, v), 1e-3);
   float sunVis = sunOn * sunThroughWindow(h, cl.sunC, shadeBottom);
-  vec3 e = cabinIrradiance(h, n, cl) * ao + windowIrradiance(h, n, lAperture)
+  vec3 eWin = windowIrradiance(h, n, lAperture);
+  // 调试 3：只看窗板这块面光源给内衬的照度。放在这里而不是 scene.ts 里再调一次 windowIrradiance，免得多内联一份（SC-3b）
+  if (uDebug == 3) return eWin;
+  vec3 e = cabinIrradiance(h, n, cl) * ao + eWin
          + cl.eSunNormal * max(dot(n, cl.sunC), 0.0) * sunVis;
   vec3 col = albedo / M_PI * e;
 

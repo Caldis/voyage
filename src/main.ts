@@ -9,7 +9,8 @@ import { generateCloudNoise } from "./clouds/noise";
 import { Bloom } from "./render/bloom";
 import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
-import { GroundDetailVariant, createSceneMaterial } from "./render/scene";
+import { createSceneMaterial } from "./render/scene";
+import { GroundDetailVariant, createOutsideMaterial, createOutsideTarget } from "./render/outside-pass";
 import { createWingMaterial } from "./render/wing-pass";
 import { GroundClipmap } from "./ground/clipmap";
 import { OceanWaves } from "./ocean/waves";
@@ -62,9 +63,14 @@ Object.assign(sceneMat.uniforms, {
   uWingEdgeAA: { value: 1 },
   uWingDebug: { value: 0 },
 });
+// 窗外 pass（SC-5，outside-pass.ts）：天空、云、地面、海面、交通、闪电画到 hdrOutside，舱内合成（sceneMat）再读回。
+// 两个材质共用同一个 uniforms 对象（之后 Object.assign 进 sceneMat.uniforms 的也都能看到）
+const outsideMat = createOutsideMaterial(sceneMat.uniforms);
+const hdrOutside = createOutsideTarget(renderer);
+sceneMat.uniforms.uOutside.value = hdrOutside.texture;
+// 低空地面细节（T02）：海拔 4 km 以下后台编译窗外程序的 GROUND_DETAIL 变体，编好才切换
+const groundDetail = new GroundDetailVariant(outsideMat, hdrOutside);
 // 海浪：GPU FFT 三级级联（T14），每帧在场景 pass 之前更新
-// 低空地面细节（T02）：海拔 4 km 以下后台编译 GROUND_DETAIL 变体，编好才切换
-const groundDetail = new GroundDetailVariant(sceneMat);
 const ocean = new OceanWaves(renderer);
 Object.assign(sceneMat.uniforms, ocean.uniforms);
 const clouds = new Clouds(pass, atmosphere, cloudUniforms, sceneMat.uniforms);
@@ -209,6 +215,7 @@ function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   hdr.setSize(size.x, size.y);
+  hdrOutside.setSize(size.x, size.y);
   hdrWing.setSize(size.x, size.y);
   clouds.setSize(size.x, size.y);
   bloom.setSize(size.x, size.y);
@@ -340,8 +347,10 @@ function renderFrame(now: number) {
   clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
-  // 场景（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdr，机翼 pass 再读实际画出来的 hdr 合成
-  pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : sceneMat, hdr);
+  // 窗外（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdrOutside，舱内合成读它画到 hdr，
+  // 机翼 pass 再读实际画出来的 hdr 合成
+  pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : outsideMat, hdrOutside);
+  pass.render(sceneMat, hdr);
   wingMat.uniforms.uScene.value = hdr.texture;
   pass.render(wingMat, hdrWing);
   exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
@@ -381,13 +390,15 @@ requestAnimationFrame(() =>
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
       geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
-      // 场景、机翼、云光线步进、云 resolve 四个程序各自绑定自己真正要画进去的目标再发起编译（compileAsync
-      // 调用时就同步提交链接，之后只是轮询）：Windows 上 ANGLE 的 D3D 后端按「链接时绑定的帧缓冲」生成像素
-      // 着色器的输出布局。场景画进两张目标（MRT）、机翼和云 resolve 各画进一张、云步进画进两张（MRT，颜色 +
-      // 深度），绑错的话首帧画的时候要按新布局同步重编一遍（实测首帧卡了 52 秒）。四个链接都提交后一起等，驱动并行编译
+      // 窗外、舱内合成（场景）、机翼、云光线步进、云 resolve 五个程序各自绑定自己真正要画进去的目标再发起编译
+      // （compileAsync 调用时就同步提交链接，之后只是轮询）：Windows 上 ANGLE 的 D3D 后端按「链接时绑定的帧缓冲」
+      // 生成像素着色器的输出布局。窗外、场景、机翼和云 resolve 各画进一张、云步进画进两张（MRT，颜色 + 深度），
+      // 绑错的话首帧画的时候要按新布局同步重编一遍（实测首帧卡了 52 秒）。所有链接都提交后一起等，驱动并行编译。
+      // SC-5：原来的场景程序拆成了窗外 + 舱内合成两个，它们也在这一批里并行编译（最慢的是窗外，决定这一批的墙钟）
       const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
       const jobs: Promise<unknown>[] = [];
       const batch: ReadonlyArray<readonly [THREE.ShaderMaterial, THREE.WebGLRenderTarget]> = [
+        [outsideMat, hdrOutside],
         [sceneMat, hdr],
         [wingMat, hdrWing],
         [cloudsInternal.marchMat, cloudsInternal.raw],
@@ -406,8 +417,7 @@ requestAnimationFrame(() =>
     } catch (err) {
       console.warn("场景 / 云着色器后台编译失败，改为首帧同步编译", err);
     }
-    tick("场景 / 机翼 / 云着色器编译（后台）");
-    boot.finish("shaders");
+    tick("窗外 / 舱内 / 机翼 / 云着色器编译（后台）");
     // march / resolve 的编译已经在上面那一批里做完了（isReady() 实测确认为 true），不用再像 T16
     // 那样假渲染一次触发编译、也不用 clouds.snap() 撤销假调用留下的时间累积痕迹了。
     // 但实测发现一个新问题：compileAsync 批次刚 resolve 之后，不管哪个材质，第一次真正调用
@@ -422,6 +432,9 @@ requestAnimationFrame(() =>
       pass.render(cloudsInternal.resolveMat, cloudsInternal.history[0]);
     }
     tick("云光线步进程序编译");
+    // SC-5：清单的「着色器」阶段在这之后才打勾——上面这一下冷启动时实测约 4.8 s（缓存命中时约 0），
+    // 原来 finish 放在它前面，这笔时间被记进了下一阶段「海面波浪程序」（默认估算只有 0.4 s），进度条在那里卡住不动
+    boot.finish("shaders");
     await nextPaint();
 
     ocean.update(0, state.wind, cloudUniforms.uCloudOffset.value);
@@ -445,6 +458,7 @@ requestAnimationFrame(() =>
     boot.complete();
     // 场景材质名下编译过几个程序：1 说明后台编译的程序被首帧直接用上了；2 说明键不一致、首帧又同步编译了一遍
     const programs = (mat: THREE.Material) => (renderer.properties.get(mat) as { programs?: Map<string, unknown> }).programs?.size ?? -1;
+    startup["窗外材质的程序数"] = programs(outsideMat);
     startup["场景材质的程序数"] = programs(sceneMat);
     startup["机翼材质的程序数"] = programs(wingMat);
     startup["云光线步进材质的程序数"] = programs(cloudsInternal.marchMat);
@@ -466,15 +480,20 @@ function benchWing(n = 20) {
   return (performance.now() - t0) / n;
 }
 
-/** 调试：把场景 pass 连续渲染 n 次并等 GPU 做完，返回每次的毫秒数。比较着色器开销用（不受刷新率上限影响） */
-function benchScene(n = 20) {
+/** 调试：把场景 pass（窗外 + 舱内合成）连续渲染 n 次并等 GPU 做完，返回每次的毫秒数。比较着色器开销用（不受刷新率上限影响）。
+ *  which：both（默认，和 SC-5 之前的「场景 pass」可比）、outside、cabin */
+function benchScene(n = 20, which: "both" | "outside" | "cabin" = "both") {
   // gl.finish() 在 Chrome（ANGLE）里不等 GPU，读回一个像素才会真正同步
   const px = new Float32Array(4);
   const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
-  pass.render(sceneMat, hdr);
+  const once = () => {
+    if (which !== "cabin") pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : outsideMat, hdrOutside);
+    if (which !== "outside") pass.render(sceneMat, hdr);
+  };
+  once();
   sync();
   const t0 = performance.now();
-  for (let i = 0; i < n; i++) pass.render(sceneMat, hdr);
+  for (let i = 0; i < n; i++) once();
   sync();
   return (performance.now() - t0) / n;
 }
@@ -491,4 +510,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, exposure, traffic, ground, weather, ocean, groundDetail, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot };

@@ -20,12 +20,15 @@
 CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电）、地面 clipmap 更新（异步拉瓦片）
   → 大气：天空视图 LUT（太阳、月亮各一张）+ 空气透视 3D LUT
   → 云：光线步进（层状云 + 雷暴 + 台风）→ 时间累积（带重投影）；每 4 帧一次云密度探针（异步读回）
-  → 场景着色器（全屏）：舷窗几何（舱壁 / 内衬 / 遮光板 / 窗板）→ 机翼 → 窗外（地形求交或海面、天空、太阳、月亮、星星）
-      + 云合成 + 远处飞机与航迹云 + 云地闪通道 + 窗板细节（划痕、油污、水痕）→ HDR（kcd/m²，alpha = 窗外遮罩）
+  → 窗外 pass（outside-pass.ts，全屏但只算本窗窗板以内）：地形求交或海面、天空、太阳、月亮、星星 + 云合成
+      + 远处飞机与航迹云 + 云地闪通道，× 窗板透射率 → hdrOutside（全分辨率 32F）
+  → 场景 pass（scene.ts，舱内合成）：舷窗几何（舱壁 / 内衬 / 遮光板 / 座椅）+ 读 hdrOutside + 窗板细节（划痕、油污、水痕）
+      → HDR（kcd/m²，alpha 打包窗外遮罩与机翼参考，见 scene.ts 的 packWingRef）
+  → 机翼 pass（wing-pass.ts）：读场景 HDR，把机翼与翼尖灯合成进窗外部分
   → 眩光 mip 链 → 测光（窗外 / 舱内分开）→ 适应 → 曝光 + 浦肯野 + AgX + 抖动 → 屏幕
 ```
 启动时一次性计算：透射率 / 多次散射 / 天空辐照度 LUT、云噪声（GPU 生成后读回）、星图（CPU 溅射）。
-首次打开或改了着色器后，着色器冷编译约 45 秒（见坑点），期间显示加载遮罩。
+首次打开或改了着色器后要冷编译着色器（Windows d3d11 上 SC-5 以后真冷启动约 17 秒，见坑点），期间显示加载遮罩。
 
 ## 目录与模块
 
@@ -44,7 +47,9 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/clouds/clouds.glsl.ts` | 云密度：层状云（天气场驱动）、雷暴（`towerShape`）、台风；云影 |
 | `src/clouds/clouds.ts` | 云的光线步进、时间累积、云预设、密度探针 |
 | `src/ground/geo.ts` / `tiles.ts` / `clipmap.ts` | 经纬度换算；瓦片加载（影像、地形、水体、夜光）；6 级 clipmap |
-| `src/render/scene.ts` | 场景着色器主体：uniform 声明、`outsideRadiance`、主函数、`createSceneMaterial`（按顺序拼接下面几个片段） |
+| `src/render/scene.ts` | 场景（舱内合成）着色器：舱内 uniform 声明、主函数（舱壁 / 内衬 / 遮光板 / 座椅 / 窗板效果、alpha 打包）、`createSceneMaterial`（持有所有 pass 共用的 uniforms） |
+| `src/render/outside-pass.ts` | 窗外着色器（SC-5）：`outsideRadiance`（地面 / 海面 / 天空的唯一调用点）、交通、闪电；`createOutsideMaterial` / `createOutsideTarget`；低空细节变体 `GroundDetailVariant` |
+| `src/render/noise.glsl.ts` | 窗外与舱内共用的小噪声（hash12 / vnoise / hash22 / fbm2）和 `uLoopGuard`；改它两个程序都重编 |
 | `src/render/ocean.glsl.ts` | 海面：菲涅尔、12 波斜率场、风痕、`oceanRadiance` |
 | `src/render/terrain-shading.glsl.ts` | 真实地面着色 `groundRadiance` |
 | `src/render/wing-shading.glsl.ts` | 机翼着色 `shadeWing` 与航行灯 / 频闪 `wingLights` |
@@ -65,14 +70,14 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 ## 调试与验证
 
 - `window.__voyage`：`state`、`head`、`cloudUniforms`、`snapAll`、`clouds`、`resize`、`sceneMat`、`exposure`、`traffic`、`ground`、`weather`。
-- `sceneMat.uniforms.uDebug.value`：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
+- `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
 - `window.__voyageStartup`：启动各阶段耗时。
 - 截图前：把 `head` 固定在 `{tx:0, ty:0.02, x:0, y:0.02, tz:-0.3, z:-0.3}`、`uCloudOffset` 归零或设成固定值、隐藏面板（加 `hidden` 类），前后对比才有意义；截图放 `tmp/screenshot/voyage-*.png`。
 - 测帧率前先 `page.bringToFront()`（窗口被挡住时 Chrome 会节流到 1 fps）。
 - 找程序生成的岛：在浏览器里用 JS 复刻 `hash22` 列出岛心（见 WORKLOG「岛屿」）。
 
 - **私有 headless 联调**（不用共享浏览器锁）：`node scripts/dev-browser.mjs shots --port <端口> [--only a,b]`（跑回归场景表 + 截图 + 帧时间）、`cold --port <端口>`（真冷启动）、`bench --port <端口> --baseline <对照端口>`（批渲帧时间两端口对照，附 GPU timer query）。脚本会自动找本机 `ms-playwright` 缓存的完整版 `chrome.exe`，启动后校验渲染器不是 SwiftShader（用了 `chrome-headless-shell.exe` 或 `--use-angle=swiftshader` 会静默退化，见下面「坑点」）。GPU 被其他代理占满时可能报 `Target crashed`（等一等或换个时间再跑，`pnpm run` 套一层时偶发挂起，直接 `node scripts/dev-browser.mjs ...` 更稳，见 `handoff/DX.md`）。
-- **离线 GLSL 检查**：`pnpm --filter voyage check:glsl`，不开浏览器，几秒内跑完，能抓住 GLSL 保留字、同一程序内的同签名函数重名、场景程序 sampler 数超 16（已用真实 GPU 交叉验证过一次，`scene-default` / `scene-ground-detail` 都是 16/16，见 `handoff/DX.md`「返工记录」）。提交前跑一次比等冷编译报错快得多。`node scripts/lint-shaders.mjs --self-test` 单独测检查逻辑本身，不用起 vite。
+- **离线 GLSL 检查**：`pnpm --filter voyage check:glsl`，不开浏览器，几秒内跑完，能抓住 GLSL 保留字、同一程序内的同签名函数重名、场景 / 窗外程序 sampler 数超 16（已用真实 GPU 交叉验证过一次，见 `handoff/DX.md`「返工记录」；SC-5 以后 `scene-default` 3/16、`outside-default` / `outside-ground-detail` 16/16）。提交前跑一次比等冷编译报错快得多。`node scripts/lint-shaders.mjs --self-test` 单独测检查逻辑本身，不用起 vite。
 
 - **ANGLE 后端切换**：`dev-browser.mjs` 的 `shots` / `cold` / `bench` 都支持 `--angle d3d11|vulkan`，默认 `d3d11`（Windows 上与生产环境一致，**这是交付验收的口径，不要改**）。日常改代码想快速看效果，开一个专用的 vulkan 窗口：`node scripts/dev-browser.mjs cold --port <端口> --angle vulkan`或直接用桌面浏览器 `chrome.exe --use-angle=vulkan`（真冷启动能从约 100 秒降到几秒，见`research/DX_SHADER_COMPILE.md`）。vulkan 会藏住 D3D11 专属问题（sampler 上限 16 vs 32、FXC 编译暴涨、X3595 屏幕导数报错），**验收前一定要在默认 d3d11 上再跑一次**。
 - **离线着色器编译预算**：`node scripts/shader-budget.mjs`（或 `pnpm --filter voyage shader-budget --<参数>`），不开完整浏览器场景、不占 GPU，用 ANGLE 的翻译器 + Windows SDK 的 `fxc.exe` 离线算出每个程序的真实编译时间和 sampler 数。`--only <程序>` 只测一个，`--quick` 用 `/Od` 几十秒内出「能不能编过」，`--bisect <模块>` 把场景程序里的某段换成桩，看它占了多少编译时间（`--bisect list` 看可换的模块）。和浏览器真冷编译对照过一次，误差 5.4%，在 ≤15% 的可信范围内（见 `handoff/SC-12.md`）。
@@ -134,7 +139,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   修法：`touch` 一下被改的文件。以后识别：报错栈里模块 URL 的 `?t=` 时间戳比最近一次修改早。
 - 回归脚本在 Playwright MCP 的 `browser_run_code_unsafe` 里运行时**没有全局 `URL`**（`ReferenceError: URL is not defined`）。只在 Node 侧可用的全局不要假设存在；取 origin 用正则。以后识别：脚本一开始就抛 ReferenceError。
 - 纯重构的验证：拼出最终着色器字符串前后逐行 diff（去空白）最可靠；截图比较要先用「同一份代码跑两次」估计噪声底（TAA 云、海浪相位、翼尖颤动、随机闪电都会带来差异，low-sea-glint 的平均差可到 7–9/255）。
-- **场景着色器的 sampler 已满（16/16）**：ANGLE 上 `MAX_TEXTURE_IMAGE_UNITS = 16`，T14 加入 `uOceanWaves` 后场景程序活跃 sampler 正好 16。再加纹理会链接失败（日志可能为空）。修法：合并进纹理数组 / 图集。识别：`gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS)` 逐个数 sampler 类型。合并任何碰场景着色器的分支前都要数一遍。
+- **窗外着色器的 sampler 已满（16/16）**：ANGLE 上 `MAX_TEXTURE_IMAGE_UNITS = 16`，T14 加入 `uOceanWaves` 后场景程序活跃 sampler 正好 16；SC-5 拆开后满的是窗外程序（outside-pass.ts），舱内合成程序只用 3 个，舱内要加纹理放那边。再加纹理会链接失败（日志可能为空）。修法：合并进纹理数组 / 图集。识别：`gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS)` 逐个数 sampler 类型。合并任何碰场景着色器的分支前都要数一遍。
 - **FXC 会把常量上界的循环整个展开**：循环多、函数内联多时冷编译从 45 s 涨到 80–90 s，甚至超时 → `VALIDATE_STATUS false`（日志为空）→ `CONTEXT_LOST_WEBGL`，还会让共享浏览器 `GL_RENDERER = Disabled`。修法：循环上界写成「常数 + 恒为 0 的 uniform」（T02 的 `uTerrainSteps`、T06 的 `uLoopGuard`），重函数只调用一处。识别：冷编译时间暴涨、日志为空的链接失败。
 - **测帧时间**：本机 GPU 远快于刷新率，rAF 间隔被锁在约 6.2 ms，看不出着色器代价；`gl.finish()` 在 Chrome 里也不等 GPU。用 `EXT_disjoint_timer_query_webgl2`，或「一个 rAF 里连渲染 N 帧后 readPixels 1 像素」。多个代理同时占 GPU 时任何计时都不可信。
 - **真冷启动**：同一端口的着色器缓存会让「冷启动」其实是热的；测编译时间要用 addInitScript 往着色器注入随机数强制缓存不命中（审查脚本 `tmp/review-t02/cold.js`）。
@@ -156,3 +161,9 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **表面细化必须退回到最近一个空白采样点**（T04 修 T03）：固定退回 2dt 会反复「撞上 → 退回」到步数上限，远处出现等高线条纹；完全不退回又会漏检成平行明暗条纹。另：高度场只能用水平切片噪声（3D 噪声会让塔身上下断开成漂浮团块）；按固定高度间距量化的台阶从高处看是等高线地图。
 - **`FRAG_PREFIX`（`lint-shaders.mjs`）的片元输出必须写 `layout(location = 0)`**：不写的话`glslangValidator` 不会报错（`check:glsl` 测不出来），但真实 ANGLE 编译 `cloud-march` 这类自己声明了 `layout(location = 1) out ...`（MRT）的程序会报 `EXT_blend_func_extended` 相关错误——GLSLES 3.00 规定一旦有多个片元输出，全部输出都要显式给 location。这也说明「静态语法校验通过」不能100% 代表「真实浏览器编译一定过」，MRT 相关的坑目前只能靠真实浏览器验证一次来兜底。
 - **离线 fxc 计时对系统负载很敏感**：同一份程序在不同时刻测，`/O1` 编译时间可能差 20% 以上（本机被其他代理占用 GPU/CPU 时更明显）。用 `shader-budget.mjs` 的数字和浏览器冷编译对照时，两次测量要紧挨着做，中间不要插其它重活；同一个 `--bisect` 批次内部的相对比较不受影响（都在同一时刻测）。
+- **场景拆成窗外 + 舱内两个程序以后（SC-5），改哪个文件重编哪个程序**：浏览器按程序的源码文本命中缓存。舱内程序（scene.ts）拼的是 cabin*.glsl.ts、seats.glsl.ts、wing.glsl.ts（ggxD / smithG）、lights、atmosphere；窗外程序（outside-pass.ts）拼的是 clouds.glsl.ts、ocean / ground / terrain / traffic / lightning / stars / islands、lights、atmosphere、noise.glsl.ts。
+  d3d11 实测（RTX 5090）：只改 `cabin-shading.glsl.ts` 一个常数，重载后这一批编译 3.2 s；只改窗外一个常数 7.9 s；真冷全部 9 s 左右（原来单个场景程序约 20 s）。
+  以后别把窗外模块拼进舱内程序（例如为了一个 uniform 拼整份 CLOUD_COMMON；舱内只需要 `uCoverage` 就单独声明），反之亦然，否则改一处两个都重编。两边都要的小工具放 noise.glsl.ts。
+- **拆程序、换写法后做逐像素对比，海面闪光和城市夜光会有成片的单像素翻转，这是正常的**：它们按世界坐标取 hash 决定亮不亮，视线方向差 1 ulp（换一种编译顺序就会差这么多）就会让格子边界上的像素换一个 hash。
+  SC-5 的校准：master 与「只给 rdW 多做一次 normalize 的 master」对比，night-city 平均相对差 3.95e-4、sunset 单像素最大相对差 0.96，和 master 与 SC-5 的差（3.93e-4、0.92）是同一量级；而天空、云、舱内这些没有 hash 的部分逐位一致或只差 1e-5。
+  判断方法：差异是否两个方向都有（A 比 B 亮和 B 比 A 亮的像素都有）、是否集中在闪光 / 夜光这类稀疏亮点上、与「1 ulp 扰动」的校准是否同量级。系统性的错误会是单向的、成片的。
