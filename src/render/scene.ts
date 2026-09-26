@@ -4,7 +4,7 @@ import type { Atmosphere } from "../atmosphere/luts";
 import { CLOUD_COMMON } from "../clouds/clouds.glsl";
 import { CABIN_COMMON, PANE_COMMON } from "./cabin.glsl";
 import { CABIN_SHADING_COMMON } from "./cabin-shading.glsl";
-import { FABRIC_COMMON } from "./fabric.glsl";
+import { LEATHER_COMMON } from "./cabin-leather.glsl";
 import { SEATS_COMMON } from "./seats.glsl";
 import { VIEW_COMMON } from "./view.glsl";
 import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
@@ -42,6 +42,7 @@ uniform sampler2D uClouds;       // 半分辨率云层：RGB 预乘辐亮度，A
 uniform float uShadeBottom;
 uniform float uWind;
 uniform float uCabinLight;      // 舱内灯光照度，klux
+uniform float uMoodLight;       // 氛围洗墙灯开关 0..1（T20；颜色随时段与舱灯自动变）
 uniform float uTime;            // 秒，给波浪和闪烁用
 uniform float uWetness;         // 窗板外侧的湿度 0..1
 uniform float uCameraFog;       // 飞机所在位置云的消光系数（1/km），机翼要隔着这层雾看
@@ -136,7 +137,7 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
 }
 
 ${CABIN_SHADING_COMMON}
-${FABRIC_COMMON}
+${LEATHER_COMMON}
 ${SEATS_COMMON}
 
 void main() {
@@ -190,6 +191,12 @@ void main() {
   // 遮光板放下的邻窗：外面的光透过半透的白塑料（和本窗遮光板的透光系数一致）
   cl.lGlow = PLASTIC_ALBEDO / M_PI * 0.08 * (M_PI * lWin + eSunNormal * max(sunC.z, 0.0));
   cl.readOn = 1.0 - smoothstep(0.005, 0.05, uCabinLight);
+  // 灯光场景（T20）：主灯色温随时段变（白天中性、夜里暖琥珀），行李架下的氛围洗墙灯（关灯时是淡紫蓝的睡眠光）。
+  // 只改舱内表面用的 cl.eCabin；窗板反射舱内用的 eCabinRefl 不动，窗外画面与测光不变
+  vec3 mainTint, moodI;
+  cabinMoodScene(uCabinLight, uSunDir.y, uMoodLight, mainTint, moodI);
+  cl.eCabin += uCabinLight * (mainTint - CABIN_LIGHT_COLOR) + moodI * 0.05; // 洗墙光在上墙、行李架之间的回弹
+  cl.moodI = moodI;
 
   // ---- 座椅：挡在侧壁和窗前面（见 seats.glsl.ts） ----
   float tWall = rd.z > 1e-4 ? traceWall(ro, rd) : 1e3;
@@ -326,6 +333,7 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uShadeBottom: { value: 1 },
       uWind: { value: 7 },
       uCabinLight: { value: 0.2 },
+      uMoodLight: { value: 1 },
       uTime: { value: 0 },
       uWetness: { value: 0 },
       uCameraFog: { value: 0 },

@@ -222,8 +222,11 @@ export function setupUi(deps: UiDeps) {
     clouds.snap();
   }
   weatherSel.addEventListener("change", applyWeather);
-  $<HTMLInputElement>("cabin-light").addEventListener("change", (e) => {
-    state.cabinLight = (e.target as HTMLInputElement).checked;
+  // 舱灯三档：开 / 睡眠（主灯关、氛围灯开）/ 全关（只剩阅读灯）
+  $<HTMLSelectElement>("cabin-light").addEventListener("change", (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    state.cabinLight = v === "true";
+    state.moodLight = v !== "off";
   });
   window.addEventListener("keydown", (e) => {
     if (e.key === "h" || e.key === "H") $("panel").classList.toggle("hidden");

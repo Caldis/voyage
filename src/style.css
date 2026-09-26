@@ -49,3 +49,23 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 .loading-title { font-size: 20px; font-weight: 600; letter-spacing: 0.1em; margin-bottom: 12px; }
 .loading-text { color: var(--text); margin-bottom: 8px; }
 .loading-hint { color: var(--muted); font-size: 12px; line-height: 1.7; }
+
+/* 分阶段进度：命中着色器磁盘缓存时全程可能不到 1 秒，这一整块要等 1 秒后仍未完成才淡入，
+   避免「进度条刚跳一点就被拿走」的抖动感（见 src/boot/progress.ts） */
+.loading-progress { margin: 18px 0; opacity: 0; transition: opacity 0.2s ease; }
+.loading-progress.visible { opacity: 1; }
+.loading-steps {
+  list-style: none; margin: 0 0 14px; padding: 0; text-align: left; display: inline-flex;
+  flex-direction: column; gap: 6px; font: 12px/1.5 ui-monospace, Consolas, monospace;
+}
+.loading-steps li { color: var(--muted); transition: color 0.3s ease; }
+.loading-steps li::before { content: "○ "; color: rgba(255, 255, 255, 0.3); }
+.loading-steps li.active { color: var(--text); }
+.loading-steps li.active::before { content: "◐ "; color: var(--accent); display: inline-block; animation: loading-spin 0.9s linear infinite; }
+.loading-steps li.done { color: var(--text); }
+.loading-steps li.done::before { content: "✓ "; color: var(--accent); }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
+
+.loading-bar { width: 260px; height: 3px; margin: 0 auto 8px; border-radius: 2px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.loading-bar-fill { display: block; height: 100%; width: 0%; background: var(--accent); border-radius: inherit; transition: width 0.25s linear; }
+.loading-meta { display: flex; justify-content: space-between; width: 260px; margin: 0 auto; font-size: 11px; color: var(--muted); }

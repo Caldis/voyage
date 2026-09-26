@@ -6,7 +6,8 @@ import { buildSpectrum, type CascadeBand, coxMunkVariance, normalTailInverse, wh
 
 /**
  * FFT 海浪（Tessendorf 2001），三个级联：
- * - 平铺尺寸约 1531 m / 211 m / 29 m，互不成整数比，叠在一起看不出平铺周期；
+ * - 平铺尺寸约 1531 m / 211 m / 29 m，互不成整数比；每级在着色器里再按世界坐标做随机六边形平铺（T21，见 ocean.glsl.ts），
+ *   单级内部也没有周期（只互不成比例还不够：俯视时 211 m 那一级会铺成约 17 像素的规则格子）；
  * - 每级只保留自己的波数段（上一级到 L/6 的波长为止），不重叠、不重复计数；
  * - 每帧：相位推进 1 次 + 逆 FFT 16 次（每次三级一起）+ 写入纹理数组 3 次 + 生成 mip，全部是 256² 量级的小 pass。
  *
@@ -18,6 +19,8 @@ const N = 256;
 const PERIOD = 512;
 
 const SIZES = [1531.1, 211.37, 29.17];
+/** 随机平铺的格子密度：每个平铺尺寸内的格点数（与 ocean.glsl.ts 的 OCEAN_HEX_SCALE 一致） */
+const HEX_SCALE = 2;
 const BANDS: CascadeBand[] = SIZES.map((size, i) => ({
   size,
   kLo: i === 0 ? 0 : (6 * 2 * Math.PI) / size,
@@ -51,7 +54,8 @@ export class OceanWaves {
   readonly uniforms: {
     uOceanWaves: THREE.IUniform<THREE.Texture>;
     uOceanTile: THREE.IUniform<THREE.Vector3>;
-    uOceanOrigin: THREE.IUniform<THREE.Vector2[]>;
+    uOceanHex: THREE.IUniform<THREE.Vector4[]>;
+    uOceanCam: THREE.IUniform<THREE.Vector4>;
     uOceanVar: THREE.IUniform<THREE.Vector3>;
     uOceanFoam: THREE.IUniform<THREE.Vector4>;
   };
@@ -111,7 +115,8 @@ export class OceanWaves {
     this.uniforms = {
       uOceanWaves: { value: this.waves.texture },
       uOceanTile: { value: size.clone() },
-      uOceanOrigin: { value: SIZES.map(() => new THREE.Vector2()) },
+      uOceanHex: { value: SIZES.map(() => new THREE.Vector4()) },
+      uOceanCam: { value: new THREE.Vector4() },
       uOceanVar: { value: new THREE.Vector3() },
       uOceanFoam: { value: new THREE.Vector4(1e3, 0, 0, 0) },
     };
@@ -143,7 +148,7 @@ export class OceanWaves {
 
   /**
    * 每帧调用。timeSec：秒（与场景 uTime 同源即可）；wind：海面风速 m/s；offsetKm：飞机累计位移（km，即 uCloudOffset）。
-   * 位移在 CPU 上用双精度对各级平铺尺寸取余，着色器里只剩小数，飞得再远纹理坐标也不丢精度。
+   * 位移在 CPU 上用双精度换算成各级随机平铺格子的斜格坐标（整数 + 小数），着色器里只加相对相机的小量，飞得再远也不丢精度。
    */
   update(timeSec: number, wind: number, offsetKm?: THREE.Vector2) {
     if (Math.abs(wind - this.wind) > 1e-3) this.rebuild(wind);
@@ -173,11 +178,19 @@ export class OceanWaves {
     this.renderer.setRenderTarget(prevTarget);
 
     if (offsetKm) {
+      const xM = offsetKm.x * 1000;
+      const zM = offsetKm.y * 1000;
       SIZES.forEach((L, c) => {
-        const fx = (offsetKm.x * 1000) / L;
-        const fz = (offsetKm.y * 1000) / L;
-        this.uniforms.uOceanOrigin.value[c].set(fx - Math.floor(fx), fz - Math.floor(fz));
+        // 相机在随机平铺格子里的斜格坐标（与 ocean.glsl.ts 的 TriangleGrid 一致），双精度拆成整数 + 小数：
+        // 着色器里只加相对相机的小量，格点编号是精确整数
+        const sx = (xM / L) * HEX_SCALE;
+        const sz = (zM / L) * HEX_SCALE;
+        const a = sx - sz / Math.sqrt(3);
+        const b = (sz * 2) / Math.sqrt(3);
+        this.uniforms.uOceanHex.value[c].set(Math.floor(a), Math.floor(b), a - Math.floor(a), b - Math.floor(b));
       });
+      const mod = (v: number) => v - 4096 * Math.floor(v / 4096);
+      this.uniforms.uOceanCam.value.set(mod(xM), mod(zM), 0, 0);
     }
   }
 

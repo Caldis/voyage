@@ -15,7 +15,23 @@
       <div class="loading-box">
         <div class="loading-title">航行伴侣</div>
         <div class="loading-text">正在准备舷窗外的天空……</div>
-        <div class="loading-hint">首次打开或程序更新后，浏览器需要编译着色器，可能要半分钟左右；之后会快很多。</div>
+        <div id="loading-progress" class="loading-progress">
+          <ol class="loading-steps">
+            <li data-stage="atmosphere">大气与光照 LUT</li>
+            <li data-stage="cloudNoise">云噪声生成</li>
+            <li data-stage="shaders">场景与机翼着色器</li>
+            <li data-stage="cloudMarch">云光线步进程序</li>
+            <li data-stage="oceanFft">海面波浪程序</li>
+            <li data-stage="post">曝光与眩光程序</li>
+            <li data-stage="firstFrame">首帧渲染</li>
+          </ol>
+          <div class="loading-bar"><div id="loading-bar-fill" class="loading-bar-fill"></div></div>
+          <div class="loading-meta">
+            <span id="loading-elapsed">已用 0.0 秒</span>
+            <span id="loading-eta"></span>
+          </div>
+        </div>
+        <div class="loading-hint">首次打开或程序更新后，浏览器需要编译着色器，可能要半分钟左右；命中缓存后会在一秒内完成。</div>
       </div>
     </div>
     <aside id="panel">
@@ -84,7 +100,14 @@
         </select>
       </label>
       <label class="check"><input id="ground-on" type="checkbox" checked />真实地理数据（卫星影像、地形、水体，联网）</label>
-      <label class="check"><input id="cabin-light" type="checkbox" checked />舱内灯光</label>
+      <label>舱内灯光
+        <!-- 选项值沿用旧复选框的 true / false，回归脚本里的 "cabin-light": true / false 不用改 -->
+        <select id="cabin-light">
+          <option value="true" selected>开</option>
+          <option value="false">睡眠（主灯关、氛围灯开）</option>
+          <option value="off">全关（只剩阅读灯）</option>
+        </select>
+      </label>
       <label class="check"><input id="auto-exposure" type="checkbox" checked />人眼式自动曝光</label>
       <label>曝光补偿 <output id="ev-comp-out"></output><input id="ev-comp" type="range" min="-3" max="3" step="0.1" value="0" /></label>
       <label id="manual-row">手动曝光 <output id="manual-ev-out"></output><input id="manual-ev" type="range" min="-2" max="17" step="0.1" value="14" /></label>
