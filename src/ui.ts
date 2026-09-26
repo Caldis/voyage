@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { SunPosition, MoonState } from "./astro";
 import { CLOUD_PRESETS, type Clouds, type CloudUniforms } from "./clouds/clouds";
-import { PRESETS, haversineKm } from "./flight";
+import { effectiveTargetKm, resetAltitudeFloor, FLOOR_LAND_AGL_KM, FLOOR_SEA_KM, PRESETS, haversineKm } from "./flight";
 import type { Exposure } from "./render/exposure";
 import { $, type HighLiftSetting, type VoyageState } from "./state";
 import { WEATHER_PRESETS, type WeatherSystem } from "./weather";
@@ -43,10 +43,31 @@ export function syncTimeUi(state: VoyageState) {
   timeLabel.textContent = `${hh}:${mm}（UTC${sign}${Math.abs(state.preset.tz)}）`;
 }
 
-/** 飞行阶段爬升 / 下降时，高度数字显示「当前 → 目标」；advanceFlight 返回 climbing = true 时调用 */
+/** 飞行阶段爬升 / 下降时，高度数字显示「当前 → 目标」；advanceFlight 返回 climbing = true 时调用。
+ *  目标按高度下限抬过的话（T18），显示的是实际要去的高度 */
 export function syncAltitudeUi(state: VoyageState) {
   altInput.value = state.altitudeKm.toFixed(1);
-  $("altitude-out").textContent = `${state.altitudeKm.toFixed(1)} km → ${state.targetAltKm.toFixed(1)} km`;
+  $("altitude-out").textContent = `${state.altitudeKm.toFixed(1)} km → ${effectiveTargetKm(state).toFixed(1)} km`;
+}
+
+let lastFloorText = "";
+/** 高度滑块的可达范围与下限提示（T18）：滑块的最小值跟着下限走，下面一行说明下限从哪来 */
+function syncFloorUi(state: VoyageState) {
+  const f = state.floor;
+  if (!f) return;
+  // 向上取到滑块步长 0.1，免得滑块最小值比下限还低一点
+  const min = Math.ceil(f.km * 10 - 1e-6) / 10;
+  if (altInput.min !== min.toFixed(1)) altInput.min = min.toFixed(1);
+  const text =
+    f.reason === "estimate"
+      ? `下限 ${min.toFixed(1)} km（地形数据加载中，按陆地离地 ${FLOOR_LAND_AGL_KM} km 估计）`
+      : f.reason === "land"
+        ? `下限 ${min.toFixed(1)} km：陆地上方离地 ≥ ${FLOOR_LAND_AGL_KM} km（近处地景经不起更低处细看）`
+        : `下限 ${min.toFixed(1)} km：海面上方`;
+  if (text !== lastFloorText) {
+    lastFloorText = text;
+    $("altitude-floor").textContent = text;
+  }
 }
 
 let lastInfo = 0;
@@ -54,6 +75,7 @@ let lastInfo = 0;
 export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number) {
   if (now - lastInfo <= 250) return;
   lastInfo = now;
+  syncFloorUi(state);
   const preset = state.preset;
   const outward = state.heading + (state.seat === "right" ? 90 : -90);
   info.textContent =
@@ -61,6 +83,7 @@ export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state
     `月亮高度角 ${moon.altitude.toFixed(1)}°，方位 ${moon.azimuth.toFixed(0)}°，照亮 ${Math.round(moon.phaseFraction * 100)}%
 ` +
     `航向 ${state.heading.toFixed(0)}°${Math.abs(state.bankDeg) > 2 ? `（坡度 ${state.bankDeg.toFixed(0)}°）` : ""}，窗外朝${compass(outward)}，高度 ${state.altitudeKm.toFixed(1)} km` +
+    (state.floor?.known && state.floor.groundKm > 0.02 ? `（离地 ${(state.altitudeKm - state.floor.groundKm).toFixed(1)} km）` : "") +
     (preset.dest ? `，距终点 ${haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]).toFixed(0)} km` : "") +
     (state.slatDeg > 0.5 || state.flapDeg > 0.5 ? `，缝翼 ${state.slatDeg.toFixed(0)}° / 襟翼 ${state.flapDeg.toFixed(0)}°` : "") +
     (state.spoilerDeg > 0.5 ? `，减速板 ${state.spoilerDeg.toFixed(0)}°` : "") + "\n" +
@@ -92,7 +115,12 @@ export function setupUi(deps: UiDeps) {
   const presetSel = $<HTMLSelectElement>("preset");
   presetSel.innerHTML = PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
 
-  presetSel.addEventListener("change", () => setPreset(presetSel.value));
+  presetSel.addEventListener("change", () => {
+    setPreset(presetSel.value);
+    // 高度下限按新地点重估（T18），滑块的最小值立刻跟上：紧接着设高度时不会被上一个地点的下限夹住
+    resetAltitudeFloor(state);
+    syncFloorUi(state);
+  });
   dateInput.addEventListener("change", () => {
     if (!dateInput.value) return;
     state.simTime = fromLocal(dateInput.value, Number(timeInput.value), state.preset.tz);
@@ -117,6 +145,8 @@ export function setupUi(deps: UiDeps) {
   });
   $<HTMLInputElement>("ground-on").addEventListener("change", (e) => {
     state.groundOn = (e.target as HTMLInputElement).checked;
+    resetAltitudeFloor(state);
+    syncFloorUi(state);
     snapAll();
   });
   $<HTMLSelectElement>("wing-pos").addEventListener("change", (e) => {
@@ -144,6 +174,8 @@ export function setupUi(deps: UiDeps) {
     update();
   }
   bindRange("altitude", (v) => {
+    // 不低于高度下限（T18）：滑块的 min 已经跟着下限走，这里再保底一次（下限刚变、滑块还没同步的那一帧）
+    v = Math.max(v, state.floor?.km ?? FLOOR_SEA_KM);
     state.altitudeKm = v;
     state.targetAltKm = v;
     snapAll();

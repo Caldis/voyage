@@ -76,7 +76,9 @@
           <option value="speedbrake">减速板（扰流板上翻）</option>
         </select>
       </label>
-      <label>高度 <output id="altitude-out"></output><input id="altitude" type="range" min="0.3" max="13" step="0.1" value="10.7" /></label>
+      <label>高度 <output id="altitude-out"></output><input id="altitude" type="range" min="0.5" max="13" step="0.1" value="10.7" /></label>
+      <!-- 高度下限（T18）：陆地上方离地 ≥ 2.5 km、海面上 ≥ 0.5 km；滑块最小值跟着变，这里说明原因 -->
+      <p id="altitude-floor" class="hint"></p>
       <div class="row rates">
         <span>飞行阶段<small>（10× 加速）</small></span>
         <button type="button" data-alt="10.7">巡航</button>

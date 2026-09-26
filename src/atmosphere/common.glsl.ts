@@ -45,31 +45,60 @@ const vec2 IRRADIANCE_SIZE = vec2(${f(LUT_SIZE.irradiance[0])}, ${f(LUT_SIZE.irr
 uniform sampler2D uTransmittanceLut;
 uniform sampler2D uMultiScatteringLut;
 
+// 边界层霾（T18，参数由 src/atmosphere/haze.ts 每帧按时段、地区、离地高度给出）：
+// x = 霾底（uHazeShape.x）处 550 nm 的消光系数（1/km），y = 霾顶海拔（km），z = 霾内的标高（km），w = 霾顶过渡层厚度（km）。
+// 只有 LUT 程序（透射率 / 多次散射 / 辐照度 / 天空视图 / 空气透视）调用 sampleMedium；场景、云程序里这两个 uniform 不可达，会被驱动剔除
+uniform vec4 uHaze;
+// x = 霾底海拔（km，密度从这里起按标高指数衰减），y = 单次散射反照率（550 nm），z = Ångström 指数，
+// w = 吸收随波长的倾斜（棕碳 / 黑碳让蓝光吸收更多，霾偏棕黄；0 = 灰）
+uniform vec4 uHazeShape;
+// 霾的相函数不对称因子：比背景米氏（0.8）小，侧向散射更多，所以侧光下霾是一层亮的灰白，而不是发暗
+const float HAZE_G = 0.7;
+
 struct Medium {
   vec3 rayleigh;   // 瑞利散射系数
-  float mie;       // 米氏散射系数
+  float mie;       // 米氏散射系数（背景气溶胶）
+  vec3 haze;       // 边界层霾的散射系数（按 Ångström 定律随波长变化；相函数用 HAZE_G）
   vec3 extinction; // 总消光系数
 };
+
+// 霾的相对波长系数：Rayleigh 系数对应的波长约 680 / 550 / 440 nm，气溶胶消光 ∝ λ^−α
+vec3 hazeSpectral(float alpha) {
+  return pow(vec3(680.0, 550.0, 440.0) / 550.0, vec3(-alpha));
+}
+
+// 边界层霾在海拔 h 处的消光系数（550 nm，1/km）：混合层里按标高指数缓降，到霾顶（逆温层）在过渡层内迅速消失
+float hazeExtinction(float h) {
+  if (uHaze.x <= 0.0) return 0.0;
+  float d = exp(-max(h - uHazeShape.x, 0.0) / max(uHaze.z, 0.05));
+  float top = 1.0 - smoothstep(uHaze.y - uHaze.w, uHaze.y + uHaze.w, h);
+  return uHaze.x * d * top;
+}
 
 Medium sampleMedium(float h) {
   float dR = exp(-h / RAYLEIGH_SCALE_HEIGHT);
   float dM = exp(-h / MIE_SCALE_HEIGHT);
   float dO = max(0.0, 1.0 - abs(h - 25.0) / 15.0); // 臭氧层：25 km 处最浓的帐篷形分布
+  vec3 haze = hazeExtinction(h) * hazeSpectral(uHazeShape.z);
+  // 单次散射反照率按通道倾斜：红 +w、蓝 −w（吸收型气溶胶在短波吸收更多）
+  vec3 ssa = clamp(uHazeShape.y + uHazeShape.w * vec3(1.0, 0.0, -1.0), 0.0, 1.0);
   Medium m;
   m.rayleigh = RAYLEIGH_SCATTERING * dR;
   m.mie = MIE_SCATTERING * dM;
-  m.extinction = m.rayleigh + vec3((MIE_SCATTERING + MIE_ABSORPTION) * dM) + OZONE_ABSORPTION * dO;
+  m.haze = haze * ssa;
+  m.extinction = m.rayleigh + vec3((MIE_SCATTERING + MIE_ABSORPTION) * dM) + haze + OZONE_ABSORPTION * dO;
   return m;
 }
 
 float rayleighPhase(float c) { return 3.0 / (16.0 * M_PI) * (1.0 + c * c); }
 
 // Cornette-Shanks 相函数
-float miePhase(float c) {
-  float g2 = MIE_G * MIE_G;
+float csPhase(float c, float g) {
+  float g2 = g * g;
   float k = 3.0 / (8.0 * M_PI) * (1.0 - g2) / (2.0 + g2);
-  return k * (1.0 + c * c) / pow(max(1.0 + g2 - 2.0 * MIE_G * c, 1e-4), 1.5);
+  return k * (1.0 + c * c) / pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5);
 }
+float miePhase(float c) { return csPhase(c, MIE_G); }
 
 // 射线与以地心为球心的球求交，返回最近的正距离，没有交点返回 -1。
 // 判别式写成 (R - r·sinθ)(R + r·sinθ)，避免 km 级大数相减在地平线附近丢精度。
@@ -136,6 +165,7 @@ vec3 integrateSegment(vec3 ro, vec3 rd, vec3 sunDir, float tLimit, float sampleC
   float cosTheta = dot(rd, sunDir);
   float pR = rayleighPhase(cosTheta);
   float pM = miePhase(cosTheta);
+  float pH = csPhase(cosTheta, HAZE_G);
   vec3 L = vec3(0.0);
   vec3 T = vec3(1.0);
   float tPrev = 0.0;
@@ -149,8 +179,8 @@ vec3 integrateSegment(vec3 ro, vec3 rd, vec3 sunDir, float tLimit, float sampleC
     Medium m = sampleMedium(r - BOTTOM);
     float sunCos = dot(p / r, sunDir);
     vec3 stepT = exp(-m.extinction * dt);
-    vec3 S = (m.rayleigh * pR + m.mie * pM) * sunTransmittance(r, sunCos)
-           + (m.rayleigh + m.mie) * multiScattering(r, sunCos);
+    vec3 S = (m.rayleigh * pR + m.mie * pM + m.haze * pH) * sunTransmittance(r, sunCos)
+           + (m.rayleigh + m.mie + m.haze) * multiScattering(r, sunCos);
     L += T * (S - S * stepT) / max(m.extinction, vec3(1e-7));
     T *= stepT;
     tPrev = tNext;
