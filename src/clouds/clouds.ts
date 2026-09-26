@@ -54,14 +54,41 @@ void main() {
   float depthSum = 0.0;
   float wSum = 0.0;
   float t = seg.x;
-  for (int i = 0; i < 192; i++) {
-    if (t >= seg.y || T < 0.005) break;
+  // 有雷暴时：从空白进入云的那一步退回去，用 1/8 的小步走过这段，采样点才能落在云的表面附近。
+  // 否则远处步长几百米、云的消光又高（60 /km），第一个采样点可能已经在云里几百米深处，
+  // 被阳光照亮的那层表面被跳过，受光面发灰、菜花状的隆起也看不出来
+  bool refineOn = uStormCount > 0;
+  int fine = 0;
+  bool wasEmpty = true;
+  // 闪电放电通道（线段）：两端换到相机坐标
+  vec3 fA = vec3(uFlash.x - uCloudOffset.x, BOTTOM + uFlash.y, uFlash.z - uCloudOffset.y);
+  vec3 fAB = vec3(uFlashB.x - uCloudOffset.x, BOTTOM + uFlashB.y, uFlashB.z - uCloudOffset.y) - fA;
+  float flashI = uFlash.w / (1.0 + 0.25 * length(fAB)); // 总能量摊到整条通道上
+  // 下方（海面 / 低云）反射上来的光的反照率：有低云时明显更亮
+  float albedoBelow = 0.06 + 0.5 * uCoverage;
+  // 次数上限：从相机空步走到 60 km 外本身就要约 190 步，细化还要额外的步数（每进一次云 9 步）
+  for (int i = 0; i < 256; i++) {
+    // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）
+    if (t >= seg.y || T < 0.005 || (!refineOn && i >= 192)) break;
     // 步长随距离变长：近处 60 m，远处 2 km
-    float dt = clamp(t * 0.008, 0.06, 2.0);
+    float dtBase = clamp(t * 0.008, 0.06, 2.0);
+    float dt = fine > 0 ? max(dtBase * 0.25, 0.03) : dtBase;
     vec3 p = ro + rd * (t + dt * jitter);
-    float lod = clamp(log2(dt / 0.055), 0.0, 5.0);
+    float lod = clamp(log2(dtBase / 0.055), 0.0, 5.0);
     float dens = cloudDensity(p, lod, t < 150.0);
+    float stormW = gStormW;
+    float stormAO = gStormAO;
+    // 只在进入雷暴时细化（层状云不必，保持原样）；退回后这段会被小步重新采样，进云那一步的密度并没有丢
+    if (dens > 0.002 && stormW > 0.5 && wasEmpty && fine == 0 && dtBase > 0.1 && t > seg.x) {
+      // 退回上一步（空白处走的是 2 倍步长），接下来 8 小步走完这 2 个大步
+      t = max(t - 2.0 * dtBase, seg.x);
+      fine = 8;
+      wasEmpty = false;
+      continue;
+    }
+    if (fine > 0) fine--;
     if (dens > 0.002) {
+      wasEmpty = false;
       float sigma = dens * CLOUD_EXTINCTION;
       float r = length(p);
       vec3 up = p / r;
@@ -71,11 +98,21 @@ void main() {
       float ls = 0.06;
       float lt = 0.0;
       int lightSteps = (uStormCount > 0 || uHurricane.w > 0.5) ? 8 : 6;
-      for (int j = 0; j < 8; j++) {
-        if (j >= lightSteps) break;
-        lt += ls;
-        od += cloudDensity(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
-        ls *= lightSteps == 8 ? 2.0 : 1.9;
+      if (lightSteps == 6) {
+        // 普通云（没有雷暴、台风）：只有层状云，常量上界，编译器展开后最快（和改动前一致）。
+        // 这里只能调用层状云密度：展开的每一份都带上雷暴密度的话，冷编译会从 55 s 涨到 90 s
+        for (int j = 0; j < 6; j++) {
+          lt += ls;
+          od += layerDensity(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
+          ls *= 1.9;
+        }
+      } else {
+        // 雷暴 / 台风：上界依赖 uniform，FXC 不展开（展开成 8 份雷暴密度时冷编译很慢）
+        for (int j = 0; j < lightSteps; j++) {
+          lt += ls;
+          od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
+          ls *= 2.0;
+        }
       }
       od *= CLOUD_EXTINCTION;
       // 多次散射近似（Wrenninge 2013）：每一阶散射更弱、衰减更慢、相函数更平。
@@ -83,10 +120,12 @@ void main() {
       // 所以顺光的云普遍偏灰。改成 6 阶、权重衰减放慢，补回高阶散射的能量
       float sunScatter = 0.0;
       float a = 1.0, b = 1.0, c = 1.0;
+      // 雷暴的光学厚度大得多（几百），高阶散射占比更高、整体反照率更接近 1：高阶权重衰减得更慢
+      float aDecay = stormW > 0.5 ? 0.7 : 0.62;
       for (int k = 0; k < 6; k++) {
         float phase = mix(hg(cosT, -0.25 * c), hg(cosT, 0.8 * c), 0.7);
         sunScatter += a * phase * exp(-b * od);
-        a *= 0.62; b *= 0.35; c *= 0.5;
+        a *= aDecay; b *= 0.35; c *= 0.5;
       }
       // Beer-Powder：云团边缘朝向太阳的地方偏暗，看起来更有体积（Schneider 2015）
       float powder = 1.0 - exp(-2.0 * od - 0.5);
@@ -95,13 +134,22 @@ void main() {
       float h01 = clamp((r - BOTTOM - uShellBottom) / (uShellTop - uShellBottom), 0.0, 1.0);
       vec3 eSky = skyIrradiance(r, up);
       vec3 ambient = eSky / (2.0 * M_PI) * mix(0.12, 1.0, pow(h01, 0.7));
+      if (stormW > 0.5) {
+        // 雷暴：隆起之间的凹处、砧底、雨幡里看到的天空少（菜花状的明暗）；
+        // 塔身下半截还被下方的海面 / 低云反射的光照着（中性的灰白，冲淡天空光的蓝）
+        ambient *= mix(0.3, 1.0, stormAO);
+        vec3 eBelow = albedoBelow * keyLight(BOTTOM + 1.0, up) * max(dot(up, uKeyDir), 0.0);
+        ambient += eBelow / (2.0 * M_PI) * 0.5 * (1.0 - h01) * stormAO;
+      }
       vec3 S = sunLight + ambient;
-      // 闪电：云内的强光源，光在云里多次散射后向外扩散（扩散长度约 1.5 km），整团云从内部亮起来
+      // 闪电：云里一段几公里长的放电通道，光在云里多次散射后向外扩散（扩散长度约 2 km），
+      // 整团云从内部亮起来，离通道越远越暗。凹处（ao 小）被周围的云挡住，也暗一些
       if (uFlash.w > 0.0) {
-        vec3 fp = vec3(uFlash.x - uCloudOffset.x, BOTTOM + uFlash.y, uFlash.z - uCloudOffset.y);
         vec3 pw = vec3(p.x, length(p), p.z);
-        float fd = length(pw - fp);
-        S += vec3(0.8, 0.85, 1.0) * uFlash.w * exp(-fd / 1.5) / (1.0 + fd * fd);
+        float u = clamp(dot(pw - fA, fAB) / max(dot(fAB, fAB), 1e-6), 0.0, 1.0);
+        float fd = length(pw - fA - fAB * u);
+        // 强度按观感标定：白天只在通道附近隐约可见，夜里通道周围几公里亮起来、十公里外的云只被照亮一点
+        S += vec3(0.8, 0.85, 1.0) * flashI * 0.005 * exp(-fd / 1.5) / (1.0 + fd * fd) * mix(1.0, stormAO, 0.5);
       }
       float stepT = exp(-sigma * dt);
       // 云的反照率接近 1：散射系数 ≈ 消光系数，积分式里 σ 被约掉
@@ -109,11 +157,12 @@ void main() {
       depthSum += T * (1.0 - stepT) * t;
       wSum += T * (1.0 - stepT);
       T *= stepT;
-    } else {
-      // 空白区域大步走
       t += dt;
+    } else {
+      // 空白区域大步走（细化时仍用小步）
+      wasEmpty = true;
+      t += fine > 0 ? dt : 2.0 * dt;
     }
-    t += dt;
   }
   if (wSum <= 0.0) return;
   float depth = depthSum / wSum;
@@ -180,7 +229,7 @@ varying vec2 vUv;
 void main() {
   vec3 p0 = vec3(0.0, uCamR, 0.0);
   float d = 0.0;
-  for (int k = 0; k < 4; k++) d += cloudDensity(p0 + uProbeDir * (float(k) * 0.12), 1.0, false);
+  for (int k = 0; k < 4; k++) d += cloudDensityLite(p0 + uProbeDir * (float(k) * 0.12), 1.0, false);
   gl_FragColor = vec4(d * 0.25, 0.0, 0.0, 1.0);
 }
 `;
@@ -224,6 +273,7 @@ export function createCloudUniforms(noise: CloudNoise) {
     uUpperWind: { value: new THREE.Vector2(0.8, 0.6) },
     uHurricane: { value: new THREE.Vector4(0, 0, 20, 0) },
     uFlash: { value: new THREE.Vector4() },
+    uFlashB: { value: new THREE.Vector3() },
   };
 }
 export type CloudUniforms = ReturnType<typeof createCloudUniforms>;
