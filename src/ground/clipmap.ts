@@ -23,6 +23,40 @@ interface Level {
   valid: boolean;
   building: boolean;
   maxHeight: number;
+  /** CPU 侧的粗网格（T18 高度下限 / 霾的地区统计）：GRID² 格，每格的最高点、平均高度（km）、陆地比例 */
+  grid: CoarseGrid | null;
+}
+
+/** 每级的粗网格边长（格数）。高度图 256² → 每格 8×8 个高度像素；水体 1024² → 每格 32×32 个像素 */
+export const GRID = 32;
+
+export interface CoarseGrid {
+  cx: number;
+  cz: number;
+  size: number;
+  /** 每格最高点（km，海底按 0） */
+  max: Float32Array;
+  /** 每格平均高度（km） */
+  mean: Float32Array;
+  /** 每格陆地比例 0..1（既不在海洋多边形里、DEM 也不低于海平面；两样数据都没取到时按陆地算，保守） */
+  land: Float32Array;
+}
+
+/** terrainFloor 的结果 */
+export interface TerrainFloor {
+  /** 这里允许的最低海拔（km） */
+  floorKm: number;
+  /** 飞机正下方的地形高度（km，海面为 0） */
+  groundKm: number;
+  /** 有没有数据：false 时 floorKm 只是保守估计 */
+  known: boolean;
+}
+
+/** 地区统计（霾用）：半径几十公里内的陆地比例、陆地平均高度 */
+export interface RegionStats {
+  land: number;
+  meanLandKm: number;
+  known: boolean;
 }
 
 function makeCanvas(w: number, h: number) {
@@ -47,6 +81,7 @@ export class GroundClipmap {
     valid: false,
     building: false,
     maxHeight: 0,
+    grid: null,
   }));
   private frame: LocalFrame;
   private generation = 0;
@@ -84,6 +119,7 @@ export class GroundClipmap {
       l.valid = false;
       l.building = false;
       l.cx = l.cz = NaN;
+      l.grid = null;
     }
     this.levelUniform.forEach((v) => (v.w = 0));
   }
@@ -109,6 +145,102 @@ export class GroundClipmap {
     }
   }
 
+  /**
+   * 高度下限（T18）：在 (x, z)（本地 km）周围 radiusKm 内逐格取「这一格要求的最低海拔」的最大值。
+   * 陆地格要求 = 格内最高点 + aglLandKm，离得越远越放宽（到 radiusKm 处降到 seaKm 的水平）；海洋格要求 = seaKm。
+   * 陆地比例低的格（海岸、小岛）按比例在两者之间插值。用覆盖得下整个圆的最细一级（≥ 64 km 级，格宽 ≥ 2 km）；
+   * 一级都没有时 known = false，调用方自己保守处理。
+   */
+  terrainFloor(x: number, z: number, aglLandKm: number, seaKm: number, radiusKm = 16): TerrainFloor {
+    const g = this.gridCovering(x, z, radiusKm, 3);
+    if (!g) return { floorKm: seaKm, groundKm: 0, known: false };
+    const cell = g.size / GRID;
+    const x0 = g.cx - g.size / 2;
+    const z0 = g.cz - g.size / 2;
+    const i0 = Math.max(0, Math.floor((x - radiusKm - x0) / cell));
+    const i1 = Math.min(GRID - 1, Math.floor((x + radiusKm - x0) / cell));
+    const j0 = Math.max(0, Math.floor((z - radiusKm - z0) / cell));
+    const j1 = Math.min(GRID - 1, Math.floor((z + radiusKm - z0) / cell));
+    let floor = seaKm;
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        // 点到格子（矩形）的最近距离
+        const dx = Math.max(x0 + i * cell - x, 0, x - (x0 + (i + 1) * cell));
+        const dz = Math.max(z0 + j * cell - z, 0, z - (z0 + (j + 1) * cell));
+        const d = Math.hypot(dx, dz);
+        if (d > radiusKm) continue;
+        const k = j * GRID + i;
+        // 近处（3 km 内）要求满额，往外平滑放宽到 radiusKm 处只剩「格内最高点 + 海面的要求」
+        const relax = THREE.MathUtils.smoothstep(d, 3, radiusKm);
+        const landReq = g.max[k] + seaKm + (aglLandKm - seaKm) * (1 - relax);
+        const w = THREE.MathUtils.smoothstep(g.land[k], 0, 0.3);
+        floor = Math.max(floor, seaKm + (landReq - seaKm) * w);
+      }
+    }
+    return { floorKm: floor, groundKm: this.heightAt(x, z) ?? 0, known: true };
+  }
+
+  /** 地区统计：radiusKm 内的陆地比例、陆地平均高度（用 ≥ 128 km 级的粗网格） */
+  regionStats(x: number, z: number, radiusKm = 40): RegionStats {
+    const g = this.gridCovering(x, z, radiusKm, 4);
+    if (!g) return { land: 0, meanLandKm: 0, known: false };
+    const cell = g.size / GRID;
+    const x0 = g.cx - g.size / 2;
+    const z0 = g.cz - g.size / 2;
+    let wSum = 0, landSum = 0, hSum = 0;
+    for (let j = 0; j < GRID; j++) {
+      for (let i = 0; i < GRID; i++) {
+        const d = Math.hypot(x0 + (i + 0.5) * cell - x, z0 + (j + 0.5) * cell - z);
+        if (d > radiusKm) continue;
+        const k = j * GRID + i;
+        wSum += 1;
+        landSum += g.land[k];
+        hSum += g.mean[k];
+      }
+    }
+    if (wSum === 0) return { land: 0, meanLandKm: 0, known: false };
+    return { land: landSum / wSum, meanLandKm: landSum > 1e-3 ? hSum / landSum : 0, known: true };
+  }
+
+  /** 正下方的地形高度（km）：最细的可用级别双线性取样；没有数据返回 null */
+  heightAt(x: number, z: number): number | null {
+    const data = this.height.image.data as unknown as Uint16Array;
+    for (let i = 0; i < GROUND_LEVELS; i++) {
+      const l = this.levels[i];
+      if (!l.valid) continue;
+      const u = (x - l.cx) / l.size + 0.5;
+      const v = (z - l.cz) / l.size + 0.5;
+      if (u < 0.01 || u > 0.99 || v < 0.01 || v > 0.99) continue;
+      const fx = u * HRES - 0.5, fz = v * HRES - 0.5;
+      const ix = Math.max(0, Math.min(HRES - 2, Math.floor(fx)));
+      const iz = Math.max(0, Math.min(HRES - 2, Math.floor(fz)));
+      const tx = THREE.MathUtils.clamp(fx - ix, 0, 1), tz = THREE.MathUtils.clamp(fz - iz, 0, 1);
+      const base = i * HRES * HRES;
+      const h = (a: number, b: number) => THREE.DataUtils.fromHalfFloat(data[base + b * HRES + a]);
+      const top = h(ix, iz) * (1 - tx) + h(ix + 1, iz) * tx;
+      const bot = h(ix, iz + 1) * (1 - tx) + h(ix + 1, iz + 1) * tx;
+      return top * (1 - tz) + bot * tz;
+    }
+    return null;
+  }
+
+  /** 从 minLevel 起往粗找第一个「粗网格能盖住以 (x, z) 为圆心、radiusKm 为半径的圆」的级别 */
+  private gridCovering(x: number, z: number, radiusKm: number, minLevel: number): CoarseGrid | null {
+    for (let i = minLevel; i < GROUND_LEVELS; i++) {
+      const l = this.levels[i];
+      const g = l.grid;
+      if (!g || !l.valid) continue;
+      if (Math.abs(x - g.cx) + radiusKm <= g.size / 2 && Math.abs(z - g.cz) + radiusKm <= g.size / 2) return g;
+    }
+    // 圆超出了最粗一级（离起点很远的边缘情况）：用包含这个点的最粗可用一级，能盖多少算多少
+    for (let i = GROUND_LEVELS - 1; i >= minLevel; i--) {
+      const l = this.levels[i];
+      const g = l.grid;
+      if (g && l.valid && Math.abs(x - g.cx) < g.size / 2 && Math.abs(z - g.cz) < g.size / 2) return g;
+    }
+    return null;
+  }
+
   private async build(i: number, cx: number, cz: number) {
     const l = this.levels[i];
     const gen = this.generation;
@@ -130,6 +262,7 @@ export class GroundClipmap {
       l.cz = cz;
       l.valid = true;
       l.maxHeight = height.max;
+      l.grid = coarseGrid(cx, cz, l.size, height.data, height.sea, water);
       this.levelUniform[i].set(cx, cz, l.size, 1);
     } finally {
       if (gen === this.generation) l.building = false;
@@ -246,6 +379,8 @@ export class GroundClipmap {
     );
     const px = ctx.getImageData(0, 0, HRES, HRES).data;
     const data = new Uint16Array(HRES * HRES);
+    // 海底（Terrarium 带海底地形，海里是负值）：给 CPU 侧的海陆判断用。瓦片没取到的地方是 0 m，按陆地算（保守）
+    const sea = new Uint8Array(HRES * HRES);
     let max = 0;
     for (let k = 0; k < HRES * HRES; k++) {
       // Terrarium：高度(m) = R·256 + G + B/256 − 32768；海底深度截到海平面
@@ -253,8 +388,9 @@ export class GroundClipmap {
       const km = Math.max(m, 0) / 1000;
       max = Math.max(max, km);
       data[k] = THREE.DataUtils.toHalfFloat(km);
+      sea[k] = m < -5 ? 1 : 0;
     }
-    return { data, max };
+    return { data, max, sea };
   }
 
   private async buildWater(size: number, cx: number, cz: number) {
@@ -307,4 +443,42 @@ export class GroundClipmap {
     }
     return ctx.getImageData(0, 0, RES, RES).data;
   }
+}
+
+/** 把一级的高度图 / 水体遮罩压成 GRID² 的粗网格（最高点、平均高度、陆地比例），CPU 侧查询用（T18） */
+function coarseGrid(cx: number, cz: number, size: number, height: Uint16Array, sea: Uint8Array, water: Uint8ClampedArray): CoarseGrid {
+  const max = new Float32Array(GRID * GRID);
+  const mean = new Float32Array(GRID * GRID);
+  const land = new Float32Array(GRID * GRID);
+  const hs = HRES / GRID;
+  const ws = RES / GRID;
+  for (let j = 0; j < GRID; j++) {
+    for (let i = 0; i < GRID; i++) {
+      let m = 0, sum = 0, seaCount = 0;
+      for (let b = 0; b < hs; b++) {
+        for (let a = 0; a < hs; a++) {
+          const k = (j * hs + b) * HRES + i * hs + a;
+          const h = THREE.DataUtils.fromHalfFloat(height[k]);
+          m = Math.max(m, h);
+          sum += h;
+          seaCount += sea[k];
+        }
+      }
+      // 水体遮罩的海洋通道（G）：隔一个像素取样就够了
+      let ocean = 0, n = 0;
+      for (let b = 0; b < ws; b += 2) {
+        for (let a = 0; a < ws; a += 2) {
+          const k = ((j * ws + b) * RES + i * ws + a) * 4;
+          ocean += water[k + 1] > 127 ? 1 : 0;
+          n++;
+        }
+      }
+      const k = j * GRID + i;
+      max[k] = m;
+      mean[k] = sum / (hs * hs);
+      // 两个来源取「更像海」的那个：矢量水体偶发缺瓦片时靠 DEM 的海底地形兜底，反之亦然
+      land[k] = 1 - Math.max(ocean / n, seaCount / (hs * hs));
+    }
+  }
+  return { cx, cz, size, max, mean, land };
 }

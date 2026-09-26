@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import type { HighLiftSetting, Preset, VoyageState } from "./state";
+import type { AltitudeFloor, HighLiftSetting, Preset, VoyageState } from "./state";
+import type { GroundClipmap } from "./ground/clipmap";
 import { CRUISE_PITCH_DEG } from "./state";
 
 /**
@@ -13,12 +14,13 @@ export const PRESETS: Preset[] = [
   { id: "ecs", name: "东海上空 · 上海以东约 400 km · 向东飞", lat: 31.2, lon: 126.0, heading: 80, tz: 8, islands: 0.05 },
   { id: "scs", name: "南海上空 · 向西南飞", lat: 18.0, lon: 115.0, heading: 225, tz: 8, islands: 0.35 },
   // 陆地：需要开「真实地理数据」
-  { id: "yangtze", name: "长江中下游 · 鄱阳湖以北 · 向东北飞", lat: 29.55, lon: 115.9, heading: 70, tz: 8, islands: 0 },
-  { id: "fuji", name: "骏河湾上空 · 向西飞（富士山从右前方出现）", lat: 35.0, lon: 138.95, heading: 270, tz: 9, islands: 0 },
+  // haze：地区霾浓度倍数（T18）。华东平原常年比日本浑浊，晴天能见度约 10–15 km（日本晴天约 30–40 km）
+  { id: "yangtze", name: "长江中下游 · 鄱阳湖以北 · 向东北飞", lat: 29.55, lon: 115.9, heading: 70, tz: 8, islands: 0, land: true, haze: 2.5 },
+  { id: "fuji", name: "骏河湾上空 · 向西飞（富士山从右前方出现）", lat: 35.0, lon: 138.95, heading: 270, tz: 9, islands: 0, land: true },
   // 真实航线（大圆航线，从爬升结束、进入巡航的位置开始）：需要开「真实地理数据」
-  { id: "hnd-cts", name: "航线：东京羽田 → 札幌新千岁（北上，经东北地方）", lat: 36.2, lon: 140.3, heading: 10, tz: 9, islands: 0, dest: [42.78, 141.69] },
-  { id: "hnd-itm", name: "航线：东京羽田 → 大阪伊丹（西行，经富士山）", lat: 35.35, lon: 139.35, heading: 260, tz: 9, islands: 0, dest: [34.78, 135.44] },
-  { id: "pvg-pek", name: "航线：上海浦东 → 北京首都（北上，过长江、黄河）", lat: 31.9, lon: 121.2, heading: 330, tz: 8, islands: 0, dest: [40.08, 116.58] },
+  { id: "hnd-cts", name: "航线：东京羽田 → 札幌新千岁（北上，经东北地方）", lat: 36.2, lon: 140.3, heading: 10, tz: 9, islands: 0, dest: [42.78, 141.69], land: true },
+  { id: "hnd-itm", name: "航线：东京羽田 → 大阪伊丹（西行，经富士山）", lat: 35.35, lon: 139.35, heading: 260, tz: 9, islands: 0, dest: [34.78, 135.44], land: true },
+  { id: "pvg-pek", name: "航线：上海浦东 → 北京首都（北上，过长江、黄河）", lat: 31.9, lon: 121.2, heading: 330, tz: 8, islands: 0, dest: [40.08, 116.58], land: true, haze: 2.5 },
 ];
 
 const D2R = Math.PI / 180;
@@ -136,7 +138,8 @@ export function advanceFlight(state: VoyageState, input: AdvanceFlightInput): Ad
   // 飞机向前飞：云场按航向平移
   const h = THREE.MathUtils.degToRad(state.heading);
   // 飞行阶段：朝目标高度爬升或下降，俯仰角跟着变（爬升抬头约 8°，下降约 0°，巡航 2.5°）
-  const dAlt = state.targetAltKm - state.altitudeKm;
+  // 目标高度不低于高度下限（T18）：地形抬升时跟着爬，离开陆地后回到面板设的目标
+  const dAlt = effectiveTargetKm(state) - state.altitudeKm;
   const climbing = Math.abs(dAlt) > 0.005;
   if (climbing) {
     state.altitudeKm += Math.sign(dAlt) * Math.min(Math.abs(dAlt), ALT_RATE_KMS * dt);
@@ -153,6 +156,52 @@ export function advanceFlight(state: VoyageState, input: AdvanceFlightInput): Ad
   const outwardW = new THREE.Vector3(Math.cos(h), 0, Math.sin(h)).multiplyScalar(state.seat === "right" ? 1 : -1);
 
   return { climbing, motion, ownDir, outwardW, speedKms };
+}
+
+// ---------- 高度下限（T18） ----------
+
+/** 陆地上方的最低离地高度（km）：地景（卫星影像约 10 m、DEM 约 30–250 m）从更低处看会露馅 */
+export const FLOOR_LAND_AGL_KM = 2.5;
+/** 海面上的最低高度（km）：海面是程序生成的 FFT 海浪，低空也经得起看 */
+export const FLOOR_SEA_KM = 0.5;
+
+/**
+ * 每帧更新高度下限（按离地高度，不是海拔）：飞机周围 16 km 内每个陆地格子要求「格内最高点 + 2.5 km」
+ * （3 km 外逐渐放宽，16 km 处只剩「最高点 + 0.5 km」），海面格子要求 0.5 km（ground/clipmap.ts 的 terrainFloor）。
+ * 地形数据还没到时：预设标了陆地就按「陆地、地形高度取已知最高点」保守估计，否则按海面。
+ * 数据刚到、而飞机低于下限时直接抬到下限（此前画面上本来就没有地面，跳一下看不出来）；之后地形抬升由 advanceFlight 按爬升率跟上。
+ */
+export function updateAltitudeFloor(state: VoyageState, ground: GroundClipmap, x: number, z: number): AltitudeFloor {
+  const prev = state.floor;
+  let next: AltitudeFloor;
+  if (!state.groundOn) {
+    // 关掉真实地理数据时只有海面和程序生成的示例岛屿
+    next = { km: FLOOR_SEA_KM, known: true, groundKm: 0, reason: "sea" };
+  } else {
+    const f = ground.terrainFloor(x, z, FLOOR_LAND_AGL_KM, FLOOR_SEA_KM);
+    if (f.known) {
+      next = { km: f.floorKm, known: true, groundKm: f.groundKm, reason: f.floorKm > FLOOR_SEA_KM + 0.05 ? "land" : "sea" };
+    } else {
+      const est = state.preset.land ? ground.maxHeightKm + FLOOR_LAND_AGL_KM : FLOOR_SEA_KM;
+      next = { km: est, known: false, groundKm: 0, reason: "estimate" };
+    }
+  }
+  if (next.known && prev && !prev.known && state.altitudeKm < next.km) state.altitudeKm = next.km;
+  state.floor = next;
+  return next;
+}
+
+/** 换了预设（地面数据作废重建）：下限先按预设估计。换预设和随后设高度常在同一帧里连着发生（回归脚本就是这样），
+ *  不能沿用上一个地点的下限去夹新地点的高度 */
+export function resetAltitudeFloor(state: VoyageState): AltitudeFloor {
+  const km = state.groundOn && state.preset.land ? FLOOR_LAND_AGL_KM : FLOOR_SEA_KM;
+  state.floor = { km, known: false, groundKm: 0, reason: state.groundOn && state.preset.land ? "estimate" : "sea" };
+  return state.floor;
+}
+
+/** 这一刻真正要飞去的高度：面板 / 飞行阶段按钮设的目标，但不低于下限 */
+export function effectiveTargetKm(state: VoyageState) {
+  return Math.max(state.targetAltKm, state.floor?.km ?? FLOOR_SEA_KM);
 }
 
 // ---------- 增升装置：缝翼、襟翼、扰流板 ----------
@@ -182,7 +231,7 @@ export function highLiftTarget(setting: HighLiftSetting, state: VoyageState): [n
   const conf = setting === "auto" ? autoConf(state.altitudeKm) : setting;
   const [slat, flap] = HIGH_LIFT_CONF[conf];
   // 自动档：快速下降（离目标高度还远）且还没放襟翼时，打开一半减速板
-  const descending = setting === "auto" && state.targetAltKm < state.altitudeKm - 0.3 && flap === 0 && state.altitudeKm > 2;
+  const descending = setting === "auto" && effectiveTargetKm(state) < state.altitudeKm - 0.3 && flap === 0 && state.altitudeKm > 2;
   return [slat, flap, descending ? 20 : 0];
 }
 

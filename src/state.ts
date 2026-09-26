@@ -19,6 +19,22 @@ export interface Preset {
   islands: number;
   /** 航线终点（纬度, 经度）：有的话沿大圆航线飞过去，航向随位置变化；没有就沿固定航向直飞 */
   dest?: [number, number];
+  /** 起点在陆地上方（T18）：地形数据还没到时，高度下限按陆地保守估计 */
+  land?: boolean;
+  /** 地区霾浓度倍数（T18，默认 1 ≈ 日本晴天的能见度 30–40 km；华东平原约 2.5） */
+  haze?: number;
+}
+
+/** 高度下限（T18，flight.ts 的 updateAltitudeFloor 每帧更新） */
+export interface AltitudeFloor {
+  /** 此刻允许的最低海拔（km） */
+  km: number;
+  /** false：地形数据还没到，km 是按预设估的 */
+  known: boolean;
+  /** 正下方的地形高度（km，海面 0；没有数据时 0） */
+  groundKm: number;
+  /** 下限由什么决定：陆地 / 海面 / 估计 */
+  reason: "land" | "sea" | "estimate";
 }
 
 /** 巡航时机头略微抬起，侧窗里的地平线因此微微倾斜（main.ts 初始化 state 时、flight.ts 每帧算俯仰目标时都要用） */
@@ -61,6 +77,8 @@ export interface VoyageState {
   slatDeg: number;
   flapDeg: number;
   spoilerDeg: number;
+  /** 高度下限（T18）：陆地上方离地 ≥ 2.5 km、海面上 ≥ 0.5 km；没初始化时按 0.5 km 处理 */
+  floor?: AltitudeFloor;
 }
 
 /** 增升装置设定：Airbus 襟翼手柄的档位（0 / 1 / 1+F / 2 / 3 / FULL），或减速板，或按高度自动 */

@@ -63,7 +63,7 @@ void main() {
         float pr = length(p);
         Medium m = sampleMedium(pr - BOTTOM);
         vec3 stepT = exp(-m.extinction * dt);
-        vec3 scat = m.rayleigh + m.mie;
+        vec3 scat = m.rayleigh + m.mie + m.haze;
         vec3 ext = max(m.extinction, vec3(1e-7));
         F += T * (scat - scat * stepT) / ext;
         vec3 S = scat * ISO_PHASE * sunTransmittance(pr, dot(p / pr, sunDir));
@@ -220,14 +220,34 @@ export class Atmosphere {
     uMultiScatteringLut: { value: this.multiScattering.texture },
   };
 
+  /**
+   * 边界层霾（T18）：所有 LUT 程序共用这两个 uniform 对象（含义见 common.glsl.ts 的 uHaze / uHazeShape）。
+   * 默认 x = 0：没有霾，和改前完全一样。用 setHaze 改，改动够大时 updateSkyView 顺带重算透射率 / 多次散射 / 辐照度 LUT
+   */
+  readonly hazeUniforms = {
+    uHaze: { value: new THREE.Vector4(0, 1.5, 3, 0.1) },
+    uHazeShape: { value: new THREE.Vector4(0, 0.92, 1.3, 0) },
+  };
+  private staticDirty = false;
+  private lastStaticUpdate = -Infinity;
+  /** 上一次重算静态 LUT 时的霾参数，用来判断变化够不够大 */
+  private readonly staticHaze = new THREE.Vector4(0, 1.5, 3, 0.1);
+  private readonly staticHazeShape = new THREE.Vector4(0, 0.92, 1.3, 0);
+
+  private readonly transmittanceMaterial = lutMaterial(TRANSMITTANCE_FRAG, { ...this.hazeUniforms });
+  private readonly multiScatteringMaterial = lutMaterial(MULTI_SCATTERING_FRAG, { ...this.sharedUniforms, ...this.hazeUniforms });
+  private readonly irradianceMaterial = lutMaterial(IRRADIANCE_FRAG, { ...this.sharedUniforms, ...this.hazeUniforms });
+
   private readonly skyViewMaterial = lutMaterial(SKY_VIEW_FRAG, {
     ...this.sharedUniforms,
+    ...this.hazeUniforms,
     uCamR: { value: 6370 },
     uSunCosZenith: { value: 0.5 },
   });
 
   private readonly aerialMaterial = lutMaterial(AERIAL_FRAG, {
     ...this.sharedUniforms,
+    ...this.hazeUniforms,
     uCamR: { value: 6370 },
     uSunDirLocal: { value: new THREE.Vector3() },
     uLayer: { value: 0 },
@@ -235,13 +255,41 @@ export class Atmosphere {
   });
 
   constructor(private readonly pass: FullscreenPass) {
-    // 透射率 → 多次散射 → 辐照度，大气参数不变，只需算一次
-    pass.render(lutMaterial(TRANSMITTANCE_FRAG, {}), this.transmittance);
-    pass.render(lutMaterial(MULTI_SCATTERING_FRAG, { ...this.sharedUniforms }), this.multiScattering);
-    pass.render(lutMaterial(IRRADIANCE_FRAG, { ...this.sharedUniforms }), this.irradiance);
+    // 透射率 → 多次散射 → 辐照度：只依赖大气参数，启动时算一次；霾参数变化够大时再重算（见 setHaze）
+    this.renderStatic();
+  }
+
+  private renderStatic() {
+    this.pass.render(this.transmittanceMaterial, this.transmittance);
+    this.pass.render(this.multiScatteringMaterial, this.multiScattering);
+    this.pass.render(this.irradianceMaterial, this.irradiance);
+    this.staticHaze.copy(this.hazeUniforms.uHaze.value);
+    this.staticHazeShape.copy(this.hazeUniforms.uHazeShape.value);
+    this.staticDirty = false;
+  }
+
+  /**
+   * 设霾参数（T18）：haze = (霾底消光 1/km, 霾顶海拔 km, 标高 km, 霾顶过渡层厚 km)，
+   * shape = (霾底海拔 km, 单次散射反照率, Ångström 指数, 吸收倾斜)。天空视图 / 空气透视每帧都重算，立即生效；
+   * 透射率 / 多次散射 / 辐照度三张 LUT 在参数变化超过约 3%（霾顶 30 m）时标脏，下一次 updateSkyView 重算（最多每 0.25 秒一次）
+   */
+  setHaze(haze: THREE.Vector4, shape: THREE.Vector4) {
+    this.hazeUniforms.uHaze.value.copy(haze);
+    this.hazeUniforms.uHazeShape.value.copy(shape);
+    const a = this.staticHaze, b = this.staticHazeShape;
+    const rel = (x: number, y: number, eps: number) => Math.abs(x - y) > eps;
+    if (
+      rel(haze.x, a.x, 0.03 * Math.max(a.x, 0.01)) || rel(haze.y, a.y, 0.03) || rel(haze.z, a.z, 0.1) || rel(haze.w, a.w, 0.02) ||
+      rel(shape.x, b.x, 0.03) || rel(shape.y, b.y, 0.01) || rel(shape.z, b.z, 0.05) || rel(shape.w, b.w, 0.005)
+    ) this.staticDirty = true;
   }
 
   updateSkyView(camR: number, sunCosZenith: number, moonCosZenith: number) {
+    const now = performance.now();
+    if (this.staticDirty && now - this.lastStaticUpdate > 250) {
+      this.lastStaticUpdate = now;
+      this.renderStatic();
+    }
     this.skyViewMaterial.uniforms.uCamR.value = camR;
     this.skyViewMaterial.uniforms.uSunCosZenith.value = sunCosZenith;
     this.pass.render(this.skyViewMaterial, this.skyView);
