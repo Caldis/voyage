@@ -11,7 +11,10 @@ import { DEFAULT_TIMINGS, loadTimings, saveTimings, type BootTimings } from "./t
  * 避免「进度条只跳了一点点就消失」的抖动感——见 REVEAL_DELAY_MS。
  */
 
-export const BOOT_STAGE_IDS = ["atmosphere", "cloudNoise", "shaders", "cloudMarch", "oceanFft", "post", "firstFrame"] as const;
+// SC-4：云光线步进程序改成和场景 / 机翼一起并行后台编译（不再是编完场景后才单独同步编译），
+// 清单里不再需要一个独立的 cloudMarch 阶段——它现在就是 shaders 阶段的一部分（main.ts 仍会单独
+// tick 一次「云光线步进程序编译」耗时，只是不再对应这里的一个清单项）。
+export const BOOT_STAGE_IDS = ["atmosphere", "cloudNoise", "shaders", "oceanFft", "post", "firstFrame"] as const;
 export type BootStageId = (typeof BOOT_STAGE_IDS)[number];
 
 const REVEAL_DELAY_MS = 1000;

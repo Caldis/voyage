@@ -355,17 +355,39 @@ requestAnimationFrame(() =>
     // 场景着色器很大（Windows 上 ANGLE → FXC 冷编译约一分钟）。先用 KHR_parallel_shader_compile 在后台编译、轮询完成，
     // 不在首帧里同步编译：同步编译太久时 Chrome 会认为 GPU 卡死，报 VALIDATE_STATUS false 并丢失 WebGL 上下文
     // （上下文恢复后 LUT、噪声纹理都没了，画面错乱）。渲染目标要和真正渲染时一致（hdr），程序缓存才能命中
+    //
+    // SC-4：云光线步进（marchMat）和它的时域累积 resolve（resolveMat）原来要等这一批编完、首帧前才单独
+    // 触发一次「假渲染」来编译，同步卡住主线程约 7 秒（T16 的发现，见 handoff/T16.md「还能做但本任务没做」）。
+    // 这里把它们并进同一批 compileAsync 后台编译。clouds.ts 目前没有导出这两个材质和它们的渲染目标（T04
+    // 正在并行改这个文件，约定本任务不碰它），下面用类型断言读运行时属性——clouds.ts 里写的是 TS 的
+    // `private` 关键字，不是原生 `#私有字段`，运行时就是普通属性，断言不会报运行时错误，也不改 clouds.ts
+    // 一个字符。等 T04 收敛后应该把这几个字段（或一个 warmup 方法）转成正式的公开 API，
+    // 建议 diff 见 apps/voyage/handoff/SC-4.md。
+    interface CloudsInternals {
+      marchMat: THREE.ShaderMaterial;
+      resolveMat: THREE.ShaderMaterial;
+      raw: THREE.WebGLRenderTarget;
+      history: THREE.WebGLRenderTarget[];
+    }
+    const cloudsInternal = clouds as unknown as CloudsInternals;
     try {
       // 几何体、相机和 FullscreenPass 的一致（只有 position + uv 的全屏三角形），程序缓存的键才相同
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
       geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
-      // 场景和机翼两个程序各自绑定自己真正要画进去的目标再发起编译（compileAsync 调用时就同步提交链接，之后只是轮询）：
-      // Windows 上 ANGLE 的 D3D 后端按「链接时绑定的帧缓冲」生成像素着色器的输出布局。场景画进两张目标（MRT）、机翼画进一张，
-      // 绑错的话首帧画的时候要按新布局同步重编一遍（实测首帧卡了 52 秒）。两个链接都提交后一起等，驱动并行编译
+      // 场景、机翼、云光线步进、云 resolve 四个程序各自绑定自己真正要画进去的目标再发起编译（compileAsync
+      // 调用时就同步提交链接，之后只是轮询）：Windows 上 ANGLE 的 D3D 后端按「链接时绑定的帧缓冲」生成像素
+      // 着色器的输出布局。场景画进两张目标（MRT）、机翼和云 resolve 各画进一张、云步进画进两张（MRT，颜色 +
+      // 深度），绑错的话首帧画的时候要按新布局同步重编一遍（实测首帧卡了 52 秒）。四个链接都提交后一起等，驱动并行编译
       const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
       const jobs: Promise<unknown>[] = [];
-      for (const [mat, target] of [[sceneMat, hdr], [wingMat, hdrWing]] as const) {
+      const batch: ReadonlyArray<readonly [THREE.ShaderMaterial, THREE.WebGLRenderTarget]> = [
+        [sceneMat, hdr],
+        [wingMat, hdrWing],
+        [cloudsInternal.marchMat, cloudsInternal.raw],
+        [cloudsInternal.resolveMat, cloudsInternal.history[0]],
+      ];
+      for (const [mat, target] of batch) {
         const probe = new THREE.Scene();
         const mesh = new THREE.Mesh(geo, mat);
         mesh.frustumCulled = false;
@@ -376,25 +398,14 @@ requestAnimationFrame(() =>
       await Promise.all(jobs);
       renderer.setRenderTarget(null);
     } catch (err) {
-      console.warn("场景着色器后台编译失败，改为首帧同步编译", err);
+      console.warn("场景 / 云着色器后台编译失败，改为首帧同步编译", err);
     }
-    tick("场景着色器编译（后台）");
+    tick("场景 / 机翼 / 云着色器编译（后台）");
     boot.finish("shaders");
-    await nextPaint();
-
-    // 云光线步进、海面 FFT、曝光 / 眩光各自还有一批小着色器：原来只在下面第一次真正渲染时才编译，
-    // 会挡住主线程（虽然比场景 / 机翼小得多）。这里提前各触发一次、单独计时，
-    // 编完立刻用 snap() 撤销这次「假」调用在时间累积 / 曝光适应历史上留下的痕迹，真正的首帧仍是干净的第一帧。
-    // 这几个调用本身仍是同步的（three 没有给普通 render() 提供后台编译版本），会各自卡一下主线程；
-    // 每个之间插一次 nextPaint()，让清单打勾 / 进度条在卡顿前先画出来，不会把好几个阶段的卡顿叠成一整段看不出进度的空白
-    {
-      const camBasis = cameraBasis();
-      const c2w = cabinToWorld();
-      clouds.render(new THREE.Vector3(), camBasis, c2w);
-      clouds.snap();
-    }
+    // 云光线步进程序已经并进上面那一批后台编译，不用再像 T16 那样假渲染一次触发编译、
+    // 再用 clouds.snap() 撤销假调用留下的时间累积痕迹了。保留这一句 tick 只是为了让
+    // window.__voyageStartup 里还能单独看到这一项的耗时（应接近 0，用来验证 SC-4 是否生效）
     tick("云光线步进程序编译");
-    boot.finish("cloudMarch");
     await nextPaint();
 
     ocean.update(0, state.wind, cloudUniforms.uCloudOffset.value);
@@ -420,6 +431,7 @@ requestAnimationFrame(() =>
     const programs = (mat: THREE.Material) => (renderer.properties.get(mat) as { programs?: Map<string, unknown> }).programs?.size ?? -1;
     startup["场景材质的程序数"] = programs(sceneMat);
     startup["机翼材质的程序数"] = programs(wingMat);
+    startup["云光线步进材质的程序数"] = programs(cloudsInternal.marchMat);
     (window as unknown as { __voyageStartup: unknown }).__voyageStartup = startup;
     $("loading").classList.add("done");
   }, 50),
