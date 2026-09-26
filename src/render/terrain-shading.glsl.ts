@@ -132,7 +132,9 @@ vec4 groundRadiance(vec3 ro, vec3 rd) {
     // 足迹 20–40 m 之间平滑淡出（远处浪线细于像素，而且粗级遮罩给出的「离岸距离」已经不准）
     float foamFade = 1.0 - smoothstep(20.0, 40.0, fpM);
     if (wat.g > 0.5 && foamFade > 0.0) {
-      float cw = sampleGround(uGroundWater, g, min(floor(lod) + 3.0, ${GROUND_LEVELS - 1}.0)).r;
+      // 直接取一级（不走 sampleGround 的逐级查找）：sampleGround 每调用一处 FXC 就内联一份循环，冷编译变慢
+      int cl = min(int(floor(lod)) + 3, ${GROUND_LEVELS - 1});
+      float cw = levelCovers(cl, g) ? textureLod(uGroundWater, levelUv(cl, g), 0.0).r : 1.0;
       float near = (1.0 - smoothstep(0.55, 0.85, cw)) * foamFade;
       if (near > 0.0) {
         float along = vnoise(g * 1000.0 / 90.0);

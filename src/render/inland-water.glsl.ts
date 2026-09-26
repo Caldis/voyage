@@ -8,6 +8,17 @@
  * 总斜率方差守恒），远处自然变成平滑的镜面 + 模糊的耀斑，不会出现摩尔纹。
  */
 export const INLAND_WATER_COMMON = /* glsl */ `
+#ifdef GROUND_DETAIL
+// 值噪声的解析梯度（一次 4 个哈希；有限差分要 12 个，代码量大，FXC 冷编译慢）
+vec2 vnoiseGrad(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  vec2 du = 6.0 * f * (1.0 - f);
+  float a = hash12(i), b = hash12(i + vec2(1.0, 0.0)), c = hash12(i + vec2(0.0, 1.0)), d = hash12(i + vec2(1.0, 1.0));
+  return du * (vec2(b - a, c - a) + (a - b - c + d) * u.yx);
+}
+
 // 涟漪的高度梯度（单位：坡度）。两层噪声随风漂移；fp = 像素足迹（米），比像素细的层不画
 vec2 rippleSlope(vec2 xzM, float fp, out float resolvedVar) {
   vec2 s = vec2(0.0);
@@ -19,10 +30,7 @@ vec2 rippleSlope(vec2 xzM, float fp, out float resolvedVar) {
     float res = 1.0 - smoothstep(0.25, 0.6, fp / lambda);
     if (res > 0.0) {
       vec2 p = xzM / lambda + vec2(0.35, 0.2) * uTime / lambda * 1.5 + float(i) * 17.3;
-      const float E = 0.08;
-      float n0 = vnoise(p);
-      vec2 gr = vec2(vnoise(p + vec2(E, 0.0)) - n0, vnoise(p + vec2(0.0, E)) - n0) / E;
-      s += gr * amp * res;
+      s += vnoiseGrad(p) * amp * res;
       resolvedVar += res * amp * amp * 1.5;
     }
     lambda *= 0.4;
@@ -30,6 +38,7 @@ vec2 rippleSlope(vec2 xzM, float fp, out float resolvedVar) {
   }
   return s;
 }
+#endif
 
 // 湖泊、河流在水面处的辐亮度（不含天空反射，天空反射由调用处按 fView 加）。
 // body：水体本身的反射率（取影像的水色）；eSun / eSky：水面处主光源（已含云影）与天空光的照度，由调用处算好传进来
@@ -40,8 +49,12 @@ vec3 inlandWaterRadiance(vec3 P, vec3 rd, float fp, vec3 body, vec3 eSun, vec3 e
   float cosV = max(dot(n, v), 1e-3);
   float cosS = dot(n, uKeyDir);
   vec2 xzM = (P.xz + uCloudOffset) * 1000.0;
-  float resVar;
-  vec2 sl = rippleSlope(xzM, fp, resVar);
+  float resVar = 0.0;
+  vec2 sl = vec2(0.0);
+#ifdef GROUND_DETAIL
+  // 看得清的涟漪只在低空细节变体里画（高处像素足迹远大于涟漪波长，本来就全部并入粗糙度）
+  sl = rippleSlope(xzM, fp, resVar);
+#endif
   // 总斜率方差：内陆水面受岸和地形遮挡、风区短，按海面 Cox–Munk 的约一半风速算；看得清的部分已经画成法线，剩下的当粗糙度
   float totalVar = 0.003 + 0.00512 * 0.5 * uWind;
   float sigma2 = max(totalVar - resVar, 0.0015);
