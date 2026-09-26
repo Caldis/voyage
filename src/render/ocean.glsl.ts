@@ -5,13 +5,33 @@
  * 斜率来源（T14）：FFT 海浪（src/ocean/waves.ts）三个级联的纹理数组。
  * 每级存 (∂h/∂x, ∂h/∂z, 斜率二阶矩, Σ|k|h)，用解析的像素足迹做 textureGrad（各向异性过滤 + mip），
  * 过滤掉的斜率方差按 LEAN mapping 并入 Cox–Munk 粗糙度，比 FFT 更短的波（厘米级毛细波）由 Cox–Munk 总方差补齐：总方差守恒。
+ *
+ * 去平铺（T21）：每级不再直接平铺，而是按世界坐标的三角格子做「六边形随机平铺」（Heitz & Neyret 2018；Mikkelsen 2022）：
+ * 每个格点给这一级的纹理一个随机平移和小角度旋转，像素取周围三个格点的样本，按重心权重做「方差守恒」混合
+ * （Σwᵢsᵢ / √Σwᵢ²）。海浪是随机相位的高斯场，这样混合出来的仍是同一频谱的高斯场，但整个海面上不再有周期。
+ * 格子在 CPU 上按双精度拆成整数 + 小数（uOceanHex），飞多远格点编号都精确、不跳变。
  */
 export const OCEAN_COMMON = /* glsl */ `
 uniform sampler2DArray uOceanWaves; // 三个级联：R = ∂h/∂x，G = ∂h/∂z，B = R² + G²，A = Σ|k|·h
 uniform vec3 uOceanTile;            // 各级平铺尺寸（m）
-uniform vec2 uOceanOrigin[3];       // 飞机累计位移对各级平铺尺寸取余后的小数（CPU 双精度算好）
+uniform vec4 uOceanHex[3];          // 各级：相机在斜格坐标里的整数部分（xy）和小数部分（zw）（CPU 双精度拆好）
+uniform vec4 uOceanCam;             // xy：相机的世界位置对 4096 m 取余（m），闪烁格子用
 uniform vec3 uOceanVar;             // 各级整张平铺的总斜率方差 ⟨sx² + sz²⟩
 uniform vec4 uOceanFoam;            // x：白浪阈值 τ（对前两级的 Σ|k|h），y：1 = FFT 海浪已接入
+
+// 格子密度：每个平铺尺寸内约 2 个格点（六边形约半个平铺大），整张平铺永远不会完整出现；与 src/ocean/waves.ts 一致
+const float OCEAN_HEX_SCALE = 2.0;
+// 每个格点的随机旋转上限（弧度）。风浪和涌浪有方向，只允许小角度偏转（真实海面的波向本来就有这么大的起伏）
+const float OCEAN_HEX_ROT = 0.35;
+
+// 整数哈希 pcg3d（Jarzynski & Olano 2020）：输入是精确的整数，飞多远都不丢精度
+vec3 oceanHash3(ivec3 p) {
+  uvec3 v = uvec3(p) * 1664525u + 1013904223u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  v ^= v >> 16u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  return vec3(v) * (1.0 / 4294967296.0);
+}
 
 float fresnelWater(float c) {
   return 0.02 + 0.98 * pow(1.0 - clamp(c, 0.0, 1.0), 5.0);
@@ -28,6 +48,7 @@ float normalTail(float x) {
 struct SeaSlope { vec2 mean; float var; float foam; };
 
 const float WIND_DIR = 0.6;   // 风浪的传播方向（弧度，相对正东；与 src/ocean/spectrum.ts 一致）
+vec3 oceanHexDbg = vec3(0.0); // 调试 13：第 0 级各格点的随机数按权重混合（看格子大小与过渡）
 
 // xzM：相对相机的海面坐标（m）；dir2 / footAlong / footAcross：像素足迹（沿视线、垂直视线，m）；
 // cmLocal：本地的 Cox–Munk 总方差；rel：本地相对全局风况的粗糙度倍数（阵风斑、风痕、浅水）；calm：湖泊河流 < 1
@@ -43,14 +64,42 @@ SeaSlope seaSlope(vec2 xzM, vec2 dir2, float footAlong, float footAcross, float 
   float leanFoam = 0.0; // 前两级的（给白浪用）
   float tr = 0.0;       // 前两级的 Σ|k|h
   float fftLocal = 0.0; // FFT 部分在本地的总方差
-  for (int c = 0; c < 3; c++) {
+  for (int c = 0; c < 3 + uLoopGuard; c++) {
     float L = max(uOceanTile[c], 1.0);
-    vec2 uv = xzM / L + uOceanOrigin[c];
-    // 像素足迹（各向异性过滤按最多 16:1 算）比两个平铺还大时，这一级只剩整体方差，省掉一次取样
+    // 像素足迹（各向异性过滤按最多 16:1 算）比两个平铺还大时，这一级只剩整体方差，省掉取样
     vec4 t = vec4(0.0, 0.0, uOceanVar[c], 0.0);
     if (max(footAcross, footAlong / 16.0) < 2.0 * L) {
-      // 显式梯度：可以在分支里用（没有隐式导数），各向异性过滤按真实的椭圆足迹取样
-      t = textureGrad(uOceanWaves, vec3(uv, float(c)), dir2 * (footAlong / L), perp * (footAcross / L));
+      // 三角格子（Mikkelsen 2022 的 TriangleGrid）：斜格坐标 = (x − z/√3, 2z/√3)，单位是 1/OCEAN_HEX_SCALE 个平铺
+      vec2 st = xzM / L * OCEAN_HEX_SCALE;
+      vec2 sk = vec2(st.x - st.y * 0.57735027, st.y * 1.15470054) + uOceanHex[c].zw;
+      vec2 skF = floor(sk);
+      vec2 fr = sk - skF;
+      float zz = 1.0 - fr.x - fr.y;
+      float up = step(zz, 0.0);            // 落在菱形的上半个三角形
+      float sg = 2.0 * up - 1.0;
+      vec3 w = vec3(-zz * sg, up - fr.y * sg, up - fr.x * sg); // 三个格点的重心权重，和为 1
+      ivec2 base = ivec2(skF) + ivec2(uOceanHex[c].xy);
+      vec2 vo[3];
+      vo[0] = vec2(up, up); vo[1] = vec2(up, 1.0 - up); vo[2] = vec2(1.0 - up, up);
+      vec2 gA = dir2 * (footAlong / L), gC = perp * (footAcross / L);
+      vec4 acc = vec4(0.0);
+      float unres = 0.0;
+      for (int j = 0; j < 3 + uLoopGuard; j++) {
+        vec3 h = oceanHash3(ivec3(base + ivec2(vo[j]), c));
+        // 像素相对格点的位置换回平铺单位（反斜变换：x = a + b/2，z = b·√3/2）
+        vec2 d = fr - vo[j];
+        d = vec2(d.x + 0.5 * d.y, d.y * 0.8660254) / OCEAN_HEX_SCALE;
+        float ang = (h.z * 2.0 - 1.0) * OCEAN_HEX_ROT;
+        mat2 R = mat2(cos(ang), sin(ang), -sin(ang), cos(ang));
+        // 纹理坐标 = R·d + 随机平移（纹理本身是周期的，平移取 [0,1) 即可）；显式梯度跟着一起旋转，分支里可用
+        vec4 tj = textureGrad(uOceanWaves, vec3(R * d + h.xy, float(c)), R * gA, R * gC);
+        acc += w[j] * vec4(tj.xy * R, tj.w, 0.0); // tj.xy * R = Rᵀ·∇：斜率转回世界方向
+        unres += w[j] * max(tj.z - dot(tj.xy, tj.xy), 0.0);
+        if (c == 0) oceanHexDbg += w[j] * h;
+      }
+      // 方差守恒混合：零均值的斜率和 Σ|k|h 除以 √Σw²；像素内看不清的方差本身是期望值，按权重直接平均
+      acc.xyz /= sqrt(dot(w, w));
+      t = vec4(acc.xy, unres + dot(acc.xy, acc.xy), acc.z);
     }
     float a2 = amp2[c];
     float a = sqrt(a2);
@@ -174,10 +223,20 @@ vec3 oceanRadiance(vec3 P, vec3 rd, float tGround, vec3 body, float calm, out fl
     float p = exp(-tan2 / sigma2) / (M_PI * sigma2);
     // 波光粼粼：像素里「恰好把阳光反射进眼睛」的小波面数服从泊松分布，λ ∝ 像素覆盖面积 × 斜率概率。
     // 耀斑中心 λ 大，画面平滑；尾部 λ < 1，只剩稀疏的亮点闪烁；高空时像素覆盖大，λ 大，自然变平滑。
-    // 结果保持期望值不变（除以 λ），只改变分布。格子按像素足迹的椭圆取（沿视线长、垂直视线短），近处不再是方块
+    // 结果保持期望值不变（除以 λ），只改变分布。
+    // 随机数的来源（T21）：格子钉在世界坐标上（随海水流过窗外，而不是跟着飞机走）；尺寸按像素足迹取 2 的整数次幂
+    // （沿视线长、垂直视线短），足迹连续变化时格子不会跟着伸缩「游动」；方向按视线方位量化成 16 个扇区，扇区内格子不随视线转动。
+    // 每个格子有自己的相位，各自以约 8 Hz 换一次随机数，不再全场同步地一齐跳（原来整片耀斑以 8 Hz 频闪）
     vec2 fp = vec2(footprint, max(footAcross, 0.5));
-    cell = floor(vec2(dot(xzM, dir2), dot(xzM, vec2(-dir2.y, dir2.x))) / fp);
-    float u = hash12(cell + floor(uTime * 8.0) * 0.1371);
+    vec2 lv = floor(log2(fp));
+    float sect = (floor(atan(dir2.y, dir2.x) * (8.0 / M_PI)) + 0.5) * (M_PI / 8.0);
+    vec2 ax = vec2(cos(sect), sin(sect));
+    vec2 wM = xzM + uOceanCam.xy;
+    cell = floor(vec2(dot(wM, ax), dot(wM, vec2(-ax.y, ax.x))) * exp2(-lv));
+    ivec3 cid = ivec3(ivec2(cell), int(lv.x) * 64 + int(lv.y) + int(sect * 100.0) * 4096);
+    float ph = oceanHash3(cid).x;
+    vec3 hs = oceanHash3(cid + ivec3(0, 0, int(floor(uTime * 8.0 + ph)) * 7919));
+    float u = hs.x;
     float lambda = 5.0 * fp.x * fp.y * exp(-tan2 / sigma2);
     float sparkle;
     if (lambda < 4.0) {
@@ -193,6 +252,7 @@ vec3 oceanRadiance(vec3 P, vec3 rd, float tGround, vec3 body, float calm, out fl
   if (uDebug == 10) L = vec3(fract(cell.x * 0.1), fract(cell.y * 0.1), 0.0);
   if (uDebug == 11) L = vec3(sl.foam, rel * 0.5, 0.0);                     // 白浪覆盖率、本地粗糙度倍数
   if (uDebug == 12) L = vec3(sl.mean * 5.0 + 0.5, 0.0);                   // 可分辨的平均斜率
+  if (uDebug == 13) L = oceanHexDbg;                                      // 第 0 级的随机平铺格子
   return L;
 }
 `;
