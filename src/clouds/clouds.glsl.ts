@@ -478,9 +478,14 @@ float cloudShadow(vec3 p, vec3 sunDir) {
   float N = storms ? 12.0 : 5.0;
   float od = 0.0;
   float dt = (seg.y - seg.x) / N;
-  for (float i = 0.0; i < 12.0; i += 1.0) {
-    if (i >= N) break;
-    od += cloudDensityLite(p + sunDir * (seg.x + (i + 0.5) * dt), 2.0, false);
+  if (!storms) {
+    // 普通云：和改动前一样的常量 5 点（展开后最快）
+    for (float i = 0.0; i < 5.0; i += 1.0) od += cloudDensityLite(p + sunDir * (seg.x + (i + 0.5) * dt), 2.0, false);
+  } else {
+    // 雷暴：点数依赖 uniform，不让 FXC 展开 12 份
+    for (int i = 0; i < 12 + min(uStormCount - 1, 0); i++) {
+      od += cloudDensityLite(p + sunDir * (seg.x + (float(i) + 0.5) * dt), 2.0, false);
+    }
   }
   return exp(-od * dt * CLOUD_EXTINCTION);
 }

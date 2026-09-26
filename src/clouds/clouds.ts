@@ -98,11 +98,20 @@ void main() {
       float ls = 0.06;
       float lt = 0.0;
       int lightSteps = (uStormCount > 0 || uHurricane.w > 0.5) ? 8 : 6;
-      // 上界直接用 lightSteps（依赖 uniform）：常量上界 8 会被 FXC 展开成 8 份云密度，冷编译很慢
-      for (int j = 0; j < lightSteps; j++) {
-        lt += ls;
-        od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
-        ls *= lightSteps == 8 ? 2.0 : 1.9;
+      if (lightSteps == 6) {
+        // 普通云：常量上界，编译器展开后最快（和改动前一致）
+        for (int j = 0; j < 6; j++) {
+          lt += ls;
+          od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
+          ls *= 1.9;
+        }
+      } else {
+        // 雷暴 / 台风：上界依赖 uniform，FXC 不展开（展开成 8 份雷暴密度时冷编译很慢）
+        for (int j = 0; j < lightSteps; j++) {
+          lt += ls;
+          od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
+          ls *= 2.0;
+        }
       }
       od *= CLOUD_EXTINCTION;
       // 多次散射近似（Wrenninge 2013）：每一阶散射更弱、衰减更慢、相函数更平。
