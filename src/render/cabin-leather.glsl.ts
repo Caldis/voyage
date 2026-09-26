@@ -72,8 +72,13 @@ vec4 leatherSeam(float across, float along, float pix, float single) {
 // 胡桃木饰条：纹理沿 u 方向走，年轮线被多尺度噪声扭曲（不规整），有细长的导管纹；开放漆面、缎光。
 // 返回反照率；rough 输出粗糙度
 vec3 leatherWalnut(vec2 uv, float pix, float seed, out float rough) {
+  // 扭曲：大尺度的波动让年轮互不平行（否则读成等距的格栅 / 出风口），小尺度的抖动，加一处节疤附近年轮绕开的鼓包
   float warp = 0.55 * vnoise(vec2(uv.x * 7.0, uv.y * 55.0) + seed) + 0.3 * vnoise(vec2(uv.x * 23.0, uv.y * 140.0) + seed * 3.0);
-  float ph = uv.y * 230.0 + warp * 4.0;
+  float wave = vnoise(vec2(uv.x * 11.0, uv.y * 8.0) + seed * 1.3) + 0.5 * vnoise(vec2(uv.x * 31.0, uv.y * 20.0) + seed * 2.1);
+  vec2 kc = vec2(0.12 * (hash12(vec2(seed, 1.7)) - 0.5), 0.0);
+  vec2 kd = (uv - kc) * vec2(1.0, 2.5);
+  float knot = exp(-dot(kd, kd) / 0.0006);
+  float ph = uv.y * 230.0 + warp * 4.0 + wave * 9.0 + knot * 6.0 * sign(uv.y - kc.y + 1e-5);
   float per = 1.0 / 230.0;                          // 约 4.3 mm 一条
   float fl = 1.0 - smoothstep(per * 0.15, per * 0.4, pix);
   float ring = smoothstep(0.1, 0.9, abs(fract(ph) - 0.5) * 2.0);
@@ -83,8 +88,8 @@ vec3 leatherWalnut(vec2 uv, float pix, float seed, out float rough) {
   float pores = smoothstep(0.62, 0.8, vnoise(vec2(uv.x * 90.0, uv.y * 2600.0) + seed * 7.0)) * fp;
   // 大尺度的色块（一整张薄木皮里颜色也不均匀）
   float blotch = vnoise(uv * vec2(9.0, 30.0) + seed * 2.0);
-  vec3 dark = vec3(0.075, 0.042, 0.024), light = vec3(0.20, 0.118, 0.066);
-  vec3 col = mix(light, dark, rings * 0.7 + 0.15 * blotch) * (1.0 - 0.35 * pores);
+  vec3 dark = vec3(0.10, 0.056, 0.03), light = vec3(0.32, 0.19, 0.10);
+  vec3 col = mix(light, dark, rings * 0.35 + 0.2 * blotch + 0.25 * knot) * (1.0 - 0.3 * pores);
   rough = 0.2 + 0.08 * pores;
   return col;
 }

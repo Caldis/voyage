@@ -228,7 +228,8 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
   // 光滑的面（漆面、木饰、屏幕玻璃）能照出窗户；皮面太粗，只取舱内环境
   float mirror = 1.0 - smoothstep(0.15, 0.35, rough);
   vec3 envR = cabinEnv(r, cl);
-  col += F * mix(envR, mix(envR, cl.lWin, sunThroughWindow(p, r, shadeBottom)), mirror) * ao;
+  if (mirror > 0.0) envR = mix(envR, cl.lWin, sunThroughWindow(p, r, shadeBottom) * mirror);
+  col += F * envR * ao;
   if (metal > 0.0) col = mix(col, cabinChampagne(p, nn, rd, 0.28, ao, e, cl), metal);
   return col;
 }

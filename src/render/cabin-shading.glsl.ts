@@ -135,8 +135,9 @@ vec3 cabinChampagne(vec3 p, vec3 n, vec3 rd, float mr, float ao, vec3 e, CabinLi
   float nv = max(dot(n, -rd), 1e-3);
   vec3 F = CHAMPAGNE_F0 + (vec3(max(1.0 - mr, 0.9)) - CHAMPAGNE_F0) * pow(1.0 - nv, 5.0);
   vec3 col = CHAMPAGNE_F0 * 0.12 / M_PI * e + F * cabinEnv(reflect(rd, n), cl) * ao;
-  col += CHAMPAGNE_F0 * keySpec(n, -rd, normalize(CABIN_LIGHT_DIR), mr * mr, 0.9, cl.eCabin * 1.5) * ao;
-  col += CHAMPAGNE_F0 * cabinMoodSpec(p, n, -rd, mr * mr, 0.9, cl.moodI);
+  // 金属的颜色只乘一次：keySpec 的 f0 取 1（菲涅尔 ≡ 1），颜色由 CHAMPAGNE_F0 给
+  col += CHAMPAGNE_F0 * keySpec(n, -rd, normalize(CABIN_LIGHT_DIR), mr * mr, 1.0, cl.eCabin * 1.5) * ao;
+  col += CHAMPAGNE_F0 * cabinMoodSpec(p, n, -rd, mr * mr, 1.0, cl.moodI);
   return col;
 }
 
