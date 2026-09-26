@@ -189,17 +189,24 @@ void main() {
   float shaded = smoothstep(-wS, wS, pShade.y - uShadeBottom) * step(SHADE_DEPTH, hitZ);
 
   vec4 cloud = texture(uClouds, gl_FragCoord.xy / uResolution);
-  vec3 view = vec3(0.0);
-  // 机翼（wing-shading.glsl.ts）：a 是覆盖率，< 1 的是轮廓上的像素（解析抗锯齿），要和窗外按覆盖率混合
-  vec4 wing = inBezel > 0.0 ? wingView(ro, rd, (PANE_DEPTH - ro.z) / rd.z, sunC, eSkyH, eDown, belowAlbedo, cloud) : vec4(0.0);
-  if (wing.a < 1.0) {
+  vec3 view;
+  float tWing = inBezel > 0.0 ? wingHit(ro, rd, (PANE_DEPTH - ro.z) / rd.z) : -1.0;
+  if (tWing > 0.0) {
+    view = shadeWing(ro + rd * tWing, rd, sunC, eSkyH, eDown, belowAlbedo);
+    // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度
+    if (uCameraFog > 0.0) {
+      float tFog = exp(-uCameraFog * tWing * 0.001);
+      vec3 fogColor = cloud.rgb / max(1.0 - cloud.a, 0.05);
+      view = mix(fogColor, view, tFog);
+    }
+    view *= PANE_TRANSMITTANCE;
+  } else {
     vec3 rdW = uCabinToWorld * rd;
     view = outsideRadiance(rdW, cloud);
     // 远处的飞机和航迹云在云层之上，挡在海面和云前面
     vec4 tr = trafficRadiance(rdW);
-    view = view * tr.a + tr.rgb + boltRadiance(rdW);
+    view = (view * tr.a + tr.rgb + boltRadiance(rdW)) * PANE_TRANSMITTANCE;
   }
-  view = mix(view, wing.rgb, wing.a) * PANE_TRANSMITTANCE;
   view += wingLights(ro, rd) * PANE_TRANSMITTANCE;
 
   // ---- 窗板上的细节 ----
