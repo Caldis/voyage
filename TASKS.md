@@ -11,7 +11,7 @@
 | DX-23/24 | 第 7 波（开发体验） | 5231 | worktree | Opus（收编同页 A/B `dev-browser ab`、确定性航迹 `flight`、compare 斜纹 / HSV / 光晕 / 连通块指标、freeze 保留冻结时刻、shots 默认高档、EOX 报错聚合、GPU 计时钩子警告等） | — | 进行中 |
 | C10 | 第 7 波（云锐度，用户主诉求） | 5227 | worktree | Opus（云表皮消光：先诊断剖面与原型——密度 remap / 侵蚀 / 近表面细步——再做成品；不改 resolve） | — | 进行中 |
 | T48c | 第 7 波（T48b 审查 P2-1） | 5224 | `worktree-agent-a2abd849f48161621`（307f782） | Opus | 审查：返工 | **返工中**：P1-a 稀疏灯点跨粗格被当瞬态 → 巡航城区 16 px 方格斑块（瞬态须成片：3×3 邻格 min 或更深 mip）；P1-b 对数域扣瞬态 → 频闪时常亮位置灯周暗洞（改线性域）；P3 半精度停滞 / 首帧随帧率 / NaN 清不掉。机翼 0.85 通过；夜城 18→13.5 是口径不同（非回归，SOP 已统一口径） |
-| W-STAIR | 第 7 波（锯齿，C11 发现） | 5213 | `worktree-agent-abbe8a37c6af3d120`（693ceeb） | Opus | 审查中（5230） | 已交付第一版：分段距离场取下界（命中落体内像素 0.58%→0，云里点阵消失）、子射线步数不足按打中、擦边 2 px、边缘 5 样本；与参考图差和降 4–10 倍；sunset 帧时间 +5.3%（压线）；遗留：商务舱正午前缘略硬、夜间频闪钝后缘虚线、白位置灯旁翼面过曝（W-LAMP） |
+| W-STAIR | 第 7 波（锯齿，C11 发现） | 5213 | `worktree-agent-abbe8a37c6af3d120`（693ceeb） | Opus | 通过 | 已交付第一版：分段距离场取下界（命中落体内像素 0.58%→0，云里点阵消失）、子射线步数不足按打中、擦边 2 px、边缘 5 样本；与参考图差和降 4–10 倍；sunset 帧时间 +5.3%（压线）；遗留：商务舱正午前缘略硬、夜间频闪钝后缘虚线、白位置灯旁翼面过曝（W-LAMP）；**审查通过，合并前小改中**（段边界分区防幻影墙、文档对齐、jobs 精简） |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -24,7 +24,8 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
-| W-LAMP | 白色位置灯旁翼面色调映射前即过曝（≥250 块 220–290 px，T48c 发现）：调 `wingLampIntensity` / `lampLit` 的强度或衰减 | 中 | render/wing* | wing | 1 km 低空夜城、night-city-off 翼尖 |
+| W-EDGE | 机翼外轮廓内侧解析覆盖率（商务舱正午前缘对天空边略硬，hf2 1.33→1.36；W-STAIR 审查：来自中心样本让覆盖率更准，参考图本身也是硬台阶，需解析覆盖率才能更柔） | 中（锯齿类） | render/wing* | wing | biz-seated 正午前缘放大 |
+| W-LAMP | 白色位置灯旁翼面色调映射前即过曝（≥250 块 220–290 px，T48c 发现）+ 夜间频闪时钝后缘显示成虚线（去亮点限幅压了中心样本，W-STAIR 遗留）：调 `wingLampIntensity` / `lampLit` 的强度或衰减、修限幅 | 中 | render/wing* | wing | 1 km 低空夜城、night-city-off 翼尖、夜间频闪（页内逐帧） |
 | G08-STITCH | 瓦片拼接整个挪进 Worker（消除影像位图在 Worker 同步读回的约 1 次/分 >16.7 ms 尖峰；主线程 CPU 拼接已试、出 59 ms 长任务否决；方案见 handoff/G07b.md） | 中 | ground/* | ground | 1× 巡航 20 分钟同页交替尖峰数 |
 | C-TYPH | 台风外围卷云盖过曝白平板（中位数 235、一半以上 ≥235，底面水平直线 + 规则水波纹；TM02 量化证实非色调映射所致，属 clouds 台风段，T44 遗留；ART-7 #5） | 中高 | clouds（台风段） | clouds | typhoon-outer-11、typhoon-bands |
 | C-TAIL | C11 合并后重定 `CLOUD_MS_TAIL.y`（C01 为压棋盘纹定成 2，约束已解除，按观感重调） | 低 | clouds | clouds | in-cloud |
