@@ -133,12 +133,11 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
   float sE1 = floor(4.0 * rfHash(vec2(winI + 1.0, 7.0 + uSeatSign)));
   float st = floor(4.0 * hS1);
   if (mod(winI, 2.0) > 0.5) {
-    float pick = floor(hS1 * (sE0 == sE1 ? 3.0 : 2.0)); // 可选的个数：邻居相同时 3 个，不同时 2 个
-    st = -1.0;
-    for (int m = 0; m < 4; m++) {
-      float fm = float(m);
-      if (st < 0.0 && fm != sE0 && fm != sE1) { if (pick < 0.5) st = fm; pick -= 1.0; }
-    }
+    // 可选的个数：邻居相同时 3 个，不同时 2 个；挑第 pick 个，再依次跳过被占的两个值（先小后大）
+    float sLo = min(sE0, sE1), sHi = max(sE0, sE1);
+    st = floor(hS1 * (sLo == sHi ? 3.0 : 2.0));
+    st += step(sLo, st);
+    st += step(sLo + 0.5, sHi) * step(sHi, st);
   }
   float shadeF = st < 0.5 ? 0.0 : (st < 1.5 ? 0.3 : (st < 2.5 ? 0.7 : 1.0));
   shadeF = clamp(shadeF + 0.16 * (hS2 - 0.5) * step(0.01, shadeF) * step(shadeF, 0.99), 0.0, 1.0);
@@ -146,7 +145,7 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
   // 遮光板从上往下拉：板的下沿在 winTop - shadeF · 窗高；板是浅色塑料，缩在窗洞里，比侧壁略暗
   float cShade = smoothstep(0.5 * winH - shadeF * winH - wW, 0.5 * winH - shadeF * winH + wW, hW.y) * step(0.01, shadeF);
   // 窗洞一圈是内凹的（窗框的阴影），拉下的遮光板靠边处更暗：全关的窗仍认得出是一扇窗，只是浅色的
-  vec3 shadeL = col * (0.8 + 0.12 * hS2) * (1.0 - 0.35 * smoothstep(-0.045 - wW, 0.0, dWin));
+  vec3 shadeL = col * (0.8 + 0.12 * hS2) * (1.0 - 0.3 * smoothstep(-0.08 - wW, 0.0, dWin));
   // 开着的窗里偶尔映出一盏暖色的阅读灯（很淡、很虚的一团，不是光点）
   vec2 gq = vec2(hW.x - winI * WINDOW_PITCH + 0.04 * (hS1 - 0.5), hW.y + 0.05);
   vec3 winL = L.lOppWin + L.lit * step(0.84, hS2) * READING_LIGHT_COLOR * dot(col, vec3(0.3333)) * 0.45 * exp(-dot(gq, gq) / 0.004);
@@ -236,7 +235,8 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
     float moodOn = step(1e-5, dot(L.moodI, vec3(1.0)));
     vec3 eSeat = L.eAmb + L.eMain * 0.4 + L.moodI * 0.03;
     float scrOn = max(moodOn, L.lit) * mix(0.3, 1.0, L.lit);
-    for (int k = 0; k < RF_NCOL; k++) {
+    // 上限写成「RF_NCOL + uLoopGuard」（恒为 RF_NCOL）：常量上限会被 FXC 展开成 6 份，舱内程序冷编译明显变慢
+    for (int k = 0; k < RF_NCOL + uLoopGuard; k++) {
       float zk = RF_COLS[k];
       float tk = (zk - p.z) / rz;
       float yk = p.y + r.y * tk;
