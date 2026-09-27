@@ -12,6 +12,7 @@
 | W02 | 第 6 波（主干，奇观首批 2） | 5202 | worktree | Opus（雾海灯城，用 W00 云间层） | — | 进行中 |
 | T12 | 第 6 波（主干） | 5212 | worktree | Opus（卷云纤维化、逆光银边、云底絮状；云程序冷编译增量 ≤ 5%） | — | 进行中 |
 | DX-08 | 第 6 波（工具） | 5247 | worktree | Sonnet（freeze、probe.mjs、flicker、passes.mjs、shader-budget --keep-hlsl / --baseline、路径规则） | — | 进行中 |
+| T47 | 第 6 波（美术总监 wave6 第 6–12 条） | 5251 | worktree | Opus（窗板 1 px 白线锯齿、窗洞内衬死白、侧壁白板、头枕十字缝、胡桃木、小翼镀铬） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
