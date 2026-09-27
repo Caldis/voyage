@@ -2,8 +2,10 @@
  * 星星与月亮（GLSL）。依赖 LIGHTS_COMMON。
  * - 星星（T41 起）：耶鲁亮星表（BSC5）放进 J2000 赤道坐标的「每格最多一颗星」的格子（见 sky-assets.ts），
  *   查视线附近的 3×3 格，把每颗星投影到屏幕、按亚像素位置做能量守恒的点扩散积分（STAR_POINTS_COMMON 的 starPoints）。
- *   **点星画在舱内程序（scene.ts）里，不在窗外程序**：同一段代码放进窗外程序，d3d11 冷编译 17 → 52 s（FXC 离线 5.5 → 45 s，
- *   见 handoff/T41.md 的二分记录），放进舱内程序只多约 1 s。窗外程序在 alpha 里告诉舱内程序这个像素能看到多少星（天空 × 云 × 交通的透射率）。
+ *   **点星画在舱内程序（scene.ts）里，不在窗外程序**：窗外程序是冷编译的关键路径（FXC 离线约 5.5 s，舱内约 6.4 s，两者并行），
+ *   放进窗外离线 +1.4 s（+26%），放进舱内 +0.6 s 且不在关键路径上（d3d11 真冷编译前后都是约 16–18 s）。
+ *   窗外程序在 alpha 里写 1 + 这个像素能看到多少星（天空 × 云 × 交通的透射率），舱内程序乘它。
+ *   星的屏幕位置按像素处的雅可比线性化，循环里不做「三角函数 → 旋转 → 投影」——那一行让 FXC 冷编译 +40–55 s（handoff/T41.md）。
  * - 三段：STAR_MAP_COMMON（两个程序都要的 uniform）、STARS_COMMON（窗外：银河、月亮）、STAR_POINTS_COMMON（舱内：点星）。
  * - 银河（T09）：同一张图的 A 通道，按物理量级定标，乘大气透射率；显示多少由眼睛的对比度阈值决定（月光、城市光、舱内光都会压它）。
  * - 月亮：Lommel-Seeliger 反射（月面没有临边昏暗、满月是均匀圆盘），相位由阳光方向自然产生；
@@ -123,37 +125,49 @@ float starErf(float x) {
   return sign(x) * sqrt(1.0 - exp(-x2 * (1.2732395 + ax2) / (1.0 + ax2)));
 }
 
-// B−V 色指数 → 线性 sRGB，按亮度归一到 1。色温按 Ballesteros 2012，色温 → 颜色按黑体近似的 Tanner Helland 拟合
-// （原来在 sky-assets.ts 的 CPU 上算，T41 起每个像素对加权平均的色指数算一次）
+// B−V 色指数 → 线性 sRGB，按亮度归一到 1。原式（T41 前在 sky-assets.ts 的 CPU 上算）：色温按 Ballesteros 2012，
+// 色温 → 颜色按黑体近似的 Tanner Helland 拟合，再转线性、按亮度归一。这里用对它的三次多项式拟合（B−V ∈ [−0.35, 2]，
+// 最大误差 R 3%、G 1%、B 6%）：原式里的 pow / log / 分支放进舱内程序会多出约 0.6 s 的 FXC 编译（离线实测）
 vec3 starBvToRgb(float bv) {
-  float k = 4600.0 * (1.0 / (0.92 * bv + 1.7) + 1.0 / (0.92 * bv + 0.62));
-  float t = k / 100.0;
-  vec3 c = vec3(
-    t <= 66.0 ? 255.0 : 329.7 * pow(t - 60.0, -0.1332),
-    t <= 66.0 ? 99.47 * log(t) - 161.12 : 288.12 * pow(t - 60.0, -0.0755),
-    t >= 66.0 ? 255.0 : (t <= 19.0 ? 0.0 : 138.52 * log(t - 10.0) - 305.04));
-  vec3 s = clamp(c, 0.0, 255.0) / 255.0;
-  vec3 lin = mix(s / 12.92, pow((s + 0.055) / 1.055, vec3(2.4)), step(0.04045, s));
-  return lin / max(dot(lin, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+  float x = clamp(bv, -0.35, 2.0);
+  vec3 c = vec3(0.83682, 1.00645, 1.41658) + x * (vec3(0.33991, -0.00726, -0.92898)
+         + x * (vec3(0.14321, -0.06765, 0.24844) + x * vec3(-0.03990, 0.01432, -0.02432)));
+  return max(c, 0.0);
 }
 
-// 这个像素上所有点星的辐亮度（kcd/m²，大气层外）。uv：视线在星表格子里的位置（x = 赤经 / 2π，y = 0.5 + 赤纬 / π）。
-// 查视线所在格的 3×3 邻格（格子每行格数随赤纬减少，保证每格在两个方向上都不小于 5.3′，核的 4σ ≈ 2.4 像素 ≈ 1.1 格以内都找得到）
-vec3 starPoints(vec2 uv) {
+// 这个像素上所有点星的辐亮度（kcd/m²，大气层外）。rd：这个像素中心的视线（当地坐标）。
+// 查视线所在格的 3×3 邻格（格子每行格数随赤纬减少，保证每格在两个方向上都不小于 5.3′，核的 4σ ≈ 2.4 像素 ≈ 1.1 格以内都找得到）。
+// 星到像素中心的屏幕偏移按「赤经 / 赤纬 → 屏幕像素」在这个像素处的雅可比线性化（循环外算一次）：核只有两三个像素宽，
+// 二阶误差在 0.01 像素量级（只有天极附近零点几度内到约 0.2 像素）。
+// 为什么不在循环里逐颗星做「三角函数 → 旋转 → 投影」：那样 FXC 冷编译暴涨（舱内 / 窗外程序各 +40–55 s，d3d11 真冷 17 → 52 s），
+// 二分到就是循环里的 normalize(矩阵 × 方向) 这一行（去掉三角、矩阵、normalize 任何一个都不够，整行去掉才回到原值，见 handoff/T41.md）
+vec3 starPoints(vec3 rd) {
+  vec2 uv = starMapUv(rd);
   float pixAng = 2.0 * uTanHalfFov / uResolution.y;
   // 视场放大（像素张角变大）时把核的角宽度夹在一格的 1/3.2 以内，免得超出 3×3 邻格被截断
   float sigma = min(STAR_PSF_SIGMA, STAR_CELL_ANG / 3.2 / pixAng);
   float kk = 0.70710678 / sigma;
   float reach = 4.0 * sigma + 0.5;
-  // 赤道坐标 → 相机系（列：右、上、后）；星投影到屏幕的公式和 view.glsl.ts 的 cabinRay 互逆
+  // 这个像素处的雅可比：东向（赤经增加、按 cos 赤纬归一）和北向（赤纬增加）的单位切向量 → 相机系 → 屏幕像素
+  float ra0 = uv.x * 2.0 * M_PI;
+  float dec0 = (uv.y - 0.5) * M_PI;
+  vec3 eEast = vec3(-sin(ra0), cos(ra0), 0.0);
+  vec3 eNorth = vec3(-sin(dec0) * cos(ra0), -sin(dec0) * sin(ra0), cos(dec0));
   mat3 eqToCam = transpose(uLocalToEquatorial * uCabinToWorld * uCamBasis);
-  vec2 toPix = vec2(uResolution.y / uResolution.x, 1.0) / uTanHalfFov;
+  vec3 r = eqToCam * (uLocalToEquatorial * rd);      // 相机系里的视线（z < 0）
+  vec3 tE = eqToCam * eEast;
+  vec3 tN = eqToCam * eNorth;
+  vec2 kPix = vec2(uResolution.y / uResolution.x, 1.0) / uTanHalfFov * 0.5 * uResolution; // 每单位「切平面坐标」多少像素
+  float iz = 1.0 / max(-r.z, 0.01);
+  vec2 jE = kPix * (tE.xy + r.xy * (tE.z * iz)) * iz;
+  vec2 jN = kPix * (tN.xy + r.xy * (tN.z * iz)) * iz;
+  float cosDec0 = cos(dec0);
   int j0 = int(floor(uv.y * float(STAR_ROWS)));
   float eSum = 0.0;
   float bvSum = 0.0;
-  // 3×3 格压成一个循环（k = 0..8，行 = k / 3，列 = k % 3），上限写成「常数 + uLoopGuard」防 FXC 展开
   int n = 1;
   int ic = 0;
+  // 3×3 格压成一个循环（k = 0..8，行 = k / 3，列 = k % 3），上限写成「常数 + uLoopGuard」防 FXC 展开
   for (int k = 0; k < 9 + uLoopGuard; k++) {
     int dj = k / 3 - 1;
     int di = k - (k / 3) * 3 - 1;
@@ -170,23 +184,20 @@ vec3 starPoints(vec2 uv) {
     if (s.r > 0.0 && j0 + dj == j && di + 1 < n) {
       float qy = floor((s.g + 0.5) / 32.0);
       float qx = s.g - qy * 32.0;
-      float sra = (float(i) + (qx + 0.5) / 32.0) / float(n) * 2.0 * M_PI;
-      float sdec = ((float(j) + (qy + 0.5) / 32.0) / float(STAR_ROWS) - 0.5) * M_PI;
-      vec3 v = normalize(eqToCam * vec3(cos(sdec) * cos(sra), cos(sdec) * sin(sra), sin(sdec)));
-      vec2 d = ((v.xy / max(-v.z, 0.01)) * toPix * 0.5 + 0.5) * uResolution - gl_FragCoord.xy;
-      if (v.z < -0.01 && max(abs(d.x), abs(d.y)) < reach) {
-        // 高斯在这个像素方格 [d − 0.5, d + 0.5]² 上的积分
-        vec4 e4 = vec4(d + 0.5, d - 0.5) * kk;
-        float cov = 0.25 * (starErf(e4.x) - starErf(e4.z)) * (starErf(e4.y) - starErf(e4.w));
-        // 离轴像素的立体角是 pixAng² · cos³θ
-        float w = s.r * cov / (-v.z * v.z * v.z);
-        eSum += w;
-        bvSum += w * s.b;
-      }
+      // 星相对像素中心的赤经差（折回 ±π）、赤纬差，都是弧度
+      float dRa = ((float(i) + (qx + 0.5) / 32.0) / float(n) - uv.x);
+      dRa = (dRa - floor(dRa + 0.5)) * 2.0 * M_PI;
+      float dDec = ((float(j) + (qy + 0.5) / 32.0) / float(STAR_ROWS) - uv.y) * M_PI;
+      vec2 d = jE * (dRa * cosDec0) + jN * dDec;
+      // 高斯在这个像素方格 [d − 0.5, d + 0.5]² 上的积分
+      vec4 e4 = vec4(d + 0.5, d - 0.5) * kk;
+      float cov = max(abs(d.x), abs(d.y)) < reach ? 0.25 * (starErf(e4.x) - starErf(e4.z)) * (starErf(e4.y) - starErf(e4.w)) : 0.0;
+      eSum += s.r * cov;
+      bvSum += s.r * cov * s.b;
     }
   }
-  if (eSum <= 0.0) return vec3(0.0);
-  // R 存的是 klux × 1e12；除以像素立体角得辐亮度
-  return eSum * 1e-12 / (pixAng * pixAng) * starBvToRgb(bvSum / eSum);
+  if (eSum <= 0.0 || r.z > -0.01) return vec3(0.0);
+  // R 存的是 klux × 1e12；除以像素立体角（离轴处是 pixAng² · cos³θ）得辐亮度
+  return eSum * 1e-12 / (pixAng * pixAng * r.z * r.z * -r.z) * starBvToRgb(bvSum / eSum);
 }
 `;

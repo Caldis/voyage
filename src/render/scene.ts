@@ -216,7 +216,7 @@ void main() {
   // 算进 viewPre（窗外的颜色），机翼 pass 按窗外遮罩合成时机翼会挡住它
   if (outside.a > 1.0) {
     vec3 rdW = uCabinToWorld * rd;
-    view += starPoints(starMapUv(rdW)) * sunTransmittance(uCamR, rdW.y) * (PANE_TRANSMITTANCE * (outside.a - 1.0));
+    view += starPoints(rdW) * sunTransmittance(uCamR, rdW.y) * (PANE_TRANSMITTANCE * (outside.a - 1.0));
   }
   viewPre = view;
 
