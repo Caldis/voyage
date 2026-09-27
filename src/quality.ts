@@ -45,6 +45,211 @@ export const DEFAULT_DPR_CAP = LEVELS[0].dprCap;
 const HEAVY_WEATHER_IDS = new Set(["storm", "squall", "typhoon-bands", "typhoon-eye", "typhoon-outer"]);
 export const isHeavyWeather = (weatherId: string) => HEAVY_WEATHER_IDS.has(weatherId);
 
+// ---------- G07：地面纹理精度（启动时定一次，运行时不随自动档切换） ----------
+
+/**
+ * 地面 clipmap 影像 / 水体纹理的边长（G06 的 2048² 或此前的 1024²，两档都带 mip + 16× 各向异性）。
+ *
+ * 为什么只能启动时定：它同时是纹理的不可变尺寸（texStorage3D，两张 7 层）、着色器常量（ground.glsl.ts 的 GROUND_RES，
+ * 参与选级 / 纹素换算 / 道路 / 火车远景）和瓦片缩放级的依据；换一次要重新分配 2 × 150 MB、重编窗外程序、重下全部瓦片，
+ * 几十秒的模糊。PERF-5 的自动档会在大雨 / 台风时降档、雨停后升档，跟着它切就是整套反复重建，所以这里只在模块加载时判一次，
+ * 结果冻结成常量：着色器文本在同一台机器上恒定（2048 档与 G06 逐字一致，离线 FXC 不变），运行时任何调档都不会触发重编。
+ *
+ * G07b：地面精度与画质档**解耦**。G07 曾让面板手动画质档跨载入记忆、并由它决定地面精度（「高」→ 2048、「中 / 低」→ 1024），
+ * 结果是为了看云选过一次「中」，之后每次载入地面都掉到 1024²；Safari（渲染器恒为「Apple GPU」、自动判 1024）想要 2048 只能选「高」，
+ * 代价是云固定全分辨率、失去 PERF-5 的自动降档（G07 审查 M2）。现在：画质档恢复 PERF-5 的「每次载入从自动起步」、不记忆；
+ * 地面精度是面板上单独一项「地面精度：自动 / 2048² / 1024²」，只有这一项的手动选择跨载入记忆（localStorage `voyage.groundRes`），
+ * 改了之后状态行提示「下次载入生效」（这次不变）。
+ *
+ * 判定顺序（第一条命中即定）：
+ * 1. 不在浏览器里（node 离线工具：shader-budget / check:glsl / shader-parity）→ 2048（与 G06 的着色器文本一致）；
+ * 2. URL `?groundres=1024|2048`（调试 / 对照，压过面板选项）；
+ * 3. 面板「地面精度」手动选过 2048 / 1024（localStorage `voyage.groundRes`）；选「自动」或没选过 → 4；
+ * 4. 按 GPU 自动：开一个临时 WebGL2 上下文（`powerPreference: "high-performance"`，与主渲染器一致，双显卡 Mac 不会拿到核显）
+ *    读渲染器字符串（WEBGL_debug_renderer_info）与 MAX_TEXTURE_SIZE，读完立即释放（finally 里，读参数抛异常也释放）。
+ *    - 软件渲染（SwiftShader / llvmpipe / Microsoft Basic Render）、MAX_TEXTURE_SIZE < 8192、上下文开不出来 → 1024；
+ *    - 显存 WebGL 读不到，用 `navigator.deviceMemory`（Chrome 有，上限报 8）粗估：< 8 GB 多半是集显 / 低端机 → 1024；
+ *    - 渲染器是高性能独显 → 2048（规则见 isHighEndGpu）；
+ *    - 其他（Intel UHD / Iris / Xe 集显、AMD 「Radeon Graphics」/ Vega APU、Apple M 基础款、Safari 隐藏型号的「Apple GPU」、
+ *      移动端 Mali / Adreno、认不出的字符串）→ 1024。宁可保守：1024 档 = G06 之前的清晰度 + mip + 各向异性，不会比 G06 之前差。
+ * PERF-5 的自动档没有「启动时初判」（一律从「高」起步、再按 GPU 计时升降），所以这里不能借它的结果，只能自己按 GPU 判。
+ */
+export interface GroundResDecision {
+  res: 1024 | 2048;
+  /** 依据（面板 / 调试显示） */
+  reason: string;
+  /** 探测到的渲染器字符串（没探测时为空） */
+  renderer: string;
+  /** 探测临时上下文花的时间（毫秒） */
+  probeMs: number;
+}
+
+/** 面板「地面精度」的选项：自动（按 GPU）或手动固定一档 */
+export type GroundResPref = "auto" | "2048" | "1024";
+
+/** G07b：只记「地面精度」这一项（画质档不记，见上）。G07 时用过的 `voyage.quality` 载入时顺手清掉，免得留着误导排查 */
+const GROUND_RES_STORAGE_KEY = "voyage.groundRes";
+const LEGACY_QUALITY_STORAGE_KEY = "voyage.quality";
+
+function storedGroundPref(): GroundResPref {
+  try {
+    const v = globalThis.localStorage?.getItem(GROUND_RES_STORAGE_KEY);
+    return v === "2048" || v === "1024" ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function storeGroundPref(pref: GroundResPref) {
+  try {
+    if (pref === "auto") globalThis.localStorage?.removeItem(GROUND_RES_STORAGE_KEY);
+    else globalThis.localStorage?.setItem(GROUND_RES_STORAGE_KEY, pref);
+  } catch {
+    // 隐私模式等拿不到 localStorage：不记，下次载入按 GPU 判
+  }
+}
+
+function clearLegacyQualityStorage() {
+  try {
+    globalThis.localStorage?.removeItem(LEGACY_QUALITY_STORAGE_KEY);
+  } catch {
+    // 拿不到 localStorage 就算了
+  }
+}
+
+/**
+ * 渲染器字符串 → 是不是高性能独显（→ 2048）。自检：`handoff/G07-gpu-rules.mts`。
+ * - NVIDIA：RTX（含 Quadro RTX / RTX A）、GTX 16 系、GTX 1060–1080、GTX 970 / 980 / 980 Ti（Maxwell 高端，性能约等于 1060–1070；移动版 970M / 980M 约等于桌面 960，不放行）、
+ *   Quadro T 系（T1000 起，约等于 GTX 1650）、Quadro P3200 起（P4000 / P5000 / P6000）；
+ *   除外：GeForce GT / MX、GTX 6 / 7 系、GTX 950 / 960、GTX 1010–1050、Quadro K / M、Quadro P400–P2200、不带 Quadro 的「NVIDIA T600」这类入门卡。
+ * - AMD：Radeon RX / Radeon Pro；除外：Vega APU（「Radeon RX Vega 8 Graphics」名字里也带 RX）、Polaris 入门的 RX 460 / 550 / 560、
+ *   Radeon Pro 450 / 455 / 460 / 555(X) / 560(X)（2016–2018 款 MacBook Pro 的移动版；iMac 的 Pro 570 / 575 / 580 约等于 RX 570 / 580，放行）。
+ * - Intel：Arc A5 / A7 / B 系独显；除外 A3 系（A310 / A350M / A370M / A380，入门）与不带型号的「Arc Graphics」（Meteor Lake 核显）。
+ * - Apple：M Pro / Max / Ultra（统一内存大、GPU 核多）；M 基础款与 Safari 的「Apple GPU」→ 1024。
+ */
+export function isHighEndGpu(renderer: string): boolean {
+  const r = renderer.toLowerCase();
+  if (/swiftshader|llvmpipe|softpipe|basic render/.test(r)) return false;
+  if (/nvidia|geforce|quadro|rtx/.test(r)) {
+    if (/geforce\s*(gt|mx)\s*\d|gtx\s*(6|7)\d\d\b|gtx\s*9[56]0\b|gtx\s*10[1-5]0\b|quadro\s*[km]\d|quadro\s*p([1-9]\d{2}|1\d{3}|2\d{3})\b/.test(r))
+      return false;
+    return /rtx|gtx\s*16\d\d|gtx\s*10[6-8]0|gtx\s*9[78]0\b|quadro/.test(r);
+  }
+  // 「Radeon RX Vega 3 / 8 / 11 Graphics」是 APU 集显，名字里也带 RX
+  if (/vega\s*\d+\s*graphics/.test(r)) return false;
+  if (/radeon\s*(\(tm\)\s*)?(rx\s*(4[56]0|5[56]0)|pro\s*(4[56][05]|5[56][05]))x?\b/.test(r)) return false;
+  // Radeon Pro WX 2100 / 3100 / 3200 / 4100（Polaris 入门，约等于 RX 550 / 460）同 RX 550 判 1024（G07b 审查 L2）
+  if (/radeon\s*(\(tm\)\s*)?pro\s*wx\s*[234]1\d\d\b|radeon\s*(\(tm\)\s*)?pro\s*wx\s*3200\b/.test(r)) return false;
+  if (/radeon\s*(\(tm\)\s*)?(rx|pro)\b/.test(r)) return true;
+  if (/arc\s*(\(tm\)\s*)?a3\d{2}/.test(r)) return false;
+  if (/arc\s*(\(tm\)\s*)?[ab]\d{3}/.test(r)) return true;
+  if (/apple\s*m\d+\s*(pro|max|ultra)/.test(r)) return true;
+  return false;
+}
+
+/** URL `?groundres=`（调试 / 对照，压过面板选项）；没带或值不对时为 null */
+function urlGroundRes(): 1024 | 2048 | null {
+  const q = new URLSearchParams(globalThis.location?.search ?? "").get("groundres");
+  return q === "1024" || q === "2048" ? (Number(q) as 1024 | 2048) : null;
+}
+
+function decideGroundRes(): GroundResDecision {
+  if (typeof document === "undefined") return { res: 2048, reason: "离线工具（默认 2048）", renderer: "", probeMs: 0 };
+  clearLegacyQualityStorage();
+  const q = urlGroundRes();
+  if (q) return { res: q, reason: `URL ?groundres=${q}`, renderer: "", probeMs: 0 };
+  const pref = storedGroundPref();
+  if (pref !== "auto") return { res: Number(pref) as 1024 | 2048, reason: "面板手动选", renderer: "", probeMs: 0 };
+  return autoGroundRes();
+}
+
+let autoCache: GroundResDecision | null = null;
+/** 按 GPU 自动判（规则 4）；结果缓存，面板提示「下次载入」时复用，不重复开临时上下文 */
+function autoGroundRes(): GroundResDecision {
+  if (autoCache) return autoCache;
+  const t0 = performance.now();
+  let renderer = "";
+  let maxTex = 0;
+  let gl: WebGL2RenderingContext | null = null;
+  try {
+    // 与主渲染器（main.ts）同一个 powerPreference：双显卡 Mac 上默认值会拿到 Intel 核显、误判 1024
+    const attrs: WebGLContextAttributes = { powerPreference: "high-performance" };
+    // 优先用 OffscreenCanvas：dev-browser.mjs 的 GPU 计时钩子（installGlProbe）挂在 HTMLCanvasElement.getContext 上、
+    // 抓「页面里第一个 webgl2 上下文」，用 <canvas> 探测会让它抓到这个随即释放的临时上下文、bench 的 gpu 计时静默变成 null（G07 起，G07b 发现）。
+    // 不支持 OffscreenCanvas 的 WebGL2（Safari 16 及更早）退回 <canvas>
+    // OffscreenCanvas 的 getContext 抛异常（而不是返回 null）时也退回 <canvas>，不误判成「探测失败」（G07b 审查 L1）
+    try {
+      gl = typeof OffscreenCanvas !== "undefined" ? (new OffscreenCanvas(1, 1).getContext("webgl2", attrs) as WebGL2RenderingContext | null) : null;
+    } catch {
+      gl = null;
+    }
+    gl ??= document.createElement("canvas").getContext("webgl2", attrs);
+    if (gl) {
+      const generic = gl.getParameter(gl.RENDERER) as string;
+      const ext = /webkit webgl/i.test(generic) ? gl.getExtension("WEBGL_debug_renderer_info") : null;
+      renderer = ext ? (gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) as string) : generic;
+      maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    }
+  } catch {
+    // 探测失败按保守处理
+  } finally {
+    // 读参数中途抛异常也要释放（WebGL 上下文数按页面有上限）
+    try {
+      gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    } catch {
+      // 释放失败只能交给 GC
+    }
+  }
+  const probeMs = performance.now() - t0;
+  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const done = (res: 1024 | 2048, reason: string): GroundResDecision => ({ res, reason: `自动：${reason}`, renderer, probeMs });
+  autoCache = !renderer
+    ? done(1024, "GPU 探测失败")
+    : maxTex < 8192
+      ? done(1024, `MAX_TEXTURE_SIZE ${maxTex}`)
+      : mem !== undefined && mem < 8
+        ? done(1024, `内存约 ${mem} GB`)
+        : isHighEndGpu(renderer)
+          ? done(2048, "高性能独显")
+          : done(1024, "集显 / 入门 GPU / 未识别");
+  return autoCache;
+}
+
+/** 本次载入的地面纹理精度（模块加载时定，之后不变；clipmap.ts 的 GROUND_RES 取自这里） */
+export const GROUND_RES_DECISION: GroundResDecision = decideGroundRes();
+
+/** 面板「地面精度」的当前选项（载入时从 localStorage 读，改了之后跟着变） */
+let groundPrefValue: GroundResPref = typeof document === "undefined" ? "auto" : storedGroundPref();
+
+/** 面板「地面精度」当前选项 */
+export function groundResPref(): GroundResPref {
+  return groundPrefValue;
+}
+
+/** 面板改「地面精度」：记下来，下次载入生效（这次的 GROUND_RES_DECISION 不变） */
+export function setGroundResPref(pref: GroundResPref) {
+  groundPrefValue = pref;
+  storeGroundPref(pref);
+}
+
+/** 按当前面板选项，下次载入会用多大的地面纹理（URL ?groundres= 仍然压过面板） */
+function nextGroundRes(): 1024 | 2048 {
+  if (typeof document === "undefined") return 2048;
+  const q = urlGroundRes();
+  if (q) return q;
+  return groundPrefValue === "auto" ? autoGroundRes().res : (Number(groundPrefValue) as 1024 | 2048);
+}
+
+/** 面板「地面精度」下方的状态行：本次精度与依据；改了选项、下次载入会换精度时提示 */
+export function describeGroundRes(): string {
+  const d = GROUND_RES_DECISION;
+  const cur = `本次 ${d.res}²（${d.reason}）`;
+  const next = nextGroundRes();
+  if (next !== d.res) return `${cur}，下次载入改为 ${next}²`;
+  if (urlGroundRes()) return `${cur}；URL 参数优先，面板选项下次载入也不生效`;
+  return cur;
+}
+
 // ---------- GPU 计时：EXT_disjoint_timer_query_webgl2，非阻塞轮询 ----------
 
 /** 扩展没有内置类型声明（非标准 WebGL 扩展），这里只声明用到的两个常量 */
@@ -163,6 +368,7 @@ export class QualityController {
 
   constructor(private readonly deps: QualityControllerDeps) {
     this.timer = new GpuTimer(deps.renderer);
+    // PERF-5：每次载入都从「自动」起步（G07 曾在这里恢复上次的手动档，G07b 撤掉，见文件头「解耦」一段）
   }
 
   get tier() {
@@ -175,6 +381,16 @@ export class QualityController {
 
   get gpuTimingAvailable() {
     return this.timer.available;
+  }
+
+  /** G07：本次载入的地面纹理精度与依据（调试：`__voyage.quality.groundRes`）；与画质档无关（G07b） */
+  get groundRes() {
+    return GROUND_RES_DECISION;
+  }
+
+  /** G07b：面板「地面精度」当前选项（调试：`__voyage.quality.groundPref`） */
+  get groundPref() {
+    return groundResPref();
   }
 
   /** 每个真实动画帧开始时调用。**不要**在 benchFrame 这类合成测量循环里调用——那是给其他任务做性能
