@@ -1,0 +1,4 @@
+[
+  { "name": "cur" },
+  { "name": "blend012", "patch": { "clouds.resolveMat": [["blend = mix(0.04, 0.12,", "blend = mix(0.12, 0.12,"], ["if (c12b) blend = max(blend, 1.0 / (uSinceReset + 1.0));", ""]] } }
+]

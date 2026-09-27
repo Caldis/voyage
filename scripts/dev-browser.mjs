@@ -104,6 +104,7 @@ import { sampleAndWarn, waitForQuiet } from "./lib/cpu-load.mjs";
 import { tryAcquire, readLock, noticeIfLocked, waitForRelease } from "./lib/measure-lock.mjs";
 import { resolveExistingDirRoot, resolveCommitRoot } from "./lib/baseline-root.mjs";
 import { collectPrograms } from "./lint-shaders.mjs";
+import { cmdAb, cmdFlight } from "./lib/ab.mjs";
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
@@ -302,30 +303,38 @@ async function installGlProbe(page) {
     const orig = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
       const ctx = orig.call(this, type, ...rest);
+      if (type === "webgl2" && ctx) (window.__glProbes ??= []).push(ctx);
       if (type === "webgl2" && ctx && !window.__glProbe) window.__glProbe = ctx;
       return ctx;
     };
   });
 }
 
-/** GPU timer query（EXT_disjoint_timer_query_webgl2），有就返回每帧 ms，没有该扩展或超时返回 null（不阻塞主流程） */
+/** GPU timer query（EXT_disjoint_timer_query_webgl2），返回 { ms, reason }：ms 为每帧 ms，拿不到时 ms=null 并在
+ * reason 里写原因（调用方打印警告，不阻塞主流程）。
+ * DX-24：以前取「页面上第一个 webgl2 上下文」——那常常是 quality.ts 探测 GPU 用的一次性画布，早已丢失
+ * （isContextLost），查询永远不可用，bench 的 gpu 列静默全是 "-"。现在优先用渲染器自己的上下文
+ * （__voyage.clouds.pass.renderer.getContext()），退回时跳过已丢失的上下文。 */
 async function gpuTimedFrame(page, frames) {
   return page.evaluate(async (n) => {
-    const gl = window.__glProbe;
-    const ext = gl && gl.getExtension("EXT_disjoint_timer_query_webgl2");
-    if (!ext) return null;
+    const v = window.__voyage;
+    let gl = v && v.clouds && v.clouds.pass && v.clouds.pass.renderer ? v.clouds.pass.renderer.getContext() : null;
+    if (!gl || gl.isContextLost()) gl = (window.__glProbes || []).filter((c) => !c.isContextLost()).pop() || null;
+    if (!gl) return { ms: null, reason: "没有可用的 webgl2 上下文（全部已丢失）" };
+    const ext = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+    if (!ext) return { ms: null, reason: "没有 EXT_disjoint_timer_query_webgl2 扩展（软渲染？）" };
     const q = gl.createQuery();
     gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
     window.__voyage.benchFrame(n);
     gl.endQuery(ext.TIME_ELAPSED_EXT);
     const t0 = performance.now();
     while (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) {
-      if (performance.now() - t0 > 2000) return null;
+      if (performance.now() - t0 > 2000) return { ms: null, reason: "查询 2 s 未返回结果" };
       await new Promise((r) => requestAnimationFrame(r));
     }
-    if (gl.getParameter(ext.GPU_DISJOINT_EXT)) return null; // 期间发生过 GPU 中断，结果不可信
+    if (gl.getParameter(ext.GPU_DISJOINT_EXT)) return { ms: null, reason: "期间发生 GPU disjoint，结果不可信" };
     const ns = gl.getQueryParameter(q, gl.QUERY_RESULT);
-    return ns / 1e6 / n;
+    return { ms: ns / 1e6 / n, reason: null };
   }, frames);
 }
 
@@ -355,11 +364,12 @@ async function cmdCheck(args) {
 
   const browser = await launchBrowser(angle);
   try {
-    const { renderer, errors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true, extraQuery: parseExtraQuery(args) });
+    const { renderer, errors, tileErrors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true, extraQuery: parseExtraQuery(args) });
     // 启动完成（__voyageStartup 出现）后再等一小段时间，抓头几帧才触发的异常（例如某个 pass 首次
     // draw 才暴露的问题），不然掐着 waitForFunction 一 resolve 就关页面，可能漏掉这类错误。
     await new Promise((r) => setTimeout(r, 1500));
     console.log(`[dev-browser] check --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
+    printTileErrors(tileErrors);
     if (errors.length === 0) {
       console.log(`[dev-browser] 没有 console error / pageerror。`);
     } else {
@@ -379,9 +389,19 @@ async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr =
   const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
   const page = await context.newPage();
   const errors = [];
+  // DX-23：EOX 地面影像瓦片跨域 / 加载失败的报错每批能刷 600+ 条（T48b / C09 审查反馈），淹没真正的错误。
+  // 这类报错不进 errors，只计数（tileErrors.n，首条原文留在 tileErrors.first），结尾聚合成一行打印；
+  // ab 会按每张图记 corsErrors，期间有就把那张标作废（地面可能缺瓦片）。
+  const tileErrors = { n: 0, first: null };
+  const isTileError = (t) => /eox\.at|tiles\.maps|CORS policy|net::ERR_FAILED/i.test(t);
   if (opts.collectErrors) {
     page.on("console", (m) => {
-      if (m.type() === "error") errors.push({ type: "console", text: m.text() });
+      if (m.type() !== "error") return;
+      const t = m.text();
+      if (isTileError(t)) {
+        tileErrors.n++;
+        tileErrors.first ??= t.slice(0, 200);
+      } else errors.push({ type: "console", text: t });
     });
     page.on("pageerror", (e) => errors.push({ type: "pageerror", text: e.message }));
   }
@@ -391,7 +411,30 @@ async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr =
   await page.goto(`${originFor(port)}/?dev=${Date.now()}${opts.extraQuery || ""}`, { waitUntil: "commit", timeout: 180000 });
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 180000, polling: 500 });
-  return { context, page, renderer, angle, viewport, dpr, errors };
+  return { context, page, renderer, angle, viewport, dpr, errors, tileErrors };
+}
+
+/** 聚合打印 EOX 瓦片报错（DX-23），没有就不打印 */
+function printTileErrors(tileErrors) {
+  if (tileErrors && tileErrors.n > 0) console.log(`[dev-browser] EOX 地面瓦片跨域 / 加载失败 ${tileErrors.n} 条（已聚合，不计入 console error；首条：${tileErrors.first}）`);
+}
+
+/** DX-23：画质档。自动档会在截图 / 测量期间按帧时间悄悄降档（云半分辨率），同一批截图前后不可比（T48b / C09 反馈），
+ * shots / ab / flight 默认固定成「高」；--quality auto 保留旧行为，--quality medium|low 显式指定。场景 p 里写了
+ * quality 的，applyScene 会再覆盖。 */
+async function setQualityTier(page, q) {
+  const tier = q === undefined || q === true ? "high" : String(q);
+  if (!["auto", "high", "medium", "low"].includes(tier)) throw new Error(`--quality 只接受 auto|high|medium|low，收到 "${q}"`);
+  await page.evaluate((tier) => {
+    const el = document.getElementById("quality");
+    if (el) {
+      el.value = tier;
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    const qq = window.__voyage && window.__voyage.quality;
+    if (qq && typeof qq.setTier === "function" && qq.tier !== tier) qq.setTier(tier);
+  }, tier);
+  return tier;
 }
 
 /** DX-07：默认关闭闪电频闪（weather.hold + heldIntensity = 0，见 src/weather.ts 的 update()：
@@ -671,8 +714,12 @@ async function cmdShots(args) {
   const browser = await launchBrowser(angle);
   try {
     // collectErrors：截图期间的 console error / pageerror 数一并打印出来（DX-07），不用另外跑一次 check
-    const { page, renderer, errors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true, extraQuery: parseExtraQuery(args) });
-    console.log(`[dev-browser] --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
+    const { page, renderer, errors, tileErrors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true, extraQuery: parseExtraQuery(args) });
+    const tier = await setQualityTier(page, args.quality); // DX-23：默认固定高画质档，--quality auto 保留旧的自动档
+    console.log(`[dev-browser] --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  画质档=${tier}  GL_RENDERER = ${renderer}`);
+    const warnQuality = (name, extra) => {
+      if (extra.quality && extra.quality.level !== "high" && tier === "auto") console.warn(`  [警告] ${name}：自动档此刻是「${extra.quality.level}」（降档了），和别的截图不可比；要固定就别传 --quality auto`);
+    };
     if (!allowFlash) {
       const applied = await setFlashDisabled(page, true);
       console.log(`[dev-browser] 默认关闭雷电频闪${applied ? "" : "（没找到 window.__voyage.weather，跳过）"}（--allow-flash 保留旧行为）`);
@@ -697,6 +744,7 @@ async function cmdShots(args) {
           const frameMs = await page.evaluate((n) => window.__voyage.benchFrame(n), 30);
           const head = await page.evaluate(() => window.__voyage.head);
           const extra = await collectShotMeta(page);
+          warnQuality(`${sc.name}.${label}`, extra);
           const meta = { scene: sc.name, pair: label, info, head, viewport, dpr, angle, renderer, cloudLive, frameMs: +frameMs.toFixed(3), origin: originFor(port), ...extraFields, ...extra };
           fs.writeFileSync(path.join(outDir, `${sc.name}.${label}.json`), JSON.stringify(meta, null, 2));
           results.push(meta);
@@ -763,6 +811,7 @@ async function cmdShots(args) {
       const head = await page.evaluate(() => window.__voyage.head);
       // 面板值 / 日期 / 太阳月亮高度 / 画质档（DX-12），见 collectShotMeta
       const extra = await collectShotMeta(page);
+      warnQuality(sc.name, extra);
       const meta = {
         scene: sc.name,
         info,
@@ -780,7 +829,8 @@ async function cmdShots(args) {
       results.push(meta);
       console.log(`  ${sc.name}: frameMs=${meta.frameMs}`);
     }
-    console.log(`[dev-browser] 完成，共 ${results.length} 个场景，输出目录 ${path.relative(REPO_ROOT, outDir).replace(/\\/g, "/")}（--out 相对仓库根解析）`);
+    console.log(`[dev-browser] 完成，共 ${results.length} 个场景，输出目录 ${outDir}（--out 相对仓库根解析；worktree 里就是 worktree 根，不是主仓库）`);
+    printTileErrors(tileErrors);
     if (errors.length === 0) {
       console.log(`[dev-browser] 截图期间没有 console error / pageerror。`);
     } else {
@@ -1219,9 +1269,12 @@ async function cmdBench(args) {
       row.gpuMsPerFrame = {};
       for (const p of ports) {
         try {
-          row.gpuMsPerFrame[p] = await gpuTimedFrame(pages[p], frames);
-        } catch {
+          const g = await gpuTimedFrame(pages[p], frames);
+          row.gpuMsPerFrame[p] = g.ms;
+          if (g.ms == null) console.warn(`  [警告] ${sc.name} 端口 ${p}：拿不到 GPU 计时（${g.reason}），gpu 列为空`);
+        } catch (err) {
           row.gpuMsPerFrame[p] = null;
+          console.warn(`  [警告] ${sc.name} 端口 ${p}：GPU 计时出错（${err.message.split("\n")[0]}）`);
         }
       }
       table.push(row);
@@ -1248,9 +1301,25 @@ async function main() {
   else if (sub === "cold") result = await cmdCold(args);
   else if (sub === "bench") result = await cmdBench(args);
   else if (sub === "flicker") result = await cmdFlicker(args);
-  else {
+  else if (sub === "ab" || sub === "flight") {
+    const helpers = {
+      REPO_ROOT,
+      openPage,
+      launchBrowser,
+      closeBrowserSafely,
+      setFlashDisabled,
+      setWingStrobe,
+      resolveBaseShaderSource,
+      parseViewport,
+      parseDpr,
+      parseExtraQuery,
+      setQualityTier,
+      log: (s) => console.log(`[dev-browser ${sub}] ${s}`),
+    };
+    result = sub === "ab" ? await cmdAb(args, helpers) : await cmdFlight(args, helpers);
+  } else {
     console.error(
-      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--scenes-file 路径.json] [--query '<url参数>'] [--out 路径] [--allow-flash] [--freeze] [--settle] [--pair '<js1>' --pair '<js2>' | --base-shader <端口|目录|提交>] [--baseline 端口] [--frames N] [--rounds N] [--repeat N] [--wait-quiet] [--respect-lock]",
+      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker|ab|flight> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--scenes-file 路径.json] [--query '<url参数>'] [--out 路径] [--allow-flash] [--freeze] [--settle] [--pair '<js1>' --pair '<js2>' | --base-shader <端口|目录|提交>] [--baseline 端口] [--frames N] [--rounds N] [--repeat N] [--wait-quiet] [--respect-lock]",
     );
     console.error("  check           只开页面、等启动完成、收集 console error / pageerror，有错误就非 0 退出");
     console.error("  --wait-quiet    仅 cold（DX-10）：测量前先等 CPU 占用降到 50% 以下再开始");
@@ -1260,8 +1329,18 @@ async function main() {
     console.error("  --scene '<JSON>'  仅 shots / flicker：临时场景，字段同 scenarios.mjs 的 SCENES 条目，可重复（shots 可与 --only 并用）");
     console.error("  --scenes-file 路径.json  仅 shots（DX-12）：场景数组文件，免去命令行 JSON 转义，可与 --only/--scene 并用");
     console.error("  --query '<url参数>'      附加到导航 URL 的额外查询参数（DX-12），如 --query 'eox=2024' 或 '?optics=all'");
-    console.error("  --out 路径      shots / cold / bench / flicker 的输出路径：绝对路径原样使用，相对路径按仓库根解析");
-    console.error("                  （worktree 里就是 worktree 根；shots 不传是 tmp/screenshot/dev-<端口>）");
+    console.error("  --out 路径      shots / cold / bench / flicker / ab / flight 的输出路径：绝对路径原样使用，相对路径按**仓库根**解析");
+    console.error("                  （不是当前目录；worktree 里就是 worktree 根，不是主仓库。scripts/ 下所有脚本的 --out / --scenes-file /");
+    console.error("                  --jobs / --variants / file: 都是这个基准。shots 不传是 tmp/screenshot/dev-<端口>）");
+    console.error("  --quality auto|high|medium|low  shots / ab / flight（DX-23）：画质档，默认固定 high；auto 保留自动档（可能中途降档，会打印警告）");
+    console.error("  ab --jobs 路径.json [--variants 路径.json] [--base 对照端口] [--rounds 2] [--cloud-live] [--warm-max 8]（DX-23）");
+    console.error("                  同页多变体 A/B：每个 job 摆好场景、冻结、等 ground.pending===0，按 old,new,old#2,new#2 交替套用变体");
+    console.error("                  （着色器来源 current|base|base:<材质>|file:<路径>、文本补丁、#define、uniform 覆盖、js，可一次换多个材质），");
+    console.error("                  每张预热到连续两张逐字节相同、记 pending / 瓦片跨域数（有则标作废），最后打印指标表与噪声底；");
+    console.error("                  job 可带 crop（测量区）、zoom、hdr（读回渲染目标逐位对照，如 hdrWing）+ hdrMask、bench（benchWing 等）、pre（js）");
+    console.error("  flight --jobs 路径.json [--variants 路径.json] [--modes static,reset,cruise,turn,exit,live]（DX-23）");
+    console.error("                  确定性航迹重放（云的时间行为）：全冻结后手动推进云，航迹逐位可复现；对静止真值（raw 等权平均 --truth 帧）");
+    console.error("                  算误差 / 等效模糊 σ（云边宽度）/ 云边梯度能量比，reset 后第 k 帧收敛，live 为解冻后页内逐帧 readPixels 的抖动");
     console.error("  --allow-flash   仅 shots：不关闭雷电频闪（默认关，见 weather.ts 的 hold / heldIntensity 开关）");
     console.error("  --freeze        仅 shots（DX-08）：截图前 __voyage.freeze(true)——位置 / 航向 / 头部 / 模拟时间 /");
     console.error("                  曝光适应 / 闪电 / 翼尖频闪相位全部钉住（PERF-13：另把翼尖频闪钉死为灭），连续渲染逐像素一致，适合两图相减找回归");
