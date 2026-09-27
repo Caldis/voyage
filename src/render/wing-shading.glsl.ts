@@ -96,8 +96,13 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 e
 
   // 环境反射：清漆近乎镜面，基础层按粗糙度取模糊的平均
   vec3 r = uCabinToWorld * reflect(rd, n);
-  vec3 envSharp = wingEnv(r, m.coatRough, eSky, eDown, belowAlbedo);
-  vec3 envBase = wingEnv(r, m.rough, eSky, eDown, belowAlbedo);
+  // PERF-14：两个粗糙度各取一次，写成循环（起点依赖 uniform，FXC 不展开）：wingEnv 只内联一份（离线 FXC 约 −4%），结果逐位不变
+  vec3 envSharp = vec3(0.0), envBase = vec3(0.0);
+  for (int i = min(uWingSteps, 0); i < 2; i++) {
+    vec3 e = wingEnv(r, i == 0 ? m.coatRough : m.rough, eSky, eDown, belowAlbedo);
+    if (i == 0) envSharp = e;
+    else envBase = e;
+  }
   // 边缘像素（轮廓、薄后缘）上的法线在一个像素里从正对转到侧对，菲涅尔在掠射端冲到 1，
   // 地平线最亮的那一段天空被整条反射进来——子采样一平均，后缘就成了一串亮点。边缘处按 n·v ≥ 0.3 算菲涅尔
   float nvF = w.edge ? max(nv, 0.3) : nv;

@@ -34,8 +34,8 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 <!-- DX-09:sampler-table:begin -->
 | 程序 | sampler 上限 | 当前用量（引用中 / 声明） |
 | --- | --- | --- |
-| `scene-default` | 16 | 5 / 8 |
-| `scene-economy` | 16 | 5 / 8 |
+| `scene-default` | 16 | 6 / 9 |
+| `scene-economy` | 16 | 6 / 9 |
 | `outside-default` | 16 | 14 / 18 |
 | `outside-extras` | 16 | 14 / 18 |
 | `outside-ground-detail` | 16 | 14 / 18 |
