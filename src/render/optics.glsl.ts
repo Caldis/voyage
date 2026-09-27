@@ -17,13 +17,16 @@
  * 默认程序只有太阳圆盘 + 绿闪。新加的「平时不出现」的光学现象一律写进这个宏里，并让 render/optics.ts 的 opticsWanted 认得它。
  */
 export const OPTICS_COMMON = /* glsl */ `
-uniform vec4 uOpticsFlash;   // x 地平线附近的蜃景竖直放大倍数（1 = 标准大气，随机）, y 色散开关（1 开 0 关）
 #ifdef OUTSIDE_OPTICS
-// ---- 以下到下一个 #endif：宝光 / 本机影子 / 幻日 / 22° 晕，只编进 OUTSIDE_OPTICS 变体（PERF-13；选变体见 outside-pass.ts 的 wantedOutsideKey，
-// 「这一帧有没有看得出的贡献」见 render/optics.ts 的 opticsWanted）。默认程序（冷启动关键路径）预处理后不含这些代码
+// ---- 各 #ifdef OUTSIDE_OPTICS 段：宝光 / 本机影子 / 幻日 / 22° 晕，只编进 OUTSIDE_OPTICS 变体（PERF-13；选变体见 outside-pass.ts 的 wantedOutsideKey，
+// 「这一帧有没有看得出的贡献」见 render/optics.ts 的 opticsWanted）。默认程序（冷启动关键路径）预处理后不含这些代码。
+// 声明顺序保持改动前的样子（变体预处理后与改动前的程序逐字相同，handoff/PERF-13-parity.mjs 核对）
 uniform vec4 uOpticsGlory;   // x 宝光强度（0 = 不出现）, y 云滴有效半径（µm）, z 粒径相对离散度, w 未用
 uniform vec4 uOpticsShadow;  // x 本机到云顶（影子落点）的高度差 km（≤ 0：下面没有云，不算）, y 影子处云辐亮度最多压暗多少
 uniform vec4 uOpticsHalo;    // x 幻日 A（太阳方位 + 侧）份额, y 幻日 B（− 侧）份额, z 22° 晕份额, w 片状冰晶倾斜的标准差（弧度）
+#endif
+uniform vec4 uOpticsFlash;   // x 地平线附近的蜃景竖直放大倍数（1 = 标准大气，随机）, y 色散开关（1 开 0 关）
+#ifdef OUTSIDE_OPTICS
 uniform float uSeatSign;     // 右侧 +1，左侧 −1（wing.glsl.ts 在机翼程序里声明同名 uniform，两个程序各自声明、共用一个值）
 
 // 代表波长（µm）：红 / 绿 / 蓝三个通道各用一个
