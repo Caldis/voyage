@@ -99,13 +99,28 @@ export const SCENES = [
  * 在浏览器里应用一个场景（用法：`page.evaluate(applyScene, { sc, defaults: DEFAULTS })`）。
  * 必须是纯函数：page.evaluate 只序列化函数自身的源码，任何外部闭包变量（包括本文件里的 DEFAULTS）
  * 到了浏览器那边都不存在，所以 defaults 通过参数传入，不是靠模块顶层的引用。
+ *
+ * DX-10（性能工程师第 6 波复测反馈，research/PERF_REPORT_wave6.md 末尾「开发体验反馈」第 5 条）：
+ * 跨版本对照（例如拿老版本主分支当 `--baseline`）时，老页面可能缺这次场景表用到的控件或下拉选项
+ * （例如老版本没有 `cabin-class`），原来 `set()` 直接 `el.type` 会因为 `el` 是 null 而抛错，整个 `applyScene`
+ * 中断、后面的场景全部测不了。现在缺控件 / 选项只打印警告并跳过这一项，不中断整个场景；`sc.js` 执行失败也只
+ * 记录失败原因、不抛出，同一份场景表因此可以在新旧版本之间共用做对照，不用像性能工程师当天那样现场写一份容错副本
+ * （`tmp/perf-w6/w6_patch_scen.py`，随一次性 worktree 删掉了，没有进仓库）。
  */
 export async function applyScene(arg) {
   const { sc, defaults, settle } = arg;
   const v = window.__voyage;
-  document.getElementById("panel").classList.add("hidden");
+  document.getElementById("panel")?.classList.add("hidden");
   const set = (id, val) => {
     const el = document.getElementById(id);
+    if (!el) {
+      console.warn(`[applyScene] 页面没有控件 #${id}（老版本页面缺这个控件？），跳过`);
+      return;
+    }
+    if (el.tagName === "SELECT" && ![...el.options].some((o) => o.value === String(val))) {
+      console.warn(`[applyScene] #${id} 没有选项 "${val}"（老版本页面缺这个选项？），跳过`);
+      return;
+    }
     if (el.type === "checkbox") {
       el.checked = val;
       el.dispatchEvent(new Event("change"));
@@ -118,8 +133,9 @@ export async function applyScene(arg) {
   for (const [id, val] of Object.entries({ ...defaults, ...sc.p })) set(id, val);
   if (sc.p.coverage === undefined) set("coverage", 0.42);
   // 日期（T09）：场景没写 date 时恢复成页面打开时的日期，免得上一个写了 date 的场景把后面的场景也带到那一天
-  window.__voyageInitialDate ??= document.getElementById("date").value;
-  if (sc.p.date === undefined) set("date", window.__voyageInitialDate);
+  // （DX-10：老版本页面可能连 #date 控件都没有，可选链 + 判空防止整段中断）
+  window.__voyageInitialDate ??= document.getElementById("date")?.value;
+  if (sc.p.date === undefined && window.__voyageInitialDate !== undefined) set("date", window.__voyageInitialDate);
   if (sc.p.time !== undefined) set("time", sc.p.time);
   // 上一个场景留下的状态也要清掉（例如穿云后的窗上水痕、颠簸）
   v.state.wetness = 0;
@@ -156,10 +172,20 @@ export async function applyScene(arg) {
   // 舱等（T25）：没编过的变体在后台编译，画面切过去之前不截图（最多等 120 s）
   const wantClass = sc.p["cabin-class"] ?? "business";
   for (let i = 0; i < 480 && v.cabinClass && v.cabinClass.shown !== wantClass; i++) await new Promise((r) => setTimeout(r, 250));
-  const jsOut = sc.js ? await new (async () => {}).constructor("v", sc.js)(v) : undefined;
+  // DX-10：js 失败只记录失败原因，不抛出——否则一个场景的 js 写错（或老版本页面没有这个调试句柄）会中断
+  // 整批场景，跨版本 / 跨提交批量对照时尤其容易撞上（PERF_REPORT_wave6.md 末尾开发体验反馈第 5 条）。
+  let jsOut;
+  if (sc.js) {
+    try {
+      jsOut = await new (async () => {}).constructor("v", sc.js)(v);
+    } catch (err) {
+      jsOut = `js 失败：${err && err.message ? err.message : String(err)}`;
+      console.warn(`[applyScene] 场景 "${sc.name}" 的 js 执行失败，已跳过（不中断整批场景）：${jsOut}`);
+    }
+  }
   v.snapAll();
   await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
-  const info = document.getElementById("info").textContent;
+  const info = document.getElementById("info")?.textContent ?? "";
   return jsOut === undefined ? info : `${info}
 js: ${typeof jsOut === "string" ? jsOut : JSON.stringify(jsOut)}`;
 }
