@@ -9,8 +9,8 @@
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | PERF-10/11 | 第 7 波（最高优先） | 5210 | worktree | Opus（云按天气拆变体 + resolve 回 0.05 ms；必审） | — | 进行中 |
-| TR03 | 第 7 波（P8） | 5203 | `worktree-agent-ac14bb478e8ff993d`（保留，未合并） | Opus（火车远景） | — | **暂停**（用户 2026-09-27：专心飞机，火车先不动）；分支 b88923b 已完成未审查。其中对飞机有用、可单独挑出的：回归脚本「页面打开日期」记录顺序 bug 修复、地形高度改 32 位浮点、shader-parity 预处理后比对 + 打印首处差异 |
-| TR07 | 第 7 波（P8） | — | `worktree-agent-ab785837288ae2ca1`（保留，未合并） | Opus（火车声音） | — | **暂停**（同上） |
+| TR03 | 第 7 波（P8） | — | `worktree-agent-ac14bb478e8ff993d`（3f6af34） | Opus（火车远景） | 审查中 | 已交付，独立审查中（用户：搞完了就合，之后专心飞机） |
+| TR07 | 第 7 波（P8） | — | worktree | Opus（火车声音） | — | 进行中（恢复，做完即合；之后火车不再派新任务） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
