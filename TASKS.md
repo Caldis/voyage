@@ -8,7 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| G07b | 第 7 波（地面，G07 审查遗留） | 5225 | worktree | Opus（地面精度与画质档解耦、探测 powerPreference / finally、注释；1× 帧尖峰调查 mips 复用缓冲） | — | 进行中 |
+| G07b | 第 7 波（地面，G07 审查遗留） | 5225 | `worktree-agent-a340d51459cab77f5`（57f89d2） | Opus | 审查中（5226） | 已交付：画质档恢复每次从自动起步、地面精度独立开关（可记忆）；探测改 OffscreenCanvas + high-performance + finally；型号规则 59 条；水体画布改 CPU 栅格（waterRead 尖峰 26→0）；1× 尖峰每分钟 G06 4.2 / G07 3.0 / 现 1.5；剩影像位图 Worker 读回约 1 次/分 → 另开（瓦片拼接挪进 Worker）；顺修 G07 探测上下文抢走 bench 的 GPU 计时钩子 |
 | C12b | 第 7 波（云噪声幅度） | 5223 | worktree | Opus（resolve：历史 Catmull-Rom + blend 按位移小数部分自适应 + 方差裁剪 A/B；只改云外） | — | 进行中 |
 | T48c | 第 7 波（T48b 审查 P2-1） | 5224 | worktree | Opus（夜间局部适应：门控乘非机翼 dW、0.2–0.3 s 时间常数避频闪 / 闪电） | — | 进行中 |
 | W-STAIR | 第 7 波（锯齿，C11 发现） | 5213 | worktree | Opus（机翼边 2 px 阶梯 / 点阵阴影：先诊断再修；须保持机翼 pass 无机翼处逐位照抄，TM02 依赖） | — | 进行中 |
@@ -24,6 +24,8 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| G08-STITCH | 瓦片拼接整个挪进 Worker（消除影像位图在 Worker 同步读回的约 1 次/分 >16.7 ms 尖峰；主线程 CPU 拼接已试、出 59 ms 长任务否决；方案见 handoff/G07b.md） | 中 | ground/* | ground | 1× 巡航 20 分钟同页交替尖峰数 |
+| DX-24 | dev-browser GPU 计时钩子只抓第一个 webgl2 上下文、被抢时静默返回 null → 跳过已丢失上下文并打印警告；Vite HMR 纳入测量锁或提供 --no-hmr；G07-diffs 目录参数与 shots --out 基准不一致 | 中 | scripts/* | — | bench 出 gpu= 列 |
 | DX-23 | `freeze()` 每次调用重设冻结时刻，uTime / 云偏移 / whiteout 跳一帧（同着色器两次测量平均差 0.6）→ 加「沿用原冻结时刻」选项并核对 `shots --pair --base-shader --cloud-live`；收编 C11-ab.mjs / C09 审查的 c09rev-ab.mjs / TM01-measure.mjs 为正式同页换材质工具；shots 默认高画质档 + 降档警告；EOX 瓦片跨域报错聚合；shader-budget --baseline 缺依赖时提示 | 中 | scripts/* | — | 同代码两次测量差为 0 |
 | C-TYPH | 台风外围卷云盖过曝白平板（中位数 235、一半以上 ≥235，底面水平直线 + 规则水波纹；TM02 量化证实非色调映射所致，属 clouds 台风段，T44 遗留；ART-7 #5） | 中高 | clouds（台风段） | clouds | typhoon-outer-11、typhoon-bands |
 | C-TAIL | C11 合并后重定 `CLOUD_MS_TAIL.y`（C01 为压棋盘纹定成 2，约束已解除，按观感重调） | 低 | clouds | clouds | in-cloud |
