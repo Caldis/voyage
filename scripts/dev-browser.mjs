@@ -11,12 +11,13 @@
 //   node scripts/dev-browser.mjs check --port 5230 [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--query '<url参数>']
 //   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--scene '<JSON>' ...]
 //                                       [--scenes-file 路径.json] [--query '<url参数>']
-//                                       [--out tmp/screenshot/dev-5230] [--allow-flash] [--freeze] [--settle]
-//                                       [--pair '<js1>' --pair '<js2>' | --base-shader <端口|目录|提交> [--material sceneMat]]
+//                                       [--out tmp/screenshot/dev-5230] [--allow-flash] [--freeze] [--cloud-live] [--settle]
+//                                       [--pair '<js1>' --pair '<js2>' | --pair '<预设置js>' --base-shader <端口|目录|提交>
+//                                         [--material sceneMat] [--define KEY[=VALUE] ...]]
 //                                       [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--baseline 5181] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
-//   node scripts/dev-browser.mjs flicker --port 5230 --only <场景> [--step 0.06] [--frames 20] [--crop x,y,w,h] [--debug N]
+//   node scripts/dev-browser.mjs flicker --port 5230 --only <场景> [--step 0.06] [--frames 20] [--cloud-live] [--crop x,y,w,h] [--debug N]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
 //
 // --scenes-file（DX-12）：一个场景数组的 JSON 文件（字段和 --scene 一致），免去命令行 JSON 转义——一个带
@@ -28,18 +29,29 @@
 //   解决「批量截图时飞机一直在飞，只拨一个开关的同机位对照拍不成」。--pair '<js1>' --pair '<js2>' 时两张
 //   各自跑一段任意 js；--base-shader <端口|目录|提交> 时第二张换成「换上另一棵树的着色器原文」（PERF-12-ab.mjs
 //   的三段式对照：a → 换基线着色器拍 b → 换回原文拍 a2 当噪声底），--pair 此时至多给一段「拍 a 之前」的
-//   预设置 js。冻结前会先 pinGeometry（钉回场景该有的头部 / 云偏移，见 scenarios.mjs），并把翼尖频闪钉死
-//   为灭（PERF-13 反馈，避免夜景冻结截图撞上全白窗）。详见 README「调试与验证」。
+//   预设置 js（DX-22：但必须显式给，哪怕是空字符串——不给 --pair 时 --base-shader 会直接报错，不再静默
+//   忽略只拍一张普通截图）。冻结前会先 pinGeometry（钉回场景该有的头部 / 云偏移，见 scenarios.mjs），并把
+//   翼尖频闪钉死为灭（PERF-13 反馈，避免夜景冻结截图撞上全白窗）。详见 README「调试与验证」。
+// --material（DX-22，配 --base-shader）：除了字面点号路径（sceneMat/outsideMat/wingMat/seatMat/clouds.*），
+//   还认几个「这一帧实际在画什么」的运行时路径：cabinClass.current / cabinClass.seat（座椅单独 pass，
+//   PERF-14）/ wingMat.current / wingMat.wet（机翼湿窗变体）/ clouds.marchMat（这里特指当前实际画的云步进
+//   变体，不是字面默认变体）。--define KEY[=VALUE]（可重复）给换上的着色器原文补 #define 再重编。
+// --cloud-live（DX-22，仅 shots，配 --freeze 或 --pair 用）：__voyage.freeze(true, {cloudLive:true})，
+//   冻结除云以外的一切，云照常渲染 / 做时间累积。
 //
 // --freeze（DX-08，仅 shots）：截图前调用 __voyage.freeze(true)（main.ts 的调试句柄）钉住位置 / 航向 / 头部 /
 //   模拟时间 / 曝光适应 / 闪电 / 翼尖航行灯频闪相位，冻结后连续渲染逐像素一致，可以拿两次 shots 的截图相减
 //   （配合 compare.mjs 的 --diff）定位「这一版改动到底动了哪些像素」，不必依赖「同一份代码跑两次」的噪声估计。
+//   DX-22：benchFrame 现在也遵守冻结（以前会绕开冻结推进飞机位置 / 模拟时间 / 曝光，见下面 benchFrame 注释）。
 // --settle（DX-08，仅 shots）：等 __voyage.ground.pending === 0 再截（默认的 sc.ground 等待用的是更宽松的
 //   pending < 5，够看大致画面但地面瓦片可能还在陆续贴上来），逐像素对比前建议加上，否则瓦片加载差异会被
 //   误判成回归。
 // flicker（DX-08，泛化自 handoff/T08-flicker.mjs + T08-flicker.py + T43-crawl.py）：__voyage.freeze(true) 之后
 //   按 --step 毫米（默认 0.06，亚像素）步进微移相机（head.x），连拍 --frames 帧，输出块能量变异系数（T08 法，
 //   抗锯齿做对了每块总亮度守恒）与爬行指标（T43 法，二阶差分，抓块能量法量不出的「台阶沿线爬」）。
+//   --cloud-live（DX-22，把 handoff/C03-rt.mjs 审查用的实时路径收成正式选项）：冻结除云以外的一切，
+//   --step 默认改 0、--frames 默认改 32，额外输出 relStd（时间标准差/均值）与 relLow16（16 帧盒平均后的
+//   低频标准差/均值——层状云横纹这类肉眼看得出的起伏是低频的，纯 relStd 会被逐帧噪声盖住）。
 //
 // --out（shots 的截图输出目录）相对**仓库根**解析，不是当前工作目录（T08 开发体验反馈踩过这个坑：
 //   写了 `../../tmp/...` 结果传到了仓库外面）。不传就是 `tmp/screenshot/dev-<port>`。
@@ -1093,11 +1105,18 @@ async function cmdFlicker(args) {
   const outDir = resolveRepoPath(REPO_ROOT, args.out || `tmp/screenshot/dev-${port}-flicker`);
   fs.mkdirSync(outDir, { recursive: true });
   // --cloud-live（DX-22）：冻结除云以外的一切，只看云本身的时间波动——这时不应该再叠加 --step 的相机
-  // 平移（那是测空间抗锯齿用的，混进来会分不清波动到底来自云还是来自相机微移）。默认步长改成 0，且默认帧数
-  // 拉到 128（凑够至少 8 个 16 帧盒子，relLow16 才有统计意义，量级同 handoff/C03-rt.mjs 的 warm=96/nSeries=128）；
-  // 两者都可以用 --step / --frames 显式覆盖（例如就是想同时测「云 + 相机微移」的耦合效应）。
+  // 平移（那是测空间抗锯齿用的，混进来会分不清波动到底来自云还是来自相机微移）。默认步长改成 0，默认帧数
+  // 拉到 32（凑够 2 个 16 帧盒子，relLow16 才有统计意义；本想学 handoff/C03-rt.mjs 的 nSeries=128，但
+  // analyzeFlicker 是拿一批完整截图 + base64 dataUrl 整批塞进 page.evaluate 解码，不是 C03-rt 那种直接读
+  // GPU 缓冲——DX-22 交付前在本机实测：48 帧稳定复现 `page.evaluate: Target page, context or browser has
+  // been closed`（40 帧过、48 帧必炸，猜测是这一批 dataUrl 太大让渲染进程崩溃；**不带 `--cloud-live` 的原版
+  // flicker 同样在 48 帧崩，不是本任务引入的新问题**，只是原来没人试过这么多帧）。32 是留了余量的稳妥默认值，
+  // 机器空闲、确实需要更细的低频分辨率时可以 `--frames` 显式调大，但见 README「调试与验证」flicker 一节的
+  // 提醒——这是一个已知的 DX 缺口，没有列进本任务范围，建议排一个 DX 任务把 analyzeFlicker 改成分批读回
+  // （不必一次性把所有帧的 dataUrl 都塞进同一次 page.evaluate）。
+  // --step / --frames 都可以显式覆盖（例如就是想同时测「云 + 相机微移」的耦合效应）。
   const cloudLive = Boolean(args["cloud-live"]);
-  const frames = Number(args.frames || (cloudLive ? 128 : 20));
+  const frames = Number(args.frames || (cloudLive ? 32 : 20));
   // 每帧头部横向位移（毫米），W01b-flicker.mjs 用过 0.06 mm 这个量级（亚像素、不引入可见的构图变化）
   const stepMm = Number(args.step ?? (cloudLive ? 0 : 0.06));
   const blockSize = Number(args.block || 48);
@@ -1246,13 +1265,19 @@ async function main() {
     console.error("  --allow-flash   仅 shots：不关闭雷电频闪（默认关，见 weather.ts 的 hold / heldIntensity 开关）");
     console.error("  --freeze        仅 shots（DX-08）：截图前 __voyage.freeze(true)——位置 / 航向 / 头部 / 模拟时间 /");
     console.error("                  曝光适应 / 闪电 / 翼尖频闪相位全部钉住（PERF-13：另把翼尖频闪钉死为灭），连续渲染逐像素一致，适合两图相减找回归");
+    console.error("                  DX-22：benchFrame 现在也遵守冻结，不会再把状态推进掉（以前 --pair 两张之间调用 benchFrame 会绕开冻结）");
+    console.error("  --cloud-live    仅 shots（DX-22）：__voyage.freeze(true, {cloudLive:true})，冻结除云以外的一切，云照常渲染 / 做时间累积");
     console.error("  --settle        仅 shots（DX-08）：等 ground.pending === 0 再截（而不是默认的 pending<5），逐像素对比用");
     console.error("  --pair '<js1>' --pair '<js2>'（或 --ab，DX-12）  仅 shots：同一机位冻结后先后跑两段 js 各拍一张（<场景>.a.png / .b.png）");
-    console.error("                  --base-shader <端口|目录|提交> [--material sceneMat]：第二张换成换上另一棵树着色器原文的对照（另拍 a2 噪声底）");
+    console.error("                  --base-shader <端口|目录|提交> [--material sceneMat] [--define KEY[=VALUE] ...]：第二张换成换上另一棵树着色器原文的对照（另拍 a2 噪声底）");
+    console.error("                  DX-22：--base-shader 必须搭配 --pair（哪怕传空字符串），不给会直接报错，不再静默忽略");
+    console.error("                  DX-22：--material 除字面路径外还认 cabinClass.current / cabinClass.seat / wingMat.current / wingMat.wet（这一帧实际画的变体）");
     console.error("  flicker         冻结后按亚像素步进（--step 毫米，默认 0.06）微移相机（head.x）连拍 --frames 帧（默认 20），");
     console.error("                  输出块能量变异系数（T08 法）与爬行指标（T43 法）；--crop x,y,w,h 限定统计区域，");
     console.error("                  --block N 块边长（默认 48），--debug N 设 uDebug，一次只测一个场景（--only 单选或单个 --scene）");
+    console.error("                  --cloud-live（DX-22）：冻结除云以外的一切（--step 默认改 0、--frames 默认改 32），额外输出 relStd / relLow16（云的时间波动）");
     console.error("  cold --baseline 端口（DX-12）：--repeat 轮交替测 port / baseline 两侧真冷启动，不用手写交替脚本");
+    console.error("                  --repeat > 1 时额外打印各阶段 min/median/max 汇总（DX-22），含 PERF-14 的「批次各程序编好（ms）」——按程序名分别聚合，看关键路径稳不稳定");
     process.exit(1);
   }
   // playwright-core 有时会留一些内部句柄没清干净（尤其是 GPU 争用导致渲染进程中途崩溃过一次的情况），
