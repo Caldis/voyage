@@ -461,6 +461,9 @@ export interface CloudPreset {
   density: number;
 }
 
+/** 云层的连续参数（CloudPreset 去掉 id / name），导演插值用（T19b） */
+export type CloudParams = Pick<CloudPreset, "bottom" | "top" | "coverage" | "type" | "density">;
+
 export const CLOUD_PRESETS: CloudPreset[] = [
   { id: "cumulus", name: "晴天积云", bottom: 1.2, top: 3.4, coverage: 0.42, type: 1, density: 1 },
   { id: "stratocumulus", name: "层积云云海", bottom: 1.0, top: 2.2, coverage: 0.78, type: 0.2, density: 0.8 },
@@ -611,6 +614,8 @@ export class Clouds {
   /** 前台（窗外程序正在查的）和后台（正在分帧重建的）两张云影图 */
   private shadow = [shadowTarget(), shadowTarget()];
   private shadowKey = "";
+  /** setParams(gradual) 之后：参数变了也不整张一帧重建云影图，而是按后台分片的节奏跟上（T19b） */
+  private shadowGradual = false;
   /** 后台正在建到第几片（-1 = 没在建） */
   private shadowSlice = -1;
   private shadowState: "idle" | "compiling" | "ready" = "idle";
@@ -748,8 +753,15 @@ export class Clouds {
     const bu = this.shadowMat.uniforms;
     const c = u.uCloudShadowCenter.value;
     const off = u.uCloudOffset.value;
+    // 天气参数渐变（T19b，setParams 的 gradual）：变化很小，按分片节奏重建即可，免得每次推进都整张一帧重建（3–8 ms）
+    let restart = false;
+    if (key !== this.shadowKey && this.shadowGradual && c.z > 0.5) {
+      this.shadowKey = key;
+      restart = this.shadowSlice < 0;
+    }
+    this.shadowGradual = false;
     const now = key !== this.shadowKey || c.z < 0.5;
-    if (!now && this.shadowSlice < 0) {
+    if (!now && !restart && this.shadowSlice < 0) {
       const drift = Math.hypot(off.x - c.x, off.y - c.y);
       if (drift < SHADOW_RECENTER_KM && this.keyDir.dot(u.uCloudShadowSun.value) > SHADOW_SUN_COS) return;
     }
@@ -846,6 +858,28 @@ export class Clouds {
 
   get texture() {
     return this.history[0].texture;
+  }
+
+  /** 此刻的云层参数（T19b：导演从这里起步做插值） */
+  params(): CloudParams {
+    const u = this.uniforms;
+    return { bottom: u.uCloudBottom.value, top: u.uCloudTop.value, coverage: u.uCoverage.value, type: u.uCloudType.value, density: u.uCloudDensity.value };
+  }
+
+  /**
+   * 天气参数的插值接口（T19b，连续航程的导演用）。gradual：连续推进的一小步——不清时间累积（history），
+   * 云影图按后台分片的节奏跟上，不整张一帧重建；false：借遮挡的硬切，和 applyPreset 一样立刻清掉累积。
+   * 改了高度范围后调用方还要调 weather.updateShell()
+   */
+  setParams(p: Partial<CloudParams>, gradual: boolean) {
+    const u = this.uniforms;
+    if (p.bottom !== undefined) u.uCloudBottom.value = p.bottom;
+    if (p.top !== undefined) u.uCloudTop.value = p.top;
+    if (p.coverage !== undefined) u.uCoverage.value = p.coverage;
+    if (p.type !== undefined) u.uCloudType.value = p.type;
+    if (p.density !== undefined) u.uCloudDensity.value = p.density;
+    if (gradual) this.shadowGradual = true;
+    else this.snap();
   }
 
   applyPreset(p: CloudPreset) {

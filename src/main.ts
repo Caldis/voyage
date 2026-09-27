@@ -231,28 +231,26 @@ const director = new Director({
     sel.value = mode;
     sel.dispatchEvent(new Event("change"));
   },
+  // 天气（T19b）
+  weather,
+  cloudParams: () => clouds.params(),
+  setCloudParams: (p, gradual) => {
+    clouds.setParams(p, gradual);
+    weather.updateShell();
+  },
+  toLocal: (lat, lon) => ground.localFrame.toLocal(lat, lon),
+  localPos: () => [cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y],
+  landBelow: () => (state.floor?.known ? state.floor.reason === "land" : null),
 });
+// 奇观之门演示开关（T19b）：URL 带 ?gateDemo 时，连续航程每 2 模拟小时在航线前方放一道云墙
+if (new URLSearchParams(location.search).has("gateDemo")) director.weather.gateDemo = true;
 
 /** 本地坐标换原点（导演借穿云 / 深夜调用）：原点挪到飞机正下方，位置（经纬度）、高度、航向都不变。
  *  地面 clipmap 按新原点重建；云场、海浪的噪声原点跟着 uCloudOffset 跳一下（所以要借遮挡）；雷暴、台风、闪电通道平移到新坐标 */
 function rebaseFrame() {
   const off = cloudUniforms.uCloudOffset.value;
   const [lat, lon] = ground.localFrame.toGeo(off.x, off.y);
-  const dx = off.x, dz = off.y;
-  for (const s of weather.storms) {
-    s.x -= dx;
-    s.z -= dz;
-  }
-  if (weather.hurricane) {
-    weather.hurricane.x -= dx;
-    weather.hurricane.z -= dz;
-  }
-  for (const b of weather.bolt) {
-    b.x -= dx;
-    b.z -= dz;
-  }
-  // weather.ts 的 uniform 同步是私有方法（本任务不碰 weather.ts），按运行时属性调用
-  (weather as unknown as { syncUniforms(): void }).syncUniforms();
+  weather.translate(off.x, off.y);
   off.set(0, 0);
   ground.reset(lat, lon);
   clouds.snap();
