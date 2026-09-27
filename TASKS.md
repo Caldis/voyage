@@ -8,6 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| DX-11/12 | 第 7 波（工具） | — | worktree | Sonnet（compare 补 RGB / 饱和度 / 相邻像素差 / 阈值比例 / 缩略图；shots --pair 同机位 A/B、--scenes-file、--query、view-preset、默认关连续航程；变体就绪后复位云；补丁编译失败报错；ts-resolve 入口） | — | 进行中 |
 | PERF-13 | 第 7 波（飞机性能） | 5213 | worktree | Opus（窗外程序冷编译回收：optics / wonder-sky 等拆按需变体，目标真冷启动 ≤13 s；必审） | — | 进行中 |
 | C01+C02 | 第 7 波（最高优先，用户需求） | 5215 | `worktree-agent-a7ed7e9bac8af7c77`（62ed4ab） | Opus | 审查中（兼美术） | 已交付：云芯对比 HDR ×1.6–2.1、最亮 1% 云 157–164→199–224；银边未变亮；cloud-march 冷编译 +6–7% |
 | PERF-12 | 第 7 波（飞机性能） | 5212 | worktree | Opus（舱内合成 0.385→≤0.3 ms、scene-default 编译 7.3→≤5 s：消融归因后治理；碰 scene → 必审） | — | 进行中 |
