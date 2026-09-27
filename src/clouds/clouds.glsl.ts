@@ -26,6 +26,7 @@ function hurricaneDensityGlsl(name: string, bands: string): string {
 float ${name}(vec2 xz, float alt, float lod, bool detail, out float ao) {
   ao = 1.0;
   gHurSoft = false;
+  gHurCanopy = false;
   if (alt > HUR_TOP + 4.2) return 0.0;
   vec2 d2 = xz - uHurricane.xy;
   float r = length(d2);
@@ -68,8 +69,16 @@ float ${name}(vec2 xz, float alt, float lod, bool detail, out float ao) {
     float rIn = rLow + rise + flare - bump;
     float s = r - rIn;
     // 眼壁 + 雨区：从海面附近到卷云盖是实心的；再往外云底抬升成卷云盖
-    float coreOuter = Re * (2.9 + 0.35 * sin(2.0 * theta + 1.0));
-    float baseAlt = mix(0.5 + 0.3 * (nS.a - 0.5), 12.0, smoothstep(coreOuter, coreOuter + Re * 0.9, r));
+    // 雨区外缘（T44）：旧版外缘半径只随方位角正弦变化、云底从 0.5 km 平滑抬到 12 km，从台风外围看过去是一整块
+    // 光滑、均匀发暗的巨型圆柱（视平线上的深色横带），侧面轮廓是一条斜直线。外缘半径加两级噪声（约 35 km / 9 km，
+    // 随高度缓慢变），抬升的云底叠球冠起伏：外缘成了参差的塔群和挂下来的云底
+    // 这组噪声专门给外缘：远处（外围看它在 150–300 km 外）步长大、lod 高，nT / nS 已被 mip 平均成常数，
+    // 起伏全没了——云底抬升段是一个光滑的圆锥面，圆锥的轮廓线是直线，就是那条斜直线。所以这里固定取 mip 3（尺度约 20–30 km 的起伏在 mip 3 里还在，远处也不闪；
+    // 按 lod − 4 取细 mip 时远处每个样本都读细纹理，缓存不友好，typhoon-bands 云步进 +3 ms）
+    vec4 nO = textureLod(uShapeNoise, vec3(u * 11.0, alt / 18.0, 0.53), 3.0);
+    float coreOuter = Re * (2.9 + 0.35 * sin(2.0 * theta + 1.0) + 0.8 * (nO.r - 0.5) + 0.3 * (nS.r - 0.5));
+    float baseAlt = mix(0.5 + 0.3 * (nS.a - 0.5), 12.0 - 4.0 * max(hurCap(nO.g), 0.0) - 1.2 * max(hurCap(nS.g), 0.0),
+                        smoothstep(coreOuter, coreOuter + Re * (0.5 + 0.8 * nO.b), r));
     // 眼壁顶沿：各扇区高低不同（hurricaneRimTop），顶上一座座上冲的对流塔高出 1–4.5 km（天际线上高耸的圆顶塔），
     // 离眼壁内缘远了就没有。塔的平面位置只取水平切片（极坐标 θ × r），不随高度变：
     // 用随高度变的 3D 噪声当高度场，塔会上下断开成漂浮的团块（README 坑点）
@@ -94,7 +103,11 @@ float ${name}(vec2 xz, float alt, float lod, bool detail, out float ao) {
     // 顶沿往外是雨区和卷云盖：云顶从顶沿往外缓慢下降（外流的冰晶云），不再抬到统一的卷云盖顶——
     // 那样顶沿低的扇区后面会露出一道比顶沿还高的水平云顶（T37 之前眼里看到的「栏杆」之一）
     float top = min(hurricaneRimTop(theta) - 1.4 * smoothstep(Re * 2.0, Re * 5.0, r) + overshoot, HUR_TOP + 4.2);
-    float wall = smoothstep(0.0, 0.35, s) * smoothstep(baseAlt, baseAlt + 0.3, alt) * (1.0 - smoothstep(top - 0.4, top, alt));
+    // 外侧在 4.2 倍眼半径之前淡出（T44）：这一段（云底已抬到 12 km）原来一直实心到 r = 4.2Re（上面 if 的边界）才一刀切掉，
+    // 是一堵半径 84 km 的竖直圆柱面。台风外围在 11–13 km 朝中心看，它正好在视平线上：一条深色的横带，
+    // 右端是圆柱面透视成的一条斜直线（美术总监说的「卷云盖底外缘的斜直线」其实是它，关掉卷云盖照样在）。外面交给卷云盖接着
+    float wall = smoothstep(0.0, 0.35, s) * smoothstep(baseAlt, baseAlt + 0.3, alt) * (1.0 - smoothstep(top - 0.4, top, alt))
+               * (1.0 - smoothstep(Re * 3.3, Re * 4.1, r + Re * 0.35 * (nT.a - 0.5)));
     if (wall > d) { d = wall; wallW = 1.0; }
     // 遮蔽：隆起顶端看到的天空多、凹处少；眼壁下部像在井底，只看得到头顶一块天
     // 眼壁表面只看得到半边天（另一半被眼壁自己挡住），对面还是眼壁：天空光约为开阔处的一半
@@ -124,6 +137,13 @@ float ${name}(vec2 xz, float alt, float lod, bool detail, out float ao) {
     // 卷云盖的底往外抬升（外缘只剩 14 km 附近薄薄一层卷云，巡航高度可以在它下面俯看雨带）
     float canopyBase = 11.8 + 2.4 * smoothstep(Re * 4.0, Re * 12.0, r);
     float canopyTop = hurricaneCanopyTop(theta, r);
+    // 底面起伏（T44）：旧版底面是光滑的解析曲面，往外抬升、在相机高度处和视平面相交，从卷云盖下面看，
+    // 底面外缘是一条从左上到右下的斜直线（像天花板开了个口）。加一层约 30 km / 12 km 的水平切片噪声高度场（±0.9 km，
+    // 只挪底面高度，不软化底面的竖直梯度：T37 坑，软化会在相机附近多出一大片要细走的稀薄云），相交线跟着弯曲、断开
+    if (alt > canopyBase - 1.3 && alt < canopyTop + 0.3) {
+      vec4 nCb = textureLod(uShapeNoise, vec3(xz / 30.0, 0.83), max(lod - 1.0, 0.0));
+      canopyBase += 1.2 * (nCb.r - 0.5) + 0.8 * hurCap(nCb.g) * smoothstep(Re * 3.5, Re * 6.0, r);
+    }
     if (alt > canopyBase - 0.3 && alt < canopyTop + 0.3) {
       // 流出气流：高空的丝缕沿反气旋弯曲的螺线向外，坐标 (θ − 1.1 ln r) 沿丝缕不变
       float lr = log(max(r, 1.0));
@@ -133,10 +153,15 @@ float ${name}(vec2 xz, float alt, float lod, bool detail, out float ao) {
       // 试过用丝缕噪声把顶面、底面打散（±0.5 km）：typhoon-outer（13 km，就在卷云盖底下）云步进 +0.7 ms（+15%），
       // 相机附近多了一大片稀薄的云要细走；眼壁附近的卷云盖顶已压到顶沿以下、从眼里看不到，所以不做（T37）
       float vert = smoothstep(canopyBase - 0.3, canopyBase + 0.4, alt) * (1.0 - smoothstep(canopyTop - 0.4, canopyTop + 0.2, alt));
-      // 冰云：靠近眼壁厚，往外越来越薄、越来越丝缕状
+      // 冰云：靠近眼壁厚，往外越来越薄、越来越丝缕状。
+      // T44：旧版外围仍是 0.3 × 60 = 18 /km，2 km 厚的光学厚度几十，从下面看是一块不透光、均匀灰色的平板顶棚。
+      // 真实的外围卷云盖是光学厚度一到几的冰云（能透出上面的天、下面的塔也不被整片压暗）：
+      // 中心密蔽云区以外按约 1.3 倍眼半径的 e 折长度变薄，外围只剩 0.012–0.05（0.7–3 /km），沿丝缕一条条浓淡
       float thin = smoothstep(Re * 3.5, Re * 10.0, r);
-      float canopy = vert * edge * mix(0.9, 0.3 * smoothstep(0.25, 0.75, fib), thin);
-      if (canopy > d) { d = canopy; wallW = 0.0; ao = 1.0; gHurSoft = true; }
+      float fibS = smoothstep(0.25, 0.75, fib);
+      float canopy = vert * edge * max(min(0.9 * exp(-(r - Re * 3.5) / (Re * 1.3)), 0.9) * mix(1.0, 0.4 + 0.9 * fibS, thin),
+                                       mix(0.0, 0.012 + 0.04 * fibS * fibS, thin));
+      if (canopy > d) { d = canopy; wallW = 0.0; ao = 1.0; gHurSoft = true; gHurCanopy = true; }
     }
   }
 ${bands}
@@ -217,8 +242,10 @@ const HUR_BANDS_FULL = /* glsl */ `
         if (Ht > 9.5 && alt > 7.0) {
           vec2 da = xz - c - uUpperWind * (4.0 + 1.5 * h3.y);
           float al = dot(da, uUpperWind);
-          vec2 dw = vec2(al / (al > 0.0 ? 1.0 : 0.55), dot(da, vec2(-uUpperWind.y, uUpperWind.x)) / 0.7);
           float La = min(Rt * (2.0 + 0.5 * h2.y), 12.0);
+          // 平面是向下风方张开的扇形（T44）：靠近塔顶窄（横向 0.45 倍），越往下风越宽（0.8 倍）；上风方只伸出一点（0.4 倍）。
+          // 旧版横向处处 0.7 倍、上风 0.55 倍，从侧面看塔顶两边对称地伸出一圈帽檐，远处的塔读成蘑菇 / 高脚杯
+          vec2 dw = vec2(al / (al > 0.0 ? 1.0 : 0.4), dot(da, vec2(-uUpperWind.y, uUpperWind.x)) / mix(0.45, 0.8, smoothstep(-0.3 * La, La, al)));
           float e = dot(dw, dw) / (La * La);
           if (e < 1.0) {
             float k = (1.0 - e) * (1.0 - e) * smoothstep(9.5, 10.5, Ht);
@@ -268,9 +295,14 @@ const HUR_BANDS_FULL = /* glsl */ `
         d = bd;
         bool isAnvil = anv > towerD && anv > skirt;
         gHurSoft = isAnvil;
+        gHurCanopy = false;
         // 砧是半透明的冰晶云，不做表面侵蚀（侵蚀会把 0.1–0.4 的稀薄外缘整片削掉）
         wallW = isAnvil ? 0.0 : 1.0;
+        // 裙边（1–3 km 的层状雨区云）顶面看得到整片天：旧版和塔身一样按高度压到约一半，天空的蓝色补光少了，
+        // 受光面只剩偏暖的直射，雨带上的低云读成沙土色（T44）。只有裙边的下半截、贴着塔的地方暗一些
+        bool isSkirt = !isAnvil && skirt > towerD;
         ao = isAnvil ? mix(0.5, 1.0, smoothstep(9.0, 12.0, alt))
+           : isSkirt ? mix(0.55, 1.0, smoothstep(H - 1.0, H - 0.1, alt))
            : mix(0.35, 1.0, smoothstep(-1.0, 0.8, bump)) * mix(0.5, 1.0, smoothstep(0.5, 8.0, alt));
       }
     }
@@ -820,6 +852,8 @@ vec3 gHurCell = vec3(0.0);
 // 台风密度的副产物：最近一次求值的点属于「软边」的冰晶云（卷云盖、雨带塔顶的砧）。这类云边缘本来就是渐变的，
 // 云步进对它们不做表面细化、稀薄处放大步长（PERF-2）
 bool gHurSoft = false;
+// 最近一次求值的点属于台风卷云盖（T44）：云步进对它用解析的受光（见 clouds.ts），cloudDensity 里记成 gStormSoft = 2
+bool gHurCanopy = false;
 
 // ---- 雨带上的积雨云塔（T37）----
 // 塔轴（塔心在高度 alt 处的水平位置）：上半截被高空风吹歪，歪多少每座塔不同（塔顶偏 0.1–0.35 倍塔高，约 6–19°），还略带横向
@@ -836,7 +870,9 @@ vec2 bandTowerAxis(vec2 c, float alt, float Ht, vec2 h3) {
 float bandTowerSdf(vec2 xz, float alt, vec2 c, float Ht, float Rt, vec2 h3) {
   float hh = clamp(alt / Ht, 0.0, 1.0);
   float rho = length(xz - bandTowerAxis(c, alt, Ht, h3));
-  float rb = Rt * mix(0.7 + 0.25 * h3.x, 1.0, smoothstep(0.05, 0.7, hh));
+  // T44：底部收得少一些。旧版底部只有顶部的 70–95%，远看是细柄上顶着一块砧——高脚杯 / 蘑菇（美术总监 wave6 第 3 条）；
+  // 试过底部比顶部宽（100–115% → 90%），近处的塔成了上下一样粗的圆桶（T37 要避免的），取中间：底部 88–103%
+  float rb = Rt * mix(0.88 + 0.15 * h3.x, 1.0, smoothstep(0.05, 0.7, hh));
   float domeH = min(Rt * 0.6, Ht * 0.3);
   vec2 q = vec2(rho / rb, max(alt - Ht + domeH, 0.0) / domeH);
   float lq = length(q);
@@ -910,7 +946,7 @@ float hurricaneShadowDensity(vec2 xz, float alt) {
   float canopyTop = hurricaneCanopyTop(theta, r);
   float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * (1.0 - smoothstep(Re * 9.0, Re * 16.0, r))
                * smoothstep(canopyBase - 0.3, canopyBase + 0.4, alt) * (1.0 - smoothstep(canopyTop - 0.4, canopyTop + 0.2, alt))
-               * mix(0.9, 0.25, smoothstep(Re * 3.5, Re * 10.0, r));
+               * max(min(0.9 * exp(-(r - Re * 3.5) / (Re * 1.3)), 0.9), 0.03 * smoothstep(Re * 3.5, Re * 10.0, r));   // 与完整版的变薄一致（T44）
   float band = smoothstep(0.3, 0.8, cos(6.0 * theta - 18.5 * log(max(r, 1.0)))) * smoothstep(Re * 2.8, Re * 4.0, r)
              * (1.0 - smoothstep(8.0, 12.0, alt)) * 0.6;
   return max(max(core, canopy), band);
@@ -970,7 +1006,7 @@ float cloudDensity(vec3 p, float lod, bool detail) {
       // 台风的受光和雷暴一样处理（凹处遮蔽、下方反射光、表面细化）
       float hao;
       float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;
-      if (hd > d) { d = hd; gStormW = 1.0; gStormAO = hao; gStormSoft = gHurSoft ? 1.0 : 0.0; }
+      if (hd > d) { d = hd; gStormW = 1.0; gStormAO = hao; gStormSoft = gHurSoft ? (gHurCanopy ? 2.0 : 1.0) : 0.0; }
     }
   }
   return d;

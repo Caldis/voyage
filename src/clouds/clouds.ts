@@ -72,7 +72,11 @@ float hurricaneCasterDensity(vec2 xz, float alt) {
   float top = HUR_TOP - 0.5 + 1.2 * HSIN(cs, 0.4) + 0.45 * HSIN(cs3, 1.7) + 0.5;   // = hurricaneRimTop(θ) + 0.5
   #undef HSIN
   float wall = smoothstep(rIn, rIn + 2.0, r) * (1.0 - smoothstep(top - 0.6, top, alt));
-  float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * smoothstep(12.0, 12.8, alt) * (1.0 - smoothstep(HUR_TOP - 1.0, HUR_TOP, alt));
+  // 卷云盖的遮挡按完整版的变薄走（T44）：眼壁附近（3.5 倍眼半径以内）是厚的中心密蔽云区，往外很快变成光学厚度几的冰云，
+  // 挡不住多少光（总透射约 0.8）。旧版一直到 9 倍眼半径都按实心算、到那里再一刀切掉：台风外围（typhoon-outer / bands）
+  // 视线上的空气全被当成在影子里，空气透视的蓝色内散射被砍到 12%，只剩透射率的偏黄——远处的雨带云被染成沙土色
+  float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * smoothstep(12.0, 12.8, alt) * (1.0 - smoothstep(HUR_TOP - 1.0, HUR_TOP, alt))
+               * mix(1.0, 0.06, smoothstep(Re * 3.5, Re * 7.0, r));
   return max(wall, canopy);
 }
 
@@ -103,9 +107,13 @@ vec3 hurricaneShadowedInscatter(vec3 ro, vec3 rd, float depth, vec3 full) {
   for (int k = 1; k < 7 + min(uStormCount, 0); k++) {
     float fk = float(k);
     vec3 Lk = fk >= N ? full : textureLod(uAerialInscatter, aerialPerspectiveUvw(rd, uSunDir, depth * fk / N), 0.0).rgb;
-    float vis = hurricaneSunVis(ro + rd * (depth * (fk - 0.5) / N), uSunDir, 0.0);
-    // 影子里的空气仍被天空光照着（多次散射）；眼里低处四周是眼壁，看得到的天空只有头顶一块，取约 12%
-    acc += max(Lk - prev, vec3(0.0)) * mix(0.12, 1.0, vis);
+    vec3 pk = ro + rd * (depth * (fk - 0.5) / N);
+    float vis = hurricaneSunVis(pk, uSunDir, 0.0);
+    // 影子里的空气仍被天空光照着（多次散射）；眼里低处四周是眼壁，看得到的天空只有头顶一块，取约 12%。
+    // 眼外（T44）：卷云盖下面四周是开阔的天和被照亮的雨带、海面，影子里的空气仍有约一半的内散射。
+    // 旧版处处 12%：远处的雨带云只剩透射率的偏黄、没了蓝色的空气透视，被染成沙土色
+    float eyeK = smoothstep(uHurricane.z * 2.5, uHurricane.z * 4.0, length(pk.xz + uCloudOffset - uHurricane.xy));
+    acc += max(Lk - prev, vec3(0.0)) * mix(mix(0.12, 0.5, eyeK), 1.0, vis);
     prev = Lk;
   }
   return acc;
@@ -320,7 +328,11 @@ void main() {
       int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;
       // 受光步进的细节噪声只沿用上面那一点随机挑中的一个随机平铺格点（见 clouds.glsl.ts 的 gDetailLight，T32）
       gDetailLight = true;
-      if (lightSteps == 6) {
+      if (gStormSoft > 1.5) {
+        // 台风卷云盖（T44）：外围变薄以后视线要在它里面走很长一段，每个采样点都走 8 步受光步进太贵（typhoon-bands 云步进 +2 ms）。
+        // 它上面只有天，朝太阳的光学厚度 ≈ 本点消光 × 到卷云盖顶（约 15 km）的斜程的一半（密度往上变淡）
+        od = dens * 0.5 * clamp(15.0 - (r - BOTTOM), 0.2, 3.0) / max(uKeyDir.y, 0.1);
+      } else if (lightSteps == 6) {
         // 普通云（没有雷暴、台风）：只有层状云，常量上界，编译器展开后最快（和改动前一致）。
         // 这里只能调用层状云密度：展开的每一份都带上雷暴密度的话，冷编译会从 55 s 涨到 90 s
         for (int j = 0; j < 6; j++) {
@@ -377,7 +389,11 @@ void main() {
         // 雷暴：隆起之间的凹处、砧底、雨幡里看到的天空少（菜花状的明暗）；
         // 塔身下半截还被下方的海面 / 低云反射的光照着（中性的灰白，冲淡天空光的蓝）
         ambient *= mix(0.3, 1.0, stormAO);
-        vec3 eBelow = albedoBelow * keyLight(BOTTOM + 1.0, up) * max(dot(up, uKeyDir), 0.0);
+        // 台风眼外（T44）：脚下是海面和雨带的裙边低云，不是眼底的云（albedoBelow 按眼底受光算，太阳低时会很小）。
+        // 取 0.25（海面 0.06 + 雨带裙边约三成覆盖）。试过取 0.17：塔身下半截失去下方反射光，读成一个深色的拱洞
+        float albB = albedoBelow;
+        if (nearHur) albB = mix(albedoBelow, 0.25, smoothstep(uHurricane.z * 2.5, uHurricane.z * 4.0, length(p.xz + uCloudOffset - uHurricane.xy)));
+        vec3 eBelow = albB * keyLight(BOTTOM + 1.0, up) * max(dot(up, uKeyDir), 0.0);
         // 台风眼里，背光的眼壁对面就是被太阳直射的眼壁和眼底：反射光在各个高度都很强，不只是下半截
         float hBelow = uHurricane.w > 0.5 ? 1.0 - 0.4 * h01 : 1.0 - h01;
         ambient += eBelow / (2.0 * M_PI) * 0.5 * hBelow * stormAO;
