@@ -8,10 +8,11 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| C09 | 第 7 波（云锐度，用户需求） | 5209 | worktree | Opus（逆光银边：backlit-close 场景 + 银边指标，比较前向峰加宽瓣 / 受光首步缩短；必审） | — | 进行中 |
+| PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
 | PERF-14 | 第 7 波（飞机性能） | 5214 | worktree | Opus（舱内 / 机翼程序冷编译回收：关键路径分解、座椅单独 pass 或光照收拢、机翼消融；目标冷启动再降 ≥1.5 s；必审） | — | 进行中 |
 | G06 | 第 7 波（飞机地面） | 5206 | worktree | Opus（clipmap 地面纹理精度 + mipmap / 各向异性：巡航纹素 / 屏幕像素比 ~3 → 1–1.5；先实验比较方案；必审） | — | 进行中 |
 | TM01 | 第 7 波（云锐度，用户需求） | 5216 | `worktree-agent-ab891a9e7f58250c4`（bf805bb） | Opus | 审查中（兼美术） | 已交付：方案③ AgX 前高光段斜率 ×1.4，云芯显示对比 ×1.63–2.42（sunset ×1.55）、非云 RGB ≤2/255 变化 |
-| C03 | 第 7 波（云锐度，用户需求） | 5211 | `worktree-agent-a395f9870209c3f11`（afff7f5） | Opus | 审查中 | 已交付：横纹根因=受光细节随机数与步进 jitter 相关，一行修复（横纹能量 −12–19%，零开销）；边宽细化三种做法都长出新条纹，未合入 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -80,8 +81,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | DX-10 | 测量可信度：shader-budget 最小值判定 + MAD、--baseline 容错、--chain 归因、--variants、--wait-quiet、--ledger；测量锁 tmp/measure.lock；passes 归类 bloom / 变体；compile-ledger.json 账本；applyScene 跨版本容错 | 2026-09-27 | Sonnet 实现，协调者合并。**合并后已通知在途代理** |
 | TR07 | 火车声音：接缝节奏（定尺示例 / 长轨化开关）、滚动 / 变频器 / 轮缘 / 空调、道口警报多普勒、停站与广播示意 + 字幕 | 2026-09-27 | Opus 实现（中途暂停又恢复），**独立审查通过**，协调者合并。火车按用户要求收尾，**遗留不修**：火车模式首次开声音漏一声飞机底噪（P2-a）、火车声音初始化失败每帧 warn（P2-b）、广播改单声道省 6 MB、弯道尖啸像颤音、audio-check 无断言 |
 | G04-G08 | 地面影像后续（research/IMAGERY.md）：G04 其他地区用 Esri（**待用户确认**：旧端点灰区 vs ArcGIS Location Platform token，每月 200 万免费）；G06 提高 clipmap 纹理精度 + 各向异性（巡航整体变清晰的真正手段，改着色器，先做一天实验量闪烁 / 冷编译）；其余见报告 | 中 | ground / 着色器 | — | — |
-| C09 | 逆光银边：HDR 里也只有 1.16（问题在光照 / 场景而非色调映射）；先做太阳在积云正后方 3–8° 的场景读云缓冲 HDR，再比较「前向峰加宽瓣」与「受光步进首步缩短」 | 高 | clouds | — | 新场景 backlit-close |
-| DX-22 | shots --pair 在带地面的夜景里机位没钉住（同 js 两张差 8.9%，城市灯光整体移动）；compare --measure 支持用云缓冲不透明度作遮罩分云 / 非云统计；FXC 对 abs 写法敏感（max+abs 慢 13%，clamp 平方持平）写进坑点或 lint 提示；--live 连跑多场景 WebGL 上下文丢失待查（TM01 反馈） | 中 | scripts | — | — |
+| DX-22 | **冻结工具对云是瞎的**：flicker / shots --freeze / --pair / --base-shader 冻结时跳过云渲染 → 加 `--cloud-live`（冻结其余、云照常渲染并输出时间波动），把 C03rev-rt.mjs 实时路径收进 scripts；compare 加分方向（对角 / 行 / 列）高频指标；shots --pair 在带地面的夜景里机位没钉住（同 js 两张差 8.9%，城市灯光整体移动）；compare --measure 支持用云缓冲不透明度作遮罩分云 / 非云统计；FXC 对 abs 写法敏感（max+abs 慢 13%，clamp 平方持平）写进坑点或 lint 提示；--live 连跑多场景 WebGL 上下文丢失待查（TM01 反馈） | 中 | scripts | — | — |
 | C04-C07 | 运动中时间累积保边（与 resolve 协调）、画质自动档切场景尖峰降档、DPR 2 按 1.5 渲染再放大、细节噪声 mip 偏粗 1.4 级（见报告） | 中 | clouds / quality | — | — |
 | C10 | 云边锐度（C03 未达成部分）：按表面距离变步长都会因采样位置依赖 jitter 产生新条纹；评估与 jitter 无关的表面距离场（Nubis³ 思路）或其他方案，先研究再实现 | 中 | clouds | — | backlit-cu、clouds-variety |
 | WX11-WX27 | 气象后续（research/METEOROLOGY.md，编号前缀由 W 改为 WX，协调者定）：WX11 风场（高空急流 / 夏季东风 / 季风驱动砧、卷云、云街、海面风；GLSL 常量改 uniform，须按 pass 计时）、WX12 多层云（低 / 中 / 高三层；高层薄云单独按需 pass，顺带修晕漏到低云）、WX13 锋面穿越序列、WX15 富士山笠云 / 吊るし雲、WX20 航迹云持久性、WX14 对流塔生长；真实天气数据（Open-Meteo CC BY 4.0，可按日期回放）。**WX11 / WX12 等 PERF-10 合并后再派** | 高 | weather / clouds | — | — |
@@ -94,6 +94,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | PERF-12 | 舱内合成开销：先算权重再着色（0 权重层跳过）、倒影早退、朝下射线不算光点、白天点星门限、uLoopGuard 与调用点合并 | 2026-09-27 | Opus 实现，**独立审查通过**（补跑 8 个湿窗 / 云中 / 满月等场景零回归）。舱内合成 GPU 0.39→0.29 ms。**遗留**：scene-default 编译仅 −5%（座椅着色要改结构：单独 pass 或光照收成一个调用点 → PERF-14）；注释「调试 1–4 仍全算」不准确 |
 | PERF-13 | 窗外程序冷编译回收：optics / wonder-sky 拆进按需变体 OW / DOW / DROW，wantedOutsideKey 唯一入口；默认程序断言 | 2026-09-27 | Opus 实现，**独立审查通过**，协调者合并（手工合并编译账本）。**真冷启动 13.4→11.1 s**（三代理并行下的最小值，收尾安静复测）。今日冷启动：早 12.5 → 午 19.0 → 晚 11.1 s。关键路径转为舱内 / 机翼程序。**遗留**：冷启动约 10 s 后宝光 / 本机影子一帧跳出（建议 1 s 渐显）；probe --patch outsideMat 改不到 OW；火车模式下仍预编 OW |
 | DX-11/12 | compare 补 RGB / 饱和度 / 相邻像素差 / 亮暗比 / 遮罩 / 行列曲线 / 缩略图；shots --pair / --ab / --base-shader 同机位 A/B、--scenes-file、--query、view-preset、默认关连续航程；变体就绪后复位云；冻结钉频闪；probe / passes 编译失败报错；测量锁跨 worktree 生效；shader-budget 指令槽；scripts/shader-parity.mjs；ts-resolve | 2026-09-28 | Sonnet 实现，协调者核对改动范围（main.ts 仅调试句柄）后合并，**已通知在途代理**。实现代理报告其内部「只读」分身写了文件（同一 worktree，未波及他人）。**遗留**：--pair 同 js 两次仍有 2.8–4/255 残差（先测噪声底）；src/rail/shader-parity.mjs 旧入口未转发 |
+| C03 | 层状云水平横纹：受光细节随机数与步进 jitter 去相关（独立 IGN + √2−1 增量），横纹能量 −12–15%、对角高频 +1–8%、零开销 | 2026-09-28 | Opus 实现，**独立审查返工一次**（实时单帧菱形交叉纹；flicker 冻结不渲染云、证据无效），协调者核验合并。**未达成**：边宽 −20%（按表面距离变步长都长新条纹 → C10） |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |

@@ -1,3 +1,6 @@
+// C03 返工：审查写的实时路径脚本（tmp/screenshot/c03rev/C03rev-rt.mjs 原样收进来）。在 C01-measure 基础上加了 realtime()：
+//   blend 0.12 + 邻域夹取，冻结后手动推进云，预热 96 帧后逐帧读云缓冲 128 帧（meta.json 的 rt：relStd / relLow16），再截稳态单帧；另有 --crop
+// 以下是 C01-measure 原来的说明
 // C01 / C02：同一页面、同一冻结姿态下对照云步进补丁 + 曝光参数（改自 tmp/cloud-sharp/csharp-measure.mjs）
 // 每个变体：页面内替换「实际在画的」云步进变体片段 + 设曝光 uniform → 真平均累积 64 帧 → 曝光 snap → 截图 + 云缓冲 + 适应结果
 // 用法：node handoff/C01-measure.mjs --port 5215 --vfile handoff/C01-ab.mjs --scenes noon-cumulus,clouds-variety,backlit-cu \
@@ -111,6 +114,44 @@ try {
         v.exposure.snap();
         await this.frames(4);
       },
+      // 审查用：真实实时路径（blend 0.12 + 邻域夹取），静止相机；预热 warm 帧后，逐帧读云缓冲裁剪区亮度，统计时间波动
+      async realtime(warm, nSeries, crop) {
+        const u = v.sceneMat.uniforms;
+        const zero = v.clouds.resolveMat.uniforms.uMotion.value.clone().set(0, 0, 0);
+        v.clouds.snap();
+        const bl = v.clouds.resolveMat.uniforms.uCsBlend, cl = v.clouds.resolveMat.uniforms.uCsClamp;
+        bl.value = 0.12; cl.value = 1;
+        v.clouds.frame = 0;
+        for (let i = 0; i < warm; i++) v.clouds.render(zero, u.uCamBasis.value, u.uCabinToWorld.value);
+        const CW = v.clouds.history[0].width / 2, CH = v.clouds.history[0].height, sx = CW / 1600, sy = CH / 1200;
+        const x = Math.round(crop[0] * sx), w = Math.round(crop[2] * sx), h = Math.round(crop[3] * sy), y = Math.round(CH - (crop[1] + crop[3]) * sy);
+        const N = w * h;
+        const series = [];
+        const buf = new Float32Array(N * 4);
+        for (let f = 0; f < nSeries; f++) {
+          v.clouds.render(zero, u.uCamBasis.value, u.uCabinToWorld.value);
+          v.clouds.pass.renderer.readRenderTargetPixels(v.clouds.history[0], x, y, w, h, buf);
+          const L = new Float32Array(N);
+          for (let k = 0; k < N; k++) L[k] = 0.2126 * buf[4 * k] + 0.7152 * buf[4 * k + 1] + 0.0722 * buf[4 * k + 2];
+          series.push(L);
+        }
+        // 每像素：时间标准差；16 帧盒平均后的标准差（低频成分）；相对均值
+        let sStd = 0, sLow = 0, sMean = 0, cnt = 0;
+        const B = 16;
+        for (let k = 0; k < N; k++) {
+          let m = 0; for (let f = 0; f < nSeries; f++) m += series[f][k]; m /= nSeries;
+          if (m < 0.02) continue;
+          let s2 = 0; for (let f = 0; f < nSeries; f++) s2 += (series[f][k] - m) ** 2;
+          let l2 = 0, nb = 0;
+          for (let f0 = 0; f0 + B <= nSeries; f0 += B) { let a = 0; for (let f = f0; f < f0 + B; f++) a += series[f][k]; a /= B; l2 += (a - m) ** 2; nb++; }
+          sStd += Math.sqrt(s2 / nSeries) / m; sLow += Math.sqrt(l2 / nb) / m; sMean += m; cnt++;
+        }
+        u.uClouds.value = v.clouds.texture;
+        await this.frames(2);
+        v.exposure.snap();
+        await this.frames(4);
+        return { px: cnt, relStd: sStd / cnt, relLow16: sLow / cnt, mean: sMean / cnt, W: v.clouds.history[0].width / 2, H: v.clouds.history[0].height };
+      },
       readAdapted() {
         const t = v.exposure.adapted[0];
         const buf = new Float32Array(8);
@@ -146,8 +187,11 @@ try {
       const changed = await page.evaluate((p) => window.__cs.patch(p), V.march || []);
       if (changed) await page.evaluate(() => window.__cs.compile());
       await page.evaluate((e) => window.__cs.setExp(e), V.exp || {});
-      await page.evaluate(() => window.__cs.accumulate(64));
+      const crop = (args.crop ? String(args.crop) : "420,450,760,550").split(",").map(Number);
+      const rt = await page.evaluate(([c]) => window.__cs.realtime(96, 128, c), [crop]);
+      log(sc.name, vn, "实时时间波动", JSON.stringify(rt));
       await page.screenshot({ path: path.join(dir, vn + ".png") });
+      meta.rt = meta.rt || {}; meta.rt[vn] = rt;
       if (!args["no-bin"]) {
         const r = await page.evaluate(() => window.__cs.readCloud(0, 0, 1600, 1200)).catch((e) => ({ err: e.message }));
         if (r.b64) fs.writeFileSync(path.join(dir, vn + ".bin"), Buffer.from(r.b64, "base64"));
