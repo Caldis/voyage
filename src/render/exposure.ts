@@ -13,7 +13,8 @@ import type { FullscreenPass } from "./pass";
  *    窗外永远按窗外的亮度曝光（和改前一致）；舱内的曝光由窗外的曝光出发，
  *    按绝对亮度决定能独立适应多少，并且不许比窗外还亮。因为遮罩是解析算出来的，交界处没有光晕。
  *    T28：舱内再做部分色适应（von Kries / CAT02）；舱灯开、窗外暗时舱内成为主导适应区。
- * 4. 输出：曝光 × HDR → 舱内色适应 → 浦肯野 → AgX 色调映射 → sRGB，最后加抖动避免天空渐变出现色带。
+ * 4. 输出：曝光 × HDR → 舱内色适应 → 浦肯野（T48：窗外高饱和、够亮的发光体只保色度）→ AgX 色调映射
+ *    （T48：夜里窗外高饱和像素做色度保持）→ sRGB，最后加抖动避免天空渐变出现色带。
  */
 
 // 测光目标是 2×1：左像素是亮度（本段），右像素是色度（CHROMA_METER，T28）
@@ -216,6 +217,8 @@ uniform vec2 uChromaCabinW; // 适应白点里舱内白点的权重：x = 窗外
 uniform vec3 uCabinRefAlbedo; // 舱内饰面的平均反照率（只用色度）：舱内平均色 ÷ 它 = 舱内光源色
 uniform vec2 uOffLocusAdapt; // 适应白点偏离普朗克轨迹的那部分人眼只适应这个比例：x = 偏绿一侧，y = 偏品红 / 紫一侧（1 = 和轨迹方向一样）
 uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度限幅（log2 色度向量的长度）
+uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 x→y、像素亮度 log10 cd/m² z→w 之间由 0 过渡到 1（只在窗外）
+uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
 #include <common>
 #include <dithering_pars_fragment>
 varying vec2 vUv;
@@ -254,6 +257,7 @@ void main() {
   vec4 src = texture(uHdr, vUv);
   float logExposure;  // log2 曝光（HDR 单位 kcd/m²）
   float logAdapt;     // 这个像素的适应亮度，log2 kcd/m²（浦肯野用）
+  float logAdaptO = 0.0; // 窗外的适应亮度，log2 kcd/m²（T48 判断「夜里」用）
   vec3 catGain = vec3(1.0); // 舱内色适应的 LMS 增益（窗外不用）
   if (uAuto) {
     vec4 adapted = texture(uAdapted, vec2(0.25, 0.5)); // log2 亮度（kcd/m²）：窗外（对数均值）、舱内（按面积）、窗外（线性均值）
@@ -262,6 +266,7 @@ void main() {
     float eO = em.eO, eC = em.eC, aC = em.aC, o = adapted.x, dom = em.dom;
     logExposure = mix(eC, eO, src.a);
     logAdapt = mix(aC, em.aO, src.a);
+    logAdaptO = em.aO;
     // ⑥ 色适应（T28，只作用于舱内）：适应白点 = 舱内光源色与窗外平均色的对数混合，
     //    舱内越主导（舱内比窗外亮得多：夜里开灯），越以舱内光源为准、适应得越完全。
     //    窗外平均色先限幅：很蓝的天空不是灰色表面，照单全收会把舱内的红补过头（fuji-day 偏粉）
@@ -287,18 +292,45 @@ void main() {
   c = mix(ca, c, src.a);
   // 浦肯野效应：暗处视杆细胞接管，看不出颜色、对蓝绿光敏感（峰值 507 nm），月夜因此是银蓝色的。
   // 按这个像素的适应亮度在明视觉（> 3 cd/m²）和暗视觉（< 0.01 cd/m²）之间过渡（经验近似，参考 Jensen 2000）
+  // T48：饱和度按浦肯野之前的颜色算（1 − min / max），发光体「保色」的两处都用它
+  float satIn = 1.0 - min(min(c.r, c.g), c.b) / max(max(max(c.r, c.g), c.b), 1e-12);
+  float logPix = log2(max(dot(c, vec3(0.2126, 0.7152, 0.0722)) * 1000.0, 1e-6)) * 0.30103; // log10 cd/m²
+  float nightChroma = 0.0; // T48 夜里饱和发光体的色度保持权重（窗外），色调映射之后用
   if (uAuto) {
     float cdAdapt = exp2(logAdapt) * 1000.0;
     float scotopic = 1.0 - smoothstep(-2.0, 0.5, log(max(cdAdapt, 1e-6)) / log(10.0));
     // 像素本身够亮（夜里的灯）就能刺激视锥细胞，保留颜色
-    float cdPixel = dot(c, vec3(0.2126, 0.7152, 0.0722)) * 1000.0;
-    scotopic *= 1.0 - smoothstep(-2.0, 0.0, log(max(cdPixel, 1e-6)) / log(10.0));
+    scotopic *= 1.0 - smoothstep(-2.0, 0.0, logPix);
+    // T48 色觉阈值：中间视觉里颜色不是按比例褪掉，而是「色度低于阈值的看不出颜色」——月光下的云、星光下的海
+    //    本来就只有很淡的颜色，落到阈值以下就是银灰；钠灯照亮的雾（R:G:B ≈ 1 : 0.23 : 0.01）色度远在阈值之上，
+    //    只要像素本身进了中间视范围（> 约 0.003 cd/m²）人眼就看得出是橙的。所以高饱和、够亮的窗外像素不混视杆的灰蓝。
+    //    但亮度照旧按视杆的光谱灵敏度走（中间视的光效率移向蓝绿，橙红的灯在夜里显得暗一些——CIE 191 的中间视光度学），
+    //    只保色度、不保亮度：灯的光晕不会因此变亮变糊，W02 标定的雾亮度层次也不变。
+    float satKeep = smoothstep(uMesopicKeep.x, uMesopicKeep.y, satIn) * src.a;
+    float keep = satKeep * smoothstep(uMesopicKeep.z, uMesopicKeep.w, logPix);
     float rod = dot(c, vec3(0.05, 0.62, 0.33));
-    c = mix(c, rod * vec3(0.66, 0.82, 1.0), scotopic * 0.8);
+    vec3 cs = mix(c, rod * vec3(0.66, 0.82, 1.0), scotopic * 0.8);
+    c = mix(cs, c * (dot(cs, vec3(0.2126, 0.7152, 0.0722)) / max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12)), keep);
+    // 窗外适应在暗视 / 低中间视（夜里）时才做色调映射后的色度保持，黄昏、白天一律不动
+    float nightO = 1.0 - smoothstep(uNightChroma.y, uNightChroma.z, (logAdaptO + 9.965784) * 0.30103);
+    //    只按饱和度门控、不再乘像素亮度门限：暗处 AgX 本来就几乎不压色度（目标 ≈ AgX 自己），叠两道门限会让雾边缘的色相变化太陡
+    nightChroma = uNightChroma.x * nightO * satKeep;
   }
   gl_FragColor = vec4(c * exposure, 1.0);
   if (uDebugMask) { gl_FragColor = vec4(vec3(src.a), 1.0); return; }
-  #include <tonemapping_fragment>
+  #ifdef TONE_MAPPING
+  {
+    vec3 x = gl_FragColor.rgb;
+    vec3 a = toneMapping(x);
+    // T48 色度保持：AgX 在对数域逐通道压缩，高光的通道比被压扁，夜里被曝光拉到中灰之上 4–7 档的钠灯 / 灯照的雾
+    //    就成了奶白。对「夜里、窗外、高饱和、够亮」的像素，把 AgX 的结果往「同色相、同显示亮度（放不下时降亮度保色度）」
+    //    的颜色拉一部分：钠灯读成橙黄、LED（饱和度低，不进这条）仍是白。中性色的目标就是 AgX 自己，不受影响
+    //    （不写分支：shader-budget 实测带 if 的版本 exposure-final 编译 +7–10%，无分支 +3–6%，约 +4 ms）
+    float yx = max(dot(x, vec3(0.2126, 0.7152, 0.0722)), 1e-9);
+    vec3 hue = x * min(dot(a, vec3(0.2126, 0.7152, 0.0722)) / yx, 1.0 / max(max(max(x.r, x.g), x.b), 1e-9));
+    gl_FragColor.rgb = mix(a, hue, nightChroma);
+  }
+  #endif
   #include <colorspace_fragment>
   #include <dithering_fragment>
 }
@@ -435,6 +467,8 @@ export class Exposure {
       uCabinRefAlbedo: { value: new THREE.Vector3(0.75, 0.72, 0.665) },
       uOffLocusAdapt: { value: new THREE.Vector2(1.0, 0.4) },
       uWinChromaMax: { value: 0.6 },
+      uMesopicKeep: { value: new THREE.Vector4(0.5, 0.85, -2.0, -0.8) },
+      uNightChroma: { value: new THREE.Vector3(0.45, -1.5, 0.0) }, // 协调者合并时 0.6 → 0.45：雾芯留一点明暗层次
     },
     true,
   );
