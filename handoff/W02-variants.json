@@ -1,0 +1,6 @@
+[
+  { "name": "on", "js": "1", "wait": 1500 },
+  { "name": "off", "js": "window.__voyage.wonders.clear()", "wait": 1500 },
+  { "name": "on2", "js": "1", "wait": 1500 },
+  { "name": "off2", "js": "window.__voyage.wonders.clear()", "wait": 1500 }
+]

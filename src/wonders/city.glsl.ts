@@ -81,7 +81,7 @@ vec4 fcCarpet(vec2 c, vec4 n, float blur) {
   if (m <= 0.0) return vec4(0.0);
   float district = 0.45 + 1.0 * smoothstep(0.22, 0.8, n.r);
   float parks = mix(0.35, 1.0, smoothstep(0.28, 0.46, n.g));
-  float riv = smoothstep(0.2 + 1.2 * blur, 0.55 + 1.8 * blur, fcRiver(c));
+  float riv = mix(0.2, 1.0, smoothstep(0.15 + 1.2 * blur, 0.7 + 1.8 * blur, fcRiver(c)));
   // 两座金字塔脚下最亮（塔的剪影压在最亮的雾上），工业区暗（只有火光）
   vec2 d1 = c - FC_P1.xy, d2 = c - FC_P2.xy, di = c - FC_IND.xz;
   float hot = 1.0 + 0.7 * exp(-dot(d1, d1) / 12.0) + 0.6 * exp(-dot(d2, d2) / 9.0);
