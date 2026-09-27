@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { LocalFrame, latToTileY, lonToTileX, tileXToLon, tileYToLat, zoomForResolution } from "./geo";
 import { DEM_MAX_ZOOM, DEM_URL, IMAGERY_MAX_ZOOM, IMAGERY_URL, NIGHT_MAX_ZOOM, NIGHT_URL, VECTOR_MAX_ZOOM, loadBitmap, loadWater } from "./tiles";
-import { packRoads, type LevelPixels, type RoadJob } from "./road-raster";
+import { buildGroundLevel, type GroundLevelResult, type RoadJob } from "./road-raster";
 
 /**
  * 地面的 clipmap：以飞机正下方为中心的 7 级方形区域，边长 8、16 … 512 km，
@@ -288,16 +288,17 @@ export class GroundClipmap {
     // 交给下面的 after 回调清（要等 3 张纹理都真正传完，见类头「PERF-8」注释）
     let queued = false;
     try {
-      const [albedo0, vec, height, night] = await Promise.all([
+      const [albedo0, vec, height, nightRaw] = await Promise.all([
         this.buildImagery(l.size, cx, cz, i === GROUND_LEVELS - 1),
         this.buildWater(l.size, cx, cz),
         this.buildHeight(l.size, cx, cz),
         this.buildNight(l.size, cx, cz),
       ]);
       if (gen !== this.generation || i < this.minLevel) return;
-      // 夜光放进水体纹理的 B 通道，道路灯带（T08）写进水体纹理和影像纹理的 A 通道：都在 Worker 里做（road-raster.ts 的 packRoads），
-      // 像素缓冲区转移过去再转移回来，主线程上不跑 1M 像素的循环
-      const { water, albedo } = await packRoadsAsync(vec.job, { water: vec.water, albedo: albedo0, night });
+      // 水体/河道栅格化、夜光的逐像素变换、道路灯带（T08）叠加：都在 Worker 里做（road-raster.ts 的
+      // buildGroundLevel，PERF-9 把水体/夜光也从主线程挪了进来，见类头「PERF-8」注释旁边的说明），
+      // 像素缓冲区转移过去再转移回来，主线程上不跑 getImageData / 逐顶点投影 / 1M 像素的循环
+      const { water, albedo } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
       this.queueUpload(
@@ -396,7 +397,10 @@ export class GroundClipmap {
     return ctx.getImageData(0, 0, RES, RES).data;
   }
 
-  /** 夜光（NASA Black Marble）：只取亮度，存成灰度。分辨率粗（~500 m），着色器里再用影像里的城市区域把它「落」到街区上 */
+  /** 夜光（NASA Black Marble）：只取亮度，分辨率粗（~500 m），着色器里再用影像里的城市区域把它「落」到街区上。
+   * 「亮度减去蓝色底」的变换（Black Marble 的底图把陆地画成暗蓝色）挪进了 Worker（PERF-9，见 road-raster.ts
+   * 的 darkenNight）：这里只做取瓦片、画布合成、getImageData 这三步（canvas 合成必须在有 2D 上下文的线程上做，
+   * 这一版没有把它挪进 Worker，见 handoff/PERF-9.md「还剩下什么」），返回原始 RGBA，不再在主线程跑一遍 1M 像素的变换循环。 */
   private async buildNight(size: number, cx: number, cz: number) {
     const [latC] = this.frame.toGeo(cx, cz);
     let zoom = zoomForResolution(size / RES, latC, NIGHT_MAX_ZOOM);
@@ -416,14 +420,7 @@ export class GroundClipmap {
         ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
       }),
     );
-    const px = ctx.getImageData(0, 0, RES, RES).data;
-    // Black Marble 的底图把陆地画成暗蓝色：取「亮度减去蓝色底」，只留下灯光
-    const out = new Uint8ClampedArray(RES * RES * 4);
-    for (let k = 0; k < RES * RES; k++) {
-      const r = px[k * 4], g = px[k * 4 + 1], b = px[k * 4 + 2];
-      out[k * 4] = Math.max(0, Math.min(255, (r * 0.6 + g * 0.4 - b * 0.35) * 1.3));
-    }
-    return out;
+    return ctx.getImageData(0, 0, RES, RES).data;
   }
 
   private async buildHeight(size: number, cx: number, cz: number) {
@@ -463,83 +460,52 @@ export class GroundClipmap {
     return { data, max, sea };
   }
 
+  /**
+   * 只取瓦片、攒任务（PERF-9）：水体/河道的栅格化（Path2D 填充/描边 + getImageData）挪进了 Worker
+   * （`road-raster.ts` 的 `buildGroundLevel`，和道路 SDF、夜光变换一起做），这里不再碰 canvas——
+   * CDP CPU 剖析（route-hnd-cts 60× 加速航程）显示原来这一步（含逐顶点的 tileYToLat/tileXToLon 投影）
+   * 是尖峰帧里最大的一块，见 handoff/PERF-9.md。
+   */
   private async buildWater(size: number, cx: number, cz: number) {
     const [latC] = this.frame.toGeo(cx, cz);
     let zoom = zoomForResolution(size / RES, latC, VECTOR_MAX_ZOOM);
     let cover = this.tileCover(size, cx, cz, zoom, RES);
     while (cover.tiles.length > 36 && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
-    const ctx = makeCanvas(RES, RES);
-    ctx.fillStyle = "black";
-    ctx.fillRect(0, 0, RES, RES);
-    const kmPerPx = size / RES;
     this.pending += cover.tiles.length;
     const results = await Promise.all(cover.tiles.map((t) => loadWater(zoom, t.x, t.y).then((w) => ({ t, w }))));
     this.pending -= cover.tiles.length;
-    for (const { t, w } of results) {
-      if (!w) continue;
-      const proj = (p: { x: number; y: number }) =>
-        cover.toPx(tileYToLat(t.y + p.y / w.extent, zoom), tileXToLon(t.x + p.x / w.extent, zoom));
-      // R = 水面，G = 海洋（海洋有大风浪，湖泊河流平静）
-      for (const poly of w.polygons) {
-        ctx.beginPath();
-        for (const ring of poly.rings) {
-          ring.forEach((p, k) => {
-            const [x, y] = proj(p);
-            if (k === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-          });
-          ctx.closePath();
-        }
-        ctx.fillStyle = poly.ocean ? "rgb(255,255,0)" : "rgb(255,0,0)";
-        ctx.fill("evenodd");
-      }
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      for (const line of w.lines) {
-        const widthPx = line.width / 1000 / kmPerPx;
-        // 比一个像素还窄的河道按覆盖比例画淡一点，免得远处闪烁
-        ctx.lineWidth = Math.max(widthPx, 1);
-        ctx.globalAlpha = Math.min(widthPx, 1);
-        ctx.strokeStyle = "rgb(255,0,0)";
-        ctx.beginPath();
-        line.points.forEach((p, k) => {
-          const [x, y] = proj(p);
-          if (k === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
-    }
-    // 道路（T08）：栅格化任务（投影、抽稀、求距离全在 Worker 里，见 road-raster.ts），等影像和夜光都齐了由 build 交出去
+    // 水体/河道 + 道路（T08）：几何数据攒成任务，投影、栅格化、求距离全在 Worker 里做（见 road-raster.ts），
+    // 等影像和夜光都齐了由 build 交出去
     const [lat0, lon0] = [this.frame.lat0, this.frame.lon0];
+    const water = results.flatMap(({ t, w }) => (w ? [{ x: t.x, y: t.y, data: w.water }] : []));
     const tiles = results.flatMap(({ t, w }) => (w?.roads ? [{ x: t.x, y: t.y, data: w.roads }] : []));
-    const job: RoadJob = { res: RES, lat0, lon0, x0: cx - size / 2, z0: cz - size / 2, size, zoom, tiles };
-    return { water: ctx.getImageData(0, 0, RES, RES).data, job };
+    const job: RoadJob = { res: RES, lat0, lon0, x0: cx - size / 2, z0: cz - size / 2, size, zoom, tiles, water };
+    return { job };
   }
 }
 
-// ---- 道路栅格化的 Worker（T08）：一个常驻 Worker，按请求号对应回调；起不来时在主线程同步算 ----
+// ---- 地面栅格化的 Worker（T08 道路，PERF-9 并入水体/夜光）：一个常驻 Worker，按请求号对应回调；
+// 起不来时在主线程同步算（buildGroundLevel 用的是 OffscreenCanvas，主线程 / Worker 都能跑）----
 // 像素缓冲区是转移过去的（主线程这边随即失效），所以 Worker 中途出错时没法在这里补算：让这次构建失败，
 // build 的 finally 清掉 building 标志，下一帧 update 发现这一级还没建好会重建，那时已经改走主线程
 let roadWorker: Worker | null | undefined;
 let roadReq = 0;
-const roadPending = new Map<number, { resolve: (px: LevelPixels) => void; reject: (e: Error) => void }>();
+const roadPending = new Map<number, { resolve: (r: GroundLevelResult) => void; reject: (e: Error) => void }>();
 
-function packRoadsAsync(job: RoadJob, px: LevelPixels): Promise<LevelPixels> {
+function buildGroundLevelAsync(job: RoadJob, albedo: Uint8ClampedArray, nightRaw: Uint8ClampedArray): Promise<GroundLevelResult> {
   if (roadWorker === undefined) {
     try {
       roadWorker = new Worker(new URL("./road-raster.worker.ts", import.meta.url), { type: "module" });
-      roadWorker.onmessage = (e: MessageEvent<{ id: number; px: LevelPixels }>) => {
+      roadWorker.onmessage = (e: MessageEvent<{ id: number; water: Uint8ClampedArray; albedo: Uint8ClampedArray }>) => {
         const req = roadPending.get(e.data.id);
         roadPending.delete(e.data.id);
-        req?.resolve(e.data.px);
+        req?.resolve({ water: e.data.water, albedo: e.data.albedo });
       };
       roadWorker.onerror = (e) => {
-        console.warn("道路栅格化 Worker 出错，改在主线程计算", e.message);
+        console.warn("地面栅格化 Worker 出错，改在主线程计算", e.message);
         roadWorker?.terminate();
         roadWorker = null;
-        for (const req of roadPending.values()) req.reject(new Error("道路栅格化 Worker 出错"));
+        for (const req of roadPending.values()) req.reject(new Error("地面栅格化 Worker 出错"));
         roadPending.clear();
       };
     } catch {
@@ -547,15 +513,14 @@ function packRoadsAsync(job: RoadJob, px: LevelPixels): Promise<LevelPixels> {
     }
   }
   if (!roadWorker) {
-    packRoads(job, px);
-    return Promise.resolve(px);
+    return Promise.resolve(buildGroundLevel(job, albedo, nightRaw));
   }
   const id = ++roadReq;
   const worker = roadWorker;
   return new Promise((resolve, reject) => {
     roadPending.set(id, { resolve, reject });
-    // 瓦片道路数据复制过去（还留在 LRU 缓存里给下次重建用），像素缓冲区转移（不复制）
-    worker.postMessage({ id, job, px }, [px.water.buffer, px.albedo.buffer, px.night.buffer]);
+    // 瓦片水体/道路几何数据复制过去（还留在 LRU 缓存里给下次重建用），像素缓冲区转移（不复制）
+    worker.postMessage({ id, job, albedo, nightRaw }, [albedo.buffer, nightRaw.buffer]);
   });
 }
 
