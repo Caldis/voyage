@@ -176,6 +176,7 @@ void main() {
     float stepLen = (fine > 0 || (!wasEmpty && !wasThin)) ? dt : 2.0 * dt;
     vec3 p = ro + rd * (t + stepLen * jitter);
     float lod = clamp(log2(dtBase / 0.055), 0.0, 5.0);
+    gDetailRnd = fract(jitter + float(i) * 0.6180339);   // 细节噪声随机平铺给受光步进挑格点用（T32），每步、每帧都换
     float dens = cloudDensity(p, lod, t < 150.0);
     float stormW = gStormW;
     float stormAO = gStormAO;
@@ -207,6 +208,8 @@ void main() {
       float ls = 0.06;
       float lt = 0.0;
       int lightSteps = (uStormCount > 0 || uHurricane.w > 0.5) ? 8 : 6;
+      // 受光步进的细节噪声只沿用上面那一点随机挑中的一个随机平铺格点（见 clouds.glsl.ts 的 gDetailLight，T32）
+      gDetailLight = true;
       if (lightSteps == 6) {
         // 普通云（没有雷暴、台风）：只有层状云，常量上界，编译器展开后最快（和改动前一致）。
         // 这里只能调用层状云密度：展开的每一份都带上雷暴密度的话，冷编译会从 55 s 涨到 90 s
@@ -223,6 +226,7 @@ void main() {
           ls *= 2.0;
         }
       }
+      gDetailLight = false;
       od *= CLOUD_EXTINCTION;
       // 多次散射近似（Wrenninge 2013）：每一阶散射更弱、衰减更慢、相函数更平。
       // 原来只取 4 阶、权重每阶折半，顺光（背散射）时厚云的有效反照率只有 ~0.3，真实厚云是 0.7–0.8，
