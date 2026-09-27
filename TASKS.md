@@ -9,7 +9,7 @@
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | BIS-7 | 第 7 波（ART-7 回归） | 5219 | 主仓库 tmp/bis7-* | Opus 调查员（二分：4 km 夜景城市奶白光雾、云面斜纹 / 棋盘点阵 → handoff/BIS-7.md） | — | 进行中 |
-| C11 | 第 7 波（云锐度，云文件） | 5211 | worktree | Opus（云里棋盘纹：resolve 邻域平均，查机翼边；基线为 C09 合并后） | — | 进行中 |
+| C11 | 第 7 波（云锐度，云文件） | 5211 | `worktree-agent-a9f74282e9a59f46a`（dadae8d） | Opus | 审查中（5212） | 已交付：云里 8 姿态相邻像素差 ×0.15、对角高频 ×0.07、时间波动 ×0.18；云外逐位不变（论证 + 实测）；cloud-resolve 冷编译 +14%（+8 ms，超单程序门槛，待审查裁定） |
 | TM02 | 第 7 波（云锐度，用户需求） | 5217 | `worktree-agent-a1ef80f4d6dd2dfb1`（f271dea） | Opus | 审查中（5218） | 已交付：局部 TM + 修机翼迷彩亮斑（uPreWing 逐通道差判机翼覆盖，main.ts 一行接线）；台风卷云盖过曝经量化非 TM 所致 → 归 clouds 台风段（T44 遗留，待排） |
 | G07 | 第 7 波（飞机地面） | 5207 | worktree | Opus（G06 代价：mip 按层在 Worker 生成、首载先粗后细、2048² 按 GPU 启动定档；必审） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
@@ -24,6 +24,10 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| W-STAIR | 机翼边 2 px 阶梯（襟翼整流罩下点阵阴影、亮三角斜边；C11 前就有，被云噪声盖住，现在是云里窗外最显眼的锯齿；tmp/screenshot/c11/wing/stair_z1.png） | 高（锯齿类） | wing-pass / wing 材质 | wing | in-cloud 机翼放大、sunset-wing |
+| DX-23 | `freeze()` 每次调用重设冻结时刻，uTime / 云偏移 / whiteout 跳一帧（同着色器两次测量平均差 0.6）→ 加「沿用原冻结时刻」选项并核对 `shots --pair --base-shader --cloud-live`；收编 C11-ab.mjs / C09 审查的 c09rev-ab.mjs / TM01-measure.mjs 为正式同页换材质工具；shots 默认高画质档 + 降档警告；EOX 瓦片跨域报错聚合；shader-budget --baseline 缺依赖时提示 | 中 | scripts/* | — | 同代码两次测量差为 0 |
+| C-TYPH | 台风外围卷云盖过曝白平板（中位数 235、一半以上 ≥235，底面水平直线 + 规则水波纹；TM02 量化证实非色调映射所致，属 clouds 台风段，T44 遗留；ART-7 #5） | 中高 | clouds（台风段） | clouds | typhoon-outer-11、typhoon-bands |
+| C-TAIL | C11 合并后重定 `CLOUD_MS_TAIL.y`（C01 为压棋盘纹定成 2，约束已解除，按观感重调） | 低 | clouds | clouds | in-cloud |
 | SC-4 | 云程序与场景并行编译 | 最高 | main.ts 启动段、boot/* | 碰 main | 冷启动 −约 6 s，无 ≥1 s 冻结 |
 | SC-6 | （可选）`?dev=` 特性隔离 | 低 | scene.ts、main.ts | 碰 | dev=cabin 场景编译 ≤8 s |
 | T07 | 光学细节：太阳附近的眼睛衍射星芒；窗板边缘色散；高空低温时内层窗板透气孔周围的冰晶 | 中 | `src/render/bloom.ts`、`src/render/exposure.ts`、`src/render/cabin.glsl.ts`（窗板部分） | 否 | sunset-wing、noon-cumulus |
