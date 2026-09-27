@@ -6,6 +6,7 @@ import { CABIN_SHADING_COMMON } from "./cabin-shading.glsl";
 import { LEATHER_COMMON } from "./cabin-leather.glsl";
 import { SEATS_COMMON } from "./seats.glsl";
 import { CABIN_REFLECT_COMMON } from "./cabin-reflect.glsl";
+import { EXPOSURE_STATE } from "./exposure";
 import { VIEW_COMMON } from "./view.glsl";
 import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
 import { LIGHTS_COMMON } from "./lights.glsl";
@@ -39,6 +40,7 @@ uniform float uTime;            // 秒，窗板上水珠的颤动用
 uniform float uWetness;         // 窗板外侧的湿度 0..1
 uniform float uCameraFog;       // 飞机所在位置云的消光系数（1/km），机翼要隔着这层雾看
 uniform float uHdrMax;          // HDR 目标能存的最大值（半精度时是 6e4）
+uniform sampler2D uExposureState; // 上一帧的曝光适应结果（exposure.ts 的 EXPOSURE_STATE）：左像素 w = 倒影的显示增益（log2，T30）
 // 调试可视化：0 关，1 内衬命中深度，2 亮度（伪彩），3 内衬受到的窗光，4 内衬法线（1–4 在这里），
 // 以下在窗外程序（outside-pass.ts）里：
 // 5 海面本身，6 海面天空反射，7 海面的内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子，
@@ -227,9 +229,16 @@ void main() {
   // 白天窗外亮上千倍，倒影不到窗外的千分之三（色调映射后不到半个灰阶），整段跳过省掉开销；
   // 上界按最亮的天花板灯槽 + 对面窗户估计，阅读灯亮着时（只在夜里全关灯时）不跳
   vec3 rr = vec3(rd.xy, -rd.z);
-  float reflMax = fr * 1.5 * dot(0.3 * (rl.eAmb + 2.5 * rl.eMain + rl.moodI) + rl.lOppWin, vec3(0.2126, 0.7152, 0.0722));
+  // T30：倒影跟舱内同一个适应框架（见 exposure.ts ⑦）——夜里窗外暗、窗内曝光比舱内高很多档时，
+  // 倒影不能跟着被拉亮到比它的来源（舱壁、灯带）还亮，超出「舱内曝光 + 余量」的部分在这里扣掉
+  float reflGain = fr * 1.5 * exp2(texelFetch(uExposureState, ivec2(0, 0), 0).w);
+  // 倒影的色适应：舱内按 T28 部分适应了舱灯的暖色（D ≈ 0.7，舱壁看上去接近中性），倒影是同一批表面、同一个框架，
+  // 也按同样程度抵掉主灯的色温；曝光 pass 分不开倒影和窗外（窗外不做舱内色适应），所以在这里预先乘上。
+  // 睡眠档的淡紫氛围灯不抵（T28 本来就只适应它一小部分）
+  vec3 reflWB = mix(vec3(1.0), vec3(dot(mainTint, vec3(0.2126, 0.7152, 0.0722))) / mainTint, 0.7 * smoothstep(0.005, 0.05, uCabinLight));
+  float reflMax = reflGain * dot(0.3 * (rl.eAmb + 2.5 * rl.eMain + rl.moodI) + rl.lOppWin, vec3(0.2126, 0.7152, 0.0722));
   if (rl.readOn > 0.0 || reflMax > 0.003 * dot(view, vec3(0.2126, 0.7152, 0.0722))) {
-    view += fr * 1.5 * cabinReflection(pPane, rr, length(pPane - ro), rl);
+    view += reflGain * reflWB * cabinReflection(pPane, rr, length(pPane - ro), rl);
   }
   paneK = (1.0 - 0.1 * sm) * (1.0 - 0.3 * edge) * (1.0 - 0.12 * wc)
     * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
@@ -310,6 +319,7 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uAerialInscatterS: { value: atmosphere.aerialInscatter.texture },
       uAerialTransmittanceS: { value: atmosphere.aerialTransmittance.texture },
       uHdrMax: { value: 6e4 },
+      uExposureState: EXPOSURE_STATE,
       uDebug: { value: 0 },
       uLoopGuard: { value: 0 },
     },
