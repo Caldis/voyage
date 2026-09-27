@@ -85,6 +85,10 @@ async (page) => {
     { name: "wonder-tether-dusk", p: { preset: "wpac", seat: "left", date: "2026-09-27", time: 1078, coverage: 0.3, "cabin-light": false, "wing-pos": "-4" }, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"tether\", { forwardOffsetDeg: 0, distKm: 370, reveal: 1 }); return v.wonders.describe();" },
     // 建木，白天（下午）：缠着树干旋上去的云气是白天最先被注意到的东西，九欘（弯枝）在窗里的高处
     { name: "wonder-jianmu-day", p: { preset: "wpac", date: "2026-09-27", time: 900, coverage: 0.3, "wing-pos": "-4" }, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 380, reveal: 1 }); return v.wonders.describe();" },
+    // W02：雾海灯城（云间层，js 召唤，种子写死 0.37 让画面可复现；召唤后等云间层变体后台编好再截图）。
+    // wpac 22:00 本地、2026-01-16 无月夜（月亮 −88°、太阳 −64°），右座朝西，城心在 95 km 外正对窗口：
+    // 被灯海染橙的雾、雾里的阶梯金字塔剪影、火炬、探照光束、雾下的车流灯带
+    { name: "wonder-fogcity-night", p: { preset: "wpac", date: "2026-01-16", time: 1320, coverage: 0.15, "cabin-light": false, "wing-pos": "-4" }, wait: 4000, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"fogcity\", { forwardOffsetDeg: 0, distKm: 95, reveal: 1, seed: 0.37 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe() + \" · \" + v.clouds.wonderLayerState;" },
   ];
 
   await page.goto(`${origin}/?regression=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });

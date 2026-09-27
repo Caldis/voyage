@@ -23,6 +23,7 @@
  */
 
 import * as THREE from "three";
+import { CITY_GLSL } from "./city.glsl";
 
 /** 云间层奇观的 uniform（WonderSystem 持有、每帧写；clouds.ts 的步进材质先铺一份默认值，再被场景共用的这份覆盖） */
 export function createWonderCloudUniforms() {
@@ -54,6 +55,13 @@ export interface WonderCloudKind {
   shade?: string;
   /** `float f(vec3 q, out vec3 albedo, out vec3 emit)`：返回消光系数 σ（1/km），albedo 单次散射反照率，emit 体积自发光（kcd/m² / km） */
   medium?: string;
+  /** （W02）`vec2 f(vec3 o, vec3 d, vec2 seg)`：把介质的步进区间收窄到真正有介质的那段（o = 相机的局部坐标、d = 视线的局部方向，
+   *  seg = 包围盒区间）。包围盒要装下光束等解析部分、比介质高得多时用它省步数；省略 = 整个包围盒 */
+  mediumSeg?: string;
+  /** （W02）`void f(vec3 o, vec3 d, vec2 seg, float pixAng, out vec4 e0, out vec4 e1, out vec4 e2)`：解析的发光「事件」，
+   *  每个 = (预乘辐亮度 rgb, 深度 t)。介质步进走到 t 时插进去（被它前面的介质衰减），在不透明表面之后的乘表面的透过率。
+   *  用于比步长细得多的发光体：地面灯带（平面求交）、光束（线积分的闭式解）、点光。没有的事件把 rgb 留 0 */
+  ray?: string;
 }
 
 // ---------------- 测试体（W00 验证接口用，不参与随机挑选，不进面板） ----------------
@@ -98,23 +106,41 @@ const PROBE_ENABLED =
   (typeof location !== "undefined" && /[?&]w00probe\b/.test(location.search)) ||
   (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.W00_PROBE === "1";
 
-/** 已注册的云间层奇观种类。W02 / W03 往这里加 */
-export const WONDER_CLOUD_KINDS: WonderCloudKind[] = [
-  ...(PROBE_ENABLED
-    ? [{ id: 1, name: "W00 测试体", glsl: PROBE_GLSL, sdf: "w00ProbeSdf", shade: "w00ProbeShade", medium: "w00ProbeMedium" }]
-    : []),
-];
-
 /** 测试体的种类编号（catalog.ts 的调试条目用） */
 export const W00_PROBE_KIND = 1;
 export const W00_PROBE_COMPILED = PROBE_ENABLED;
+/** 雾海灯城（W02）的种类编号 */
+export const FOGCITY_KIND = 2;
 
-function dispatch(kinds: WonderCloudKind[], field: "sdf" | "shade" | "medium", call: string, fallback: string) {
+/** 已注册的云间层奇观种类。W03 往这里加 */
+export const WONDER_CLOUD_KINDS: WonderCloudKind[] = [
+  ...(PROBE_ENABLED
+    ? [{ id: W00_PROBE_KIND, name: "W00 测试体", glsl: PROBE_GLSL, sdf: "w00ProbeSdf", shade: "w00ProbeShade", medium: "w00ProbeMedium" }]
+    : []),
+  {
+    id: FOGCITY_KIND,
+    name: "雾海灯城（W02）",
+    glsl: CITY_GLSL,
+    sdf: "fcSdf",
+    shade: "fcShade",
+    medium: "fcMedium",
+    mediumSeg: "fcMediumSeg",
+    ray: "fcRay",
+  },
+];
+
+function dispatch(kinds: WonderCloudKind[], field: "sdf" | "shade" | "medium" | "mediumSeg", call: string, fallback: string) {
   const cases = kinds
     .filter((k) => k[field])
     .map((k) => `  if (k == ${k.id}) return ${k[field]}(${call});`)
     .join("\n");
   return `${cases}\n  return ${fallback};`;
+}
+function dispatchVoid(kinds: WonderCloudKind[], field: "ray", call: string) {
+  return kinds
+    .filter((k) => k[field])
+    .map((k) => `  if (k == ${k.id}) { ${k[field]}(${call}); return; }`)
+    .join("\n");
 }
 
 const UNIFORMS_GLSL = /* glsl */ `
@@ -124,7 +150,7 @@ uniform vec3 uWonderCam;        // 相机在奇观局部坐标里的位置（km�
 uniform mat3 uWonderToLocal;    // 窗外坐标方向 → 奇观局部坐标方向（行 = 局部的东、天顶、南）
 uniform vec3 uWonderBoxMin;     // 局部坐标的包围盒（km）：表面和介质都必须在里面
 uniform vec3 uWonderBoxMax;
-uniform vec4 uWonderParams;     // x：reveal（0..1）；y：时间（真实秒，循环）；zw：各奇观自用
+uniform vec4 uWonderParams;     // x：reveal（0..1）；y：时间（真实秒，1 小时循环）；z：本次出现的随机种子（0..1，W02）；w：catalog 的 params[0]
 uniform vec4 uWonderCaster;     // 投影椭球：xyz 中心（局部坐标），w：1 = 启用
 uniform vec3 uWonderCasterR;    // 投影椭球的三个半轴（km）
 uniform float uWonderStep;      // 介质的步长（km）；包围盒里另外保证 8–96 步
@@ -213,6 +239,17 @@ float wonderMedium(vec3 q, out vec3 albedo, out vec3 emit) {
   emit = vec3(0.0);
   int k = int(uWonderVol + 0.5);
 ${dispatch(kinds, "medium", "q, albedo, emit", "0.0")}
+}
+vec2 wonderMediumSeg(vec3 o, vec3 d, vec2 seg) {
+  int k = int(uWonderVol + 0.5);
+${dispatch(kinds, "mediumSeg", "o, d, seg", "seg")}
+}
+void wonderRay(vec3 o, vec3 d, vec2 seg, float pixAng, out vec4 e0, out vec4 e1, out vec4 e2) {
+  e0 = vec4(0.0, 0.0, 0.0, 1e9);
+  e1 = e0;
+  e2 = e0;
+  int k = int(uWonderVol + 0.5);
+${dispatchVoid(kinds, "ray", "o, d, seg, pixAng, e0, e1, e2")}
 }
 
 // 视线（从相机出发，窗外坐标方向 rd）穿过奇观包围盒的区间 [t0, t1]；穿不过时 t1 < t0。被地球挡住的部分截掉
@@ -318,24 +355,42 @@ vec3 wonderMediumLight(vec3 pW, vec3 q, float cosT) {
   return keyLight(r, up) * vis * phase + skyIrradiance(r, up) / (2.0 * M_PI);
 }
 
-// 奇观层：表面 + 介质合成一层。返回 (预乘辐亮度, 不透明度)，tOut = 按不透明度加权的深度（km）。
-// 介质在 [seg.x, 表面) 里步进（表面完全挡住时截到表面），步长 uWonderStep，另外保证 8–96 步；jitter 让时间累积抹平步进纹
+// 解析发光事件 e 在 tt 之前：插进去（乘当前的透过率 T），记下按亮度加权的深度，然后作废
+#define WONDER_EVENT(e, tt) if ((e).w <= (tt)) { vec3 c_ = T * (e).rgb; L += c_; float l_ = dot(c_, vec3(0.2126, 0.7152, 0.0722)); eW += l_; eD += l_ * (e).w; (e) = vec4(0.0, 0.0, 0.0, 1e9); }
+
+// 奇观层：表面 + 介质 + 解析发光事件合成一层。返回 (预乘辐亮度, 不透明度)，tOut = 按不透明度加权的深度（km；只有发光时按亮度加权）。
+// 介质在 [seg.x, 表面) 里步进（表面完全挡住时截到表面；种类给了 mediumSeg 时再收窄），步长 uWonderStep，另外保证 8–96 步；
+// jitter 让时间累积抹平步进纹。事件（W02）在步进走到它的深度时插进去
 vec4 wonderLayer(vec3 ro, vec3 rd, vec2 seg, float pixAng, float jitter, out float tOut) {
   float tS;
   vec4 s = wonderSurface(ro, rd, seg, pixAng, tS);
   vec3 L = vec3(0.0);
   float T = 1.0;
   float dSum = 0.0, wSum = 0.0;
+  float eW = 0.0, eD = 0.0;
+  vec3 dL = uWonderToLocal * rd;
+  vec4 e0, e1, e2;
+  wonderRay(uWonderCam, dL, seg, pixAng, e0, e1, e2);
+  // 在表面后面的事件：乘表面的透过率（表面完全不透明时就没了）
+  float sT = 1.0 - s.a;
+  if (e0.w > tS) e0.rgb *= sT;
+  if (e1.w > tS) e1.rgb *= sT;
+  if (e2.w > tS) e2.rgb *= sT;
   if (uWonderUse.y > 0.5) {
     float t1 = s.a > 0.999 ? min(seg.y, tS) : seg.y;
-    float len = t1 - seg.x;
+    vec2 ms = wonderMediumSeg(uWonderCam, dL, vec2(seg.x, t1));
+    float t0 = max(ms.x, seg.x);
+    t1 = min(ms.y, t1);
+    float len = t1 - t0;
     float n = clamp(ceil(len / max(uWonderStep, 1e-3)), 8.0, 96.0);
     float dt = len / n;
-    vec3 dL = uWonderToLocal * rd;
     float cosT = dot(rd, uKeyDir);
     for (int i = 0; i < 96 + min(uStormCount, 0); i++) {
       if (float(i) >= n || T < 0.005 || len <= 0.0) break;
-      float t = seg.x + (float(i) + jitter) * dt;
+      float t = t0 + (float(i) + jitter) * dt;
+      WONDER_EVENT(e0, t)
+      WONDER_EVENT(e1, t)
+      WONDER_EVENT(e2, t)
       vec3 q = uWonderCam + dL * t;
       vec3 alb, em;
       float sig = wonderMedium(q, alb, em);
@@ -350,12 +405,16 @@ vec4 wonderLayer(vec3 ro, vec3 rd, vec2 seg, float pixAng, float jitter, out flo
       T *= stepT;
     }
   }
+  // 介质走完还没插的事件（在介质之后、表面之前或之后——之后的已经乘过表面的透过率）
+  WONDER_EVENT(e0, 1e10)
+  WONDER_EVENT(e1, 1e10)
+  WONDER_EVENT(e2, 1e10)
   // 表面在介质后面（边缘像素 α < 1 时，表面后面那段介质按在前面算，差别只在 1 像素的轮廓上）
   L += T * s.rgb;
   dSum += T * s.a * tS;
   wSum += T * s.a;
   T *= 1.0 - s.a;
-  tOut = wSum > 0.0 ? dSum / wSum : 0.5 * (seg.x + seg.y);
+  tOut = wSum > 0.0 ? dSum / wSum : eW > 0.0 ? eD / eW : 0.5 * (seg.x + seg.y);
   return vec4(L, 1.0 - T);
 }
 `;
