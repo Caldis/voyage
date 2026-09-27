@@ -24,6 +24,7 @@
 
 import * as THREE from "three";
 import { CITY_GLSL } from "./city.glsl";
+import { FLOATCITY_GLSL } from "./floatcity.glsl";
 
 /** 云间层奇观的 uniform（WonderSystem 持有、每帧写；clouds.ts 的步进材质先铺一份默认值，再被场景共用的这份覆盖） */
 export function createWonderCloudUniforms() {
@@ -53,7 +54,8 @@ export interface WonderCloudKind {
   /** `vec3 f(vec3 q, vec3 n, vec3 pW, vec3 nW, vec3 rd)`：表面辐亮度（kcd/m²，不含空气透视——步进最后统一加）。
    *  q / n 是局部坐标的点和法线，pW / nW 是窗外坐标（相机在 (0, uCamR, 0)）；可以用 wonderLitSurface 做标准受光 */
   shade?: string;
-  /** `float f(vec3 q, out vec3 albedo, out vec3 emit)`：返回消光系数 σ（1/km），albedo 单次散射反照率，emit 体积自发光（kcd/m² / km） */
+  /** `float f(vec3 q, out vec3 albedo, out vec3 emit)`：返回消光系数 σ（1/km），albedo 单次散射反照率，emit 体积自发光（kcd/m² / km）。
+   *  （W03）albedo 全 0 时跳过标准受光（wonderMediumLight）：受光要自己算（例如被树冠缝隙切成光束）的种类把散射光全放进 emit */
   medium?: string;
   /** （W02）`vec2 f(vec3 o, vec3 d, vec2 seg)`：把介质的步进区间收窄到真正有介质的那段（o = 相机的局部坐标、d = 视线的局部方向，
    *  seg = 包围盒区间）。包围盒要装下光束等解析部分、比介质高得多时用它省步数；省略 = 整个包围盒 */
@@ -111,6 +113,8 @@ export const W00_PROBE_KIND = 1;
 export const W00_PROBE_COMPILED = PROBE_ENABLED;
 /** 雾海灯城（W02）的种类编号 */
 export const FOGCITY_KIND = 2;
+/** 浮空古城（W03）的种类编号 */
+export const FLOATCITY_KIND = 3;
 
 /** 已注册的云间层奇观种类。W03 往这里加 */
 export const WONDER_CLOUD_KINDS: WonderCloudKind[] = [
@@ -126,6 +130,16 @@ export const WONDER_CLOUD_KINDS: WonderCloudKind[] = [
     medium: "fcMedium",
     mediumSeg: "fcMediumSeg",
     ray: "fcRay",
+  },
+  {
+    id: FLOATCITY_KIND,
+    name: "浮空古城（W03）",
+    glsl: FLOATCITY_GLSL,
+    sdf: "flcSdf",
+    shade: "flcShade",
+    medium: "flcMedium",
+    mediumSeg: "flcMediumSeg",
+    ray: "flcRay",
   },
 ];
 
@@ -398,7 +412,8 @@ vec4 wonderLayer(vec3 ro, vec3 rd, vec2 seg, float pixAng, float jitter, out flo
       if (sig <= 1e-5 && !glow) continue;
       float stepT = exp(-sig * dt);
       vec3 src = em;
-      if (sig > 1e-5) src += sig * alb * wonderMediumLight(ro + rd * t, q, cosT);
+      // 反照率全 0：种类自己算了受光（放在 emit 里，W03），不走标准受光
+      if (sig > 1e-5 && max(alb.r, max(alb.g, alb.b)) > 0.0) src += sig * alb * wonderMediumLight(ro + rd * t, q, cosT);
       L += T * src * (sig > 1e-5 ? (1.0 - stepT) / sig : dt);
       dSum += T * (1.0 - stepT) * t;
       wSum += T * (1.0 - stepT);
