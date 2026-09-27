@@ -1,0 +1,8 @@
+[
+  { "name": "clouds-variety", "scene": "clouds-variety", "crop": [420, 300, 760, 700] },
+  { "name": "backlit-cu", "scene": { "name": "backlit-cu", "p": { "preset": "wpac", "time": 1010, "altitude": 4, "coverage": 0.5, "wing-pos": "-4" }, "offset": [0, 0] }, "crop": [420, 300, 760, 700] },
+  { "name": "noon-cumulus", "scene": "noon-cumulus", "offset": [0, 0], "crop": [420, 300, 760, 700] },
+  { "name": "storm-day", "scene": "storm-day", "crop": [420, 300, 760, 700] },
+  { "name": "typhoon-bands", "scene": "typhoon-bands", "crop": [420, 300, 760, 700] },
+  { "name": "sunset-wing", "scene": "sunset-wing", "crop": [420, 300, 760, 700] }
+]

@@ -281,6 +281,13 @@ void main() {
 
   // 直射主光源：白天是太阳，夜里是月亮（月光照亮云海）
   float cosT = dot(rd, uKeyDir);
+  // 相函数只和 cosT 有关，整条视线不变：在循环外算好（C09；原来每个有云的采样点要算 7 次 pow）
+  // 前向峰按「路上被峰再散射了几次」展宽（C09，见受光段）：HG(0.9^(k+1))，k = 0, 1, 2 与 k ≥ 3 的余量
+  vec4 phPeak = vec4(hg(cosT, 0.9), hg(cosT, 0.81), hg(cosT, 0.729), hg(cosT, 0.6561));
+  float phBody = mix(hg(cosT, -0.25), hg(cosT, 0.8), 0.7);
+  // 多次散射近似第 1、2 阶的相函数（g 按 c^k 变平：c = 0.5、0.25）
+  float phMs1 = mix(hg(cosT, -0.125), hg(cosT, 0.4), 0.7);
+  float phMs2 = mix(hg(cosT, -0.0625), hg(cosT, 0.2), 0.7);
   float jitter = fract(ign(gl_FragCoord.xy) + uFrame * 0.61803);
   vec3 L = vec3(0.0);
   float T = 1.0;
@@ -404,11 +411,11 @@ void main() {
       // 朝太阳方向做短距步进，估计阳光在云里走过的光学厚度。
       // 有雷暴、台风时走得更远（约 15 km），否则几公里厚的积雨云底部照样被照亮
       float od = 0.0;
-      float ls = 0.06;
       float lt = 0.0;
       // 受光步进的细节噪声只沿用上面那一点随机挑中的一个随机平铺格点（见 clouds.glsl.ts 的 gDetailLight，T32）
       gDetailLight = true;
 #ifdef CLOUD_WEATHER
+      float ls = 0.06;
       int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;
       if (gStormSoft > 1.5) {
         // 台风卷云盖（T44）：外围变薄以后视线要在它里面走很长一段，每个采样点都走 8 步受光步进太贵（typhoon-bands 云步进 +2 ms）。
@@ -419,10 +426,15 @@ void main() {
       {
         // 普通云（没有雷暴、台风）：只有层状云，常量上界，编译器展开后最快（和改动前一致）。
         // 这里只能调用层状云密度：展开的每一份都带上雷暴密度的话，冷编译会从 55 s 涨到 90 s
+        // 步长 30 m 起、每步 ×2.2（6 步共 2.81 km；原来 60 m ×1.9、3.07 km）（C09）：第一个受光样本从 30 m 挪到 15 m，
+        // 离本点更近、和本点的密度更相关（云外实时时间波动 −7~−13%；云里 8 姿态均值持平，但个别姿态 ×0.4~×2 的起伏
+        // 全来自这一步，见 handoff/C09-review.md）；单独用时银边略弱（薄处 od 变小，芯也跟着亮）。
+        // 雷暴 / 台风的受光步进（下面 else）不变
+        float lsL = 0.03;
         for (int j = 0; j < 6; j++) {
-          lt += ls;
-          od += layerDensity(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
-          ls *= 1.9;
+          lt += lsL;
+          od += layerDensity(p + uKeyDir * (lt - 0.5 * lsL), lod + 0.5, j < 3) * lsL;
+          lsL *= 2.2;
         }
       }
 #ifdef CLOUD_WEATHER
@@ -444,8 +456,22 @@ void main() {
       // 银边（T12）：水滴的散射里约一半是几度以内的衍射峰（g ≈ 0.9），顺着光走的光几乎不偏折，按 delta 缩放
       // （Joseph 1976）它只受约 1/4 的消光——所以朝太阳看时，云的薄边、顶上被照透的一层比「单次散射 × 全消光」亮得多。
       // 只在前向起作用（hg(0.9) 离开太阳 30° 就只剩百分之几），顺光 / 侧光的云几乎不变
+      // 逆光银边（C09）：原来整份按 hg(0.9)·e^(−0.25·od) 算，等于假设光在路上被峰散射多少次都还挤在太阳几度以内，
+      // od ≈ 10 的云芯照样在太阳周围发一大团光，薄边反而不突出（离边 0.5–1.5° 的芯还有边的一半亮，显示上整块饱和）。
+      // 其实每被峰散射一次角分布就宽一圈：HG 与 HG 卷积仍是 HG，g 相乘（勒让德矩 g^l 相乘），散射 k 次后是 HG(0.9^(k+1))。
+      // 峰的散射率取 f = 0.75（经验值，为与 e^(−0.25·od) 的 delta 缩放衔接；物理上约 0.5；推导用小角近似，
+      // 三次以上散射全归到 g = 0.656，深处展宽偏保守），路上峰散射 k 次、别的散射 0 次的概率是
+      // e^(−od)·(0.75·od)^k / k!，对 k 求和正好是原来的 e^(−0.25·od)——总能量不变，只把深处那份按次数摊到更宽的瓣上。
+      // k = 0–2 显式写，k ≥ 3 的余量给 HG(0.9^4 ≈ 0.656)。效果：薄边照旧亮（k ≈ 0），云芯在太阳附近暗下去，银边从一团光晕收成一圈边
+      // （backlit-close：HDR 边 ÷ 往里 0.5–1.5° 从 6.2 到 8.9（连同上面受光首步缩短），见 handoff/C09.md）；顺光 / 侧光的云变化 ≤ 2%。
+      // 试过：f = 0.5（「约一半是衍射峰」）银边更强，但薄处的随机受光被放大，单帧亮点 +36%，没用；只加一个 g = 0.6 的宽瓣、
+      // 受光步进首步缩短到 20–30 m 都几乎不改变「光晕太宽」（后者薄处 od 变小，芯也跟着亮，反而更糊）
+      float pk = 0.75 * od;
+      float pk0 = exp(-od);
+      float pkSum = pk0 * (1.0 + pk + 0.5 * pk * pk);
+      float sunScatter = 0.6 * (pk0 * dot(phPeak.xyz, vec3(1.0, pk, 0.5 * pk * pk)) + max(exp(-0.25 * od) - pkSum, 0.0) * phPeak.w)
       // 单次散射（下面多次散射近似的第 0 阶）：相函数双瓣，消光不打折
-      float sunScatter = 0.6 * hg(cosT, 0.9) * exp(-0.25 * od) + mix(hg(cosT, -0.25), hg(cosT, 0.8), 0.7) * exp(-od);
+                       + phBody * pk0;
       // 多次散射近似（Wrenninge 2013 的八度法）：第 k 阶 = a^k · p(g·c^k) · exp(−b^k · od)，每一阶更弱、衰减更慢、相函数更平。
       // C01：**a ≤ b 才守恒**（散射权重衰减不能慢于消光衰减，Wrenninge 2013；Hillaire 2016 Frostbite 沿用，常取 a = b = c = 0.5；
       // UE Volumetric Cloud 的默认值同为 0.5，八度数最多加到 2）。原来是 a = 0.62 > b = 0.35、6 阶（T12 为补「顺光的云偏灰」加的）：
@@ -460,13 +486,9 @@ void main() {
       const float msDecay = 0.5;
       float tailK = mix(CLOUD_MS_TAIL.x, CLOUD_MS_TAIL.y, uCloudImmersion);
 #endif
-      float msScatter = 0.0;
-      float a = msDecay, b = msDecay, c = 0.5;
-      for (int k = 1; k < 3; k++) {
-        float phase = mix(hg(cosT, -0.25 * c), hg(cosT, 0.8 * c), 0.7);
-        msScatter += a * phase * exp(-b * od);
-        a *= msDecay; b *= msDecay; c *= 0.5;
-      }
+      // 第 k 阶：a = b = msDecay^k、g 乘 0.5^k（相函数在循环外算好，C09）
+      float msDecay2 = msDecay * msDecay;
+      float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msDecay2 * od);
       // Beer-Powder（Schneider 2015，原文是经验性的）：按其物理含义的解读——刚进云的那一薄层里多次散射还没「攒」起来，
       // 所以只压多次散射（C01）；单次散射在受光表面本来就是满的。
       // 原来整项一起压，顺光时把受光的云边也压暗了，和真实云朵受光面的亮边相反。逆光时薄边正是最亮的地方，淡出（T12）
@@ -691,6 +713,7 @@ uniform vec3 uMotion;
 uniform bool uReset;
 uniform bool uResetDepth;   // 右半（深度）这一帧从停用变回启用：右半不取历史（PERF-11）
 uniform vec2 uCloudResolution;
+uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；与步进程序、曝光的 uWhiteout 同一个 uniform 对象，C11）
 varying vec2 vUv;
 // 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半是云的深度——窗外程序要拿它判断云在山前还是山后
 // （clouds.glsl.ts 的 cloudBeforeGround），放进同一张纹理，窗外 / 机翼程序不多占 sampler。两半各自时间累积、各自邻域夹取。
@@ -712,9 +735,8 @@ void main() {
   float dCur = texelFetch(uCurrentDepth, ip, 0).r * CLOUD_DEPTH_SCALE;
   vec4 cur = texelFetch(uCurrent, ip, 0);
   if (depthHalf) cur = vec4(dCur * (1.0 - cur.a), 1.0 - cur.a, 0.0, 1.0);
-  if (uReset || (depthHalf && uResetDepth)) { gl_FragColor = cur; return; }
-
   vec4 mn = cur, mx = cur;
+  vec4 nsum = vec4(0.0);
   for (int x = -1; x <= 1; x++)
   for (int y = -1; y <= 1; y++) {
     ivec2 q = clamp(ip + ivec2(x, y), ivec2(0), hi);
@@ -722,7 +744,21 @@ void main() {
     if (depthHalf) s = vec4(texelFetch(uCurrentDepth, q, 0).r * CLOUD_DEPTH_SCALE * (1.0 - s.a), 1.0 - s.a, 0.0, 1.0);
     mn = min(mn, s);
     mx = max(mx, s);
+    nsum += s;
   }
+  // 云里的 2×2 棋盘纹（C11，handoff/INCLOUD-CHECKER.md）：飞机在云里时，步进的两个 1 spp 随机源（步进位置、受光挑格点）
+  // 打在对受光 od 极敏感的介质上，blend 0.12 + 邻域夹取的时间累积压不住，收敛后剩下抖动序列的空间图样。
+  // 本帧值按「在云里的程度」换成已经读进来的 3×3 平均（不加取样）：历史收敛到的是本帧的 3×3 盒式滤波，
+  // 相当于云缓冲上固定一次 3×3 模糊——云里满窗是几十米内的雾，没有需要保住的细节。
+  // 不会跨深度边：左半只有云（步进不认识机翼 / 机身 / 地面，地面在窗外 pass 按右半的深度再合成，机翼在机翼 pass 里盖上去），
+  // 3×3 里没有别的物体的边；右半（深度）不做，免得云山前 / 山后的判断被抹宽。窗板外的 (0, 0, 0, 1) 只在窗板外 0.02 的那圈里，看不到。
+  // 权重从 uCloudImmersion = 0.02 起算：它出云后按 0.5 s 指数衰减、要约一分钟才真正变成 0，
+  // 不设门槛的话出云后几秒内还在做 1% 量级的平均（看不出，但云外不再逐位等于改动前）；约 2 s 后 < 0.02，结果逐位等于 cur
+  // 只在权重 > 0 时混：云外（权重 0）即使邻域里有 NaN / Inf 也逐位等于 cur（C11 审查）
+  float wImm = clamp(uCloudImmersion * 1.0204 - 0.0204, 0.0, 1.0);
+  if (!depthHalf && wImm > 0.0) cur = mix(cur, nsum * (1.0 / 9.0), wImm);
+  // 重置帧在平均之后才返回：否则云里换预设 / 缩放 / 自动降档时会闪回约 0.3 s 的旧棋盘纹（C11 审查）
+  if (uReset || (depthHalf && uResetDepth)) { gl_FragColor = cur; return; }
 
   vec3 rd = uCabinToWorld * rdC;
   vec3 prevDir = normalize(rd * dCur + uMotion);
@@ -1219,6 +1255,7 @@ export class Clouds {
         uReset: { value: true },
         uResetDepth: { value: false },
         uCloudResolution: this.marchMat.uniforms.uCloudResolution,
+        uCloudImmersion: EXPOSURE_WHITEOUT, // 云里的空间平均（C11，见 RESOLVE_FRAG）
       },
     });
   }

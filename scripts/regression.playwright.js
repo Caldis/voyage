@@ -63,8 +63,11 @@ async (page) => {
     // T12：卷云（11.5–12.5 km），从 9 km 往上斜看：顺高空风拉长的丝缕、向一侧甩下去的马尾，半透明、透出蓝天
     // 卷云用单独的云步进变体（clouds.ts 的 marchCirrusMat），第一次选卷云时在后台编译：js 里等它编好（最多 60 s）再截图
     { name: "cirrus-noon", p: { preset: "wpac", time: 720, "cloud-preset": "cirrus", coverage: 0.5, altitude: 9, "wing-pos": "8" }, js: "for (let i = 0; i < 240 && !['ready', 'failed'].includes(v.clouds.cirrusLayerState); i++) await new Promise((r) => setTimeout(r, 250)); return 'cirrus ' + v.clouds.cirrusLayerState;" },
+    // C09：逆光银边。2026-09-27 16:45（太阳高 9.3°、方位 263°），航向写死 169°（右窗朝西，太阳在窗上部），1 km 在积云底下往上看，云偏移 [0, 3] 让 2.5–5 km 外一团积云正好挡住太阳（太阳在云顶后 3–8°），四周是天
+    { name: "backlit-close", p: { preset: "wpac", date: "2026-09-27", time: 1005, altitude: 1, coverage: 0.42, "wing-pos": "-4" }, offset: [0, 3], js: "v.director.setHeading(169); v.state.heading = 169; v.state.bankDeg = 0; return 'heading ' + v.state.heading;" },
     { name: "low-sea-glint", p: { preset: "wpac", time: 980, coverage: 0, altitude: 0.6, "wing-pos": "-4" } },
-    { name: "in-cloud", p: { preset: "wpac", time: 840, "cloud-preset": "stratocumulus", coverage: 0.95, altitude: 1.35, "wing-pos": "8" }, wait: 6000 },
+    // C11：云里写死云偏移（不写时飞机停在哪就量哪，同一份代码的相邻像素差能差 30 倍，INCLOUD-CHECKER.md）；[-10, -5] 是 C09 审查 8 姿态之一，云里噪声大、对改动敏感
+    { name: "in-cloud", p: { preset: "wpac", time: 840, "cloud-preset": "stratocumulus", coverage: 0.95, altitude: 1.35, "wing-pos": "8" }, offset: [-10, -5], wait: 6000 },
     { name: "storm-day", p: { preset: "wpac", time: 900, coverage: 0.3, weather: "storm", "wing-pos": "-4" } },
     { name: "typhoon-eye", p: { preset: "wpac", time: 540, coverage: 0.2, weather: "typhoon-eye", "wing-pos": "-4" } },
     { name: "typhoon-bands", p: { preset: "wpac", time: 900, coverage: 0.2, weather: "typhoon-bands", "wing-pos": "-4" } },
