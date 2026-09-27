@@ -148,6 +148,31 @@
           "note": "离线不可信"
         }
       }
+    },
+    {
+      "date": "2026-09-27",
+      "commit": "a25ea62",
+      "label": "shader-budget --ledger（--only scene-default,scene-economy,wing）",
+      "quick": false,
+      "jobs": 1,
+      "rounds": 3,
+      "programs": {
+        "scene-default": {
+          "min": 7850,
+          "median": 8328,
+          "mad": 478
+        },
+        "scene-economy": {
+          "min": 6947,
+          "median": 7507,
+          "mad": 560
+        },
+        "wing": {
+          "min": 7810,
+          "median": 8077,
+          "mad": 31
+        }
+      }
     }
   ]
 }
