@@ -746,11 +746,43 @@ uniform bool uReset;
 uniform bool uResetDepth;   // 右半（深度）这一帧从停用变回启用：右半不取历史（PERF-11）
 uniform vec2 uCloudResolution;
 uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；与步进程序、曝光的 uWhiteout 同一个 uniform 对象，C11）
+uniform float uSinceReset;     // 自上次 reset 起的帧数（reset 帧 = 0，C12b 审查）
 varying vec2 vUv;
 // 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半是云的深度——窗外程序要拿它判断云在山前还是山后
 // （clouds.glsl.ts 的 cloudBeforeGround），放进同一张纹理，窗外 / 机翼程序不多占 sampler。两半各自时间累积、各自邻域夹取。
 // 右半存 (深度 × 不透明度, 不透明度)，用时再相除：直接累积深度的话，没有云的帧深度是 400 km（gl_FragDepth = 1），
 // 稀疏的小云、云边上逐帧抖动有云 / 没云，累积出来的「深度」是 150–360 km，海面上的云被当成在海面后面整片去掉（T38 踩过）
+//
+// 云外的历史取样与混合（C12b，handoff/C12b.md）：
+//  - 历史用 Catmull-Rom（12 次 texelFetch，去掉权重最小的四个角再归一）而不是双线性：双线性每帧按重投影位置的小数部分
+//    叠一次方差约 f(1−f) 像素² 的模糊，EMA 累积下来稳态约 1.1 px（blend 0.12）；Catmull-Rom 二阶矩为 0，巡航时等效模糊
+//    σ 1.08 → 0.73 px。代价：双线性顺带压了噪声，单独换它运动时噪声 ×1.16，所以要和下面两条一起上。
+//  - 重投影深度用 3×3 按不透明度加权的平均深度（dRep），不用本像素 1 spp 的深度：单像素深度逐帧抖（步进抖动、云边有 / 无云），
+//    每帧取历史的位置跟着随机偏，blend 低时累积成错位的拖影（C12b 实测：不改它，blend 0.04 巡航时云边误差最多 ×1.8）。
+//    只改它（其余照旧）巡航误差 ×0.90、转弯 ×0.85。
+//  - blend 按重投影位置的小数部分自适应：mix(0.04, 0.12, 4·(fx(1−fx) + fy(1−fy)))——位移恰好整像素 / 静止时取历史不糊，
+//    可以放心降到 0.04（静止噪声 relStd ×0.49）；落在半像素上时回到 0.12。按位移「大小」分档不行：远云每帧只动 0.1–0.3 px，
+//    正是糊得最厉害的区间（C12 审查）；常数 0.04 转弯 / 出云误差 ×1.7 / ×1.2。
+//  云里（wImm > 0，C11 的 3×3 平均）和右半（深度）逐位保持原样：双线性 + 0.12 + 本像素深度
+vec4 c12bFetch(ivec2 t) { return texelFetch(uHistory, clamp(t, ivec2(0), ivec2(uCloudResolution) - 1), 0); }
+vec4 c12bRow4(ivec2 b, int y, vec4 wx) {
+  return c12bFetch(b + ivec2(-1, y)) * wx.x + c12bFetch(b + ivec2(0, y)) * wx.y + c12bFetch(b + ivec2(1, y)) * wx.z + c12bFetch(b + ivec2(2, y)) * wx.w;
+}
+vec4 c12bRow2(ivec2 b, int y, vec2 wx) { return c12bFetch(b + ivec2(0, y)) * wx.x + c12bFetch(b + ivec2(1, y)) * wx.y; }
+// p：左半内的连续纹素坐标（纹素中心在 .5）
+vec4 historyCatmullRom(vec2 p) {
+  vec2 q = p - 0.5;
+  vec2 i0 = floor(q);
+  vec2 f = q - i0;
+  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+  vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+  vec2 w3 = f * f * (-0.5 + 0.5 * f);
+  ivec2 b = ivec2(i0);
+  vec4 wx = vec4(w0.x, w1.x, w2.x, w3.x);
+  vec4 s = c12bRow2(b, -1, vec2(w1.x, w2.x)) * w0.y + c12bRow4(b, 0, wx) * w1.y + c12bRow4(b, 1, wx) * w2.y + c12bRow2(b, 2, vec2(w1.x, w2.x)) * w3.y;
+  return s / ((w1.x + w2.x) * (w0.y + w3.y) + (w1.y + w2.y));
+}
 void main() {
   bool depthHalf = gl_FragCoord.x >= uCloudResolution.x;
   vec2 fc = gl_FragCoord.xy - vec2(depthHalf ? uCloudResolution.x : 0.0, 0.0);
@@ -769,11 +801,14 @@ void main() {
   if (depthHalf) cur = vec4(dCur * (1.0 - cur.a), 1.0 - cur.a, 0.0, 1.0);
   vec4 mn = cur, mx = cur;
   vec4 nsum = vec4(0.0);
+  float dsum = 0.0, osum = 0.0;  // 左半：3×3 按不透明度加权的深度（C12b 的重投影深度）
   for (int x = -1; x <= 1; x++)
   for (int y = -1; y <= 1; y++) {
     ivec2 q = clamp(ip + ivec2(x, y), ivec2(0), hi);
     vec4 s = texelFetch(uCurrent, q, 0);
-    if (depthHalf) s = vec4(texelFetch(uCurrentDepth, q, 0).r * CLOUD_DEPTH_SCALE * (1.0 - s.a), 1.0 - s.a, 0.0, 1.0);
+    float dq = texelFetch(uCurrentDepth, q, 0).r * CLOUD_DEPTH_SCALE;
+    if (depthHalf) s = vec4(dq * (1.0 - s.a), 1.0 - s.a, 0.0, 1.0);
+    else { dsum += dq * (1.0 - s.a); osum += 1.0 - s.a; }
     mn = min(mn, s);
     mx = max(mx, s);
     nsum += s;
@@ -792,8 +827,11 @@ void main() {
   // 重置帧在平均之后才返回：否则云里换预设 / 缩放 / 自动降档时会闪回约 0.3 s 的旧棋盘纹（C11 审查）
   if (uReset || (depthHalf && uResetDepth)) { gl_FragColor = cur; return; }
 
+  bool c12b = !depthHalf && wImm <= 0.0;  // 云外左半：Catmull-Rom + 3×3 深度 + 自适应 blend（见 main 之前的说明）
   vec3 rd = uCabinToWorld * rdC;
-  vec3 prevDir = normalize(rd * dCur + uMotion);
+  // 3×3 里全是晴空（不透明度和 ≈ 0）时还用本像素的深度（400 km，只剩背景，怎么重投影都一样）
+  float dRep = c12b && osum > 1e-3 ? dsum / osum : dCur;
+  vec3 prevDir = normalize(rd * dRep + uMotion);
   vec3 v = transpose(uPrevCamBasis) * (transpose(uPrevCabinToWorld) * prevDir);
   float blend = 0.12;
   vec2 puv = vec2(-1.0);
@@ -805,7 +843,15 @@ void main() {
   if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0)))) blend = 1.0;
   // 上一帧的缓冲也是两倍宽：取对应的半边，夹在半边以内半个纹素（线性过滤不串到另一半）
   float hx = clamp(puv.x * uCloudResolution.x, 0.5, uCloudResolution.x - 0.5) + (depthHalf ? uCloudResolution.x : 0.0);
-  vec4 hist = clamp(texture(uHistory, vec2(hx / (2.0 * uCloudResolution.x), puv.y)), mn, mx);
+  vec2 hp = puv * uCloudResolution;  // 左半内的连续纹素坐标
+  vec4 hist = clamp(c12b ? historyCatmullRom(hp) : texture(uHistory, vec2(hx / (2.0 * uCloudResolution.x), puv.y)), mn, mx);
+  if (c12b && blend < 1.0) {
+    vec2 fr = fract(hp - 0.5);
+    blend = mix(0.04, 0.12, clamp(4.0 * (fr.x * (1.0 - fr.x) + fr.y * (1.0 - fr.y)), 0.0, 1.0));
+  }
+  // reset 之后按等权平均兜底（C12b 审查）：reset 帧只有 1 spp，blend 0.04 下它的权重 0.96ⁿ 衰减得慢，
+  // 第 16 帧误差是 master 的 2.4–3.1 倍；前约 25 帧取 1/(n+1)（等权平均）以后自然交还给上面的自适应 blend
+  if (c12b) blend = max(blend, 1.0 / (uSinceReset + 1.0));
   gl_FragColor = mix(hist, cur, blend);
 }
 `;
@@ -1289,6 +1335,7 @@ export class Clouds {
         uResetDepth: { value: false },
         uCloudResolution: this.marchMat.uniforms.uCloudResolution,
         uCloudImmersion: EXPOSURE_WHITEOUT, // 云里的空间平均（C11，见 RESOLVE_FRAG）
+        uSinceReset: { value: 0 },
       },
     });
   }
@@ -1780,6 +1827,8 @@ export class Clouds {
     r.uHistory.value = prev.texture;
     r.uMotion.value.copy(motion);
     r.uReset.value = this.reset;
+    // reset 后的帧计数（C12b 审查：reset 后按等权平均兜底收敛，见 RESOLVE_FRAG 末尾）
+    r.uSinceReset.value = this.reset ? 0 : Math.min(r.uSinceReset.value + 1, 1e4);
     // 云缓冲右半（云的平均深度，T38）只在附近有高出海面的真实地形时写（PERF-11）：它只用来判断「云在山前还是山后」，
     // 海面 / 没开真实地理时用不上，却让 resolve 多一倍像素。停用期间右半不更新（窗外按 uCloudDepthOn = 0 不读），
     // 重新启用的那一帧右半不取历史（旧内容早已过时）
