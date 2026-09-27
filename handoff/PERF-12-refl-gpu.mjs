@@ -7,7 +7,6 @@ export const VARIANTS = [
   ["-cBin", [["  col = mix(col, underL, clamp(mix(cCU, cCUg, RF_GHOST_EDGE), 0.0, 1.0));\n  col = mix(col, cbL, clamp(cCF, 0.0, 1.0));", ""]]],
   ["-seatPlane", [["  if (r.y < 0.0) {\n    float tS", "  if (false) {\n    float tS"]]],
   ["-blobs", [["  col = mix(col, bodyDark, cBody * (1.0 - L.lit));\n  col *= 1.0 - 0.13 * L.lit * max(cBody, cHead);", ""]]],
-  ["-cols", [["for (int k = 0; k < RF_NCOL + uLoopGuard; k++) {", "for (int k = 0; k < 0; k++) {"]]],
-  ["colsEarly", [["      float wk = max(RF_WID(tk), 0.02);\n", "      float wk = max(RF_WID(tk), 0.02);\n      if (yk > RF_SEAT_Y + 0.35 + 2.0 * wk) continue;\n"]]],
+  ["-cols", [["for (int kr = 0; kr < RF_NCOL + uLoopGuard; kr++) {", "for (int kr = 0; kr < 0; kr++) {"]]],
   ["-pts", [["  if (max(moodOn, L.lit) <= 0.0) return vec3(0.0);", "  return vec3(0.0);"]]],
 ];

@@ -212,6 +212,15 @@ void main() {
   // 视线在遮光板所在深度之前就打到内衬的话，遮光板被内衬挡住
   float shaded = smoothstep(-wS, wS, pShade.y - shadeBottom) * step(SHADE_DEPTH, hitZ);
 
+  // PERF-12：先把与窗外无关的各层（侧壁、内衬、遮光板、座椅）按原来的 mix 顺序合成成 col = kView·view + colFixed，
+  // 进窗板分支之前就收成一个 vec3。原来 wall / reveal / shade / seatCol 四个 vec3 要一直活到窗板分支（划痕、倒影……）之后，
+  // 寄存器压力拖慢了整个程序（消融：去掉划痕、侧壁、内衬任何一项都「省」0.03–0.05 ms，远超它们本身的运算量）。
+  // 展开：col = (1 − cov)·[(1 − inBezel)·wall + inBezel·((1 − shaded)·((1 − inPane)·reveal + inPane·view) + shaded·shade)] + cov·seat
+  float kView = inBezel * (1.0 - shaded) * inPane * (1.0 - seat.cov);
+  vec3 colFixed = mix(mix(wall, mix((1.0 - inPane) * reveal, shade, shaded), inBezel), seatCol, seat.cov);
+  if (uDebug == 3 || uDebug == 4) { colFixed = mix(vec3(0.0), reveal, inBezel * (1.0 - inPane)); kView = 0.0; }
+  if (uDebug == 1) { colFixed = vec3(hitZ / PANE_DEPTH, inBezel, shaded) * 10.0; kView = 0.0; }
+
   // 邻窗遮光板下沿以下（窗洞最深处）：只有一点暗光
   vec3 view = reveal * 0.3;
   float logExpOC = 0.0;        // log2(窗外曝光 / 舱内曝光)，给交界像素的覆盖率重映射用（T47，见文末）
@@ -224,7 +233,10 @@ void main() {
   // 点星（T41，stars.glsl.ts）：窗外程序在 alpha 里写 1 + 这个像素能看到多少星（天空 × 云 × 交通的透射率），
   // 这里补上相机上方大气的消光和窗板透射率。点星放在舱内程序是为了冷编译（放进窗外程序 d3d11 冷编译 17 → 52 s，见 handoff/T41.md）。
   // 算进 viewPre（窗外的颜色），机翼 pass 按窗外遮罩合成时机翼会挡住它
-  if (outside.a > 1.0) {
+  // PERF-12：窗外本身够亮时点星看不出来，不算。星表里最亮的天狼星（−1.46 等）照度约 9.8e-9 klux，落在一个像素里的份额最多约 0.35，
+  // 再乘窗板透射率 0.85，辐亮度 ≤ 2.9e-9 / pixAng²（kcd/m²）；窗外亮度超过它的 200 倍（白天的天空与云、黄昏亮的那半边）时，
+  // 最亮的星也只让这个像素亮 0.5%，看不出。只省运行时（正午整扇窗都是天空，每个像素都要查 3×3 格），编译不变
+  if (outside.a > 1.0 && dot(view, vec3(0.2126, 0.7152, 0.0722)) * pixAng * pixAng < 6e-7) {
     vec3 rdW = uCabinToWorld * rd;
     view += starPoints(rdW) * sunTransmittance(uCamR, rdW.y) * (PANE_TRANSMITTANCE * (outside.a - 1.0));
   }
@@ -320,10 +332,7 @@ void main() {
   paneK = (1.0 - 0.1 * sm) * (1.0 - WATER_RIM * wat.w)
     * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
   }
-  vec3 col = mix(wall, mix(mix(reveal, view, inPane), shade, shaded), inBezel);
-  col = mix(col, seatCol, seat.cov);
-  if (uDebug == 3 || uDebug == 4) col = mix(vec3(0.0), reveal, inBezel * (1.0 - inPane));
-  if (uDebug == 1) col = vec3(hitZ / PANE_DEPTH, inBezel, shaded) * 10.0;
+  vec3 col = colFixed + kView * view;
   if (uDebug == 2) col = vec3(log2(max(dot(col, vec3(0.2126, 0.7152, 0.0722)), 1e-6)) * 0.1 + 1.0) * 10.0;
   // HDR 目标是 32 位浮点时可以原样存下太阳的辐亮度（约 1.8e6 kcd/m²），眩光的能量才对。
   // alpha 存「这个像素有多少是窗外」，曝光时窗外和舱内分开适应
