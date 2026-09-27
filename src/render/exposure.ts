@@ -400,7 +400,7 @@ export const EXPOSURE_MODEL_UNIFORMS: Record<string, THREE.IUniform> = {
   uCabinLitWhiteEv: { value: 0.35 },
   uWinGapLitEv: { value: 6.5 },
   uReflGapEv: { value: new THREE.Vector2(2.5, 2.0) },
-  uReflCapK: { value: new THREE.Vector2(0.2, 0.35) },
+  uReflCapK: { value: new THREE.Vector2(0.2, 0.25) }, // T42：开灯档 0.35 → 0.25（美术总监第 6 波第 1 条）
 };
 
 export class Exposure {

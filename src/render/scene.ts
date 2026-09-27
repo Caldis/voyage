@@ -298,7 +298,9 @@ void main() {
     // 读成天上的「双亮星」。开灯档（lit = 1）照旧不进上限：那时舱内亮、倒影本来就认得出是灯
     vec3 ptsR = reflGain * reflWB * pts;
     float pl = dot(ptsR, vec3(0.2126, 0.7152, 0.0722)) / capL;
-    ptsR *= mix(inversesqrt(sqrt(1.0 + pl * pl * pl * pl)), 1.0, rl.lit);
+    // T42：开灯档也在色调映射之前限幅，只是上限放宽到面状上限的 6 倍（灯仍比墙亮），免得主像和重影都被压到纯白、一样亮
+    float plLit = pl / 6.0;
+    ptsR *= mix(inversesqrt(sqrt(1.0 + pl * pl * pl * pl)), inversesqrt(sqrt(1.0 + plLit * plLit * plLit * plLit)), rl.lit);
     reflAdd = surf + (uDebug == 33 ? vec3(0.0) : ptsR);
   }
   // 调试 31：窗内只留倒影（窗外置黑，量倒影本身的显示亮度）；32：关掉倒影（T34）
