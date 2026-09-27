@@ -1,5 +1,6 @@
 import { VectorTile } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
+import { RoadTileBuilder, type RoadTileData } from "./road-raster";
 
 /**
  * 瓦片数据源（全部免费，浏览器直连，均允许跨域；请求头不带任何个人信息）：
@@ -81,16 +82,8 @@ export interface WaterFeatures {
   polygons: { rings: { x: number; y: number }[][]; ocean: boolean }[];
   /** 河道折线；width = 估计河宽（米） */
   lines: { points: { x: number; y: number }[]; width: number }[];
-  /** 道路折线（T08） */
-  roads: RoadLine[];
-}
-
-/** highway = 高速 / 快速路（motorway、trunk）；width = 路灯照亮的宽度（米）；weight = 相对照明强度 0..1 */
-export interface RoadLine {
-  points: { x: number; y: number }[];
-  highway: boolean;
-  width: number;
-  weight: number;
+  /** 道路（T08）：攒成扁平数组，直接交给栅格化 Worker（见 road-raster.ts）；坐标是 transportation 图层自己的瓦片内坐标 */
+  roads: RoadTileData | null;
 }
 
 /**
@@ -108,9 +101,9 @@ const ROAD_CLASS: Record<string, { highway: boolean; width: number; weight: numb
 };
 
 /**
- * 去掉整段落在瓦片以外（缓冲区里）的线段，把折线在那里断开（T08）。
+ * 去掉整段落在瓦片以外（缓冲区里）的线段，把折线在那里断开（T08 发现，道路见 road-raster.ts 的 RoadTileBuilder，河道用这里）。
  * 矢量瓦片的线在瓦片外留了 64 单位的缓冲，裁剪时有些线会贴着缓冲区的边走一段（实测每张 z9–z12 瓦片 2–19 段），
- * 画出来就是沿经线 / 纬线笔直延伸几十公里的假路（从舷窗斜看是一条横贯画面的水平亮线）。相邻瓦片会画自己那部分，删掉不缺
+ * 画出来就是沿经线 / 纬线笔直延伸几十公里的假线。相邻瓦片会画自己那部分，删掉不缺
  */
 function insideTile(line: { x: number; y: number }[], extent: number) {
   const parts: { x: number; y: number }[][] = [];
@@ -145,7 +138,7 @@ export function loadWater(z: number, x: number, y: number): Promise<WaterFeature
       .then((buf) => {
         if (!buf) return null;
         const tile = new VectorTile(new PbfReader(buf));
-        const out: WaterFeatures = { extent: 4096, polygons: [], lines: [], roads: [] };
+        const out: WaterFeatures = { extent: 4096, polygons: [], lines: [], roads: null };
         const water = tile.layers.water;
         if (water) {
           out.extent = water.extent;
@@ -165,22 +158,18 @@ export function loadWater(z: number, x: number, y: number): Promise<WaterFeature
             for (const line of f.loadGeometry()) for (const part of insideTile(line, ways.extent)) out.lines.push({ points: part, width });
           }
         }
-        // 道路（T08）：坐标换算到水体图层的 extent（OpenMapTiles 各图层都是 4096，不一致时按比例换）
+        // 道路（T08）
         const tr = tile.layers.transportation;
         if (tr) {
-          const k = out.extent / tr.extent;
+          const rb = new RoadTileBuilder(tr.extent);
           for (let i = 0; i < tr.length; i++) {
             const f = tr.feature(i);
             if (f.type !== 2) continue;
             const c = ROAD_CLASS[String(f.properties.class)];
             if (!c || f.properties.brunnel === "tunnel") continue;
-            for (const line of f.loadGeometry()) {
-              for (const part of insideTile(line, tr.extent)) {
-                const points = k === 1 ? part : part.map((p) => ({ x: p.x * k, y: p.y * k }));
-                out.roads.push({ points, ...c });
-              }
-            }
+            for (const line of f.loadGeometry()) rb.add(line, c.width, c.weight, c.highway);
           }
+          out.roads = rb.build();
         }
         return out;
       })
