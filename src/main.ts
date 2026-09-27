@@ -328,12 +328,23 @@ let frameCount = 0;
 // 改分辨率污染，其他任务的性能回归数字就不可信了
 let lastFrameAt = performance.now();
 
+// 调试：冻结（DX-08）。钉住喂给 renderFrame 的挂钟时间，renderFrame 内部按它算出的 dt 就恒为 0——
+// 位置推进、头部平滑跟随、天气（含闪电）、曝光适应等所有按 dt 累积的状态不再变化；uTime（= 冻结时刻/1000）
+// 同一批喂给翼尖静弯 / 频闪相位（ts % 1.1）、海浪相位等，也一并钉住。冻结后连续渲染逐像素一致，可用来
+// 做两张截图相减定位（`scripts/probe.mjs`、`dev-browser.mjs flicker`）。只影响真实 rAF 循环，
+// 不影响 benchFrame 这类合成测量（那边本来就是每次显式推进 16 ms，语义不同，不经过 frame()）。
+let frozenNow: number | null = null;
+function freeze(on: boolean) {
+  frozenNow = on ? performance.now() : null;
+}
+
 function frame(now: number) {
-  const intervalMs = now - lastFrameAt;
-  lastFrameAt = now;
+  const t = frozenNow ?? now;
+  const intervalMs = t - lastFrameAt;
+  lastFrameAt = t;
   quality.beginFrame();
-  renderFrame(now);
-  quality.endFrame(now, intervalMs);
+  renderFrame(t);
+  quality.endFrame(t, intervalMs);
   requestAnimationFrame(frame);
 }
 
@@ -360,7 +371,8 @@ function renderFrame(now: number) {
 
   // 头部平滑跟随鼠标，像人慢慢挪动身体
   // ---- 颠簸与窗上的水 ----
-  if (frameCount++ % 4 === 0) clouds.probe(renderer, ownDirW(state.heading));
+  // 冻结时跳过（DX-08）：这是一次 GPU 读回，不影响画面，但会跟着 frameCount 走、没有必要在冻结时还做
+  if (!frozenNow && frameCount++ % 4 === 0) clouds.probe(renderer, ownDirW(state.heading));
   const inCloud = clouds.cameraDensity;
   const bump = updateTurbulence(state, { dt, now, inCloud, storms: weather.storms, cloudOffset: cloudUniforms.uCloudOffset.value });
 
@@ -479,7 +491,10 @@ function renderFrame(now: number) {
   // 舱灯开：约 200 lux；关：只剩地板灯带和零星阅读灯，约 1 lux
   u.uCabinLight.value = state.cabinLight ? 0.2 : 0.001;
   u.uMoodLight.value = state.moodLight ? 1 : 0;
-  clouds.render(flightResult.motion, camBasis, c2w);
+  // 冻结时跳过（DX-08）：clouds.render 内部有一个不受 dt 控制、每次调用都推进的抖动相位（uFrame，
+  // 时间累积重投影用），跳过整次调用才能让 clouds.texture 拿到的是同一块已经画好的缓冲，逐像素不变；
+  // 只改 dt 会让「这一帧」仍然用不同的抖动相位重新光线步进一次，画面会有肉眼看不出但截图能测出的残留噪声。
+  if (!frozenNow) clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
   // 窗外（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdrOutside，舱内合成读它画到 hdr，
@@ -658,4 +673,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze };

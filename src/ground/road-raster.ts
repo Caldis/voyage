@@ -12,6 +12,11 @@ import { LocalFrame, tileXToLon, tileYToLat } from "./geo";
  * 着色器再按屏幕像素的足迹做解析的抗锯齿，得到细而准的线（和 SDF 字体同一个道理）。
  * 另存这条路的「照亮宽度」w（米，= 照明强度 × 路宽，只写在离中心线 ROAD_MASK_TEXELS 以内）：它同时当遮罩用，
  * 把有向距离在两条路之间、或在路的负侧与「无路」之间跳变时插值出来的假零点（假线）挡掉。
+ *
+ * PERF-9 起，这个 Worker 也顺带把水体/河道栅格化（`buildGroundLevel`）与夜光的逐像素变换（`darkenNight`）
+ * 一起搬了进来：CDP CPU 剖析（route-hnd-cts 60× 加速航程）发现这两步在主线程用 Path2D + `getImageData` 做，
+ * 是尖峰帧里最大的一块（getImageData 本身、逐顶点投影、canvas 填充/描边的原生开销），见 handoff/PERF-9.md。
+ * 水体/河道的几何在 `WaterTileData`（tiles.ts 用 `WaterTileBuilder` 攒好，格式对齐 `RoadTileData`）。
  */
 
 /** 有向距离的编码范围（± 纹素）；ground.glsl.ts 的 ROAD_SD_RANGE 要一致 */
@@ -35,6 +40,67 @@ export interface RoadTileData {
   ramp: Uint8Array;
 }
 
+/**
+ * 一张矢量瓦片里的水体 / 河道（tiles.ts 加载时攒好，PERF-9）：xy = 多边形顶点（交错存放），
+ * ringStart[i]..ringStart[i+1] 是第 i 个环的顶点范围，polyRingStart[p]..polyRingStart[p+1] 是第 p 个多边形
+ * 占用的环序号范围（一个多边形可以有多个环：外环 + 内环/岛中岛），polyOcean[p] 标这个多边形是不是海洋。
+ * 河道另存一套折线（lxy/lineStart/lineWidth，和道路用的格式同一个道理）。
+ * 拆成扁平数组是为了能整批 `postMessage` 转移/复制到 Worker 里用 OffscreenCanvas 栅格化（PERF-9：这一步
+ * 原来在主线程用 Path2D 画 + `getImageData` 读回，实测是 route-hnd-cts 60× 加速航程下最大的一块尖峰，见 handoff/PERF-9.md）。
+ */
+export interface WaterTileData {
+  extent: number;
+  xy: Float32Array;
+  ringStart: Uint32Array;
+  polyRingStart: Uint32Array;
+  /** 每个多边形是不是海洋（海洋画黄、湖泊河流画红，见 buildGroundLevel） */
+  polyOcean: Uint8Array;
+  lxy: Float32Array;
+  lineStart: Uint32Array;
+  /** 河宽（米，一条线） */
+  lineWidth: Float32Array;
+}
+
+/** 攒 WaterTileData（tiles.ts 用），写法对齐 RoadTileBuilder */
+export class WaterTileBuilder {
+  private xy: number[] = [];
+  private ringStart: number[] = [0];
+  private polyRingStart: number[] = [0];
+  private polyOcean: number[] = [];
+  private lxy: number[] = [];
+  private lineStart: number[] = [0];
+  private lineWidth: number[] = [];
+
+  /** rings：外环 + 若干内环（同一个多边形，evenodd 填充） */
+  addPolygon(rings: { x: number; y: number }[][], ocean: boolean) {
+    for (const ring of rings) {
+      for (const p of ring) this.xy.push(p.x, p.y);
+      this.ringStart.push(this.xy.length / 2);
+    }
+    this.polyRingStart.push(this.ringStart.length - 1);
+    this.polyOcean.push(ocean ? 1 : 0);
+  }
+
+  addLine(points: { x: number; y: number }[], width: number) {
+    for (const p of points) this.lxy.push(p.x, p.y);
+    this.lineStart.push(this.lxy.length / 2);
+    this.lineWidth.push(width);
+  }
+
+  build(extent: number): WaterTileData {
+    return {
+      extent,
+      xy: new Float32Array(this.xy),
+      ringStart: new Uint32Array(this.ringStart),
+      polyRingStart: new Uint32Array(this.polyRingStart),
+      polyOcean: new Uint8Array(this.polyOcean),
+      lxy: new Float32Array(this.lxy),
+      lineStart: new Uint32Array(this.lineStart),
+      lineWidth: new Float32Array(this.lineWidth),
+    };
+  }
+}
+
 /** 一级 clipmap 的栅格化任务 */
 export interface RoadJob {
   res: number;
@@ -46,6 +112,8 @@ export interface RoadJob {
   size: number;
   zoom: number;
   tiles: { x: number; y: number; data: RoadTileData }[];
+  /** 同一批瓦片的水体 / 河道几何（PERF-9，和道路一起搬进 Worker 合成，见 buildGroundLevel） */
+  water: { x: number; y: number; data: WaterTileData }[];
 }
 
 /** 一级的像素数据（RES² × RGBA，getImageData 的结果）：在 Worker 里就地写入道路，再原样转移回主线程 */
@@ -272,6 +340,84 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
     }
     albedo[i4 + 3] = 128 + Math.min(w[i] * lit * kw, 127);
   }
+}
+
+export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo">;
+
+/**
+ * 一级的水体 + 道路 + 夜光合成入口（PERF-9）：栅格化水体/河道（OffscreenCanvas，Worker 和主线程兜底都能用）
+ * → 夜光变换 → 叠加道路（packRoads，逻辑不变）。原来这一步分散在主线程的 clipmap.ts（`buildWater` 用
+ * Path2D + `getImageData`，`buildNight` 多一个逐像素变换循环）里，CDP CPU 剖析（route-hnd-cts 60× 加速航程，
+ * 见 handoff/PERF-9.md）显示这是尖峰帧里最大的一块：`getImageData` 本身、逐顶点的 `tileYToLat`/`tileXToLon`
+ * 投影、canvas 填充/描边的原生开销都在这里。搬进 Worker 后主线程只需要传两张已经解码好的像素数组
+ * （`albedo`、`nightRaw`，两个都走 Transferable）和瓦片的几何数据（水体/河道顶点，仍然是复制——它们缓存在
+ * `tiles.ts` 的 LRU 里给下次重建复用，不能转移/detach，见类头 `RoadJob.water` 注释）。
+ */
+export function buildGroundLevel(job: RoadJob, albedo: Uint8ClampedArray, nightRaw: Uint8ClampedArray): GroundLevelResult {
+  const RES = job.res;
+  const canvas = new OffscreenCanvas(RES, RES);
+  const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 0, RES, RES);
+  const frame = new LocalFrame(job.lat0, job.lon0);
+  const k = RES / job.size;
+  const kmPerPx = job.size / RES;
+  for (const { x: tx, y: ty, data: w } of job.water) {
+    const E = w.extent;
+    const proj = (px: number, py: number): [number, number] => {
+      const lat = tileYToLat(ty + py / E, job.zoom);
+      const lon = tileXToLon(tx + px / E, job.zoom);
+      const [x, z] = frame.toLocal(lat, lon);
+      return [(x - job.x0) * k, (z - job.z0) * k];
+    };
+    for (let p = 0; p < w.polyOcean.length; p++) {
+      ctx.beginPath();
+      for (let r = w.polyRingStart[p]; r < w.polyRingStart[p + 1]; r++) {
+        const s0 = w.ringStart[r], s1 = w.ringStart[r + 1];
+        for (let s = s0; s < s1; s++) {
+          const [x, y] = proj(w.xy[2 * s], w.xy[2 * s + 1]);
+          if (s === s0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+      }
+      ctx.fillStyle = w.polyOcean[p] ? "rgb(255,255,0)" : "rgb(255,0,0)";
+      ctx.fill("evenodd");
+    }
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let l = 0; l < w.lineWidth.length; l++) {
+      const s0 = w.lineStart[l], s1 = w.lineStart[l + 1];
+      const widthPx = w.lineWidth[l] / 1000 / kmPerPx;
+      ctx.lineWidth = Math.max(widthPx, 1);
+      ctx.globalAlpha = Math.min(widthPx, 1);
+      ctx.strokeStyle = "rgb(255,0,0)";
+      ctx.beginPath();
+      for (let s = s0; s < s1; s++) {
+        const [x, y] = proj(w.lxy[2 * s], w.lxy[2 * s + 1]);
+        if (s === s0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+  const water = ctx.getImageData(0, 0, RES, RES).data;
+  const night = darkenNight(nightRaw);
+  const px: LevelPixels = { water, albedo, night };
+  packRoads(job, px);
+  return { water: px.water, albedo: px.albedo };
+}
+
+/** Black Marble 的底图把陆地画成暗蓝色：取「亮度减去蓝色底」，只留下灯光（原来在主线程的 clipmap.ts
+ * `buildNight` 里逐像素做，PERF-9 挪进这里和水体/道路一起在 Worker 里算） */
+function darkenNight(pxRaw: Uint8ClampedArray): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(pxRaw.length);
+  for (let k = 0; k < pxRaw.length; k += 4) {
+    const r = pxRaw[k], g = pxRaw[k + 1], b = pxRaw[k + 2];
+    out[k] = Math.max(0, Math.min(255, (r * 0.6 + g * 0.4 - b * 0.35) * 1.3));
+  }
+  return out;
 }
 
 /** GN×GN 网格的盒式平均（半径 rc 格，可分离，边界外按 0 计） */

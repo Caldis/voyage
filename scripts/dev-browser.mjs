@@ -10,10 +10,22 @@
 // 用法：
 //   node scripts/dev-browser.mjs check --port 5230 [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--scene '<JSON>' ...]
-//                                       [--out tmp/screenshot/dev-5230] [--allow-flash] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//                                       [--out tmp/screenshot/dev-5230] [--allow-flash] [--freeze] [--settle]
+//                                       [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//   node scripts/dev-browser.mjs flicker --port 5230 --only <场景> [--step 0.06] [--frames 20] [--crop x,y,w,h] [--debug N]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
+//
+// --freeze（DX-08，仅 shots）：截图前调用 __voyage.freeze(true)（main.ts 的调试句柄）钉住位置 / 航向 / 头部 /
+//   模拟时间 / 曝光适应 / 闪电 / 翼尖航行灯频闪相位，冻结后连续渲染逐像素一致，可以拿两次 shots 的截图相减
+//   （配合 compare.mjs 的 --diff）定位「这一版改动到底动了哪些像素」，不必依赖「同一份代码跑两次」的噪声估计。
+// --settle（DX-08，仅 shots）：等 __voyage.ground.pending === 0 再截（默认的 sc.ground 等待用的是更宽松的
+//   pending < 5，够看大致画面但地面瓦片可能还在陆续贴上来），逐像素对比前建议加上，否则瓦片加载差异会被
+//   误判成回归。
+// flicker（DX-08，泛化自 handoff/T08-flicker.mjs + T08-flicker.py + T43-crawl.py）：__voyage.freeze(true) 之后
+//   按 --step 毫米（默认 0.06，亚像素）步进微移相机（head.x），连拍 --frames 帧，输出块能量变异系数（T08 法，
+//   抗锯齿做对了每块总亮度守恒）与爬行指标（T43 法，二阶差分，抓块能量法量不出的「台阶沿线爬」）。
 //
 // --out（shots 的截图输出目录）相对**仓库根**解析，不是当前工作目录（T08 开发体验反馈踩过这个坑：
 //   写了 `../../tmp/...` 结果传到了仓库外面）。不传就是 `tmp/screenshot/dev-<port>`。
@@ -59,7 +71,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULTS, applyScene, pickScenes } from "./scenarios.mjs";
-import { launchBrowser as launchBrowserAngle, closeBrowserSafely } from "./lib/chrome.mjs";
+import { launchBrowser as launchBrowserAngle, closeBrowserSafely, resolveRepoPath } from "./lib/chrome.mjs";
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
@@ -265,11 +277,13 @@ async function cmdShots(args) {
   const port = args.port;
   if (!port) throw new Error("shots 需要 --port <端口>");
   const angle = String(args.angle || "d3d11");
-  const outDir = path.join(REPO_ROOT, args.out || `tmp/screenshot/dev-${port}`);
+  const outDir = resolveRepoPath(REPO_ROOT, args.out || `tmp/screenshot/dev-${port}`);
   fs.mkdirSync(outDir, { recursive: true });
   const viewport = parseViewport(args);
   const dpr = parseDpr(args);
   const allowFlash = Boolean(args["allow-flash"]);
+  const freeze = Boolean(args.freeze);
+  const settle = Boolean(args.settle);
 
   const browser = await launchBrowser(angle);
   try {
@@ -283,9 +297,19 @@ async function cmdShots(args) {
     const scenes = resolveScenes(args);
     const results = [];
     for (const sc of scenes) {
-      const info = await page.evaluate(applyScene, { sc, defaults: DEFAULTS });
+      const info = await page.evaluate(applyScene, { sc, defaults: DEFAULTS, settle });
+      // --freeze（DX-08）：截图前钉住位置 / 航向 / 头部 / 模拟时间 / 曝光适应 / 闪电 / 翼尖频闪相位
+      // （__voyage.freeze，见 main.ts），冻结后连续渲染逐像素一致，可用来做两图相减定位。
+      // 多等两帧让第一帧的残留 dt 归零（freeze 那一刻可能刚好在两次 rAF 中间）；截图后立刻解冻，
+      // 不影响紧接着的 benchFrame 计时（那条路本来就不经过 frame()，freeze 状态对它没有实际影响，
+      // 这里解冻只是让后续场景恢复正常节奏）。
+      if (freeze) {
+        await page.evaluate(() => window.__voyage.freeze(true));
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      }
       const pngPath = path.join(outDir, `${sc.name}.png`);
       await page.screenshot({ path: pngPath, timeout: 60000 });
+      if (freeze) await page.evaluate(() => window.__voyage.freeze(false));
       const frameMs = await page.evaluate((n) => window.__voyage.benchFrame(n), 30);
       const head = await page.evaluate(() => window.__voyage.head);
       const meta = {
@@ -370,8 +394,168 @@ async function cmdCold(args) {
   } finally {
     await closeBrowserSafely(browser);
   }
-  if (args.out) fs.writeFileSync(path.join(REPO_ROOT, args.out), JSON.stringify(results, null, 2));
+  if (args.out) fs.writeFileSync(resolveRepoPath(REPO_ROOT, args.out), JSON.stringify(results, null, 2));
   return results;
+}
+
+// ---------- flicker：冻结后亚像素步进微移相机连拍 N 帧，块能量 CV（T08 法）+ 爬行指标（T43 法）----------
+// 泛化自 handoff/T08-flicker.mjs（+ T08-flicker.py 的块能量变异系数）与 handoff/T43-crawl.py（二阶差分爬行指标）。
+// 原理：__voyage.freeze(true) 钉住一切按 dt 累积的状态（见 main.ts），只手动步进 head.x（相机横向亚像素位移，
+// 绕过头部平滑——冻结时 dt=0，head.tx 目标不会再被追上）。线在屏幕上滑动时，抗锯齿做对了：
+//   - 块能量守恒：把画面切成小块，每块总亮度随帧几乎不变（T08 法，输出变异系数 CV = std/mean）；
+//   - 亮度平滑变化：每个像素的亮度随时间线性变化，二阶差分 ≈ 0（T43 法）——盒式足迹的台阶会让二阶差分很大，
+//     块能量法量不出台阶移动（块能量本身仍守恒），所以两个指标都要看。
+function parseXYWH(s, label) {
+  const nums = String(s).split(",").map(Number);
+  if (nums.length !== 4 || nums.some((n) => !Number.isFinite(n))) throw new Error(`${label} 格式应为 x,y,w,h，收到 "${s}"`);
+  const [x, y, w, h] = nums;
+  return { x, y, w, h };
+}
+
+/** 在（已经打开的）页面里解码 N 张截图、算块能量 CV 与爬行指标；不需要真实 GPU，只用 Canvas2D。 */
+async function analyzeFlicker(page, files, crop, blockSize) {
+  const dataUrls = files.map((f) => `data:image/png;base64,${fs.readFileSync(f).toString("base64")}`);
+  return page.evaluate(
+    async ({ dataUrls, crop, blockSize }) => {
+      const loadImg = (src) =>
+        new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error("图片解码失败"));
+          img.src = src;
+        });
+      const imgs = await Promise.all(dataUrls.map(loadImg));
+      const x0 = crop ? crop.x : 0;
+      const y0 = crop ? crop.y : 0;
+      const w = crop ? crop.w : imgs[0].naturalWidth;
+      const h = crop ? crop.h : imgs[0].naturalHeight;
+      const T = imgs.length;
+      const lumas = imgs.map((img) => {
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(img, x0, y0, w, h, 0, 0, w, h);
+        const data = ctx.getImageData(0, 0, w, h).data;
+        const lum = new Float64Array(w * h);
+        for (let p = 0, j = 0; p < data.length; p += 4, j++) lum[j] = 0.2126 * data[p] + 0.7152 * data[p + 1] + 0.0722 * data[p + 2];
+        return lum;
+      });
+      const percentile = (arr, p) => {
+        if (arr.length === 0) return NaN;
+        const idx = (p / 100) * (arr.length - 1);
+        const lo = Math.floor(idx);
+        const hi = Math.ceil(idx);
+        return lo === hi ? arr[lo] : arr[lo] + (arr[hi] - arr[lo]) * (idx - lo);
+      };
+      // ---- T08 法：块能量变异系数（块内总亮度对时间的 std/mean），排除太暗的块 ----
+      const cvs = [];
+      for (let by = 0; by + blockSize <= h; by += blockSize) {
+        for (let bx = 0; bx + blockSize <= w; bx += blockSize) {
+          const sums = new Array(T).fill(0);
+          for (let t = 0; t < T; t++) {
+            let s = 0;
+            for (let y = by; y < by + blockSize; y++) for (let x = bx; x < bx + blockSize; x++) s += lumas[t][y * w + x];
+            sums[t] = s;
+          }
+          const mean = sums.reduce((a, b) => a + b, 0) / T;
+          if (mean / (blockSize * blockSize) < 3) continue; // 太暗（全黑块）会把中位数拉低，排除
+          const variance = sums.reduce((a, b) => a + (b - mean) ** 2, 0) / T;
+          cvs.push(Math.sqrt(variance) / mean);
+        }
+      }
+      cvs.sort((a, b) => a - b);
+      // ---- T43 法：亮像素上 |I(t+1) - 2I(t) + I(t-1)| 的均值 ÷ 亮度均值（爬行指标）；一阶差分做参考 ----
+      const N = w * h;
+      const mean = new Float64Array(N);
+      for (let j = 0; j < N; j++) {
+        let s = 0;
+        for (let t = 0; t < T; t++) s += lumas[t][j];
+        mean[j] = s / T;
+      }
+      let sumD2 = 0, sumD1 = 0, sumBrightMean = 0, brightCount = 0;
+      const jitVals = []; // T08 法自己的逐像素抖动（亮像素阈值不同，见下）
+      for (let j = 0; j < N; j++) {
+        if (mean[j] <= 12) continue;
+        let d2 = 0;
+        for (let t = 1; t < T - 1; t++) d2 += Math.abs(lumas[t + 1][j] - 2 * lumas[t][j] + lumas[t - 1][j]);
+        let d1 = 0;
+        for (let t = 1; t < T; t++) d1 += Math.abs(lumas[t][j] - lumas[t - 1][j]);
+        d2 /= Math.max(1, T - 2);
+        d1 /= Math.max(1, T - 1);
+        sumD2 += d2;
+        sumD1 += d1;
+        sumBrightMean += mean[j];
+        brightCount++;
+        if (mean[j] > 20) jitVals.push(d1 / mean[j]);
+      }
+      jitVals.sort((a, b) => a - b);
+      return {
+        frames: T,
+        crop: { x: x0, y: y0, w, h },
+        blocks: cvs.length,
+        cvMedian: percentile(cvs, 50),
+        cvP90: percentile(cvs, 90),
+        cvP98: percentile(cvs, 98),
+        crawlD2: brightCount ? sumD2 / sumBrightMean : NaN,
+        crawlD1: brightCount ? sumD1 / sumBrightMean : NaN,
+        pixelJitterMedian: percentile(jitVals, 50),
+        brightPixels: brightCount,
+      };
+    },
+    { dataUrls, crop, blockSize },
+  );
+}
+
+async function cmdFlicker(args) {
+  const port = args.port;
+  if (!port) throw new Error("flicker 需要 --port <端口>");
+  const angle = String(args.angle || "d3d11");
+  const viewport = parseViewport(args);
+  const dpr = parseDpr(args);
+  const outDir = resolveRepoPath(REPO_ROOT, args.out || `tmp/screenshot/dev-${port}-flicker`);
+  fs.mkdirSync(outDir, { recursive: true });
+  const frames = Number(args.frames || 20);
+  // 每帧头部横向位移（毫米），W01b-flicker.mjs 用过 0.06 mm 这个量级（亚像素、不引入可见的构图变化）
+  const stepMm = Number(args.step ?? 0.06);
+  const blockSize = Number(args.block || 48);
+  const crop = args.crop ? parseXYWH(args.crop, "--crop") : null;
+  const debugMode = args.debug !== undefined ? Number(args.debug) : null;
+  const settle = Boolean(args.settle);
+
+  const scenes = resolveScenes(args);
+  if (scenes.length !== 1) throw new Error(`flicker 一次只测一个场景（用 --only 单选一个，或传一个 --scene），收到 ${scenes.length} 个`);
+  const sc = scenes[0];
+
+  const browser = await launchBrowser(angle);
+  try {
+    const { page, renderer } = await openPage(browser, port, angle, viewport, dpr);
+    console.log(`[dev-browser] flicker --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
+    await page.evaluate(applyScene, { sc, defaults: DEFAULTS, settle });
+    if (debugMode !== null) await page.evaluate((d) => { window.__voyage.sceneMat.uniforms.uDebug.value = d; }, debugMode);
+    // 冻结（DX-08）：位置 / 航向 / 模拟时间 / 曝光适应 / 闪电 / 频闪相位全部钉住，只由下面手动步进 head.x
+    await page.evaluate(() => window.__voyage.freeze(true));
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const stepM = stepMm / 1000;
+    const files = [];
+    for (let i = 0; i < frames; i++) {
+      if (i > 0) await page.evaluate((dx) => { window.__voyage.head.x += dx; }, stepM);
+      // 等两帧真正画出新的 head.x（frame() 里 renderFrame 每次都读最新的 head.x，不缓存）
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const file = path.join(outDir, `f${String(i).padStart(2, "0")}.png`);
+      await page.screenshot({ path: file, timeout: 60000 });
+      files.push(file);
+    }
+    await page.evaluate(() => window.__voyage.freeze(false));
+    console.log(`[dev-browser] ${sc.name}：${frames} 帧，每帧头部 +${stepMm} mm，输出 ${path.relative(REPO_ROOT, outDir).replace(/\\/g, "/")}`);
+    const stats = await analyzeFlicker(page, files, crop, blockSize);
+    console.log(`  块能量 CV（T08 法）中位 ${stats.cvMedian.toFixed(4)} / p90 ${stats.cvP90.toFixed(4)} / p98 ${stats.cvP98.toFixed(4)}（${stats.blocks} 个块，边长 ${blockSize}）`);
+    console.log(`  爬行指标（T43 法，二阶差分/亮度）${stats.crawlD2.toFixed(4)}（一阶差分/亮度 ${stats.crawlD1.toFixed(4)} 做参考，亮像素 ${stats.brightPixels}）`);
+    if (args.out) fs.writeFileSync(path.join(outDir, "stats.json"), JSON.stringify({ scene: sc.name, stepMm, debug: debugMode, ...stats }, null, 2));
+    return stats;
+  } finally {
+    await closeBrowserSafely(browser);
+  }
 }
 
 // ---------- bench：批渲帧时间，多轮交替、剔除离群；--baseline 时两端口对照 ----------
@@ -440,7 +624,7 @@ async function cmdBench(args) {
       console.log(`  ${sc.name}: ` + ports.map((p) => `${p}=${row[p]}ms`).join("  ") + (baseline ? `  Δ=${row.deltaPct}%` : "") + gpuNote);
     }
     console.log(`[dev-browser] renderer: ${JSON.stringify(renderers)}`);
-    if (args.out) fs.writeFileSync(path.join(REPO_ROOT, args.out), JSON.stringify({ angle, viewport, dpr, renderers, table }, null, 2));
+    if (args.out) fs.writeFileSync(resolveRepoPath(REPO_ROOT, args.out), JSON.stringify({ angle, viewport, dpr, renderers, table }, null, 2));
     return table;
   } finally {
     await closeBrowserSafely(browser);
@@ -456,16 +640,24 @@ async function main() {
   else if (sub === "shots") result = await cmdShots(args);
   else if (sub === "cold") result = await cmdCold(args);
   else if (sub === "bench") result = await cmdBench(args);
+  else if (sub === "flicker") result = await cmdFlicker(args);
   else {
     console.error(
-      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--out 路径] [--allow-flash] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
+      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--out 路径] [--allow-flash] [--freeze] [--settle] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
     );
     console.error("  check           只开页面、等启动完成、收集 console error / pageerror，有错误就非 0 退出");
     console.error("  --viewport WxH  浏览器视口尺寸，默认 1600x1200（如 --viewport 2400x1800）");
     console.error("  --dpr N         deviceScaleFactor，默认 1（和 --viewport 组合模拟高分屏 / 弱 GPU）");
-    console.error("  --scene '<JSON>'  仅 shots：临时场景，字段同 scenarios.mjs 的 SCENES 条目，可重复，和 --only 可并用");
-    console.error("  --out 路径      仅 shots：截图输出目录，相对仓库根解析（不传是 tmp/screenshot/dev-<端口>）");
+    console.error("  --scene '<JSON>'  仅 shots / flicker：临时场景，字段同 scenarios.mjs 的 SCENES 条目，可重复（shots 可与 --only 并用）");
+    console.error("  --out 路径      shots / cold / bench / flicker 的输出路径：绝对路径原样使用，相对路径按仓库根解析");
+    console.error("                  （worktree 里就是 worktree 根；shots 不传是 tmp/screenshot/dev-<端口>）");
     console.error("  --allow-flash   仅 shots：不关闭雷电频闪（默认关，见 weather.ts 的 hold / heldIntensity 开关）");
+    console.error("  --freeze        仅 shots（DX-08）：截图前 __voyage.freeze(true)——位置 / 航向 / 头部 / 模拟时间 /");
+    console.error("                  曝光适应 / 闪电 / 翼尖频闪相位全部钉住，连续渲染逐像素一致，适合两图相减找回归");
+    console.error("  --settle        仅 shots（DX-08）：等 ground.pending === 0 再截（而不是默认的 pending<5），逐像素对比用");
+    console.error("  flicker         冻结后按亚像素步进（--step 毫米，默认 0.06）微移相机（head.x）连拍 --frames 帧（默认 20），");
+    console.error("                  输出块能量变异系数（T08 法）与爬行指标（T43 法）；--crop x,y,w,h 限定统计区域，");
+    console.error("                  --block N 块边长（默认 48），--debug N 设 uDebug，一次只测一个场景（--only 单选或单个 --scene）");
     process.exit(1);
   }
   // playwright-core 有时会留一些内部句柄没清干净（尤其是 GPU 争用导致渲染进程中途崩溃过一次的情况），

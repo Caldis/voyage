@@ -49,6 +49,9 @@ export const SCENES = [
   // 月亮高度 −19.3°（新月相位 1%，在地平线下），不会露头
   { name: "dusk-earthshadow", p: { preset: "wpac", seat: "left", date: "2026-02-16", time: 1068, "wing-pos": "-4" } },
   { name: "clouds-variety", p: { preset: "wpac", time: 900, coverage: 0.62, altitude: 5, "wing-pos": "-4" }, offset: [37, -12] },
+  // T12：卷云（11.5–12.5 km），从 9 km 往上斜看：顺高空风拉长的丝缕、向一侧甩下去的马尾，半透明、透出蓝天
+  // 卷云用单独的云步进变体（clouds.ts 的 marchCirrusMat），第一次选卷云时在后台编译：js 里等它编好（最多 60 s）再截图
+  { name: "cirrus-noon", p: { preset: "wpac", time: 720, "cloud-preset": "cirrus", coverage: 0.5, altitude: 9, "wing-pos": "8" }, js: "for (let i = 0; i < 240 && !['ready', 'failed'].includes(v.clouds.cirrusLayerState); i++) await new Promise((r) => setTimeout(r, 250)); return 'cirrus ' + v.clouds.cirrusLayerState;" },
   { name: "low-sea-glint", p: { preset: "wpac", time: 980, coverage: 0, altitude: 0.6, "wing-pos": "-4" } },
   { name: "in-cloud", p: { preset: "wpac", time: 840, "cloud-preset": "stratocumulus", coverage: 0.95, altitude: 1.35, "wing-pos": "8" }, wait: 6000 },
   { name: "storm-day", p: { preset: "wpac", time: 900, coverage: 0.3, weather: "storm", "wing-pos": "-4" } },
@@ -91,7 +94,7 @@ export const SCENES = [
  * 到了浏览器那边都不存在，所以 defaults 通过参数传入，不是靠模块顶层的引用。
  */
 export async function applyScene(arg) {
-  const { sc, defaults } = arg;
+  const { sc, defaults, settle } = arg;
   const v = window.__voyage;
   document.getElementById("panel").classList.add("hidden");
   const set = (id, val) => {
@@ -129,10 +132,13 @@ export async function applyScene(arg) {
   if (sc.offset) v.cloudUniforms.uCloudOffset.value.set(sc.offset[0], sc.offset[1]);
   // 天气要在位移设好之后重新摆放
   if (sc.p.weather) set("weather", sc.p.weather);
-  if (sc.ground) {
+  // settle（DX-08，配合 __voyage.freeze 做逐像素对比）：等 ground.pending 真正归零，不是原来的「< 5 且已经等过 5 轮」
+  // ——瓦片还在陆续贴上来时冻结两帧、相减，差异会被当成回归。没传 settle 时行为和以前完全一样。
+  if (sc.ground || settle) {
     for (let i = 0; i < 40; i++) {
       await new Promise((r) => setTimeout(r, 1000));
-      if (v.ground.pending < 5 && i > 5) break;
+      const done = settle ? v.ground.pending === 0 : v.ground.pending < 5 && i > 5;
+      if (done) break;
     }
   }
   // 奇观（W01b）：每个场景都从「没有奇观」出发（要奇观的场景在 js 里召唤），免得上一个场景的奇观带到下一个
