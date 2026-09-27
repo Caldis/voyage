@@ -79,6 +79,8 @@ export interface VoyageState {
   spoilerDeg: number;
   /** 高度下限（T18）：陆地上方离地 ≥ 2.5 km、海面上 ≥ 0.5 km；没初始化时按 0.5 km 处理 */
   floor?: AltitudeFloor;
+  /** 爬升 / 下降率（km/s，T19a）：连续航程由导演设成真实值（约 0.01）；没设时用飞行阶段按钮的 10 倍加速值 */
+  altRateKms?: number;
 }
 
 /** 增升装置设定：Airbus 襟翼手柄的档位（0 / 1 / 1+F / 2 / 3 / FULL），或减速板，或按高度自动 */

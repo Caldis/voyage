@@ -97,7 +97,7 @@ export interface AdvanceFlightInput {
   curLon: number;
   /** cloudUniforms.uCloudOffset.value：就地累加这一帧的位移，云场、地面 clipmap 都靠它随飞机平移 */
   cloudOffset: THREE.Vector2;
-  /** preset.dest 且飞到终点附近时触发（main.ts 里是重新 setPreset 回起点） */
+  /** preset.dest 且飞到终点附近时触发（T19a 起 main.ts 交给导演接下一段航线，不再瞬移回起点） */
   onReachDest: () => void;
 }
 
@@ -129,7 +129,7 @@ export function advanceFlight(state: VoyageState, input: AdvanceFlightInput): Ad
     state.heading = (state.heading + rate * dt + 360) % 360;
     const bankTarget = THREE.MathUtils.radToDeg(Math.atan((vKms * 1000 * THREE.MathUtils.degToRad(rate)) / 9.81));
     state.bankDeg += (bankTarget - state.bankDeg) * (1 - Math.exp(-dt * 0.7));
-    // 到达终点附近：回到起点重新飞
+    // 到达终点附近：交给调用方接下一段（T19a）
     if (haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]) < 40) onReachDest();
   } else {
     state.bankDeg *= Math.exp(-dt);
@@ -142,7 +142,7 @@ export function advanceFlight(state: VoyageState, input: AdvanceFlightInput): Ad
   const dAlt = effectiveTargetKm(state) - state.altitudeKm;
   const climbing = Math.abs(dAlt) > 0.005;
   if (climbing) {
-    state.altitudeKm += Math.sign(dAlt) * Math.min(Math.abs(dAlt), ALT_RATE_KMS * dt);
+    state.altitudeKm += Math.sign(dAlt) * Math.min(Math.abs(dAlt), (state.altRateKms ?? ALT_RATE_KMS) * dt);
   }
   const lowAndSlow = state.altitudeKm < 2 ? 3.5 : CRUISE_PITCH_DEG; // 低空低速时迎角更大，机头更高
   const pitchTarget = climbing ? (dAlt > 0 ? 8 : 0) : lowAndSlow;

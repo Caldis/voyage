@@ -131,10 +131,27 @@ export class GroundClipmap {
     return m;
   }
 
+  /**
+   * 最细的几级停用（T19a 加速播放）：60× 时飞机每秒走 15 km，8–32 km 的细级别每一两帧就要重建一次，
+   * 瓦片请求量按「飞过的距离 × 细级别数」暴涨，影像服务器会限流（实测 60× 每分钟约 7000 个 EOX 请求、上万个被拒）。
+   * 停用的级别标成不可用（着色器退到更粗一级），在途的构建完成后也不再启用。
+   */
+  setMinLevel(n: number) {
+    this.minLevel = Math.max(0, Math.min(GROUND_LEVELS - 1, n));
+    for (let i = 0; i < this.minLevel; i++) {
+      const l = this.levels[i];
+      l.valid = false;
+      l.cx = l.cz = NaN;
+      l.grid = null;
+      this.levelUniform[i].w = 0;
+    }
+  }
+  private minLevel = 0;
+
   /** 每帧调用：飞机当前的本地坐标（km） */
   update(x: number, z: number) {
     // 粗的级别先建，远景先出来
-    for (let i = GROUND_LEVELS - 1; i >= 0; i--) {
+    for (let i = GROUND_LEVELS - 1; i >= this.minLevel; i--) {
       const l = this.levels[i];
       if (l.building) continue;
       const snap = l.size / 8;
@@ -252,7 +269,7 @@ export class GroundClipmap {
         this.buildHeight(l.size, cx, cz),
         this.buildNight(l.size, cx, cz),
       ]);
-      if (gen !== this.generation) return;
+      if (gen !== this.generation || i < this.minLevel) return;
       // 夜光亮度放进水体纹理的 B 通道
       for (let k = 0; k < RES * RES; k++) water[k * 4 + 2] = night[k * 4];
       this.upload(this.albedo, i, albedo, RES * RES * 4);

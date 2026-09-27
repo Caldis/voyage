@@ -6,6 +6,7 @@ import type { Exposure } from "./render/exposure";
 import { $, type HighLiftSetting, type VoyageState } from "./state";
 import { WEATHER_PRESETS, type WeatherSystem } from "./weather";
 import { VIEW_PRESETS } from "./view-presets";
+import type { Director } from "./director";
 
 /**
  * 面板：DOM 绑定、信息栏文字、方位文字（COMPASS）。从 main.ts 拆出（T01 纯重构，未改动任何取值或绑定顺序）。
@@ -72,7 +73,7 @@ function syncFloorUi(state: VoyageState) {
 
 let lastInfo = 0;
 /** 信息栏文字：太阳 / 月亮方位、航向、位置，每 250 ms 刷新一次 */
-export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number) {
+export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number, legLine = "") {
   if (now - lastInfo <= 250) return;
   lastInfo = now;
   syncFloorUi(state);
@@ -87,7 +88,9 @@ export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state
     (preset.dest ? `，距终点 ${haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]).toFixed(0)} km` : "") +
     (state.slatDeg > 0.5 || state.flapDeg > 0.5 ? `，缝翼 ${state.slatDeg.toFixed(0)}° / 襟翼 ${state.flapDeg.toFixed(0)}°` : "") +
     (state.spoilerDeg > 0.5 ? `，减速板 ${state.spoilerDeg.toFixed(0)}°` : "") + "\n" +
-    `位置 ${curLat.toFixed(3)}°N ${curLon.toFixed(3)}°E` + (state.groundOn && groundPending > 0 ? `，地面瓦片加载中（${groundPending}）` : "");
+    `位置 ${curLat.toFixed(3)}°N ${curLon.toFixed(3)}°E` + (state.groundOn && groundPending > 0 ? `，地面瓦片加载中（${groundPending}）` : "") +
+    (legLine ? `
+${legLine}` : "");
 }
 
 export interface UiDeps {
@@ -106,11 +109,13 @@ export interface UiDeps {
   setView: (id: string) => void;
   /** 当前视角预设的 id */
   currentView: () => string;
+  /** 导演（T19a）：连续航程 / 背景板模式 */
+  director: Director;
 }
 
 /** 绑定面板上的所有控件。调用一次，顺序和原来 main.ts 里一致。 */
 export function setupUi(deps: UiDeps) {
-  const { state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView } = deps;
+  const { state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView, director } = deps;
 
   const presetSel = $<HTMLSelectElement>("preset");
   presetSel.innerHTML = PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
@@ -263,9 +268,72 @@ export function setupUi(deps: UiDeps) {
   window.addEventListener("keydown", (e) => {
     if (e.key === "h" || e.key === "H") $("panel").classList.toggle("hidden");
   });
+  setupVoyageUi(director);
 
   $<HTMLSelectElement>("quality").addEventListener("change", (e) => {
     clouds.resolutionScale = Number((e.target as HTMLSelectElement).value);
     resize();
   });
+}
+
+// ---------- 连续航程 / 背景板模式（T19a） ----------
+
+/** 背景板模式下鼠标静止多久后隐藏光标与提示（毫秒） */
+const BACKDROP_IDLE_MS = 2500;
+
+function setupVoyageUi(director: Director) {
+  const voyageBox = $<HTMLInputElement>("voyage-on");
+  const rateBtns = document.querySelectorAll<HTMLButtonElement>("[data-voyage-rate]");
+  const timeRateBtns = document.querySelectorAll<HTMLButtonElement>("[data-rate]");
+  const hint = $("backdrop-hint");
+  const body = document.body;
+
+  /** 面板控件与导演状态对齐：连续航程开着时，「时间流速」按钮让位给航程流速（两者都推时间，避免叠加） */
+  function sync() {
+    voyageBox.checked = director.active;
+    rateBtns.forEach((b) => b.classList.toggle("on", director.active && Number(b.dataset.voyageRate) === director.rate));
+    timeRateBtns.forEach((b) => (b.disabled = director.active));
+    $("voyage-rates").hidden = !director.active;
+    body.classList.toggle("backdrop", director.backdrop);
+    if (!director.backdrop) body.classList.remove("backdrop-idle");
+  }
+
+  voyageBox.addEventListener("change", () => {
+    director.setActive(voyageBox.checked);
+    sync();
+  });
+  rateBtns.forEach((b) =>
+    b.addEventListener("click", () => {
+      director.rate = Number(b.dataset.voyageRate);
+      sync();
+    }),
+  );
+
+  let idleTimer = 0;
+  const wake = () => {
+    if (!director.backdrop) return;
+    body.classList.remove("backdrop-idle");
+    window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(() => body.classList.add("backdrop-idle"), BACKDROP_IDLE_MS);
+  };
+  function setBackdrop(on: boolean) {
+    if (on && !director.active) director.setActive(true);
+    director.backdrop = on;
+    $("panel").classList.toggle("hidden", on);
+    sync();
+    if (on) {
+      wake();
+    } else window.clearTimeout(idleTimer);
+  }
+  $("backdrop-on").addEventListener("click", () => setBackdrop(true));
+  $("backdrop-exit").addEventListener("click", () => setBackdrop(false));
+  window.addEventListener("mousemove", wake);
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && director.backdrop) setBackdrop(false);
+    if ((e.key === "b" || e.key === "B") && !(e.target instanceof HTMLInputElement)) setBackdrop(!director.backdrop);
+  });
+  hint.hidden = false;
+  sync();
+  // 调试 / 测试脚本用
+  (window as unknown as { __voyageUi?: unknown }).__voyageUi = { setBackdrop, sync };
 }
