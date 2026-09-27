@@ -77,9 +77,9 @@
 - **并行测试造成的卡顿可以忽略（2026-09-28 用户澄清：「卡顿你不用太关心，如果是你同步测试导致资源占用的话可以忽略」）**：不必为用户使用机器而限制并行代理数。但**性能结论的可信度**仍要求：各任务在负载下测的帧时间 / 冷编译只作参考，波次收尾在安静窗口统一复测累计退化（PERF-15）。
 - **`shots --pair` / `--base-shader` 冻结已修（DX-22）**：benchFrame 冻结时不再推进状态，master 自比三场景（含带地面夜景）逐像素 0 差；不再需要 `v.benchFrame = () => 0` 绕法。
 - **判零回归看最大差与平均差，不只看「超阈值 8 像素数」**（PERF-14 审查正对照：座椅亮度故意 +5%，超阈值像素为 0 但平均差 0.63、最大 3）。
-- **云的噪声回归判断要多姿态**（INV-INCLOUD）：没写固定 offset 的场景（如 in-cloud）两次测量姿态不同，同代码指标能差 30 倍；判断云里 / 云的噪声是否回归，要在 ≥8 个固定姿态上同页对比，看几何均值与最差值，不看单姿态单帧。
-- **冻结工具对云是瞎的（C03 审查发现）**：`dev-browser flicker`、`shots --freeze`、`--pair` / `--base-shader` 冻结时整次跳过云渲染，**不能用来证明云不闪 / 云着色器零回归**；云的时间行为用 `shots / flicker --cloud-live`（DX-22：冻结其余、云照常渲染，输出 relStd / relLow16）测，见 README「调试与验证」；`flicker` ≥48 帧会崩，默认 32 帧。交叉 / 菱形纹用对角高频能量占比量（`compare.mjs --measure` 的 `adjDiffDiag` 可快速近似），相邻像素差量不出（与横纹此消彼长）。
-- **时间累积 / 时间常数类改动的三条（C12b、T48c 发现）**：①验收除静止、巡航、转弯外**必须加「reset 后收敛」**（换预设 / 滑条 / 画质档自动升降都会 snap；C12b 静止 blend 0.04 让 reset 后第 16 帧误差 ×2.4–3.1，只有这个模式抓得到）；②**运动 / 抖动不能用逐帧截图测**——截图拉长帧间隔，带时间常数的一方被额外调制，量出假抖动；用页内每个 rAF 后 readPixels（`handoff/T48c-motion.mjs --inpage`）或确定性航迹（`handoff/C12b-ab.mjs`）；③`cloudLive` 冻结后改参数要等约 30 帧再截，4 帧会截到旧画面。
+- **云的噪声回归判断要多姿态**（INV-INCLOUD）：没写固定 offset 的场景（如 in-cloud）两次测量姿态不同，同代码指标能差 30 倍；判断云里 / 云的噪声是否回归，要在 ≥8 个固定姿态上同页对比，看几何均值与最差值，不看单姿态单帧。同页多姿态、多变体对照用 `dev-browser.mjs ab --jobs`（DX-23：每个 job 一个 `offset`，变体按 old,new,old#2,new#2 交替，自带噪声底、预热判据、瓦片作废标记），不要再各写一份 `*-ab.mjs`。
+- **冻结工具对云是瞎的（C03 审查发现）**：`dev-browser flicker`、`shots --freeze`、`--pair` / `--base-shader` 冻结时整次跳过云渲染，**不能用来证明云不闪 / 云着色器零回归**；云的时间行为用 `shots / flicker --cloud-live`（DX-22：冻结其余、云照常渲染，输出 relStd / relLow16）测，见 README「调试与验证」；`flicker` ≥48 帧会崩，默认 32 帧。交叉 / 菱形纹用对角高频能量占比量（`compare.mjs --measure` 的 `adjDiffDiag` 可快速近似），相邻像素差量不出（与横纹此消彼长）；斜纹 / 死白 / 夜里偏色 / 光晕分别看 `compare.mjs --measure` 的 `streak`（只在静止同机位间比）、`blownMaxArea`、`hsvSat`/`rgbSpread`、`--halo`（DX-23）。
+- **时间累积 / 时间常数类改动的三条（C12b、T48c 发现）**：①验收除静止、巡航、转弯外**必须加「reset 后收敛」**（换预设 / 滑条 / 画质档自动升降都会 snap；C12b 静止 blend 0.04 让 reset 后第 16 帧误差 ×2.4–3.1，只有这个模式抓得到）；②**运动 / 抖动不能用逐帧截图测**——截图拉长帧间隔，带时间常数的一方被额外调制，量出假抖动；用 `dev-browser.mjs flight`（DX-23：`--modes static,reset,cruise,turn,exit` 是确定性航迹 + 静止真值，`live` 是页内每个 rAF 后 readPixels；① 的「reset 后收敛」就是 `reset` 模式），不要再从 handoff 复制 `C12b-ab.mjs` / `T48c-motion.mjs`；③`cloudLive` 冻结后改参数要等约 30 帧再截，4 帧会截到旧画面。
 - **DX 工具合并后通知在途代理**（SendMessage 一句话：新工具名与用途），否则在途任务还会各写一份（第 6 波 DX-08 合并后 W03 仍复制旧脚本）。
 
 ### 3.5 中途核查（协调者，2026-09-25 用户追问后补）
