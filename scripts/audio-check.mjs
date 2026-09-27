@@ -408,6 +408,13 @@ async function railCheck(page) {
         ac.push(s);
         if (s > best) { best = s; bestLag = lag; }
       }
+      // 防倍周期：周期 T 的包络在 2T、3T 处的自相关和 T 处几乎一样高，取「≥ 最大值 90%」的局部峰里最短的滞后
+      for (let i = 1; i < ac.length - 1; i++) {
+        if (ac[i] >= 0.9 * best && ac[i] >= ac[i - 1] && ac[i] >= ac[i + 1]) {
+          bestLag = i + 40;
+          break;
+        }
+      }
       // 抛物线插值
       const li = bestLag - 40;
       let frac = 0;

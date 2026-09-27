@@ -25,8 +25,8 @@ try {
   await page.waitForFunction(() => window.__voyage.rail.active, null, { timeout: 60000 });
   await page.waitForTimeout(4500);
   console.log("切到火车 4.5 s：", await dbg(), "字幕元素：", JSON.stringify(await page.textContent("#rail-caption")), await page.evaluate(() => document.getElementById("rail-caption").classList.contains("on")));
-  // 道口：s = 529 m 处有一处；从 250 m 起步开过去
-  await page.evaluate(() => window.__voyage.rail.teleport(250, 1, 80));
+  // 道口：s = 529 m 处有一处；从 400 m 开过去
+  await page.evaluate(() => window.__voyage.rail.teleport(400, 1, 80));
   for (let i = 0; i < 4; i++) {
     await page.waitForTimeout(1500);
     console.log(`道口附近 +${(i + 1) * 1.5} s：`, await dbg(), "里程", await page.evaluate(() => window.__voyage.rail.train.s.toFixed(0)));

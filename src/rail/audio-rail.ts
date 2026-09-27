@@ -68,6 +68,9 @@ const IMPACT_SPEED_EXP = 1.0;
 const BELL_PEAK_AT_3M5 = 0.6;
 /** 车体 / 窗对 700 Hz 附近的隔声（dB，估：在来线车窗的隔声量级 25–30 dB） */
 const BELL_TL_DB = -27;
+/** 广播喃喃声：预合成几段、每段最长几秒（最长的「まもなく 終点 信濃大町」约 5.6 s） */
+const MURMUR_VARIANTS = 3;
+const MURMUR_MAX_S = 7;
 /** 超过这个距离不排警报声（米）：已经比滚动噪声低 20 dB 以上 */
 const BELL_MAX_R = 450;
 
@@ -197,6 +200,8 @@ export class RailSoundscape {
   private bellBuf!: [AudioBuffer, AudioBuffer];
   private bellBus!: [StereoPannerNode, StereoPannerNode];
   private sources: AudioScheduledSourceNode[] = [];
+  private murmurs: AudioBuffer[] = [];
+  private murmurNext = 0;
 
   // 状态
   private lastUpdate = -1;
@@ -340,6 +345,12 @@ export class RailSoundscape {
     this.bellBuf = [makeBuffer(ctx, [bellBuffer(sr, BELL_FREQS_HZ[0])]), makeBuffer(ctx, [bellBuffer(sr, BELL_FREQS_HZ[1])])];
     this.bellBus = [ctx.createStereoPanner(), ctx.createStereoPanner()];
     for (const b of this.bellBus) b.connect(this.events);
+    // 广播喃喃声：建图时预合成几段（每段约 60–90 ms 的 JS 计算，逐段让出主线程），播放时截取需要的长度。
+    // 第一版在广播那一刻现算，真实页面里是一次 63 ms 的主线程长任务（TR07-prof.mjs）
+    for (let i = 0; i < MURMUR_VARIANTS; i++) {
+      await yieldNow();
+      this.murmurs.push(makeBuffer(ctx, murmurBuffer(sr, MURMUR_MAX_S, this.rng)));
+    }
   }
 
   private loop(buf: AudioBuffer, dest: AudioNode) {
@@ -389,14 +400,14 @@ export class RailSoundscape {
     const u = f.dir * f.s;
 
     // 模拟时间流速的估计：面板加速播放时，列车在一个音频秒里走了好几秒的路——节奏类的声音没有意义，静掉事件（连续层照常）
-    if (this.lastU !== null && f.dir === this.lastDir && dtA > 0.04 && v > 1) {
-      const r = (u - this.lastU) / (dtA * v);
-      if (isFinite(r)) this.rateEst += (clamp(r, 0, 100) - this.rateEst) * 0.4;
-    }
-    if (f.dir !== this.lastDir || this.lastU === null || Math.abs(u - this.lastU) > 500) {
-      // 折返、跳位置：重新开始排程
+    // 折返、跳位置（teleport）：重新开始排程，这一次不拿来估流速（否则一次 30 km 的跳跃会被当成 40 倍速，把接下来的广播也吞掉）
+    const jumped = f.dir !== this.lastDir || this.lastU === null || Math.abs(u - this.lastU) > 100 * Math.max(v, 1) * Math.max(dtA, 0.02) + 50; // 列车只随导演的航程流速加速（最快 60×），100 倍以上只能是跳位置
+    if (jumped) {
       this.watermark = u;
       this.bells.clear();
+    } else if (dtA > 0.04 && v > 1) {
+      const r = (u - this.lastU!) / (dtA * v);
+      if (isFinite(r)) this.rateEst += (clamp(r, 0, 100) - this.rateEst) * 0.4;
     }
     this.lastU = u;
     this.lastDir = f.dir;
@@ -672,8 +683,24 @@ export class RailSoundscape {
 
   /** 车内广播（示意）：when 时刻放一段听不清内容的喃喃声 */
   announceAt(when: number, a: Announcement) {
-    const [L, R] = murmurBuffer(this.ctx.sampleRate, a.durationS, this.rng);
-    this.playAt(makeBuffer(this.ctx, [L, R]), when, ROLL_RMS * 1.1, 1, this.events);
+    if (!this.murmurs.length) return;
+    const buf = this.murmurs[this.murmurNext++ % this.murmurs.length];
+    const dur = Math.min(a.durationS, buf.duration - 0.2);
+    const s = this.ctx.createBufferSource();
+    s.buffer = buf;
+    // 每次音高略有不同（同一个「播音员」，±3%），末尾 0.25 s 淡出（截取处可能落在一拍中间）
+    s.playbackRate.value = 0.97 + 0.06 * this.rng();
+    const g = this.ctx.createGain();
+    g.gain.value = 0;
+    const env = new Float32Array(32);
+    for (let i = 0; i < env.length; i++) {
+      const t = (i / (env.length - 1)) * dur;
+      env[i] = ROLL_RMS * 1.1 * Math.min(1, (dur - t) / 0.25);
+    }
+    g.gain.setValueCurveAtTime(env, when, dur);
+    s.connect(g).connect(this.events);
+    s.start(when);
+    s.stop(when + dur + 0.05);
   }
 
   setMaster(v: number, tau = 0.8) {
@@ -880,6 +907,7 @@ export class RailAudio {
   private announcer = new Announcer();
   private building: Promise<void> | null = null;
   private corridor: Corridor | null = null;
+  private lastFrameMs = -1e9;
   options: RailSoundOptions;
 
   constructor(options: RailSoundOptions) {
@@ -918,6 +946,9 @@ export class RailAudio {
       this.announcer.reset();
       return false;
     }
+    // 广播时机、声音图参数都只需要 10 Hz（声音图内部本来也节流到 10 Hz）
+    if (nowMs - this.lastFrameMs < 95) return true;
+    this.lastFrameMs = nowMs;
     const t = src.train, cor = src.corridor;
     const next = cor.nextStation(t.s, t.dir);
     const stopS = t.nextStop();
@@ -928,11 +959,12 @@ export class RailAudio {
       next ? { name: next.name, s: next.s, dist: Math.abs(next.s - t.s) } : null,
       { name: stopSt.name, dist: Math.abs(stopS - t.s), terminal: stopS === t.terminalS[0] || stopS === t.terminalS[1] },
     );
-    const fast = (this.scape?.targets?.fastForward ?? false) && playing;
-    if (a && !fast) {
+    // 字幕总是显示；加速播放时不放喃喃声（一段广播会被下一段顶掉，听起来是乱的）
+    const fast = this.scape?.targets?.fastForward ?? false;
+    if (a) {
       this.caption = `${a.text}（车内广播 · 示意）`;
       this.captionUntil = nowMs + (a.durationS + 3) * 1000;
-      if (playing && this.scape) this.scape.announceAt(this.scape.ctx.currentTime + 0.3, a);
+      if (playing && this.scape && !fast) this.scape.announceAt(this.scape.ctx.currentTime + 0.3, a);
     }
     if (nowMs > this.captionUntil) this.caption = "";
     if (playing && this.scape) this.scape.update(railFrameFrom(t, src.pose, seatSign));
