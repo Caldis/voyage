@@ -152,6 +152,11 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | 卫星影像（运行时拉取） | EOX Sentinel-2 cloudless 2020（`tiles.maps.eox.at`） | CC BY-NC-SA 4.0，需署名；仅限非商业 |
 | 地形（运行时拉取） | AWS Terrain Tiles，Terrarium 编码（`elevation-tiles-prod`） | 开放数据，各来源署名见其说明 |
 | 水体、道路（运行时拉取） | OpenFreeMap 矢量瓦片的 water / waterway / transportation 图层（同一张瓦片、同一次请求） | © OpenStreetMap contributors，ODbL |
+| `public/data/rail/oito-matsumoto-shinanoomachi.{json,bin}`（火车线路走廊：中心线、车站、道口、桥、建筑、土地利用、道路、水系、电力线） | OpenStreetMap，Geofabrik 中部包离线提取（`scripts/rail/extract_osm.py`，不走公共 Overpass），`scripts/rail/bake.py` 烘焙 | © OpenStreetMap contributors，ODbL 1.0；本文件属于衍生数据库，对外发布同样按 ODbL 提供 |
+| 同上文件中的高程（`center.zGround` / `zRail` / `grade`、`grid.z`） | 国土地理院 标高タイル DEM5A（缺值用 DEM10B 补），`scripts/rail/dem.py` 取样 | 国土地理院コンテンツ利用規約（与 CC BY 4.0 兼容），署名「地理院タイル（標高タイル）を加工して作成」 |
+| 同上文件中的 `masts.*`（接触网支柱） | **程序生成的示例**（OSM 里这一段没有支柱数据） | — |
+
+火车线路数据的格式、各类要素的覆盖率与缺口、事实核对，见 `research/RAIL_BAKE_REPORT.md`；重跑方法见该报告 §6。
 
 **经验近似（不是物理量，后续要替换）**：舱内受窗外光的系数、夜间自动曝光的目标中灰曲线、水体反射率取值。代码里都标了注释。
 

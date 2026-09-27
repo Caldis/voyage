@@ -1,0 +1,3474 @@
+{
+ "version": 1,
+ "id": "oito-matsumoto-shinanoomachi",
+ "name": "JR 大糸線 松本—信濃大町",
+ "generated": "2026-09-27",
+ "sources": {
+  "osm": {
+   "file": "chubu-260926.osm.pbf",
+   "provider": "Geofabrik（download.geofabrik.de/asia/japan/chubu）",
+   "license": "ODbL 1.0",
+   "attribution": "© OpenStreetMap contributors"
+  },
+  "dem": {
+   "provider": "国土地理院 標高タイル（DEM5A / DEM5B / DEM5C / DEM10B）",
+   "license": "国土地理院コンテンツ利用規約（CC BY 4.0 互換）",
+   "attribution": "地理院タイル（標高タイル）を加工して作成"
+  },
+  "stationKm": "営業キロ：Wikipedia「大糸線」駅一覧"
+ },
+ "format": {
+  "bin": "oito-matsumoto-shinanoomachi.bin",
+  "endianness": "little",
+  "crs": {
+   "type": "local-ENU-tangent-plane",
+   "originLat": 36.2307332,
+   "originLon": 137.9644409,
+   "originName": "松本駅（OSM node 6036834287）",
+   "x": "东（米）",
+   "y": "北（米）",
+   "z": "国土地理院 DEM 标高（米，东京湾平均海面起算），不是 ENU 的 up"
+  },
+  "s": "里程（米），沿本线中心线量，0 = 松本站节点的投影，增大方向 = 往信濃大町",
+  "d": "横向偏移（米），+ = 行进方向（往信濃大町）左侧",
+  "centerStepM": 2.0,
+  "grid": {
+   "ds": 10.0,
+   "dd": 10.0,
+   "s0": -6.379111983265494,
+   "rows": 3508,
+   "cols": 101,
+   "d0": -500.0,
+   "unit": 0.1,
+   "nodata": -32768
+  },
+  "flags": {
+   "bridge": 1,
+   "tunnel": 2,
+   "embankment": 4,
+   "cutting": 8,
+   "platform": 16,
+   "level_crossing": 32,
+   "electrified": 64,
+   "multi_track": 128,
+   "route_member": 256
+  },
+  "arrays": "arrays.<名字> = {type, offset(字节), length(元素数), desc}；new <Type>Array(buf, offset, length)"
+ },
+ "arrays": {
+  "center.x": {
+   "type": "f32",
+   "offset": 0,
+   "length": 17540,
+   "desc": "中心线东坐标（米），每 2 m 一点"
+  },
+  "center.y": {
+   "type": "f32",
+   "offset": 70160,
+   "length": 17540,
+   "desc": "中心线北坐标（米）"
+  },
+  "center.s": {
+   "type": "f32",
+   "offset": 140320,
+   "length": 17540,
+   "desc": "里程 s（米），0 = 松本站节点的投影"
+  },
+  "center.zGround": {
+   "type": "f32",
+   "offset": 210480,
+   "length": 17540,
+   "desc": "中心线处 DEM 地表高程（米，缺 = -9999；桥下是河床）"
+  },
+  "center.zRail": {
+   "type": "f32",
+   "offset": 280640,
+   "length": 17540,
+   "desc": "轨面高程近似（米）：桥 / 隧道段两端线性插值，σ = 30 m 平滑"
+  },
+  "center.grade": {
+   "type": "f32",
+   "offset": 350800,
+   "length": 17540,
+   "desc": "纵坡（‰，正 = 往信濃大町上坡），由 zRail 再 σ = 50 m 平滑后求导"
+  },
+  "center.heading": {
+   "type": "f32",
+   "offset": 420960,
+   "length": 17540,
+   "desc": "切向角（弧度，从东向逆时针；σ = 15 m 平滑）"
+  },
+  "center.curvature": {
+   "type": "f32",
+   "offset": 491120,
+   "length": 17540,
+   "desc": "曲率（1/m，正 = 左转；由 OSM 折线求导后 σ = 15 m 平滑，非设计值）"
+  },
+  "center.flags": {
+   "type": "u16",
+   "offset": 561280,
+   "length": 17540,
+   "desc": "位标志，见 json.format.flags"
+  },
+  "center.tracks": {
+   "type": "u8",
+   "offset": 596360,
+   "length": 17540,
+   "desc": "法线 ±12 m 内 railway=rail 的股道数（含本线）"
+  },
+  "grid.z": {
+   "type": "i16",
+   "offset": 613904,
+   "length": 354308,
+   "desc": "走廊高程网格，行 = s（10.0 m 一行），列 = d（10.0 m 一列，-500.0..+500.0），单位 0.1 m，-32768 = 无数据"
+  },
+  "masts.s": {
+   "type": "f32",
+   "offset": 1322520,
+   "length": 855,
+   "desc": "接触网支柱里程"
+  },
+  "masts.d": {
+   "type": "f32",
+   "offset": 1325944,
+   "length": 855,
+   "desc": "接触网支柱横向偏移（米，+ = 左）"
+  },
+  "masts.source": {
+   "type": "u8",
+   "offset": 1329368,
+   "length": 855,
+   "desc": "0 = 程序生成（示例，非真实位置），1 = OSM railway=catenary_mast"
+  },
+  "buildings.verts": {
+   "type": "f32",
+   "offset": 1330224,
+   "length": 60270,
+   "desc": "顶点 xy 交错（米），环不重复首点"
+  },
+  "buildings.ringStart": {
+   "type": "u32",
+   "offset": 1571304,
+   "length": 5827,
+   "desc": "每个环在 verts 里的起始顶点号（长度 = 环数 + 1）"
+  },
+  "buildings.ringHole": {
+   "type": "u8",
+   "offset": 1594616,
+   "length": 5826,
+   "desc": "1 = 内环（洞）"
+  },
+  "buildings.featRing": {
+   "type": "u32",
+   "offset": 1600448,
+   "length": 5801,
+   "desc": "每个要素的第一个环号（长度 = 要素数 + 1）"
+  },
+  "buildings.cls": {
+   "type": "u8",
+   "offset": 1623656,
+   "length": 5800,
+   "desc": "类别下标，查 json.layers.<层>.classes"
+  },
+  "buildings.s": {
+   "type": "f32",
+   "offset": 1629456,
+   "length": 5800,
+   "desc": "要素代表点的里程（已按 s 排序）"
+  },
+  "buildings.d": {
+   "type": "f32",
+   "offset": 1652656,
+   "length": 5800,
+   "desc": "要素中心的横向偏移（米）"
+  },
+  "buildings.levels": {
+   "type": "u8",
+   "offset": 1675856,
+   "length": 5800,
+   "desc": "building:levels，0 = 未标"
+  },
+  "buildings.height": {
+   "type": "u16",
+   "offset": 1681656,
+   "length": 5800,
+   "desc": "height（0.1 m），0 = 未标"
+  },
+  "buildings.roof": {
+   "type": "u8",
+   "offset": 1693256,
+   "length": 5800,
+   "desc": "roof:shape 下标，0 = 未标"
+  },
+  "landuse.verts": {
+   "type": "f32",
+   "offset": 1699056,
+   "length": 43902,
+   "desc": "顶点 xy 交错（米），环不重复首点"
+  },
+  "landuse.ringStart": {
+   "type": "u32",
+   "offset": 1874664,
+   "length": 2131,
+   "desc": "每个环在 verts 里的起始顶点号（长度 = 环数 + 1）"
+  },
+  "landuse.ringHole": {
+   "type": "u8",
+   "offset": 1883192,
+   "length": 2130,
+   "desc": "1 = 内环（洞）"
+  },
+  "landuse.featRing": {
+   "type": "u32",
+   "offset": 1885328,
+   "length": 2120,
+   "desc": "每个要素的第一个环号（长度 = 要素数 + 1）"
+  },
+  "landuse.cls": {
+   "type": "u8",
+   "offset": 1893808,
+   "length": 2119,
+   "desc": "类别下标，查 json.layers.<层>.classes"
+  },
+  "landuse.s": {
+   "type": "f32",
+   "offset": 1895928,
+   "length": 2119,
+   "desc": "要素代表点的里程（已按 s 排序）"
+  },
+  "road.verts": {
+   "type": "f32",
+   "offset": 1904408,
+   "length": 138048,
+   "desc": "顶点 xy 交错（米）"
+  },
+  "road.featStart": {
+   "type": "u32",
+   "offset": 2456600,
+   "length": 13145,
+   "desc": "每条线的起始顶点号（长度 = 条数 + 1）"
+  },
+  "road.cls": {
+   "type": "u8",
+   "offset": 2509184,
+   "length": 13144,
+   "desc": "类别下标"
+  },
+  "road.s": {
+   "type": "f32",
+   "offset": 2522328,
+   "length": 13144,
+   "desc": "中点里程（已按 s 排序）"
+  },
+  "road.struct": {
+   "type": "u8",
+   "offset": 2574904,
+   "length": 13144,
+   "desc": "1 = 桥，2 = 隧道 / 地下"
+  },
+  "road.lanes": {
+   "type": "u8",
+   "offset": 2588048,
+   "length": 13144,
+   "desc": "lanes，0 = 未标"
+  },
+  "water.verts": {
+   "type": "f32",
+   "offset": 2601192,
+   "length": 20406,
+   "desc": "顶点 xy 交错（米）"
+  },
+  "water.featStart": {
+   "type": "u32",
+   "offset": 2682816,
+   "length": 1172,
+   "desc": "每条线的起始顶点号（长度 = 条数 + 1）"
+  },
+  "water.cls": {
+   "type": "u8",
+   "offset": 2687504,
+   "length": 1171,
+   "desc": "类别下标"
+  },
+  "water.s": {
+   "type": "f32",
+   "offset": 2688680,
+   "length": 1171,
+   "desc": "中点里程（已按 s 排序）"
+  },
+  "power.verts": {
+   "type": "f32",
+   "offset": 2693368,
+   "length": 710,
+   "desc": "顶点 xy 交错（米）"
+  },
+  "power.featStart": {
+   "type": "u32",
+   "offset": 2696208,
+   "length": 36,
+   "desc": "每条线的起始顶点号（长度 = 条数 + 1）"
+  },
+  "power.cls": {
+   "type": "u8",
+   "offset": 2696352,
+   "length": 35,
+   "desc": "类别下标"
+  },
+  "power.s": {
+   "type": "f32",
+   "offset": 2696392,
+   "length": 35,
+   "desc": "中点里程（已按 s 排序）"
+  },
+  "power.voltage": {
+   "type": "u16",
+   "offset": 2696536,
+   "length": 35,
+   "desc": "电压（100 V 单位，取第一个值），0 = 未标"
+  },
+  "barrier.verts": {
+   "type": "f32",
+   "offset": 2696608,
+   "length": 1086,
+   "desc": "顶点 xy 交错（米）"
+  },
+  "barrier.featStart": {
+   "type": "u32",
+   "offset": 2700952,
+   "length": 136,
+   "desc": "每条线的起始顶点号（长度 = 条数 + 1）"
+  },
+  "barrier.cls": {
+   "type": "u8",
+   "offset": 2701496,
+   "length": 135,
+   "desc": "类别下标"
+  },
+  "barrier.s": {
+   "type": "f32",
+   "offset": 2701632,
+   "length": 135,
+   "desc": "中点里程（已按 s 排序）"
+  },
+  "powerPts.s": {
+   "type": "f32",
+   "offset": 2702176,
+   "length": 297,
+   "desc": "里程"
+  },
+  "powerPts.d": {
+   "type": "f32",
+   "offset": 2703368,
+   "length": 297,
+   "desc": "横向偏移"
+  },
+  "powerPts.xy": {
+   "type": "f32",
+   "offset": 2704560,
+   "length": 594,
+   "desc": "xy 交错"
+  },
+  "powerPts.cls": {
+   "type": "u8",
+   "offset": 2706936,
+   "length": 297,
+   "desc": "0 = pole，1 = tower，2 = portal"
+  }
+ },
+ "layers": {
+  "buildings": {
+   "count": 5800,
+   "classes": [
+    "yes",
+    "house",
+    "greenhouse",
+    "industrial",
+    "retail",
+    "school",
+    "roof",
+    "allotment_house",
+    "train_station",
+    "apartments",
+    "hotel",
+    "garage",
+    "warehouse",
+    "hospital",
+    "commercial",
+    "office",
+    "public",
+    "shed",
+    "civic",
+    "government",
+    "gatehouse",
+    "shrine",
+    "detached",
+    "parking",
+    "sports_hall",
+    "chapel",
+    "toilets",
+    "temple",
+    "farm_auxiliary",
+    "garages"
+   ],
+   "roofShapes": [
+    "（无）",
+    "gabled",
+    "hipped",
+    "pyramidal",
+    "flat",
+    "round"
+   ]
+  },
+  "landuse": {
+   "count": 2119,
+   "classes": [
+    "landuse=farmland",
+    "amenity=parking",
+    "landuse=forest",
+    "leisure=park",
+    "landuse=grass",
+    "leisure=pitch",
+    "natural=water;water=river",
+    "landuse=orchard",
+    "landuse=retail",
+    "amenity=school",
+    "natural=wood",
+    "landuse=religious",
+    "natural=grassland",
+    "landuse=brownfield",
+    "amenity=grave_yard",
+    "natural=sand",
+    "leisure=garden",
+    "natural=water;water=pond",
+    "natural=water;water=reservoir",
+    "landuse=industrial",
+    "landuse=commercial",
+    "amenity=hospital",
+    "landuse=farmyard",
+    "landuse=cemetery",
+    "landuse=railway",
+    "natural=scrub",
+    "landuse=farmland;crop=rice",
+    "natural=heath",
+    "landuse=construction",
+    "natural=water;water=moat",
+    "leisure=golf_course",
+    "landuse=recreation_ground",
+    "leisure=playground",
+    "landuse=residential",
+    "landuse=civic_admin",
+    "natural=water",
+    "landuse=apiary",
+    "landuse=farmland;crop=grape",
+    "landuse=garages",
+    "landuse=greenhouse_horticulture",
+    "landuse=flowerbed",
+    "landuse=greenfield"
+   ]
+  },
+  "road": {
+   "count": 13144,
+   "classes": [
+    "unclassified",
+    "residential",
+    "service",
+    "footway",
+    "track",
+    "tertiary",
+    "path",
+    "secondary",
+    "cycleway",
+    "trunk",
+    "steps",
+    "primary",
+    "pedestrian",
+    "motorway",
+    "tertiary_link",
+    "motorway_link",
+    "secondary_link",
+    "services",
+    "construction",
+    "road",
+    "trunk_link"
+   ]
+  },
+  "water": {
+   "count": 1171,
+   "classes": [
+    "stream",
+    "canal",
+    "ditch",
+    "drain",
+    "river"
+   ]
+  },
+  "power": {
+   "count": 35,
+   "classes": [
+    "line"
+   ]
+  },
+  "barrier": {
+   "count": 135,
+   "classes": [
+    "hedge",
+    "fence",
+    "wall",
+    "guard_rail"
+   ]
+  },
+  "powerPts": {
+   "count": 297,
+   "classes": [
+    "pole",
+    "tower",
+    "portal"
+   ]
+  },
+  "masts": {
+   "count": 855,
+   "note": "source = 0 的是程序生成：径间 ≤ 50 m，弯道按 √(8·R·0.2 m) 缩短，随机缩短 0–12%，避开道口 ±6 m，站间随机选一侧。位置不是真实的，只用来给节奏。"
+  }
+ },
+ "stations": [
+  {
+   "name": "松本",
+   "km": 0.0,
+   "s": -0.8,
+   "d": -37.1,
+   "osmNode": 6036834287,
+   "tags": {
+    "name:en": "Matsumoto",
+    "name:ja-Hira": "まつもと",
+    "operator": "東日本旅客鉄道;アルピコ交通",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": -6.6,
+     "s1": 125.6,
+     "dMedian": 5.4,
+     "osmId": 403541087
+    }
+   ]
+  },
+  {
+   "name": "北松本",
+   "km": 0.7,
+   "s": 787.1,
+   "d": -6.3,
+   "osmNode": 4058909982,
+   "tags": {
+    "name:en": "Kita-Matsumoto",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 684.6,
+     "s1": 861.4,
+     "dMedian": -2.2,
+     "osmId": 403541086
+    }
+   ]
+  },
+  {
+   "name": "島内",
+   "km": 2.6,
+   "s": 2584.0,
+   "d": -14.0,
+   "osmNode": 6110354080,
+   "tags": {
+    "name:en": "Shimauchi",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 2582.7,
+     "s1": 2718.1,
+     "dMedian": -2.9,
+     "osmId": 651650806
+    }
+   ]
+  },
+  {
+   "name": "島高松",
+   "km": 3.8,
+   "s": 3802.8,
+   "d": 3.6,
+   "osmNode": 6110366066,
+   "tags": {
+    "name:en": "Shimatakamatsu",
+    "railway": "station"
+   },
+   "platforms": []
+  },
+  {
+   "name": "梓橋",
+   "km": 5.2,
+   "s": 5164.7,
+   "d": -6.6,
+   "osmNode": 6110464588,
+   "tags": {
+    "name:en": "Azusabashi",
+    "name:ja-Hira": "あずさばし",
+    "railway": "station"
+   },
+   "platforms": []
+  },
+  {
+   "name": "一日市場",
+   "km": 6.8,
+   "s": 6804.4,
+   "d": -3.6,
+   "osmNode": 6110464611,
+   "tags": {
+    "name:en": "Hitoichiba",
+    "name:ja-Hira": "ひといちば",
+    "railway": "station"
+   },
+   "platforms": []
+  },
+  {
+   "name": "中萱",
+   "km": 8.4,
+   "s": 8383.0,
+   "d": -7.1,
+   "osmNode": 6110499796,
+   "tags": {
+    "name:en": "Nakagaya",
+    "name:ja-Hira": "なかがや",
+    "railway": "station"
+   },
+   "platforms": []
+  },
+  {
+   "name": "南豊科",
+   "km": 10.4,
+   "s": 10404.5,
+   "d": 3.8,
+   "osmNode": 6110498882,
+   "tags": {
+    "name:en": "Minami-Toyoshina",
+    "name:ja-Hira": "みなみとよしな",
+    "railway": "station"
+   },
+   "platforms": []
+  },
+  {
+   "name": "豊科",
+   "km": 11.4,
+   "s": 11415.3,
+   "d": -3.5,
+   "osmNode": 6110498863,
+   "tags": {
+    "name:en": "Toyoshina",
+    "name:ja-Hira": "とよしな",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 11290.8,
+     "s1": 11458.4,
+     "dMedian": -4.5,
+     "osmId": 550065686
+    }
+   ]
+  },
+  {
+   "name": "柏矢町",
+   "km": 14.2,
+   "s": 14227.6,
+   "d": -6.1,
+   "osmNode": 10942933656,
+   "tags": {
+    "name:en": "Hakuyachō",
+    "railway": "station"
+   },
+   "platforms": []
+  },
+  {
+   "name": "穂高",
+   "km": 16.2,
+   "s": 16159.1,
+   "d": -6.4,
+   "osmNode": 7054262349,
+   "tags": {
+    "name:en": "Hotaka",
+    "name:ja-Hira": "ほたか",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 15989.7,
+     "s1": 16160.4,
+     "dMedian": -3.0,
+     "osmId": 496615518
+    }
+   ]
+  },
+  {
+   "name": "有明",
+   "km": 18.4,
+   "s": 18419.2,
+   "d": 3.9,
+   "osmNode": 265029386,
+   "tags": {
+    "name:en": "Ariake",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 18394.3,
+     "s1": 18545.9,
+     "dMedian": 4.2,
+     "osmId": 749189755
+    }
+   ]
+  },
+  {
+   "name": "安曇追分",
+   "km": 19.9,
+   "s": 19831.9,
+   "d": -15.5,
+   "osmNode": 9779036894,
+   "tags": {
+    "name:en": "Azumi-Oiwake",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 19813.0,
+     "s1": 19965.1,
+     "dMedian": -4.3,
+     "osmId": 1177970986
+    },
+    {
+     "s0": 19813.0,
+     "s1": 19965.1,
+     "dMedian": -4.3,
+     "osmId": 1177970986
+    }
+   ]
+  },
+  {
+   "name": "細野",
+   "km": 22.8,
+   "s": 22787.2,
+   "d": 5.9,
+   "osmNode": 10942933675,
+   "tags": {
+    "name:en": "Hosono",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 22707.3,
+     "s1": 22836.9,
+     "dMedian": 4.0,
+     "osmId": 1198848699
+    },
+    {
+     "s0": 22707.3,
+     "s1": 22836.9,
+     "dMedian": 4.0,
+     "osmId": 1198848699
+    }
+   ]
+  },
+  {
+   "name": "北細野",
+   "km": 23.8,
+   "s": 23849.6,
+   "d": 2.2,
+   "osmNode": 10942933676,
+   "tags": {
+    "name:en": "Kita-Hosono",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 23845.9,
+     "s1": 23974.2,
+     "dMedian": 3.9,
+     "osmId": 568309862
+    }
+   ]
+  },
+  {
+   "name": "信濃松川",
+   "km": 26.0,
+   "s": 26024.4,
+   "d": -4.5,
+   "osmNode": 10942933677,
+   "tags": {
+    "name:en": "Shinano-Matsukawa",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 25847.0,
+     "s1": 26042.1,
+     "dMedian": -3.7,
+     "osmId": 608684543
+    }
+   ]
+  },
+  {
+   "name": "安曇沓掛",
+   "km": 28.6,
+   "s": 28612.3,
+   "d": 6.7,
+   "osmNode": 10942933679,
+   "tags": {
+    "name:en": "Azumi-Kutsukake",
+    "railway": "station"
+   },
+   "platforms": []
+  },
+  {
+   "name": "信濃常盤",
+   "km": 30.9,
+   "s": 30899.2,
+   "d": 1.7,
+   "osmNode": 10942933680,
+   "tags": {
+    "name:en": "Shinano-Tokiwa",
+    "railway": "station"
+   },
+   "platforms": []
+  },
+  {
+   "name": "南大町",
+   "km": 34.0,
+   "s": 34012.8,
+   "d": -5.9,
+   "osmNode": 10942933682,
+   "tags": {
+    "name:en": "Minami-Ōmachi",
+    "railway": "station"
+   },
+   "platforms": []
+  },
+  {
+   "name": "信濃大町",
+   "km": 35.1,
+   "s": 35063.2,
+   "d": 0.4,
+   "osmNode": 10942933690,
+   "tags": {
+    "name:en": "Shinano-Ōmachi",
+    "railway": "station"
+   },
+   "platforms": [
+    {
+     "s0": 34924.7,
+     "s1": 35065.0,
+     "dMedian": 6.6,
+     "osmId": 1177970994
+    },
+    {
+     "s0": 34937.5,
+     "s1": 35059.2,
+     "dMedian": -5.7,
+     "osmId": 1177970995
+    },
+    {
+     "s0": 34924.7,
+     "s1": 35065.0,
+     "dMedian": 7.1,
+     "osmId": 1177970994
+    },
+    {
+     "s0": 34937.5,
+     "s1": 35059.2,
+     "dMedian": -5.7,
+     "osmId": 1177970995
+    }
+   ]
+  }
+ ],
+ "platforms": [
+  {
+   "s0": 19813.0,
+   "s1": 19965.1,
+   "dMedian": -4.3,
+   "osmId": 1177970986
+  },
+  {
+   "s0": 34924.7,
+   "s1": 35065.0,
+   "dMedian": 6.6,
+   "osmId": 1177970994
+  },
+  {
+   "s0": 34937.5,
+   "s1": 35059.2,
+   "dMedian": -5.7,
+   "osmId": 1177970995
+  },
+  {
+   "s0": 22707.3,
+   "s1": 22836.9,
+   "dMedian": 4.0,
+   "osmId": 1198848699
+  },
+  {
+   "s0": 684.6,
+   "s1": 861.4,
+   "dMedian": -2.2,
+   "osmId": 403541086
+  },
+  {
+   "s0": -6.6,
+   "s1": 125.6,
+   "dMedian": 5.4,
+   "osmId": 403541087
+  },
+  {
+   "s0": 63.7,
+   "s1": 182.3,
+   "dMedian": -28.8,
+   "osmId": 403541137
+  },
+  {
+   "s0": 43.1,
+   "s1": 184.0,
+   "dMedian": -30.1,
+   "osmId": 403541139
+  },
+  {
+   "s0": 15989.7,
+   "s1": 16160.4,
+   "dMedian": -3.0,
+   "osmId": 496615518
+  },
+  {
+   "s0": 11290.8,
+   "s1": 11458.4,
+   "dMedian": -4.5,
+   "osmId": 550065686
+  },
+  {
+   "s0": 23845.9,
+   "s1": 23974.2,
+   "dMedian": 3.9,
+   "osmId": 568309862
+  },
+  {
+   "s0": 25847.0,
+   "s1": 26042.1,
+   "dMedian": -3.7,
+   "osmId": 608684543
+  },
+  {
+   "s0": 2138.4,
+   "s1": 2363.1,
+   "dMedian": 78.6,
+   "osmId": 641302107
+  },
+  {
+   "s0": 2582.7,
+   "s1": 2718.1,
+   "dMedian": -2.9,
+   "osmId": 651650806
+  },
+  {
+   "s0": 18394.3,
+   "s1": 18545.9,
+   "dMedian": 4.2,
+   "osmId": 749189755
+  },
+  {
+   "s0": 19813.0,
+   "s1": 19965.1,
+   "dMedian": -4.3,
+   "osmId": 1177970986
+  },
+  {
+   "s0": 34924.7,
+   "s1": 35065.0,
+   "dMedian": 7.1,
+   "osmId": 1177970994
+  },
+  {
+   "s0": 34937.5,
+   "s1": 35059.2,
+   "dMedian": -5.7,
+   "osmId": 1177970995
+  },
+  {
+   "s0": 22707.3,
+   "s1": 22836.9,
+   "dMedian": 4.0,
+   "osmId": 1198848699
+  }
+ ],
+ "levelCrossings": [
+  {
+   "s": 529.2,
+   "d": -0.0,
+   "osmNodes": [
+    1623821396,
+    4058909944
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 897.3,
+   "d": -0.0,
+   "osmNodes": [
+    1623822018,
+    1623822014,
+    1623822036
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 1092.2,
+   "d": -0.0,
+   "osmNodes": [
+    1623822044,
+    241787821
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 1386.7,
+   "d": 0.0,
+   "osmNodes": [
+    1622902790,
+    1622902801
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 1763.4,
+   "d": -0.0,
+   "osmNodes": [
+    265029750
+   ],
+   "tags": {
+    "crossing:barrier": "full",
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 2160.5,
+   "d": -0.0,
+   "osmNodes": [
+    1630601569
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 2532.4,
+   "d": -0.0,
+   "osmNodes": [
+    1630601688,
+    6110354082
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 2827.5,
+   "d": 0.0,
+   "osmNodes": [
+    6110354073,
+    1630601751
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 3157.3,
+   "d": -0.0,
+   "osmNodes": [
+    265029428
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 3338.2,
+   "d": -0.0,
+   "osmNodes": [
+    265029431
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 3496.4,
+   "d": -0.0,
+   "osmNodes": [
+    4036152896
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 3876.6,
+   "d": -0.0,
+   "osmNodes": [
+    265029556
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 4176.4,
+   "d": -0.0,
+   "osmNodes": [
+    1624578374
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 4482.2,
+   "d": 0.0,
+   "osmNodes": [
+    265029618
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 5049.8,
+   "d": 0.0,
+   "osmNodes": [
+    265029600
+   ],
+   "tags": {
+    "crossing:barrier": "double_half",
+    "crossing:bell": "yes",
+    "crossing:light": "yes",
+    "name": "梓橋松本線踏切",
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 6008.6,
+   "d": -0.0,
+   "osmNodes": [
+    265033097
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 6522.0,
+   "d": 0.1,
+   "osmNodes": [
+    265033094
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 7243.2,
+   "d": 0.0,
+   "osmNodes": [
+    265030277
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 7415.9,
+   "d": -0.0,
+   "osmNodes": [
+    265030259
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 8278.5,
+   "d": -0.0,
+   "osmNodes": [
+    1659730227
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 8359.5,
+   "d": 0.0,
+   "osmNodes": [
+    1663393231
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 8690.3,
+   "d": -0.0,
+   "osmNodes": [
+    265029903
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 8861.4,
+   "d": 0.0,
+   "osmNodes": [
+    1663393479
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 9206.0,
+   "d": 0.0,
+   "osmNodes": [
+    1663393647
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 9458.0,
+   "d": 0.0,
+   "osmNodes": [
+    1663393845
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 9640.6,
+   "d": 0.0,
+   "osmNodes": [
+    1663393994
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 9779.8,
+   "d": -0.0,
+   "osmNodes": [
+    1663453793
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 10441.1,
+   "d": 0.0,
+   "osmNodes": [
+    1663394696
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 10959.0,
+   "d": 0.0,
+   "osmNodes": [
+    265029873
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 11208.7,
+   "d": -0.0,
+   "osmNodes": [
+    1663395347
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 11670.0,
+   "d": 0.1,
+   "osmNodes": [
+    1663395736
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 12207.7,
+   "d": -0.0,
+   "osmNodes": [
+    265030164
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 12520.4,
+   "d": 0.0,
+   "osmNodes": [
+    5334250421
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 12801.5,
+   "d": -0.0,
+   "osmNodes": [
+    1658330357
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 13247.0,
+   "d": 0.0,
+   "osmNodes": [
+    1658331659
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 13487.6,
+   "d": 0.0,
+   "osmNodes": [
+    265030131
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 13930.2,
+   "d": -0.0,
+   "osmNodes": [
+    1658334134
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 14055.9,
+   "d": 0.0,
+   "osmNodes": [
+    1658334481
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 14315.9,
+   "d": 0.0,
+   "osmNodes": [
+    1659068290
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 14496.2,
+   "d": 0.0,
+   "osmNodes": [
+    1659068355
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 15027.1,
+   "d": -0.0,
+   "osmNodes": [
+    1659068528
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 15353.9,
+   "d": -0.0,
+   "osmNodes": [
+    1659068636
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 15634.9,
+   "d": -0.0,
+   "osmNodes": [
+    1659068787
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 15914.0,
+   "d": -0.0,
+   "osmNodes": [
+    1659069160
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 16255.1,
+   "d": 0.0,
+   "osmNodes": [
+    1659070092
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 16340.1,
+   "d": 0.0,
+   "osmNodes": [
+    1659070211
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 16614.6,
+   "d": -0.0,
+   "osmNodes": [
+    1659070751
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 16765.9,
+   "d": 0.0,
+   "osmNodes": [
+    4887368243
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 17002.2,
+   "d": -0.0,
+   "osmNodes": [
+    1659071045
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 17427.0,
+   "d": -0.0,
+   "osmNodes": [
+    4878024419
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 17913.8,
+   "d": -0.0,
+   "osmNodes": [
+    1661456208
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 18313.8,
+   "d": -0.1,
+   "osmNodes": [
+    7006121968,
+    1661456979
+   ],
+   "tags": {
+    "crossing:barrier": "double_half",
+    "crossing:bell": "yes",
+    "crossing:light": "yes",
+    "name": "有明槍ヶ岳線踏切",
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 18735.8,
+   "d": -0.0,
+   "osmNodes": [
+    1661457661
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 19024.9,
+   "d": 0.0,
+   "osmNodes": [
+    1661458041
+   ],
+   "tags": {
+    "crossing:barrier": "yes",
+    "crossing:bell": "yes",
+    "crossing:light": "yes",
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 19402.8,
+   "d": -0.0,
+   "osmNodes": [
+    1661458321
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 19660.3,
+   "d": -0.0,
+   "osmNodes": [
+    1661458465
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 19782.5,
+   "d": -4.4,
+   "osmNodes": [
+    1661458599
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 20039.7,
+   "d": 0.0,
+   "osmNodes": [
+    1661458702
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 20283.4,
+   "d": -0.0,
+   "osmNodes": [
+    1661458744
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 21327.9,
+   "d": -0.0,
+   "osmNodes": [
+    1664343571
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 21892.8,
+   "d": 0.0,
+   "osmNodes": [
+    265033159
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 22843.6,
+   "d": 0.0,
+   "osmNodes": [
+    265030125
+   ],
+   "tags": {
+    "crossing:barrier": "yes",
+    "crossing:bell": "yes",
+    "crossing:light": "yes",
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 23839.8,
+   "d": 0.0,
+   "osmNodes": [
+    6868368940
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 24508.5,
+   "d": -0.0,
+   "osmNodes": [
+    1664344617
+   ],
+   "tags": {
+    "crossing:barrier": "yes",
+    "crossing:bell": "yes",
+    "crossing:light": "yes",
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 24675.8,
+   "d": 0.0,
+   "osmNodes": [
+    1664344715
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 25110.2,
+   "d": -0.0,
+   "osmNodes": [
+    1664344965
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 25360.0,
+   "d": 0.0,
+   "osmNodes": [
+    1664345134
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 26108.1,
+   "d": 0.0,
+   "osmNodes": [
+    4859216122,
+    1664345904
+   ],
+   "tags": {
+    "railway": "level_crossing",
+    "crossing:barrier": "yes",
+    "crossing:bell": "yes",
+    "crossing:light": "yes"
+   }
+  },
+  {
+   "s": 26504.6,
+   "d": 0.0,
+   "osmNodes": [
+    265029735
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 26670.6,
+   "d": 0.0,
+   "osmNodes": [
+    265029726
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 27077.3,
+   "d": 0.0,
+   "osmNodes": [
+    1664347401
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 27302.6,
+   "d": -0.0,
+   "osmNodes": [
+    1664347660
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 27443.2,
+   "d": 0.0,
+   "osmNodes": [
+    1664297874
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 27729.9,
+   "d": 0.0,
+   "osmNodes": [
+    4849212948
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 28492.3,
+   "d": -0.0,
+   "osmNodes": [
+    1664298583
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 28658.6,
+   "d": -0.0,
+   "osmNodes": [
+    1664298591
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 28920.0,
+   "d": 0.0,
+   "osmNodes": [
+    4849212910
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 30001.7,
+   "d": -0.0,
+   "osmNodes": [
+    2524520766
+   ],
+   "tags": {
+    "crossing:barrier": "yes",
+    "crossing:bell": "yes",
+    "crossing:light": "yes",
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 30168.1,
+   "d": -0.0,
+   "osmNodes": [
+    1596167759
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 30541.5,
+   "d": -0.0,
+   "osmNodes": [
+    3820648626
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 30835.5,
+   "d": -0.0,
+   "osmNodes": [
+    3820648627,
+    4857425148
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 31006.1,
+   "d": 0.0,
+   "osmNodes": [
+    3820648630,
+    4857425149
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 31783.2,
+   "d": -0.0,
+   "osmNodes": [
+    10605879187
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 31962.5,
+   "d": 0.0,
+   "osmNodes": [
+    4421857612
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 32088.4,
+   "d": -0.0,
+   "osmNodes": [
+    2524521617
+   ],
+   "tags": {
+    "crossing:barrier": "yes",
+    "crossing:bell": "yes",
+    "crossing:light": "yes",
+    "railway": "level_crossing",
+    "supervised": "no"
+   }
+  },
+  {
+   "s": 32524.3,
+   "d": 0.0,
+   "osmNodes": [
+    10605895142
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 32893.4,
+   "d": -0.0,
+   "osmNodes": [
+    4353361138
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 33318.9,
+   "d": -0.0,
+   "osmNodes": [
+    4844760662
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 34100.0,
+   "d": -0.0,
+   "osmNodes": [
+    3820648632
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 34731.0,
+   "d": 1.3,
+   "osmNodes": [
+    6406041815,
+    6406041814
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  },
+  {
+   "s": 34866.9,
+   "d": 2.1,
+   "osmNodes": [
+    312904722,
+    6406041767
+   ],
+   "tags": {
+    "railway": "level_crossing"
+   }
+  }
+ ],
+ "bridges": [
+  {
+   "s0": 273.6,
+   "s1": 291.6,
+   "ways": [
+    403541104
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 299.6,
+   "s1": 329.6,
+   "ways": [
+    403541102
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 1955.6,
+   "s1": 2067.6,
+   "ways": [
+    585392417
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 2253.6,
+   "s1": 2261.6,
+   "ways": [
+    651649974
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 4719.6,
+   "s1": 4739.6,
+   "ways": [
+    558702011
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 4753.6,
+   "s1": 5047.6,
+   "ways": [
+    558702010
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 5297.6,
+   "s1": 5305.6,
+   "ways": [
+    651661481
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 5327.6,
+   "s1": 5339.6,
+   "ways": [
+    401314719
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 5503.6,
+   "s1": 5511.6,
+   "ways": [
+    651661497
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 5519.6,
+   "s1": 5523.6,
+   "ways": [
+    651661494
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 5865.6,
+   "s1": 5877.6,
+   "ways": [
+    651661500
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 6563.6,
+   "s1": 6567.6,
+   "ways": [
+    651661513
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 7025.6,
+   "s1": 7033.6,
+   "ways": [
+    651661525
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 8441.6,
+   "s1": 8449.6,
+   "ways": [
+    651666299
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 9679.6,
+   "s1": 9685.6,
+   "ways": [
+    651666305
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 9727.6,
+   "s1": 9741.6,
+   "ways": [
+    651666295
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 10283.6,
+   "s1": 10287.6,
+   "ways": [
+    651666287
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 10949.6,
+   "s1": 10957.6,
+   "ways": [
+    651666278
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 12717.6,
+   "s1": 12769.6,
+   "ways": [
+    549952670
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 17431.6,
+   "s1": 17627.6,
+   "ways": [
+    496866269
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 17641.6,
+   "s1": 17655.6,
+   "ways": [
+    1500431565
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 25607.6,
+   "s1": 25621.6,
+   "ways": [
+    489015227
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 33375.6,
+   "s1": 33679.6,
+   "ways": [
+    245219217
+   ],
+   "name": null,
+   "type": "yes"
+  },
+  {
+   "s0": 33725.6,
+   "s1": 33741.6,
+   "ways": [
+    378650546
+   ],
+   "name": null,
+   "type": "yes"
+  }
+ ],
+ "tunnels": [],
+ "embankments": [],
+ "cuttings": [],
+ "overpasses": [
+  {
+   "s": 3.0,
+   "wayId": 946180575,
+   "highway": "footway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": "松本駅"
+  },
+  {
+   "s": 1603.3,
+   "wayId": 844452426,
+   "highway": "footway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": null
+  },
+  {
+   "s": 1614.6,
+   "wayId": 149287180,
+   "highway": "trunk",
+   "kind": "bridge",
+   "layer": "1",
+   "name": "松本バイパス"
+  },
+  {
+   "s": 1623.7,
+   "wayId": 844452420,
+   "highway": "footway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": null
+  },
+  {
+   "s": 3362.4,
+   "wayId": 150144623,
+   "highway": "motorway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": "長野自動車道"
+  },
+  {
+   "s": 3374.8,
+   "wayId": 427176938,
+   "highway": "motorway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": "長野自動車道"
+  },
+  {
+   "s": 11024.1,
+   "wayId": 831064195,
+   "highway": "primary",
+   "kind": "bridge",
+   "layer": "1",
+   "name": "安曇野インター堀金線"
+  },
+  {
+   "s": 11031.2,
+   "wayId": 831064194,
+   "highway": "footway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": null
+  },
+  {
+   "s": 20495.5,
+   "wayId": 153474095,
+   "highway": "trunk",
+   "kind": "bridge",
+   "layer": "1",
+   "name": "国道147号"
+  },
+  {
+   "s": 28993.8,
+   "wayId": 984860195,
+   "highway": "footway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": null
+  },
+  {
+   "s": 29005.5,
+   "wayId": 146356214,
+   "highway": "trunk",
+   "kind": "bridge",
+   "layer": "1",
+   "name": "国道147号"
+  },
+  {
+   "s": 29023.2,
+   "wayId": 492962536,
+   "highway": "footway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": null
+  },
+  {
+   "s": 34810.5,
+   "wayId": 492244792,
+   "highway": "footway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": null
+  },
+  {
+   "s": 34816.7,
+   "wayId": 683871577,
+   "highway": "trunk",
+   "kind": "bridge",
+   "layer": "1",
+   "name": "国道147号"
+  },
+  {
+   "s": 34821.7,
+   "wayId": 492244783,
+   "highway": "trunk",
+   "kind": "bridge",
+   "layer": "1",
+   "name": "国道147号"
+  },
+  {
+   "s": 34831.2,
+   "wayId": 492244786,
+   "highway": "cycleway",
+   "kind": "bridge",
+   "layer": "1",
+   "name": null
+  }
+ ],
+ "underpasses": [
+  {
+   "s": 778.8,
+   "wayId": 844434427,
+   "highway": "footway",
+   "kind": "tunnel",
+   "layer": "-1",
+   "name": null
+  },
+  {
+   "s": 784.7,
+   "wayId": 613852025,
+   "highway": "tertiary",
+   "kind": "tunnel",
+   "layer": "-1",
+   "name": null
+  },
+  {
+   "s": 795.4,
+   "wayId": 613852027,
+   "highway": "tertiary",
+   "kind": "tunnel",
+   "layer": "-1",
+   "name": null
+  },
+  {
+   "s": 798.3,
+   "wayId": 844434425,
+   "highway": "footway",
+   "kind": "tunnel",
+   "layer": "-1",
+   "name": null
+  },
+  {
+   "s": 5435.6,
+   "wayId": 651661487,
+   "highway": "secondary",
+   "kind": "tunnel",
+   "layer": "-1",
+   "name": "小倉梓橋停車場線"
+  },
+  {
+   "s": 9712.6,
+   "wayId": 651666291,
+   "highway": "cycleway",
+   "kind": "tunnel",
+   "layer": "-1",
+   "name": "穂高松本塩尻自転車道線"
+  },
+  {
+   "s": 17419.0,
+   "wayId": 496073899,
+   "highway": "cycleway",
+   "kind": "tunnel",
+   "layer": "-1",
+   "name": "穂高松本塩尻自転車道線"
+  },
+  {
+   "s": 25595.2,
+   "wayId": 494113242,
+   "highway": "service",
+   "kind": "tunnel",
+   "layer": "-1",
+   "name": null
+  },
+  {
+   "s": 33066.5,
+   "wayId": 146358244,
+   "highway": "tertiary",
+   "kind": "tunnel",
+   "layer": "-1",
+   "name": null
+  },
+  {
+   "s": 272.2,
+   "wayId": 553461210,
+   "highway": "footway",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 280.8,
+   "wayId": 149396257,
+   "highway": "trunk",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": "国道143号"
+  },
+  {
+   "s": 286.1,
+   "wayId": 763528222,
+   "highway": "footway",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 320.0,
+   "wayId": 846299639,
+   "highway": "path",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 2057.8,
+   "wayId": 150144123,
+   "highway": "residential",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 4728.2,
+   "wayId": 149489792,
+   "highway": "tertiary",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 5333.1,
+   "wayId": 436227576,
+   "highway": "unclassified",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 5502.0,
+   "wayId": 1536543047,
+   "highway": "track",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 7029.5,
+   "wayId": 153268062,
+   "highway": "unclassified",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 25607.7,
+   "wayId": 489015229,
+   "highway": "secondary",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": "上生坂信濃松川停車場線"
+  },
+  {
+   "s": 25613.5,
+   "wayId": 494113238,
+   "highway": "footway",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 33566.0,
+   "wayId": 684029822,
+   "highway": "track",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  },
+  {
+   "s": 33725.8,
+   "wayId": 146362054,
+   "highway": "unclassified",
+   "kind": "under_rail_bridge",
+   "layer": null,
+   "name": null
+  }
+ ],
+ "waterCrossings": [
+  {
+   "s": 305.0,
+   "waterway": "river",
+   "name": "女鳥羽川",
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 845.3,
+   "waterway": "river",
+   "name": "大門沢川",
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 1194.3,
+   "waterway": "stream",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 2002.2,
+   "waterway": "river",
+   "name": "奈良井川",
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 2254.2,
+   "waterway": "stream",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": true
+  },
+  {
+   "s": 4931.7,
+   "waterway": "river",
+   "name": "梓川",
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 5298.6,
+   "waterway": "stream",
+   "name": null,
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 5507.2,
+   "waterway": "stream",
+   "name": null,
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 5518.5,
+   "waterway": "stream",
+   "name": null,
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 5871.2,
+   "waterway": "stream",
+   "name": null,
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 6411.5,
+   "waterway": "stream",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 7405.3,
+   "waterway": "stream",
+   "name": null,
+   "kind": "open",
+   "onBridge": false
+  },
+  {
+   "s": 9681.3,
+   "waterway": "stream",
+   "name": null,
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 9730.3,
+   "waterway": "canal",
+   "name": "捨ヶ堰",
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 10489.6,
+   "waterway": "ditch",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 10950.3,
+   "waterway": "canal",
+   "name": "新田堰",
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 12738.2,
+   "waterway": "river",
+   "name": "万水川",
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 13027.8,
+   "waterway": "ditch",
+   "name": null,
+   "kind": "open",
+   "onBridge": false
+  },
+  {
+   "s": 16256.3,
+   "waterway": "drain",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 16539.4,
+   "waterway": "drain",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 17481.6,
+   "waterway": "river",
+   "name": "烏川",
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 17550.0,
+   "waterway": "river",
+   "name": "穂高川",
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 17646.7,
+   "waterway": "stream",
+   "name": null,
+   "kind": "open",
+   "onBridge": true
+  },
+  {
+   "s": 20050.7,
+   "waterway": "stream",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 24112.1,
+   "waterway": "drain",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 24911.6,
+   "waterway": "ditch",
+   "name": null,
+   "kind": "open",
+   "onBridge": false
+  },
+  {
+   "s": 27868.1,
+   "waterway": "stream",
+   "name": null,
+   "kind": "open",
+   "onBridge": false
+  },
+  {
+   "s": 28477.6,
+   "waterway": "stream",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 32118.6,
+   "waterway": "stream",
+   "name": null,
+   "kind": "culvert",
+   "onBridge": false
+  },
+  {
+   "s": 32590.8,
+   "waterway": "stream",
+   "name": null,
+   "kind": "open",
+   "onBridge": false
+  },
+  {
+   "s": 33471.6,
+   "waterway": "river",
+   "name": "高瀬川",
+   "kind": "open",
+   "onBridge": true
+  }
+ ],
+ "stats": {
+  "centerline": {
+   "samples": 17540,
+   "lengthM": 35078.0,
+   "sMin": -6.4,
+   "sMax": 35071.6,
+   "zRailMin": 536.0,
+   "zRailMax": 714.8,
+   "gradeAbsMaxPermil": 22.1,
+   "gradeAbsP99Permil": 18.7,
+   "radiusMinM": 242.0,
+   "multiTrackFraction": 0.13,
+   "electrifiedFraction": 0.996
+  },
+  "wayTagsByLengthM": {
+   "electrified": {
+    "contact_line": 34955.0,
+    "（无）": 125.0
+   },
+   "voltage": {
+    "1500": 34955.0,
+    "（无）": 125.0
+   },
+   "frequency": {
+    "0": 34955.0,
+    "（无）": 125.0
+   },
+   "maxspeed": {
+    "（无）": 35080.0
+   },
+   "gauge": {
+    "1067": 35080.0
+   },
+   "usage": {
+    "main": 34955.0,
+    "（无）": 125.0
+   },
+   "service": {
+    "（无）": 35080.0
+   },
+   "name": {
+    "JR大糸線": 35080.0
+   },
+   "operator": {
+    "東日本旅客鉄道": 35080.0
+   },
+   "railway:track_ref": {
+    "（无）": 34801.0,
+    "6": 279.0
+   },
+   "bridge": {
+    "（无）": 33905.0,
+    "yes": 1175.0
+   },
+   "tunnel": {
+    "（无）": 35080.0
+   },
+   "embankment": {
+    "（无）": 35080.0
+   },
+   "cutting": {
+    "（无）": 35080.0
+   },
+   "tracks": {
+    "（无）": 35080.0
+   },
+   "railway:preferred_direction": {
+    "（无）": 35080.0
+   },
+   "railway:traffic_mode": {
+    "（无）": 35080.0
+   },
+   "railway:signal_box": {
+    "（无）": 35080.0
+   },
+   "layer": {
+    "（无）": 33742.0,
+    "1": 1338.0
+   },
+   "railway:cant": {
+    "（无）": 35080.0
+   },
+   "cant": {
+    "（无）": 35080.0
+   }
+  },
+  "stations": 20,
+  "platformIntervals": 19,
+  "levelCrossings": 91,
+  "roadGradeCrossingsWithoutNode": 11,
+  "crossingNodesWithoutRoad": 2,
+  "overpasses": 16,
+  "underpasses": 22,
+  "bridges": 24,
+  "tunnels": 0,
+  "embankments": 0,
+  "cuttings": 0,
+  "waterCrossings": 31,
+  "mastsOsm": 0,
+  "mastsGenerated": 855,
+  "buildings": {
+   "inCorridor": 5800,
+   "inBbox": 12341,
+   "withLevels": 213,
+   "withHeight": 0,
+   "withRoofShape": 49,
+   "types": {
+    "yes": 5178,
+    "house": 140,
+    "greenhouse": 127,
+    "industrial": 73,
+    "retail": 70,
+    "school": 60,
+    "roof": 34,
+    "allotment_house": 21,
+    "train_station": 12,
+    "apartments": 11,
+    "hotel": 10,
+    "garage": 10,
+    "warehouse": 6,
+    "hospital": 6,
+    "commercial": 6,
+    "office": 5,
+    "public": 5,
+    "shed": 4,
+    "civic": 4,
+    "government": 3,
+    "gatehouse": 2,
+    "shrine": 2,
+    "detached": 2,
+    "parking": 2,
+    "sports_hall": 2,
+    "chapel": 1,
+    "toilets": 1,
+    "temple": 1,
+    "farm_auxiliary": 1,
+    "garages": 1
+   },
+   "within300mPerKm": [
+    {
+     "km": -1.0,
+     "n": 5
+    },
+    {
+     "km": 0.0,
+     "n": 268
+    },
+    {
+     "km": 1.0,
+     "n": 4
+    },
+    {
+     "km": 2.0,
+     "n": 2
+    },
+    {
+     "km": 3.0,
+     "n": 0
+    },
+    {
+     "km": 4.0,
+     "n": 0
+    },
+    {
+     "km": 5.0,
+     "n": 1
+    },
+    {
+     "km": 6.0,
+     "n": 18
+    },
+    {
+     "km": 7.0,
+     "n": 0
+    },
+    {
+     "km": 8.0,
+     "n": 7
+    },
+    {
+     "km": 9.0,
+     "n": 0
+    },
+    {
+     "km": 10.0,
+     "n": 4
+    },
+    {
+     "km": 11.0,
+     "n": 114
+    },
+    {
+     "km": 12.0,
+     "n": 3
+    },
+    {
+     "km": 13.0,
+     "n": 0
+    },
+    {
+     "km": 14.0,
+     "n": 1
+    },
+    {
+     "km": 15.0,
+     "n": 5
+    },
+    {
+     "km": 16.0,
+     "n": 12
+    },
+    {
+     "km": 17.0,
+     "n": 0
+    },
+    {
+     "km": 18.0,
+     "n": 0
+    },
+    {
+     "km": 19.0,
+     "n": 1
+    },
+    {
+     "km": 20.0,
+     "n": 0
+    },
+    {
+     "km": 21.0,
+     "n": 0
+    },
+    {
+     "km": 22.0,
+     "n": 47
+    },
+    {
+     "km": 23.0,
+     "n": 231
+    },
+    {
+     "km": 24.0,
+     "n": 212
+    },
+    {
+     "km": 25.0,
+     "n": 494
+    },
+    {
+     "km": 26.0,
+     "n": 279
+    },
+    {
+     "km": 27.0,
+     "n": 117
+    },
+    {
+     "km": 28.0,
+     "n": 23
+    },
+    {
+     "km": 29.0,
+     "n": 0
+    },
+    {
+     "km": 30.0,
+     "n": 0
+    },
+    {
+     "km": 31.0,
+     "n": 0
+    },
+    {
+     "km": 32.0,
+     "n": 0
+    },
+    {
+     "km": 33.0,
+     "n": 7
+    },
+    {
+     "km": 34.0,
+     "n": 97
+    },
+    {
+     "km": 35.0,
+     "n": 28
+    }
+   ]
+  },
+  "landuse": {
+   "polygons": 2119,
+   "classes": {
+    "landuse=farmland": 1107,
+    "amenity=parking": 235,
+    "landuse=forest": 111,
+    "leisure=park": 99,
+    "landuse=grass": 66,
+    "leisure=pitch": 64,
+    "natural=water;water=river": 46,
+    "landuse=orchard": 43,
+    "landuse=retail": 36,
+    "amenity=school": 33,
+    "natural=wood": 30,
+    "landuse=religious": 27,
+    "natural=grassland": 23,
+    "landuse=brownfield": 22,
+    "amenity=grave_yard": 20,
+    "natural=sand": 15,
+    "leisure=garden": 15,
+    "natural=water;water=pond": 14,
+    "natural=water;water=reservoir": 14,
+    "landuse=industrial": 12,
+    "landuse=commercial": 10,
+    "amenity=hospital": 7,
+    "landuse=farmyard": 7,
+    "landuse=cemetery": 6,
+    "landuse=railway": 6,
+    "natural=scrub": 6,
+    "landuse=farmland;crop=rice": 5,
+    "natural=heath": 5,
+    "landuse=construction": 5,
+    "natural=water;water=moat": 4,
+    "leisure=golf_course": 4,
+    "landuse=recreation_ground": 4,
+    "leisure=playground": 4,
+    "landuse=residential": 4,
+    "landuse=civic_admin": 2,
+    "natural=water": 2,
+    "landuse=apiary": 1,
+    "landuse=farmland;crop=grape": 1,
+    "landuse=garages": 1,
+    "landuse=greenhouse_horticulture": 1,
+    "landuse=flowerbed": 1,
+    "landuse=greenfield": 1
+   },
+   "areaKm2ByClass": {
+    "landuse=farmland": 13.929,
+    "natural=water;water=river": 3.633,
+    "natural=wood": 2.531,
+    "landuse=industrial": 1.053,
+    "amenity=school": 0.851,
+    "leisure=park": 0.581,
+    "leisure=pitch": 0.428,
+    "amenity=parking": 0.388,
+    "landuse=religious": 0.227,
+    "landuse=forest": 0.223,
+    "natural=grassland": 0.204,
+    "landuse=retail": 0.197,
+    "landuse=grass": 0.178,
+    "landuse=commercial": 0.14,
+    "amenity=hospital": 0.127,
+    "landuse=orchard": 0.113,
+    "leisure=golf_course": 0.095,
+    "landuse=railway": 0.095,
+    "amenity=grave_yard": 0.026,
+    "natural=water;water=moat": 0.025,
+    "landuse=recreation_ground": 0.024,
+    "landuse=civic_admin": 0.023,
+    "natural=sand": 0.021,
+    "landuse=brownfield": 0.02,
+    "landuse=cemetery": 0.016,
+    "landuse=residential": 0.014,
+    "landuse=farmland;crop=grape": 0.014,
+    "landuse=greenfield": 0.013,
+    "natural=water;water=pond": 0.012,
+    "landuse=farmyard": 0.011,
+    "natural=water;water=reservoir": 0.009,
+    "landuse=greenhouse_horticulture": 0.008,
+    "landuse=farmland;crop=rice": 0.007,
+    "leisure=garden": 0.004,
+    "landuse=construction": 0.004,
+    "leisure=playground": 0.003,
+    "natural=heath": 0.003,
+    "natural=scrub": 0.003,
+    "landuse=apiary": 0.001,
+    "landuse=garages": 0.0,
+    "natural=water": 0.0,
+    "landuse=flowerbed": 0.0
+   },
+   "corridorAreaKm2": 112.09,
+   "coveredFractionUpperBound": 0.225,
+   "coverPerKmWithin500m": [
+    {
+     "km": -1.0,
+     "coveredFraction": 0.316
+    },
+    {
+     "km": 0.0,
+     "coveredFraction": 0.136
+    },
+    {
+     "km": 1.0,
+     "coveredFraction": 0.132
+    },
+    {
+     "km": 2.0,
+     "coveredFraction": 0.05
+    },
+    {
+     "km": 3.0,
+     "coveredFraction": 0.162
+    },
+    {
+     "km": 4.0,
+     "coveredFraction": 0.486
+    },
+    {
+     "km": 5.0,
+     "coveredFraction": 0.176
+    },
+    {
+     "km": 6.0,
+     "coveredFraction": 0.083
+    },
+    {
+     "km": 7.0,
+     "coveredFraction": 0.025
+    },
+    {
+     "km": 8.0,
+     "coveredFraction": 0.017
+    },
+    {
+     "km": 9.0,
+     "coveredFraction": 0.095
+    },
+    {
+     "km": 10.0,
+     "coveredFraction": 0.307
+    },
+    {
+     "km": 11.0,
+     "coveredFraction": 0.249
+    },
+    {
+     "km": 12.0,
+     "coveredFraction": 0.667
+    },
+    {
+     "km": 13.0,
+     "coveredFraction": 0.557
+    },
+    {
+     "km": 14.0,
+     "coveredFraction": 0.025
+    },
+    {
+     "km": 15.0,
+     "coveredFraction": 0.136
+    },
+    {
+     "km": 16.0,
+     "coveredFraction": 0.09
+    },
+    {
+     "km": 17.0,
+     "coveredFraction": 0.031
+    },
+    {
+     "km": 18.0,
+     "coveredFraction": 0.0
+    },
+    {
+     "km": 19.0,
+     "coveredFraction": 0.001
+    },
+    {
+     "km": 20.0,
+     "coveredFraction": 0.185
+    },
+    {
+     "km": 21.0,
+     "coveredFraction": 0.045
+    },
+    {
+     "km": 22.0,
+     "coveredFraction": 0.2
+    },
+    {
+     "km": 23.0,
+     "coveredFraction": 0.576
+    },
+    {
+     "km": 24.0,
+     "coveredFraction": 0.52
+    },
+    {
+     "km": 25.0,
+     "coveredFraction": 0.441
+    },
+    {
+     "km": 26.0,
+     "coveredFraction": 0.388
+    },
+    {
+     "km": 27.0,
+     "coveredFraction": 0.365
+    },
+    {
+     "km": 28.0,
+     "coveredFraction": 0.048
+    },
+    {
+     "km": 29.0,
+     "coveredFraction": 0.0
+    },
+    {
+     "km": 30.0,
+     "coveredFraction": 0.0
+    },
+    {
+     "km": 31.0,
+     "coveredFraction": 0.0
+    },
+    {
+     "km": 32.0,
+     "coveredFraction": 0.0
+    },
+    {
+     "km": 33.0,
+     "coveredFraction": 0.191
+    },
+    {
+     "km": 34.0,
+     "coveredFraction": 0.172
+    },
+    {
+     "km": 35.0,
+     "coveredFraction": 0.191
+    }
+   ]
+  },
+  "lines": {
+   "road": {
+    "count": 13144,
+    "classes": {
+     "unclassified": 3527,
+     "residential": 3029,
+     "service": 2038,
+     "footway": 1596,
+     "track": 1229,
+     "tertiary": 668,
+     "path": 467,
+     "secondary": 164,
+     "cycleway": 123,
+     "trunk": 109,
+     "steps": 75,
+     "primary": 40,
+     "pedestrian": 37,
+     "motorway": 14,
+     "tertiary_link": 11,
+     "motorway_link": 10,
+     "secondary_link": 2,
+     "services": 2,
+     "construction": 1,
+     "road": 1,
+     "trunk_link": 1
+    }
+   },
+   "water": {
+    "count": 1171,
+    "classes": {
+     "stream": 719,
+     "canal": 157,
+     "ditch": 134,
+     "drain": 106,
+     "river": 55
+    }
+   },
+   "power": {
+    "count": 35,
+    "classes": {
+     "line": 35
+    }
+   },
+   "barrier": {
+    "count": 135,
+    "classes": {
+     "hedge": 68,
+     "fence": 29,
+     "wall": 19,
+     "guard_rail": 19
+    }
+   }
+  },
+  "powerPoints": {
+   "tower": 275,
+   "portal": 1,
+   "pole": 21
+  }
+ },
+ "report": {
+  "missing": [
+   "车站「島高松」附近 25 m 内没有站台（railway=platform）几何",
+   "车站「梓橋」附近 25 m 内没有站台（railway=platform）几何",
+   "车站「一日市場」附近 25 m 内没有站台（railway=platform）几何",
+   "车站「中萱」附近 25 m 内没有站台（railway=platform）几何",
+   "车站「南豊科」附近 25 m 内没有站台（railway=platform）几何",
+   "车站「柏矢町」附近 25 m 内没有站台（railway=platform）几何",
+   "车站「安曇沓掛」附近 25 m 内没有站台（railway=platform）几何",
+   "车站「信濃常盤」附近 25 m 内没有站台（railway=platform）几何",
+   "车站「南大町」附近 25 m 内没有站台（railway=platform）几何"
+  ],
+  "notes": [],
+  "routeRelations": [
+   {
+    "id": 1871691,
+    "name": "JR大糸線",
+    "route": "train",
+    "ways": 248
+   },
+   {
+    "id": 15926012,
+    "name": "JR大糸線 (南小谷 => 松本)",
+    "route": "train",
+    "ways": 141
+   },
+   {
+    "id": 15926013,
+    "name": "JR大糸線 (松本 => 南小谷)",
+    "route": "train",
+    "ways": 141
+   }
+  ],
+  "path": {
+   "nodes": 466,
+   "ways": 84,
+   "lengthM": 35080.0,
+   "startOffsetM": -6.4
+  },
+  "levelCrossingNodes": 104,
+  "demCenter": {
+   "tilesFetched": 0,
+   "hits": {
+    "dem5a_png": 17520,
+    "dem5b_png": 0,
+    "dem5c_png": 0,
+    "dem_png": 20
+   },
+   "nodata": 0
+  },
+  "demGrid": {
+   "tilesFetched": 0,
+   "tilesMissing404": 0,
+   "hits": {
+    "dem5a_png": 370712,
+    "dem5b_png": 0,
+    "dem5c_png": 0,
+    "dem_png": 1136
+   },
+   "nodataSamples": 0
+  },
+  "roadGradeCrossingsWithoutNode": [
+   {
+    "s": 11829.1,
+    "wayId": 401323047,
+    "highway": "path",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 14806.0,
+    "wayId": 153193993,
+    "highway": "path",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 17750.2,
+    "wayId": 496866273,
+    "highway": "path",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 20881.9,
+    "wayId": 405586889,
+    "highway": "track",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 22558.0,
+    "wayId": 489762574,
+    "highway": "path",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 24911.1,
+    "wayId": 153795080,
+    "highway": "tertiary",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 26213.3,
+    "wayId": 492701133,
+    "highway": "cycleway",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 28013.7,
+    "wayId": 146357812,
+    "highway": "track",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 31339.9,
+    "wayId": 146360621,
+    "highway": "unclassified",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 31593.7,
+    "wayId": 146362022,
+    "highway": "residential",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   },
+   {
+    "s": 32768.3,
+    "wayId": 146360190,
+    "highway": "track",
+    "kind": "grade",
+    "layer": null,
+    "name": null
+   }
+  ],
+  "crossingNodesWithoutRoad": [
+   {
+    "s": 34731.0,
+    "d": 1.3,
+    "osmNodes": [
+     6406041815,
+     6406041814
+    ],
+    "tags": {
+     "railway": "level_crossing"
+    }
+   },
+   {
+    "s": 34866.9,
+    "d": 2.1,
+    "osmNodes": [
+     312904722,
+     6406041767
+    ],
+    "tags": {
+     "railway": "level_crossing"
+    }
+   }
+  ]
+ }
+}
