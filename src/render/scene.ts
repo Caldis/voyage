@@ -31,7 +31,8 @@ import type { CabinClass } from "../state";
  * （经济舱：织物座椅、浅灰塑料、冷白灯）。差别全在预处理层（cabin-shading / seats / cabin-leather / fabric / cabin-reflect
  * 里的 #ifdef），每个变体只编自己那一套；经济舱由 CabinClassVariant 在用户选中时才后台编译。
  */
-const SCENE_FRAG = /* glsl */ `
+// 舱内合成与座椅 pass（seat-pass.ts，PERF-14）共用的开头：模块、uniform 声明、常数。两个程序的灯光按同一份代码算（cabinLightsSetup）
+export const CABIN_FRAG_HEAD = /* glsl */ `
 ${ATMOSPHERE_COMMON}
 ${VIEW_COMMON}
 ${CABIN_COMMON}
@@ -60,6 +61,55 @@ uniform int uDebug;
 varying vec2 vUv;
 
 const float PANE_TRANSMITTANCE = 0.85; // 两层亚克力 + 内层防刮板（窗外 pass 已经乘过，这里给舱内的窗光用）
+const vec3 PLASTIC_ALBEDO = vec3(0.78, 0.76, 0.72);
+`;
+
+// 窗外来的光与舱内灯光（舱内所有表面共用）。舱内合成和座椅 pass 各调用一次，同一份代码、同一组 uniform，结果逐位相同。
+// 依赖 CABIN_SHADING_COMMON（CabinLights、cabinMoodScene）。eCabinRefl：窗板上的划痕 / 擦痕被舱内光照亮时用的那一版环境光；
+// mainTint：主灯色温（倒影的色适应要用）
+export const CABIN_LIGHTS_SETUP = /* glsl */ `
+CabinLights cabinLightsSetup(out vec3 eCabinRefl, out vec3 mainTint) {
+  // 「sun」系列变量指直射主光源：白天是太阳，夜里是月亮
+  vec3 sunC = transpose(uCabinToWorld) * uKeyDir;   // 座舱系里的主光源方向
+  vec3 upW = vec3(0.0, 1.0, 0.0);
+  // 头顶处的主光源照度只算一次（原来 eSunNormal 和 eDown 各调一次 keyLight，SC-3b）
+  // 乘上飞机到主光源之间云的透射率（T31）：穿云时舱壁上不再有硬边光斑；被云挡掉的直射光变成白色的漫射光
+  vec3 eKey0 = keyLight(uCamR, upW);
+  vec3 eKeyUp = eKey0 * uKeyCloud.x;
+  // T47：斜射时按多层窗板的菲涅尔透射再打折（paneSunT，cabin.glsl.ts）
+  vec3 eSunNormal = eKeyUp * PANE_TRANSMITTANCE * paneSunT(sunC.z);
+  vec3 eSkyH = skyIrradiance(uCamR, upW) * uKeyCloud.z + eKey0 * max(uKeyDir.y, 0.0) * uKeyCloud.y;
+  // 下半球：海面或云海把天空光和阳光反射上来。云海的反照率远高于海面
+  vec3 eDown = eSkyH + eKeyUp * max(uKeyDir.y, 0.0);
+  float belowAlbedo = mix(0.06, 0.7, clamp(uCoverage * 0.9, 0.0, 1.0));
+  // 窗板当作面光源时的平均辐亮度：一半看天，一半看下面
+  vec3 lWin = 0.5 * (eSkyH / M_PI + belowAlbedo * eDown / M_PI) * PANE_TRANSMITTANCE;
+  // 舱内环境光：灯光 + 满舱窗户进来的光被来回反射后的均匀部分（经验系数，待换成辐射度近似）
+  vec3 eCabin = uCabinLight * CABIN_LIGHT_COLOR + 0.06 * M_PI * lWin + 0.004 * eSunNormal * max(sunC.z, 0.0);
+  // 划痕 / 擦痕被舱内光照亮时仍用这一版；舱内表面的环境光里满舱窗户的回弹再多算一些（经验值）
+  eCabinRefl = eCabin;
+  eCabin += 0.03 * M_PI * lWin;
+  CabinLights cl;
+  cl.sunC = sunC;
+  cl.eSunNormal = eSunNormal;
+  cl.lWin = lWin;
+  cl.eCabin = eCabin;
+  // 遮光板放下的邻窗：外面的光透过半透的白塑料（和本窗遮光板的透光系数一致）
+  cl.lGlow = PLASTIC_ALBEDO / M_PI * 0.08 * (M_PI * lWin + eSunNormal * max(sunC.z, 0.0));
+  cl.readOn = 1.0 - smoothstep(0.005, 0.05, uCabinLight);
+  // 灯光场景（T20）：主灯色温随时段变（白天中性、夜里暖琥珀），行李架下的氛围洗墙灯（关灯时是淡紫蓝的睡眠光）。
+  // 只改舱内表面用的 cl.eCabin；窗板反射舱内用的 eCabinRefl 不动，窗外画面与测光不变
+  vec3 moodI;
+  cabinMoodScene(uCabinLight, uSunDir.y, uMoodLight, mainTint, moodI);
+  cl.eCabin += uCabinLight * (mainTint - CABIN_LIGHT_COLOR) + moodI * 0.05; // 洗墙光在上墙、行李架之间的回弹
+  cl.moodI = moodI;
+  return cl;
+}
+`;
+
+const SCENE_FRAG = /* glsl */ `
+${CABIN_FRAG_HEAD}
+uniform sampler2D uSeat;         // 座椅 pass 的结果（PERF-14，seat-pass.ts）：rgb = 座椅颜色，a = 座椅覆盖率
 
 // 输出的 alpha 只给机翼 pass 读（它再把窗外遮罩写回自己的输出给曝光用），所以这里把两样东西打包进 alpha 的 32 位里：
 // 窗外遮罩 m（5 位）和「与窗外颜色无关的部分」A = 结果 − m·k·O（RGB 各 6 位 + 共享指数），
@@ -79,12 +129,12 @@ float packWingRef(float m, vec3 o) {
   uint bits = uint(round(clamp(m, 0.0, 1.0) * 31.0)) | (q.r << 5) | (q.g << 11) | (q.b << 17) | (1u << 23) | (uint(e + 20) << 24);
   return uintBitsToFloat(bits);
 }
-const vec3 PLASTIC_ALBEDO = vec3(0.78, 0.76, 0.72);
 
 ${CABIN_SHADING_COMMON}
 ${LEATHER_COMMON}
 ${FABRIC_COMMON}
 ${SEATS_COMMON}
+${CABIN_LIGHTS_SETUP}
 ${CABIN_REFLECT_COMMON}
 ${EXPOSURE_MODEL}
 ${STAR_MAP_COMMON}
@@ -117,45 +167,20 @@ void main() {
   float pixShade = max(length(fwidth(pShade.xy)), 1e-5);
   float pixAng = 2.0 * uTanHalfFov / uResolution.y; // 一个像素的张角（分支里用它算解析的像素足迹）
 
-  // ---- 窗外来的光（舱内所有表面共用） ----
-  // 「sun」系列变量指直射主光源：白天是太阳，夜里是月亮
-  vec3 sunC = transpose(uCabinToWorld) * uKeyDir;   // 座舱系里的主光源方向
-  vec3 upW = vec3(0.0, 1.0, 0.0);
-  // 头顶处的主光源照度只算一次（原来 eSunNormal 和 eDown 各调一次 keyLight，SC-3b）
-  // 乘上飞机到主光源之间云的透射率（T31）：穿云时舱壁上不再有硬边光斑；被云挡掉的直射光变成白色的漫射光
-  vec3 eKey0 = keyLight(uCamR, upW);
-  vec3 eKeyUp = eKey0 * uKeyCloud.x;
-  // T47：斜射时按多层窗板的菲涅尔透射再打折（paneSunT，cabin.glsl.ts）
-  vec3 eSunNormal = eKeyUp * PANE_TRANSMITTANCE * paneSunT(sunC.z);
-  vec3 eSkyH = skyIrradiance(uCamR, upW) * uKeyCloud.z + eKey0 * max(uKeyDir.y, 0.0) * uKeyCloud.y;
-  // 下半球：海面或云海把天空光和阳光反射上来。云海的反照率远高于海面
-  vec3 eDown = eSkyH + eKeyUp * max(uKeyDir.y, 0.0);
-  float belowAlbedo = mix(0.06, 0.7, clamp(uCoverage * 0.9, 0.0, 1.0));
-  // 窗板当作面光源时的平均辐亮度：一半看天，一半看下面
-  vec3 lWin = 0.5 * (eSkyH / M_PI + belowAlbedo * eDown / M_PI) * PANE_TRANSMITTANCE;
-  // 舱内环境光：灯光 + 满舱窗户进来的光被来回反射后的均匀部分（经验系数，待换成辐射度近似）
-  vec3 eCabin = uCabinLight * CABIN_LIGHT_COLOR + 0.06 * M_PI * lWin + 0.004 * eSunNormal * max(sunC.z, 0.0);
-  // 划痕 / 擦痕被舱内光照亮时仍用这一版；舱内表面的环境光里满舱窗户的回弹再多算一些（经验值）
-  vec3 eCabinRefl = eCabin;
-  eCabin += 0.03 * M_PI * lWin;
-  CabinLights cl;
-  cl.sunC = sunC;
-  cl.eSunNormal = eSunNormal;
-  cl.lWin = lWin;
-  cl.eCabin = eCabin;
-  // 遮光板放下的邻窗：外面的光透过半透的白塑料（和本窗遮光板的透光系数一致）
-  cl.lGlow = PLASTIC_ALBEDO / M_PI * 0.08 * (M_PI * lWin + eSunNormal * max(sunC.z, 0.0));
-  cl.readOn = 1.0 - smoothstep(0.005, 0.05, uCabinLight);
-  // 灯光场景（T20）：主灯色温随时段变（白天中性、夜里暖琥珀），行李架下的氛围洗墙灯（关灯时是淡紫蓝的睡眠光）。
-  // 只改舱内表面用的 cl.eCabin；窗板反射舱内用的 eCabinRefl 不动，窗外画面与测光不变
-  vec3 mainTint, moodI;
-  cabinMoodScene(uCabinLight, uSunDir.y, uMoodLight, mainTint, moodI);
-  cl.eCabin += uCabinLight * (mainTint - CABIN_LIGHT_COLOR) + moodI * 0.05; // 洗墙光在上墙、行李架之间的回弹
-  cl.moodI = moodI;
-  // ---- 座椅：挡在侧壁和窗前面（见 seats.glsl.ts） ----
+  // ---- 窗外来的光（舱内所有表面共用；座椅 pass 调同一个函数，见 CABIN_LIGHTS_SETUP） ----
+  vec3 eCabinRefl, mainTint;
+  CabinLights cl = cabinLightsSetup(eCabinRefl, mainTint);
+  vec3 sunC = cl.sunC;
+  vec3 eSunNormal = cl.eSunNormal;
+  vec3 lWin = cl.lWin;
+  vec3 moodI = cl.moodI;
+  // ---- 座椅：挡在侧壁和窗前面（见 seats.glsl.ts）。PERF-14：追踪与着色搬进单独的座椅 pass（seat-pass.ts），这里只读结果。
+  // 座椅着色（shadeSeat）和这个程序其余部分叠在一起时 FXC 冷编译最慢（PERF-12 消融：整块换常数 −42%，内部拆不出单独热点），
+  // 拆成两个程序后靠 KHR_parallel_shader_compile 并行编译，启动批次的关键路径不再是舱内程序
   float tWall = rd.z > 1e-4 ? traceWall(ro, rd) : 1e3;
-  SeatHit seat = traceSeats(ro, rd, tWall, pixAng);
-  vec3 seatCol = seat.cov > 0.0 ? shadeSeat(ro, rd, seat, pixAng, cl, uShadeBottom) : vec3(0.0);
+  vec4 seatS = texelFetch(uSeat, ivec2(gl_FragCoord.xy), 0);
+  float seatCov = seatS.a;
+  vec3 seatCol = seatS.rgb;
 
   // ---- 合成权重先算好（PERF-12）：后面每一层只在它的权重不为 0 时才着色 ----
   float inBezel = 1.0 - smoothstep(-wB, wB, dBezel);
@@ -164,7 +189,7 @@ void main() {
   // hidden：座椅完全挡住；paneOnly：视线整个穿过本窗的窗板开口（这时侧壁、内衬的权重都是 0）；
   // shadeFree：遮光板盖不到这个像素（这时内衬的命中深度 hitZ 也用不上）。窗板开口里的像素约占画面三分之一，
   // 原来侧壁（shadeWall）、内衬（marchFunnel 一路走满 24 步）、遮光板（shadeShade）都照算一遍再乘 0。调试 1–4 要看这些层，不跳
-  bool hidden = seat.cov >= 1.0;
+  bool hidden = seatCov >= 1.0;
   bool paneOnly = isMain > 0.5 && inBezel >= 1.0 && inPane >= 1.0 && rd.z >= 1e-4;
   bool shadeFree = pShade.y - shadeBottom <= -wS;
   bool dbgLayers = uDebug >= 1 && uDebug <= 4;
@@ -179,7 +204,7 @@ void main() {
     wall = shadeWall(pW, rd, tWall, pixAng, wq, dBezel, seed, wallSeatAO, cl);
   }
   if (rd.z < 1e-4) {
-    gl_FragColor = vec4(mix(wall, seatCol, seat.cov), 0.0);
+    gl_FragColor = vec4(mix(wall, seatCol, seatCov), 0.0);
     return;
   }
 
@@ -217,8 +242,8 @@ void main() {
   // 进窗板分支之前就收成一个 vec3。原来 wall / reveal / shade / seatCol 四个 vec3 要一直活到窗板分支（划痕、倒影……）之后，
   // 寄存器压力拖慢了整个程序（消融：去掉划痕、侧壁、内衬任何一项都「省」0.03–0.05 ms，远超它们本身的运算量）。
   // 展开：col = (1 − cov)·[(1 − inBezel)·wall + inBezel·((1 − shaded)·((1 − inPane)·reveal + inPane·view) + shaded·shade)] + cov·seat
-  float kView = inBezel * (1.0 - shaded) * inPane * (1.0 - seat.cov);
-  vec3 colFixed = mix(mix(wall, mix((1.0 - inPane) * reveal, shade, shaded), inBezel), seatCol, seat.cov);
+  float kView = inBezel * (1.0 - shaded) * inPane * (1.0 - seatCov);
+  vec3 colFixed = mix(mix(wall, mix((1.0 - inPane) * reveal, shade, shaded), inBezel), seatCol, seatCov);
   if (uDebug == 3 || uDebug == 4) { colFixed = mix(vec3(0.0), reveal, inBezel * (1.0 - inPane)); kView = 0.0; }
   if (uDebug == 1) { colFixed = vec3(hitZ / PANE_DEPTH, inBezel, shaded) * 10.0; kView = 0.0; }
 
@@ -349,7 +374,7 @@ void main() {
   if (uDebug == 2) col = vec3(log2(max(dot(col, vec3(0.2126, 0.7152, 0.0722)), 1e-6)) * 0.1 + 1.0) * 10.0;
   // HDR 目标是 32 位浮点时可以原样存下太阳的辐亮度（约 1.8e6 kcd/m²），眩光的能量才对。
   // alpha 存「这个像素有多少是窗外」，曝光时窗外和舱内分开适应
-  float outsideMask = isMain * inBezel * inPane * (1.0 - shaded) * (1.0 - seat.cov);
+  float outsideMask = isMain * inBezel * inPane * (1.0 - shaded) * (1.0 - seatCov);
   // T47：交界像素（窗板开口边、座椅 / 遮光板压在窗前的轮廓）的覆盖率重映射。曝光 pass 按遮罩给每个像素一个曝光
   // （exposure.ts：按曝光的倒数混合），窗外和舱内曝光差好几档，直接按几何覆盖率 m 混合的像素，显示出来窗外那份的权重是
   // m/E窗外 : (1 − m)/E舱内，不再是 m——夜里开灯时窗板边一圈几乎全取舱内色，边缘成了台阶；原来 log 域混合时更糟，
@@ -379,6 +404,7 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       ...cloudUniforms,
       uClouds: { value: null },
       uOutside: { value: null },
+      uSeat: { value: null },
       uSkyViewLut: { value: atmosphere.skyView.texture },
       uSkyViewMoonLut: { value: atmosphere.skyViewMoon.texture },
       uIrradianceLut: { value: atmosphere.irradiance.texture },
@@ -441,36 +467,45 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
 
 /**
  * 舱等变体（T25）：舱内合成程序按舱等切换（默认商务舱 = 传进来的 base 材质；经济舱 = 同一份源码加 #define CABIN_CLASS_ECONOMY）。
+ * PERF-14 起每个舱等是一对程序：舱内合成 + 座椅 pass（seat-pass.ts），两个都编好才切换（座椅和舱内的材质必须同一舱等）。
  * 只编当前要用的那一套：首帧只有商务舱（main.ts 的后台编译批次里就是 base），用户在面板选经济舱时才用
  * renderer.compileAsync 在后台编译（KHR_parallel_shader_compile，不阻塞渲染），编好之前继续画当前的舱等，编好了才切——
  * 切换时没有黑屏、不卡帧。编过的变体留着，来回切不再编。变体之间共用同一份 uniforms，切换不需要同步任何状态。
  * 做法与坑同 GroundDetailVariant（outside-pass.ts）：
- * - 编译时绑定真正要画进去的目标（hdr，单输出）：ANGLE 的 D3D 后端按链接时绑定的帧缓冲生成输出布局，绑错会在首次使用时同步重编；
+ * - 编译时绑定真正要画进去的目标（hdr / hdrSeat，单输出）：ANGLE 的 D3D 后端按链接时绑定的帧缓冲生成输出布局，绑错会在首次使用时同步重编；
  * - compileAsync 编译失败也会 resolve：取出程序、检查 diagnostics.runnable，失败就留在当前舱等（面板显示「编译失败」）。
  */
+type CabinPair = { cabin: THREE.ShaderMaterial; seat: THREE.ShaderMaterial };
 export class CabinClassVariant {
-  private readonly mats: Partial<Record<CabinClass, THREE.ShaderMaterial>> = {};
+  private readonly mats: Partial<Record<CabinClass, CabinPair>> = {};
   private readonly states: Partial<Record<CabinClass, "compiling" | "ready" | "failed">> = { business: "ready" };
   /** 这一帧实际画的舱等（变体编好之前可能和面板选的不一样） */
   shown: CabinClass = "business";
   /** 最近一次变体编译的耗时（毫秒），调试 / 测量用 */
   lastCompileMs = 0;
 
-  /** base：默认（商务舱）材质；target：舱内合成真正画进去的目标 */
+  /** base / seatBase：默认（商务舱）的舱内合成与座椅材质；target / seatTarget：两者真正画进去的目标 */
   constructor(
     base: THREE.ShaderMaterial,
     private readonly target: THREE.WebGLRenderTarget,
+    seatBase: THREE.ShaderMaterial,
+    private readonly seatTarget: THREE.WebGLRenderTarget,
   ) {
-    this.mats.business = base;
+    this.mats.business = { cabin: base, seat: seatBase };
   }
 
-  /** 每帧调用：want 是面板选的舱等，返回这一帧该用的材质 */
+  /** 每帧调用：want 是面板选的舱等，返回这一帧该用的舱内合成材质（座椅材质用 seat()，同一舱等） */
   pick(renderer: THREE.WebGLRenderer, want: CabinClass): THREE.ShaderMaterial {
     if (want !== this.shown) {
       if (!this.states[want]) this.prepare(renderer, want);
       if (this.states[want] === "ready") this.shown = want;
     }
-    return this.mats[this.shown]!;
+    return this.mats[this.shown]!.cabin;
+  }
+
+  /** 当前画的舱等的座椅 pass 材质（先调 pick 再调它，保证和舱内合成同一舱等） */
+  seat(): THREE.ShaderMaterial {
+    return this.mats[this.shown]!.seat;
   }
 
   /** 某个舱等的状态：ready 可以直接切；compiling 后台编译中；failed 编译失败；undefined 还没开始 */
@@ -481,39 +516,49 @@ export class CabinClassVariant {
   private prepare(renderer: THREE.WebGLRenderer, c: CabinClass) {
     this.states[c] = "compiling";
     const b = this.mats.business!;
-    const m = new THREE.ShaderMaterial({
-      vertexShader: b.vertexShader,
-      fragmentShader: b.fragmentShader,
-      uniforms: b.uniforms, // 共用同一份 uniforms
-      defines: { ...b.defines, CABIN_CLASS_ECONOMY: 1 },
-      depthTest: false,
-      depthWrite: false,
-      toneMapped: false,
-    });
-    const scene = new THREE.Scene();
+    const variant = (src: THREE.ShaderMaterial) => {
+      const m = new THREE.ShaderMaterial({
+        vertexShader: src.vertexShader,
+        fragmentShader: src.fragmentShader,
+        uniforms: src.uniforms, // 共用同一份 uniforms
+        defines: { ...src.defines, CABIN_CLASS_ECONOMY: 1 },
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      m.name = src.name;
+      return m;
+    };
+    const pair: CabinPair = { cabin: variant(b.cabin), seat: variant(b.seat) };
     // 几何体与相机和 FullscreenPass 一致（只有 position + uv 的全屏三角形），程序缓存的键才相同
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
     geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
-    const mesh = new THREE.Mesh(geometry, m);
-    mesh.frustumCulled = false;
-    scene.add(mesh);
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     const t0 = performance.now();
     const prevTarget = renderer.getRenderTarget();
-    renderer.setRenderTarget(this.target);
-    const job = renderer.compileAsync(scene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
+    const jobs = ([[pair.cabin, this.target], [pair.seat, this.seatTarget]] as const).map(([m, target]) => {
+      const scene = new THREE.Scene();
+      const mesh = new THREE.Mesh(geometry, m);
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      renderer.setRenderTarget(target);
+      return renderer.compileAsync(scene, cam);
+    });
     renderer.setRenderTarget(prevTarget);
-    job
+    Promise.all(jobs)
       .then(() => {
-        // compileAsync 只等「编译完成」，不管编译是否成功。取出程序、触发一次诊断，失败就不切换
-        const program = (renderer.properties.get(m) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
-        program?.getUniforms();
-        if (!program || program.diagnostics?.runnable === false) {
-          this.states[c] = "failed";
-          return;
+        // compileAsync 只等「编译完成」，不管编译是否成功。取出程序、触发一次诊断，任何一个失败就不切换
+        for (const m of [pair.cabin, pair.seat]) {
+          const program = (renderer.properties.get(m) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
+          program?.getUniforms();
+          if (!program || program.diagnostics?.runnable === false) {
+            this.states[c] = "failed";
+            return;
+          }
         }
         this.lastCompileMs = performance.now() - t0;
-        this.mats[c] = m;
+        this.mats[c] = pair;
         this.states[c] = "ready";
       })
       .catch(() => {

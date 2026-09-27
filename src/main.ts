@@ -12,7 +12,8 @@ import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
 import { CabinClassVariant, createSceneMaterial } from "./render/scene";
 import { GroundDetailVariant, createOutsideMaterial, createOutsideTarget } from "./render/outside-pass";
-import { createWingMaterial } from "./render/wing-pass";
+import { WingWetVariant, createWingMaterial } from "./render/wing-pass";
+import { createSeatMaterial, createSeatTarget } from "./render/seat-pass";
 import { GroundClipmap } from "./ground/clipmap";
 import { OceanWaves } from "./ocean/waves";
 import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateAltitudeFloor, updateHighLift, updateTurbulence } from "./flight";
@@ -39,7 +40,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, DEFAULT_DPR_CAP));
 $("app").appendChild(renderer.domElement);
 
 // 启动计时（调试用，结果放在 window.__voyageStartup）
-const startup: Record<string, number> = { 模块开始执行时离导航: Math.round(performance.now()) };
+const startup: Record<string, number | string> = { 模块开始执行时离导航: Math.round(performance.now()) };
 const tick = (() => {
   let t = performance.now();
   return (label: string) => {
@@ -121,8 +122,13 @@ const hdr = new THREE.WebGLRenderTarget(1, 1, {
   magFilter: THREE.LinearFilter,
   depthBuffer: false,
 });
-// 舱等（T25）：舱内合成的着色器变体。默认商务舱（sceneMat 本身，首帧的后台编译批次里就是它），选经济舱时才后台编译
-const cabinClass = new CabinClassVariant(sceneMat, hdr);
+// 座椅 pass（PERF-14，seat-pass.ts）：窗外 pass 之后先把座椅画到 hdrSeat，舱内合成按像素读回（座椅着色从舱内程序里拆出来，
+// 两个程序并行冷编译）。uniforms 就是 sceneMat.uniforms 本身（同一个对象）
+const seatMat = createSeatMaterial(sceneMat.uniforms);
+const hdrSeat = createSeatTarget(renderer);
+sceneMat.uniforms.uSeat.value = hdrSeat.texture;
+// 舱等（T25）：舱内合成（+ 座椅 pass）的着色器变体。默认商务舱（sceneMat / seatMat 本身，首帧的后台编译批次里就是它们），选经济舱时才后台编译
+const cabinClass = new CabinClassVariant(sceneMat, hdr, seatMat, hdrSeat);
 // 各舱等侧壁 / 窗罩饰面的平均反照率（和 cabin-shading.glsl.ts 的 LINING_ALBEDO 一致）：曝光的舱内色适应按它把饰面本色
 // 从「舱内平均色」里除掉，剩下的才是光源色（T28，exposure.ts 的 uCabinRefAlbedo）。换舱等时跟着换，否则浅灰塑料会被当成冷光抵掉
 const CABIN_REF_ALBEDO: Record<CabinClass, THREE.Vector3> = {
@@ -140,6 +146,8 @@ const hdrWing = new THREE.WebGLRenderTarget(1, 1, {
   magFilter: THREE.LinearFilter,
   depthBuffer: false,
 });
+// 机翼 pass 的湿窗变体（PERF-14）：水珠暗边只在变体里，启动批次只编干窗的 wingMat；首帧后后台预编，窗上有水时才换
+const wingVariant = new WingWetVariant(wingMat, hdrWing);
 
 const state: VoyageState = {
   preset: PRESETS[0],
@@ -332,6 +340,7 @@ function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   hdr.setSize(size.x, size.y);
+  hdrSeat.setSize(size.x, size.y);
   hdrOutside.setSize(size.x, size.y);
   hdrWing.setSize(size.x, size.y);
   clouds.setSize(size.x, size.y);
@@ -537,13 +546,14 @@ function renderFrame(now: number) {
   const cabinMat = cabinClass.pick(renderer, state.cabinClass);
   exposure.finalMat.uniforms.uCabinRefAlbedo.value.copy(CABIN_REF_ALBEDO[cabinClass.shown]);
   exposure.finalMat.uniforms.uClouds.value = clouds.texture; // TM01：高光段只给云（曝光合成读云缓冲的不透明度）
+  pass.render(cabinClass.seat(), hdrSeat);
   pass.render(cabinMat, hdr);
   // 面板上的舱等状态：变体后台编译时提示一下（编好之前画面保持原来的舱等）
   const st = cabinClass.status(state.cabinClass);
   const ui = st === "compiling" ? "（准备中…）" : st === "failed" ? "（编译失败，保持原舱等）" : "";
   if (ui !== cabinClassUi) $("cabin-class-status").textContent = cabinClassUi = ui;
   wingMat.uniforms.uScene.value = hdr.texture;
-  pass.render(wingMat, hdrWing);
+  pass.render(wingVariant.pick(renderer, u.uWetness.value), hdrWing);
   exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
 
   // 面板「画质」下面那行状态（PERF-5）：手动档标「固定」，自动档带上当前落在哪一档 + 依据的数字
@@ -611,21 +621,27 @@ requestAnimationFrame(() =>
       // SC-5：原来的场景程序拆成了窗外 + 舱内合成两个，它们也在这一批里并行编译（最慢的是窗外，决定这一批的墙钟）
       const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
       const jobs: Promise<unknown>[] = [];
-      const batch: ReadonlyArray<readonly [THREE.ShaderMaterial, THREE.WebGLRenderTarget]> = [
-        [outsideMat, hdrOutside],
-        [sceneMat, hdr],
-        [wingMat, hdrWing],
-        ...clouds.compileTargets(),
+      const cloudTargets = clouds.compileTargets();
+      const batch: ReadonlyArray<readonly [THREE.ShaderMaterial, THREE.WebGLRenderTarget, string]> = [
+        [outsideMat, hdrOutside, "窗外"],
+        [sceneMat, hdr, "舱内"],
+        [seatMat, hdrSeat, "座椅"],
+        [wingMat, hdrWing, "机翼"],
+        ...cloudTargets.map(([m, t], i) => [m, t, `云#${i}`] as const),
       ];
-      for (const [mat, target] of batch) {
+      // PERF-14：批次里每个程序各自编好的时刻（相对批次开始，毫秒）——看关键路径是谁（dev-browser cold 会打印 startup 全部字段）
+      const tBatch = performance.now();
+      const doneMs: Record<string, number> = {};
+      for (const [mat, target, name] of batch) {
         const probe = new THREE.Scene();
         const mesh = new THREE.Mesh(geo, mat);
         mesh.frustumCulled = false;
         probe.add(mesh);
         renderer.setRenderTarget(target);
-        jobs.push(renderer.compileAsync(probe, cam));
+        jobs.push(renderer.compileAsync(probe, cam).then(() => (doneMs[name] = Math.round(performance.now() - tBatch))));
       }
       await Promise.all(jobs);
+      startup["批次各程序编好（ms）"] = JSON.stringify(doneMs);
       renderer.setRenderTarget(null);
     } catch (err) {
       console.warn("场景 / 云着色器后台编译失败，改为首帧同步编译", err);
@@ -657,6 +673,7 @@ requestAnimationFrame(() =>
     const programs = (mat: THREE.Material) => (renderer.properties.get(mat) as { programs?: Map<string, unknown> }).programs?.size ?? -1;
     startup["窗外材质的程序数"] = programs(outsideMat);
     startup["场景材质的程序数"] = programs(sceneMat);
+    startup["座椅材质的程序数"] = programs(seatMat);
     startup["机翼材质的程序数"] = programs(wingMat);
     const [[marchMat], [resolveMat]] = clouds.compileTargets();
     startup["云光线步进材质的程序数"] = programs(marchMat);
@@ -670,10 +687,11 @@ requestAnimationFrame(() =>
 function benchWing(n = 20) {
   const px = new Float32Array(4);
   const sync = () => renderer.readRenderTargetPixels(hdrWing, 0, 0, 1, 1, px);
-  pass.render(wingMat, hdrWing);
+  const wm = wingVariant.pick(renderer, sceneMat.uniforms.uWetness.value);
+  pass.render(wm, hdrWing);
   sync();
   const t0 = performance.now();
-  for (let i = 0; i < n; i++) pass.render(wingMat, hdrWing);
+  for (let i = 0; i < n; i++) pass.render(wm, hdrWing);
   sync();
   return (performance.now() - t0) / n;
 }
@@ -686,7 +704,11 @@ function benchScene(n = 20, which: "both" | "outside" | "cabin" = "both") {
   const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
   const once = () => {
     if (which !== "cabin") pass.render(pickOutside(), hdrOutside);
-    if (which !== "outside") pass.render(cabinClass.pick(renderer, state.cabinClass), hdr);
+    if (which !== "outside") {
+      const cabinMat = cabinClass.pick(renderer, state.cabinClass);
+      pass.render(cabinClass.seat(), hdrSeat);
+      pass.render(cabinMat, hdr);
+    }
   };
   once();
   sync();
@@ -710,4 +732,4 @@ function benchFrame(n = 10) {
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
 // DX-12：新增 sunAltDeg / moonAltDeg（截图 JSON 附太阳 / 月亮高度用，见 README「调试与验证」），
 // 复用已有的 lastSunAlt / lastMoonAlt（每帧更新，见上）——不重复算一遍天文位置
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };

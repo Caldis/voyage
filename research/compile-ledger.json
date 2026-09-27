@@ -364,6 +364,51 @@
           "mad": 3
         }
       }
+    },
+    {
+      "date": "2026-09-27",
+      "commit": "79fa03f",
+      "label": "shader-budget --ledger（--only scene-default,scene-economy,seat-default,seat-economy,wing,wing-wet,outside-default）",
+      "quick": false,
+      "jobs": 8,
+      "rounds": 3,
+      "programs": {
+        "scene-default": {
+          "min": 3906,
+          "median": 4007,
+          "mad": 101
+        },
+        "scene-economy": {
+          "min": 4218,
+          "median": 4326,
+          "mad": 108
+        },
+        "outside-default": {
+          "min": 5771,
+          "median": 6172,
+          "mad": 401
+        },
+        "seat-default": {
+          "min": 1469,
+          "median": 1511,
+          "mad": 42
+        },
+        "seat-economy": {
+          "min": 1014,
+          "median": 1039,
+          "mad": 25
+        },
+        "wing": {
+          "min": 6500,
+          "median": 6858,
+          "mad": 72
+        },
+        "wing-wet": {
+          "min": 7652,
+          "median": 7763,
+          "mad": 111
+        }
+      }
     }
   ]
 }
