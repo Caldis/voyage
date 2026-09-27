@@ -19,6 +19,7 @@
 | 任务 | 代理 id（SendMessage 用） | 分支 / 状态 | 下一步 |
 | --- | --- | --- | --- |
 | C09 逆光银边 | a9c6c3fe7fe7ff883 | 开发中（5209 / 5269） | 交付后必审 |
+| INV-INCLOUD 云里棋盘纹回归调查 | （调查代理，只读） | 调查中 → handoff/INCLOUD-CHECKER.md | 若确认 C03 回归：由 C09 之后的云任务或单独小任务修（云文件同时只一个任务） |
 | G06 clipmap 纹理精度 | a1c121a158e5469bd | worktree-agent-a1c121a158e5469bd，开发中（端口 5206 / 对照 5266） | 交付后必审 |
 | PERF-14 舱内 / 机翼冷编译 | ae3e95f93a3e4d63a | worktree-agent-ae3e95f93a3e4d63a，开发中（5214 / 5274） | 交付后必审 |
 
