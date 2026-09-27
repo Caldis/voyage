@@ -101,10 +101,10 @@ export interface RoadLine {
 const ROAD_CLASS: Record<string, { highway: boolean; width: number; weight: number }> = {
   motorway: { highway: true, width: 18, weight: 1.0 },
   trunk: { highway: true, width: 16, weight: 0.9 },
-  primary: { highway: false, width: 14, weight: 0.8 },
-  secondary: { highway: false, width: 12, weight: 0.6 },
-  tertiary: { highway: false, width: 10, weight: 0.45 },
-  minor: { highway: false, width: 8, weight: 0.3 },
+  primary: { highway: false, width: 14, weight: 0.7 },
+  secondary: { highway: false, width: 12, weight: 0.45 },
+  tertiary: { highway: false, width: 10, weight: 0.28 },
+  minor: { highway: false, width: 8, weight: 0.14 },
 };
 
 /**
