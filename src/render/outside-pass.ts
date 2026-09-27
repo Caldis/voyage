@@ -154,9 +154,10 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
         L += disk * coverage * sunTransmittance(uCamR, rd.y);
       }
     }
-    // 月亮圆盘（白天也在，只是很淡）和星星；都要穿过相机上方的大气
+    // 月亮圆盘（白天也在，只是很淡）、星星和银河；都要穿过相机上方的大气。
+    // 银河的可见度按它对这个方向天空底色（此时的 L：月光照亮的天空 + 夜天光）的对比度判断（T09，stars.glsl.ts）
     vec3 tUp = sunTransmittance(uCamR, rd.y);
-    L += (moonDisk(rd) + starRadiance(rd)) * tUp;
+    L += moonDisk(rd) * tUp + starRadiance(rd, tUp, L);
   }
   // 【大气合成接入点】到这里 L 是云层背后的背景辐亮度：地面 / 海面已含空气透视，天空含内散射。
   // T18 的边界层霾不在这里叠：它是大气里的一层气溶胶，已经进了透射率 / 天空视图 / 空气透视 LUT（atmosphere/haze.ts），
