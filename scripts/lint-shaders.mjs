@@ -104,6 +104,12 @@ export async function collectPrograms(server) {
       fragmentShader: "#define GROUND_DETAIL 1\n" + outside.fragmentShader,
       vertexShader: outside.vertexShader,
     });
+    // TR03：窗外的火车远景变体（GroundDetailVariant 火车模式下编译：源码多拼了 rail/far-view.glsl.ts 的两段，再加两个 #define）
+    programs.push({
+      id: "outside-rail",
+      fragmentShader: "#define GROUND_DETAIL 1\n#define RAIL 1\n" + o.outsideRailFragment(),
+      vertexShader: outside.vertexShader,
+    });
   }
 
   // 机翼 pass
@@ -286,7 +292,7 @@ function findDuplicatesInProgram(text) {
  * 只服务于「按文本数 sampler / 找重名」这类静态检查，不是真正的 GLSL 预处理器（不做宏替换、
  * 不展开 #define 常量、不算 #if 的算术表达式）——glslangValidator 校验用的是原始文本 + 自己的真预处理器，
  * 不经过这里。 */
-function resolveConditionals(text, defines) {
+export function resolveConditionals(text, defines) {
   const lines = text.split("\n");
   const out = [];
   const stack = []; // { active: 这一层当前分支是否被编译, taken: 这条 #if/#elif 链是否已经有分支命中过 }
@@ -430,13 +436,13 @@ function samplerAudit(text, defines) {
 export const SAMPLER_LIMIT = 16;
 
 /** 需要进速查表、也需要致命检查的程序 id，顺序即表格行序。 */
-const SAMPLER_TABLE_PROGRAMS = ["scene-default", "scene-economy", "outside-default", "outside-ground-detail"];
+const SAMPLER_TABLE_PROGRAMS = ["scene-default", "scene-economy", "outside-default", "outside-ground-detail", "outside-rail"];
 
 export const SAMPLER_TABLE_BEGIN = "<!-- DX-09:sampler-table:begin -->";
 export const SAMPLER_TABLE_END = "<!-- DX-09:sampler-table:end -->";
 
 function samplerDefinesFor(id) {
-  return id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : id === "scene-economy" ? new Set(["CABIN_CLASS_ECONOMY"]) : new Set();
+  return id === "outside-rail" ? new Set(["GROUND_DETAIL", "RAIL"]) : id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : id === "scene-economy" ? new Set(["CABIN_CLASS_ECONOMY"]) : new Set();
 }
 
 /** 对 collectPrograms() 的结果，按 SAMPLER_TABLE_PROGRAMS 逐个跑 samplerAudit，返回表格需要的行

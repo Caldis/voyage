@@ -108,7 +108,7 @@ export class GroundClipmap {
 
   constructor(lat0: number, lon0: number) {
     this.frame = new LocalFrame(lat0, lon0);
-    const tex = (data: Uint8Array | Uint16Array, w: number, format: THREE.PixelFormat, type: THREE.TextureDataType) => {
+    const tex = (data: Uint8Array | Float32Array, w: number, format: THREE.PixelFormat, type: THREE.TextureDataType) => {
       const t = new THREE.DataArrayTexture(data, w, w, GROUND_LEVELS);
       t.format = format;
       t.type = type;
@@ -122,7 +122,9 @@ export class GroundClipmap {
     this.albedo = tex(new Uint8Array(RES * RES * 4 * GROUND_LEVELS), RES, THREE.RGBAFormat, THREE.UnsignedByteType);
     this.albedo.colorSpace = THREE.SRGBColorSpace;
     this.water = tex(new Uint8Array(RES * RES * 4 * GROUND_LEVELS), RES, THREE.RGBAFormat, THREE.UnsignedByteType);
-    this.height = tex(new Uint16Array(HRES * HRES * GROUND_LEVELS), HRES, THREE.RedFormat, THREE.HalfFloatType);
+    // 高度用 32 位浮点（TR03）：半精度在 0.5–1 km 海拔上只有约 0.5 m 一级（1–2 km 约 1 m），飞机上看不出来；
+    // 火车眼高 2.5 m 掠射时，平原被量化成一级级半米高的台地，远处地平线成了阶梯状的锯齿。R32F 的线性过滤要 OES_texture_float_linear（three 初始化时已启用）
+    this.height = tex(new Float32Array(HRES * HRES * GROUND_LEVELS), HRES, THREE.RedFormat, THREE.FloatType);
   }
 
   get localFrame() {
@@ -167,6 +169,13 @@ export class GroundClipmap {
     }
   }
   private minLevel = 0;
+
+  /**
+   * 河道折线（OpenMapTiles 的 waterway，没有宽度字段，tiles.ts 按类别估：river 60 m、canal 25 m）的最大画宽（米）。
+   * 飞机上无所谓；火车贴地时，一条被标成 river 的十几米小河按 60 m 画，就是铁路边一片 70 m 宽的「湖」（TR03 实测 12.65 km 处）。
+   * 火车模式设成一个小值（rail/mode.ts）：宽河本来就有水面多边形（riverbank），折线只需补上没有多边形的细河道。改了要 reset() 才生效
+   */
+  waterwayMaxM = Infinity;
 
   /** 每帧调用：飞机当前的本地坐标（km） */
   update(x: number, z: number) {
@@ -243,7 +252,7 @@ export class GroundClipmap {
 
   /** 正下方的地形高度（km）：最细的可用级别双线性取样；没有数据返回 null */
   heightAt(x: number, z: number): number | null {
-    const data = this.height.image.data as unknown as Uint16Array;
+    const data = this.height.image.data as unknown as Float32Array;
     for (let i = 0; i < GROUND_LEVELS; i++) {
       const l = this.levels[i];
       if (!l.valid) continue;
@@ -255,7 +264,7 @@ export class GroundClipmap {
       const iz = Math.max(0, Math.min(HRES - 2, Math.floor(fz)));
       const tx = THREE.MathUtils.clamp(fx - ix, 0, 1), tz = THREE.MathUtils.clamp(fz - iz, 0, 1);
       const base = i * HRES * HRES;
-      const h = (a: number, b: number) => THREE.DataUtils.fromHalfFloat(data[base + b * HRES + a]);
+      const h = (a: number, b: number) => data[base + b * HRES + a];
       const top = h(ix, iz) * (1 - tx) + h(ix + 1, iz) * tx;
       const bot = h(ix, iz + 1) * (1 - tx) + h(ix + 1, iz + 1) * tx;
       return top * (1 - tz) + bot * tz;
@@ -445,7 +454,7 @@ export class GroundClipmap {
       }),
     );
     const px = ctx.getImageData(0, 0, HRES, HRES).data;
-    const data = new Uint16Array(HRES * HRES);
+    const data = new Float32Array(HRES * HRES);
     // 海底（Terrarium 带海底地形，海里是负值）：给 CPU 侧的海陆判断用。瓦片没取到的地方是 0 m，按陆地算（保守）
     const sea = new Uint8Array(HRES * HRES);
     let max = 0;
@@ -454,7 +463,7 @@ export class GroundClipmap {
       const m = px[k * 4] * 256 + px[k * 4 + 1] + px[k * 4 + 2] / 256 - 32768;
       const km = Math.max(m, 0) / 1000;
       max = Math.max(max, km);
-      data[k] = THREE.DataUtils.toHalfFloat(km);
+      data[k] = km;
       sea[k] = m < -5 ? 1 : 0;
     }
     return { data, max, sea };
@@ -479,7 +488,7 @@ export class GroundClipmap {
     const [lat0, lon0] = [this.frame.lat0, this.frame.lon0];
     const water = results.flatMap(({ t, w }) => (w ? [{ x: t.x, y: t.y, data: w.water }] : []));
     const tiles = results.flatMap(({ t, w }) => (w?.roads ? [{ x: t.x, y: t.y, data: w.roads }] : []));
-    const job: RoadJob = { res: RES, lat0, lon0, x0: cx - size / 2, z0: cz - size / 2, size, zoom, tiles, water };
+    const job: RoadJob = { res: RES, lat0, lon0, x0: cx - size / 2, z0: cz - size / 2, size, zoom, tiles, water, waterwayMaxM: this.waterwayMaxM };
     return { job };
   }
 }
@@ -525,7 +534,7 @@ function buildGroundLevelAsync(job: RoadJob, albedo: Uint8ClampedArray, nightRaw
 }
 
 /** 把一级的高度图 / 水体遮罩压成 GRID² 的粗网格（最高点、平均高度、陆地比例），CPU 侧查询用（T18） */
-function coarseGrid(cx: number, cz: number, size: number, height: Uint16Array, sea: Uint8Array, water: Uint8ClampedArray): CoarseGrid {
+function coarseGrid(cx: number, cz: number, size: number, height: Float32Array, sea: Uint8Array, water: Uint8ClampedArray): CoarseGrid {
   const max = new Float32Array(GRID * GRID);
   const mean = new Float32Array(GRID * GRID);
   const land = new Float32Array(GRID * GRID);
@@ -537,7 +546,7 @@ function coarseGrid(cx: number, cz: number, size: number, height: Uint16Array, s
       for (let b = 0; b < hs; b++) {
         for (let a = 0; a < hs; a++) {
           const k = (j * hs + b) * HRES + i * hs + a;
-          const h = THREE.DataUtils.fromHalfFloat(height[k]);
+          const h = height[k];
           m = Math.max(m, h);
           sum += h;
           seaCount += sea[k];

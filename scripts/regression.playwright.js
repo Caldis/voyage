@@ -97,6 +97,11 @@ async (page) => {
     { name: "wonder-floatcity-day", p: { preset: "wpac", seat: "right", date: "2026-09-27", time: 975, "cloud-preset": "stratocumulus", coverage: 0.6, "wing-pos": "-4" }, wait: 4000, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"floatcity\", { forwardOffsetDeg: 0, distKm: 80, reveal: 1, seed: 0.23 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe() + \" · \" + v.clouds.wonderLayerState;" },
     // dusk：左座朝东、17:20（太阳约 1°，在身后）：台地与树冠被低日镀成暖色，身后是暗下去的东天
     { name: "wonder-floatcity-dusk", p: { preset: "wpac", seat: "left", date: "2026-09-27", time: 1040, "cloud-preset": "stratocumulus", coverage: 0.6, "cabin-light": false, "wing-pos": "-4" }, wait: 4000, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"floatcity\", { forwardOffsetDeg: 0, distKm: 80, reveal: 1, seed: 0.23 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe() + \" · \" + v.clouds.wonderLayerState;" },
+    // TR03：火车模式（JR 大糸线，示例）的远景。vehicle 放在 DEFAULTS 最后，火车场景在换完地点 / 座位之后才进入火车；
+    // js 等线路数据加载完、把列车放到指定里程（初速 0，截图等待期间只走一两米）、等地面瓦片和火车变体编好，再放一次。
+    // default：12.65 km 豊科过后的平原段，往信濃大町、左座朝西（北阿尔卑斯）；curve：1.79 km 松本出发后的弯道（近处有女鳥羽川 / 奈良井川）
+    { name: "rail-oito-default", p: { vehicle: "train", date: "2026-08-05", time: 720 }, wait: 3000, js: "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(12650, 1, 0); for (let i = 0; i < 90 && v.ground.pending > 0; i++) await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(12650, 1, 0); return v.rail.describe() + \" · \" + (v.groundDetail.railStatus ?? v.groundDetail.status);" },
+    { name: "rail-oito-curve", p: { vehicle: "train", date: "2026-08-05", time: 720 }, wait: 3000, js: "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(1790, 1, 0); for (let i = 0; i < 90 && v.ground.pending > 0; i++) await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(1790, 1, 0); return v.rail.describe() + \" · \" + (v.groundDetail.railStatus ?? v.groundDetail.status);" },
   ];
 
   await page.goto(`${origin}/?regression=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
@@ -129,7 +134,7 @@ async (page) => {
         }
       };
       // 默认状态
-      const defaults = { preset: "wpac", seat: "right", weather: "fair", "cloud-preset": "cumulus", "cabin-light": true, "cabin-class": "business", altitude: 10.7, shade: 0, wind: 7, "wing-pos": "8", "ground-on": true };
+      const defaults = { preset: "wpac", seat: "right", weather: "fair", "cloud-preset": "cumulus", "cabin-light": true, "cabin-class": "business", altitude: 10.7, shade: 0, wind: 7, "wing-pos": "8", "ground-on": true, vehicle: "plane" };
       for (const [id, val] of Object.entries({ ...defaults, ...sc.p })) set(id, val);
       if (sc.p.coverage === undefined) set("coverage", 0.42);
       // 日期（T09）：场景没写 date 时恢复成页面打开时的日期，免得上一个写了 date 的场景把后面的场景也带到那一天

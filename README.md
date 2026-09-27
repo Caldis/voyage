@@ -35,6 +35,7 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 | `scene-economy` | 16 | 5 / 8 |
 | `outside-default` | 16 | 14 / 18 |
 | `outside-ground-detail` | 16 | 14 / 18 |
+| `outside-rail` | 16 | 14 / 18 |
 <!-- DX-09:sampler-table:end -->
 
 ## 使用
