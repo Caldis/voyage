@@ -411,6 +411,23 @@ async function translateAll(variants) {
   return out;
 }
 
+// DX-11/12（PERF-12/TR07 反馈）：从 fxc 的汇编清单（`/Fc`）里抠两个确定性指标——不受机器负载影响，
+// 不需要多轮取 min，一次编译就能读到：
+//   instructionSlots  清单末尾的 `// approximately N instruction slots used`
+//   dclTemps          清单靠前的 `dcl_temps N`（这个程序用了多少个临时寄存器）
+// 用来先判断「冷编译变慢是不是常量循环被 FXC 展开了」——被展开的循环通常伴随 instructionSlots 暴涨（
+// 展开前几十条指令的循环体，展开后变成循环次数倍的指令数）、dclTemps 也可能跟着涨（展开后各次迭代不再
+// 共用同一组临时变量）；两个数字都没怎么变但 fxcMs 涨了很多，说明大概率是别的原因（优化器路径变了、
+// 目标不同导致的寄存器分配差异……），不用一上来就去 `--bisect`/`--variants` 排查「是不是某个循环被展开了」。
+function parseFxcAsm(asmText) {
+  const slotsMatch = asmText.match(/approximately\s+(\d+)\s+instruction\s+slots?\s+used/i);
+  const tempsMatch = asmText.match(/^\s*dcl_temps\s+(\d+)/im);
+  return {
+    instructionSlots: slotsMatch ? Number(slotsMatch[1]) : null,
+    dclTemps: tempsMatch ? Number(tempsMatch[1]) : null,
+  };
+}
+
 // ---------- 4. fxc.exe 离线计时，小线程池并行 ----------
 async function runFxc(translated, { fxc, quick, jobsN, tmpDir }) {
   const queue = translated.filter((v) => v.translateOk && v.hlsl);
@@ -422,19 +439,27 @@ async function runFxc(translated, { fxc, quick, jobsN, tmpDir }) {
       const filled = fillPlaceholders(v.hlsl);
       const safeName = v.id.replace(/[^\w.-]+/g, "_");
       const file = path.join(tmpDir, `${safeName}.hlsl`);
+      const asmFile = path.join(tmpDir, `${safeName}.asm`);
       fs.writeFileSync(file, filled);
       const samplers = countSamplers(v.hlsl);
       const t0 = Date.now();
       try {
-        execFileSync(fxc, ["/nologo", "/T", "ps_5_0", "/E", "main", quick ? "/Od" : "/O1", "/Fo", "NUL", file], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-        results.push({ ...v, fxcOk: true, fxcMs: Date.now() - t0, samplers });
+        // /Fc <汇编清单>：额外产出反汇编文本（DX-11，见上面 parseFxcAsm），不影响 /Fo NUL 本身的计时路径
+        execFileSync(fxc, ["/nologo", "/T", "ps_5_0", "/E", "main", quick ? "/Od" : "/O1", "/Fo", "NUL", "/Fc", asmFile, file], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+        let asmStats = { instructionSlots: null, dclTemps: null };
+        try {
+          asmStats = parseFxcAsm(fs.readFileSync(asmFile, "utf8"));
+        } catch {
+          /* 清单文件读不到（极少见，不影响计时本身）就留 null，不让这个额外指标拖垮主流程 */
+        }
+        results.push({ ...v, fxcOk: true, fxcMs: Date.now() - t0, samplers, ...asmStats });
       } catch (err) {
         const tail = String(err.stderr || err.stdout || err.message)
           .trim()
           .split("\n")
           .slice(-2)
           .join(" / ");
-        results.push({ ...v, fxcOk: false, fxcMs: Date.now() - t0, fxcError: tail, samplers });
+        results.push({ ...v, fxcOk: false, fxcMs: Date.now() - t0, fxcError: tail, samplers, instructionSlots: null, dclTemps: null });
       }
     }
   }
@@ -498,6 +523,10 @@ async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups 
   console.log(`\n[2/2] fxc.exe 交替计时 ${rounds} 轮...`);
   const curSamples = new Map();
   const baseSamples = new Map();
+  // DX-11/12：instruction slots / dcl_temps 是确定性的（同一份 HLSL 编出来的清单不随负载变），
+  // 不需要每轮都存，取任意一轮（这里用最后一轮覆盖前面的即可）的值即可代表整个 --baseline 这次跑
+  const curAsmById = new Map();
+  const baseAsmById = new Map();
   let keptCurDir = null;
   let keptBaseDir = null;
   for (let r = 0; r < rounds; r++) {
@@ -508,6 +537,7 @@ async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups 
       if (!t.fxcOk) continue;
       if (!curSamples.has(t.id)) curSamples.set(t.id, []);
       curSamples.get(t.id).push(t.fxcMs);
+      curAsmById.set(t.id, { instructionSlots: t.instructionSlots ?? null, dclTemps: t.dclTemps ?? null });
     }
     if (keepHlsl && r === rounds - 1) keptCurDir = curDir;
     else rmSync(curDir, { recursive: true, force: true });
@@ -518,6 +548,7 @@ async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups 
       if (!t.fxcOk) continue;
       if (!baseSamples.has(t.id)) baseSamples.set(t.id, []);
       baseSamples.get(t.id).push(t.fxcMs);
+      baseAsmById.set(t.id, { instructionSlots: t.instructionSlots ?? null, dclTemps: t.dclTemps ?? null });
     }
     if (keepHlsl && r === rounds - 1) keptBaseDir = baseDir;
     else rmSync(baseDir, { recursive: true, force: true });
@@ -966,10 +997,23 @@ async function main() {
         const contribution = base - cur;
         note += `${note ? " " : ""}贡献≈${contribution >= 0 ? "+" : ""}${contribution.toFixed(0)}ms（基线 ${base.toFixed(0)}ms）`;
       }
+      // DX-11/12：instruction slots / dcl_temps（确定性指标，不受负载影响，见 runFxc 里 parseFxcAsm 的注释）
+      if (r.fxcOk && (r.instructionSlots != null || r.dclTemps != null)) {
+        note += `${note ? " " : ""}slots=${r.instructionSlots ?? "?"} temps=${r.dclTemps ?? "?"}`;
+      }
       if (!r.fxcOk) note += `${note ? " " : ""}错误:${r.fxcError}`;
       if (unreliableNote(r.baseId)) note += `${note ? " " : ""}${unreliableNote(r.baseId)}`;
       console.log(`${r.id.padEnd(38)} ${samplerStr.padEnd(10)} ${msStr.padEnd(valueColWidth)} ${note}`);
-      programRows.push({ id: r.id, baseId: r.baseId, label: r.label || null, samplers: r.samplers, fxcOk: r.fxcOk, stats: r.fxcOk ? st : null });
+      programRows.push({
+        id: r.id,
+        baseId: r.baseId,
+        label: r.label || null,
+        samplers: r.samplers,
+        fxcOk: r.fxcOk,
+        stats: r.fxcOk ? st : null,
+        instructionSlots: r.instructionSlots ?? null,
+        dclTemps: r.dclTemps ?? null,
+      });
     }
     const skippedTranslate = translated.filter((v) => !v.translateOk);
     if (skippedTranslate.length > 0) console.log(`\n（${skippedTranslate.length} 个程序翻译失败，没有 fxc 结果，见上面的 [翻译失败]）`);
