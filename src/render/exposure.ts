@@ -471,7 +471,7 @@ void main() {
     //    T48c 机翼（TM02 的 notWing 判据，dW 上面已算好，不多采样）：落在翼面上的眩光那一份照常压，翼面自身只按 uNightLocal.z 的比例压。
     //    整个像素一起压（z = 1，T48b）时，位置灯旁的翼面（自身中等亮、紧挨极亮的灯）出现约 12–15 级的暗环（审查 P2-1）；
     //    整个像素都不压时，灯的眩光在翼面一侧比天空一侧大一圈、贴着白灯的翼面死白（1 km 低空 1256 px 的块）；
-    //    只压眩光（z = 0）光晕两侧一样大、翼面单调，但死白块仍有 673 px。z = 0.7：径向剖面单调、死白块 336 px（handoff/T48c.md 扫描表）。
+    //    只压眩光（z = 0）光晕两侧一样大、翼面单调，但死白块仍有约 670 px。z = 0.85：径向剖面不再先暗后亮、死白块约 220–290 px（handoff/T48c.md 扫描表）。
     //    频闪 / 闪电不当帧进适应靠的是 uLocalLum 的瞬态扣除，不靠这里。非机翼像素 notWing = 1，与 T48b 逐点相同
     x *= mix(1.0 + max(glareFrac, uNightLocal.z) * (gLoc - 1.0), gLoc, notWing);
     // TM01：白天窗外的受光云在 AgX 肩部保留对比（见 dayHighlightGain）；夜里、黄昏、舱内、云里 hiGate = 0，逐位不变
@@ -579,7 +579,7 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  * T48b「夜城不连成奶白平台」（只在夜里的窗外，门控同 T48 的 nightO × 窗外遮罩）：
  *   ① AgX 之前按眩光低通亮度 b 局部适应：x ·= 2^(−0.6 · 软铰链(log2(b / 0.18) − 3))，城区的地毯光被压回 AgX 的线性段，灯点 / 路网（低通之上的细节）照原样；
  *   ② T48 色度保持的目标改成「同色相、亮度 = AgX」，放不下时向同亮度的白去饱和（旧写法按 1/max 降亮度，把所有过曝的灯压到同一亮度）。
- *   T48c：机翼上（TM02 的 dW 判据）只压眩光那一份 + 翼面自身的 0.7；① 的低通 b 减去粗网格上的瞬态（LOCAL_FRAG，
+ *   T48c：机翼上（TM02 的 dW 判据）只压眩光那一份 + 翼面自身的 0.85；① 的低通 b 减去粗网格上的瞬态（LOCAL_FRAG，
  *     1/16 屏幕的粗网格，对数域指数平滑，变亮 τ 0.25 s / 变暗 0.1 s，只扣「刚刚突然变亮」的部分），频闪、闪电这类瞬态不当帧把周围压暗，移动的灯点仍即时适应。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
  * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
@@ -656,7 +656,7 @@ export class Exposure {
       uMesopicKeep: { value: new THREE.Vector4(0.5, 0.85, -2.0, -0.8) },
       uNightChroma: { value: new THREE.Vector3(0.45, -1.5, 0.0) }, // 协调者合并时 0.6 → 0.45：雾芯留一点明暗层次
       // T48b：拐点中灰 +3 档、斜率 0.6（+2 / 0.5、+2.5 / 0.6 更暗，+2 / 0.7 城区发灰；见 handoff/T48b.md）
-      uNightLocal: { value: new THREE.Vector3(3.0, 0.6, 0.7) }, // T48c z：翼面自身参与 0.7（0 时贴着白灯的翼面死白块 673 px，1 = T48b 的暗环；handoff/T48c.md）
+      uNightLocal: { value: new THREE.Vector3(3.0, 0.6, 0.85) }, // T48c z：翼面自身参与 0.85（0 时贴着白灯的翼面死白块约 670 px，0.7 约 390–470，0.85 约 220–290；1 = T48b 的暗环；handoff/T48c.md）
       uLocalLum: { value: null },
       // TM01：膝点中灰 +0.5 档（显示约 144）、顶点 +2.5（约 203）、收回到 +5.0，段内斜率 1.4；w = 1 即关（见 handoff/TM01.md 的方案对比）
       // 返工：收回终点 4.0 → 5.0（+2.5→+4 档的局部对比从 0.39 回到 0.54；最亮的云边 / 砧顶细节要留住）

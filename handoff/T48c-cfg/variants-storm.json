@@ -1,0 +1,11 @@
+[
+  { "name": "master" },
+  { "name": "inst" },
+  { "name": "noLocal", "js": "u.uNightLocal.value.y = 0;" },
+  { "name": "hold", "js": "const raf = () => new Promise((r) => requestAnimationFrame(r)); v.weather.heldIntensity = 0; v.freeze(true, { cloudLive: true }); v.exposure.localDt = null; for (let i = 0; i < 60; i++) await raf(); v.exposure.localDt = 0; v.weather.heldIntensity = 300; for (let i = 0; i < 60; i++) await raf(); v.freeze(true); for (let i = 0; i < 4; i++) await raf(); return 'ok';" },
+  { "name": "h100", "js": "v.exposure.localDt = 0.1; v.benchFrame(1); v.exposure.localDt = 0;" },
+  { "name": "h200", "js": "v.exposure.localDt = 0.1; v.benchFrame(1); v.exposure.localDt = 0;" },
+  { "name": "inst2", "js": "v.exposure.localDt = null;" },
+  { "name": "noLocal2", "js": "v.exposure.localDt = null; u.uNightLocal.value.y = 0;" },
+  { "name": "noFlash", "js": "const raf = () => new Promise((r) => requestAnimationFrame(r)); v.exposure.localDt = null; v.weather.heldIntensity = 0; v.freeze(true, { cloudLive: true }); for (let i = 0; i < 60; i++) await raf(); v.freeze(true); for (let i = 0; i < 4; i++) await raf(); return 'ok';" }
+]

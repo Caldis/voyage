@@ -1,0 +1,3 @@
+[
+  { "name": "storm-night", "p": { "preset": "wpac", "date": "2026-01-16", "time": 1320, "coverage": 0.3, "weather": "storm", "cabin-light": "off", "wing-pos": "-4", "quality": "high" }, "wait": 3000, "js": "v.weather.flashNow(0, false, true, 300); for (let i = 0; i < 4; i++) await new Promise((r) => requestAnimationFrame(r)); return 'storms ' + v.weather.storms.length;" }
+]
