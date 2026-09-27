@@ -10,9 +10,11 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | PERF-10/11 | 第 7 波（最高优先） | 5210 | worktree | Opus（云按天气拆变体 + resolve 回 0.05 ms；必审） | — | 进行中 |
 | PERF-12 | 第 7 波（飞机性能） | 5212 | worktree | Opus（舱内合成 0.385→≤0.3 ms、scene-default 编译 7.3→≤5 s：消融归因后治理；碰 scene → 必审） | — | 进行中 |
-| T49 | 第 7 波（插单，用户反馈） | 5249 | worktree | Opus（大幅转向倾斜：relay 掉头、时间加速下坡度瞬间打满；优先向前的下一段 + 提前转弯 + 真实时间滚转限速 + 大角度转向借遮挡 + 调试触发按钮） | — | 进行中 |
+| T49 | 第 7 波（插单，用户需求） | 5249 | worktree | Opus（**航向控制 / 巡航方式**：手动航向盘 + 左右转、选目的地机场、等待航线式盘旋；真实时间滚转限速；保留航线接力。用户澄清：不是倾斜缺陷，是想自己控制航向） | — | 进行中 |
+| R-IMAGERY | 第 7 波（飞机地面打磨，用户提问） | — | 主仓库 research/ | Opus 研究代理（高清卫星 / 航空影像：Esri / 国土地理院 / Mapbox / Google 许可原文、实测对比、混用方案 → research/IMAGERY.md） | — | 进行中 |
+| R-CLOUD-SHARP | 第 7 波（飞机，用户提问） | — | 主仓库 research/ | Opus 研究代理（云不够锐利 / 边缘高光缺高分辨率质感：诊断分辨率 / 上采样 / TAA / 噪声 LOD / 受光，对照 MSFS 与业界 → research/CLOUD_SHARPNESS.md） | — | 进行中 |
+| R-METEO | 第 7 波（飞机，用户需求） | — | 主仓库 research/ | Opus 研究代理（气象学体检：云属 / 多层云 / 锋面 / 台风 / 雷暴 / 雾 / 山地波；真实天气数据许可；可规划功能 → research/METEOROLOGY.md） | — | 进行中 |
 | TR03 | 第 7 波（P8） | — | `worktree-agent-ac14bb478e8ff993d`（3f6af34） | Opus（火车远景） | 审查中 | 已交付，独立审查中（用户：搞完了就合，之后专心飞机） |
-| TR07 | 第 7 波（P8） | — | worktree | Opus（火车声音） | — | 进行中（恢复，做完即合；之后火车不再派新任务） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -79,6 +81,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | TR02 | 火车模式与列车运动：src/rail/*（线路加载、走廊坐标、速度曲线与弯道限速、超高侧倾按规范公式估算、悬挂振动、终点停站折返）、面板「交通工具」切换；飞机模式着色器逐字相同 | 2026-09-27 | Opus 实现，**独立审查返工一次**（B1：终点停站切换冲出终点永久卡住——审查读 diff 抓到，截图查不出），协调者核验（60 项单测、只改 rail / main / ui / index）后合并。**浏览器检查待性能复测结束后补**。DX 待办：shader-parity 收进 scripts 并支持提交号 + 打印首处差异（check:parity）、scenarios 默认 vehicle、ground/geo.ts 去参数属性便于 node 单测 |
 | DX-09 | README 顶部硬约束速查表（sampler 用量由 `lint-shaders --emit-table` 生成、check:glsl 比对防过时）、research/PARAMS.md、坑点按八个主题分节 | 2026-09-27 | Sonnet 实现，协调者合并；实测 sampler：舱内 5/16、窗外 14/16（旧 README 写 3/16、16/16 已过时）。Windows GBK 打印坑已写进根 AGENTS.md |
 | DX-10 | 测量可信度：shader-budget 最小值判定 + MAD、--baseline 容错、--chain 归因、--variants、--wait-quiet、--ledger；测量锁 tmp/measure.lock；passes 归类 bloom / 变体；compile-ledger.json 账本；applyScene 跨版本容错 | 2026-09-27 | Sonnet 实现，协调者合并。**合并后已通知在途代理** |
+| TR07 | 火车声音：接缝节奏（定尺示例 / 长轨化开关）、滚动 / 变频器 / 轮缘 / 空调、道口警报多普勒、停站与广播示意 + 字幕 | 2026-09-27 | Opus 实现（中途暂停又恢复），**独立审查通过**，协调者合并。火车按用户要求收尾，**遗留不修**：火车模式首次开声音漏一声飞机底噪（P2-a）、火车声音初始化失败每帧 warn（P2-b）、广播改单声道省 6 MB、弯道尖啸像颤音、audio-check 无断言 |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
@@ -106,7 +109,6 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | TR04 | 近景解析层：接触网支柱、馈线、道砟与枕木，解析运动模糊（快门位移预过滤） | P8 第一期（TR02 后） | 新近景层 | 否 | 90 km/h 近景不频闪 |
 | TR05a / TR05b | 中景：夏季稻田 / 畦畔 / 稻浪；民居 / 树 / 配电杆实例化 + 电线 | P8 第一期（TR03、TR04 后） | 新中景 | 否 | 安昙野稻田 |
 | TR06 | 车厢：特急大窗、双层玻璃倒影、遮阳帘、支柱影子扫过车内。**待用户确认**：默认特急普通车 / 绿色车（高级定位）还是地方线四人对坐（旅情） | P8 第一期（TR02 后） | 新车厢合成 | 否 | 车厢四视角 |
-| TR07 | 火车声音：接缝节奏（25 m 钢轨、台车距 13.8 m、轴距 2.1 m）、滚动噪声、电机音调 | P8 第一期（TR01、TR02 后） | audio | 否 | 频谱检查 |
 | TR08 | 火车回归场景 + 「运动中的频闪」度量 | P8 第一期（TR02 后） | scripts | 否 | — |
 | T29 | 窗上的水：−15°C 以下不挂水；折射式随机水痕 | 2026-09-27 | Opus 实现，协调者核验。留：机翼上的水珠只有暗边未折射机翼、窗角冰晶未做 |
 | T25 | 舱等切换：经济舱 / 商务舱着色器变体（按需 compileAsync，编好前保持原画面），经济舱取回 T06 织物并收敛，商务舱胡桃木提亮 | 2026-09-27 | Opus 实现，协调者核验。已知：点下拉那帧 60–80 ms（提交编译时同步翻译 GLSL） |

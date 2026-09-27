@@ -11,6 +11,7 @@ import { WONDERS } from "./wonders/catalog";
 import { RARITY_LEVELS, type WonderSystem } from "./wonders/system";
 import { isHeavyWeather, type QualityController, type QualityTier } from "./quality";
 import type { CabinAudio } from "./audio";
+import type { RailSoundSource } from "./rail/audio-rail";
 import type { DebugMinimap } from "./debug/minimap";
 
 /**
@@ -127,7 +128,7 @@ export interface UiDeps {
 }
 
 /** 面板需要的火车模式接口（rail/mode.ts 的 RailMode 满足它；这里只声明用到的部分，免得 ui.ts 引入 rail 模块） */
-export interface VehicleControl {
+export interface VehicleControl extends RailSoundSource {
   readonly active: boolean;
   readonly loading: boolean;
   readonly status: string;
@@ -299,6 +300,7 @@ export function setupUi(deps: UiDeps) {
   setupVoyageUi(director);
   setupWonderUi(deps.wonders);
   setupSoundUi(deps.audio);
+  deps.audio.attachRail(deps.vehicle); // TR07：火车模式下声音换成火车的声场（只读列车状态）
   setupMinimapUi(deps.minimap);
   setupVehicleUi(deps.vehicle);
 
@@ -425,7 +427,9 @@ function setupSoundUi(audio: CabinAudio) {
   const volOut = $("sound-volume-out");
   const ac = $<HTMLInputElement>("sound-aircon");
   const chime = $<HTMLInputElement>("sound-chime");
+  const joints = $<HTMLSelectElement>("sound-rail-joints");
   const sync = () => {
+    joints.value = audio.options.railJoints;
     box.checked = audio.enabled;
     controls.hidden = !audio.enabled;
     vol.value = String(Math.round(audio.volume * 100));
@@ -441,6 +445,17 @@ function setupSoundUi(audio: CabinAudio) {
   });
   ac.addEventListener("change", () => audio.setOption("aircon", ac.checked));
   chime.addEventListener("change", () => audio.setOption("chime", chime.checked));
+  joints.addEventListener("change", () => audio.setRailJoints(joints.value === "welded" ? "welded" : "jointed"));
+  // 火车的车内广播字幕（TR07）：广播时显示站名（声音关着也显示），4 次 / 秒对一次
+  const caption = $("rail-caption");
+  let lastCaption = "";
+  window.setInterval(() => {
+    const t = audio.caption;
+    if (t === lastCaption) return;
+    lastCaption = t;
+    if (t) caption.textContent = t;
+    caption.classList.toggle("on", !!t);
+  }, 250);
   window.addEventListener("keydown", (e) => {
     if ((e.key === "m" || e.key === "M") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) audio.toggle();
   });
