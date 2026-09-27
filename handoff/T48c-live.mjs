@@ -3,7 +3,7 @@
 // 冻结工具把瞬态扣除视为「直接收敛」，看不到飞行中的状态，所以：飞机照常飞 → 等频闪灭且离上次闪光 ≥ 0.4 s →
 // 同一个 rAF 回调里 localDt = 0 并冻结（保持那一刻的平滑状态）→ 截 A；localDt = null（直接收敛，扣除 0）→ 截 B。
 // A − B = 飞行中这一刻瞬态扣除让画面亮了多少（应 ≈ 0：巡航中没有瞬态）。
-// 用法（apps/voyage 下）：node handoff/T48c-live.mjs --port 5224 --scenes-file <json> --out <dir> [--samples 4] [--only a,b]
+// 用法（apps/voyage 下）：node handoff/T48c-live.mjs --port 5224 --scenes-file <json> --out <dir> [--samples 4] [--only a,b] [--js "l.uErode.value.set(0, 1)"]
 // 分析：python handoff/T48c-cfg/t48c_livean.py <dir>
 import { chromium } from "playwright-core";
 import fs from "node:fs";
@@ -36,6 +36,8 @@ try {
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 180000, polling: 500 });
   await page.evaluate(() => { const w = window.__voyage.weather; w.hold = true; w.heldIntensity = 0; });
+  // --js：页面就绪后执行一次（v = __voyage、u = 曝光合成 uniforms、l = 局部适应 pass 的 uniforms），比较参数用
+  if (args.js) await page.evaluate((js) => { const v = window.__voyage; new Function("v", "u", "l", js)(v, v.exposure.finalMat.uniforms, v.exposure.localMat.uniforms); }, String(args.js));
   const raf = (n) => page.evaluate(async (n) => { for (let i = 0; i < n; i++) await new Promise((r) => requestAnimationFrame(r)); }, n);
   for (const sc of scenes) {
     const e0 = errors.length;
