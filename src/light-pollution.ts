@@ -20,7 +20,6 @@ const NATURAL_SKY_KCD = 1.6e-7;
 /** 大城市中心地面上的人工天光 ÷ 自然夜天光（估算） */
 const CITY_CENTRE_RATIO = 60;
 const SEARCH_RADIUS_KM = 150;
-const RES = 1024; // 和 clipmap.ts 的 RES 一致（水体纹理边长）
 const SAMPLES = 64;
 
 export class LightPollution {
@@ -29,6 +28,7 @@ export class LightPollution {
     uSkyGlow: { value: 0 },
   };
   private lastT = -Infinity;
+  private res = 1024;
   /** 最近一次算出的城市灯光强度 S（调试用） */
   strength = 0;
 
@@ -42,6 +42,7 @@ export class LightPollution {
     this.lastT = nowMs;
     // 从粗到细找第一级能盖住搜索圆的（512 km 级优先，建好之前退到 256 km 级）
     const data = ground.water.image.data as unknown as Uint8Array;
+    this.res = ground.water.image.width;
     let s = -1;
     for (let i = ground.levelUniform.length - 1; i >= 0 && s < 0; i--) {
       const lv = ground.levelUniform[i];
@@ -57,6 +58,7 @@ export class LightPollution {
     const size = lv.z;
     const x0 = lv.x - size / 2;
     const z0 = lv.y - size / 2;
+    const RES = this.res; // 水体纹理边长（G06 起 2048，跟着 clipmap 走）
     const base = layer * RES * RES * 4;
     const stride = RES / SAMPLES;
     const d0 = Math.max(altitudeKm, 3); // 正下方的距离下限，免得 d^−2.5 在正下方发散
