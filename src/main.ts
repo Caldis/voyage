@@ -24,6 +24,7 @@ import { Director } from "./director";
 import { WonderSystem } from "./wonders/system";
 import { createQualityController, DEFAULT_DPR_CAP } from "./quality";
 import { CabinAudio, audioInputFrom } from "./audio";
+import { LightPollution } from "./light-pollution";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
@@ -65,6 +66,9 @@ Object.assign(sceneMat.uniforms, haze.sceneUniforms);
 // 奇观（W01，wonders/system.ts）：天幕层奇观的 uniform 进场景 / 窗外共用的 uniforms（只有窗外程序用到）
 const wonders = new WonderSystem();
 Object.assign(sceneMat.uniforms, wonders.uniforms);
+// 城市天光（T09）：只用来压银河的可见度，不画进天空
+const lightPollution = new LightPollution();
+Object.assign(sceneMat.uniforms, lightPollution.uniforms);
 // 机翼增升装置的 uniform（声明在 wing.glsl.ts）。在首次渲染前加进材质即可生效；以后可以挪进 createSceneMaterial
 // uWingSteps / uWingShadowSteps 是机翼光线步进和自阴影的最大步数：用 uniform 而不是常量，FXC 就不会把循环展开，冷编译不会翻倍
 Object.assign(sceneMat.uniforms, {
@@ -444,6 +448,7 @@ function renderFrame(now: number) {
     ground.setMinLevel(minLevel);
   }
   if (state.groundOn) ground.update(cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y);
+  lightPollution.update(ground, cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y, state.altitudeKm, state.groundOn, now);
   u.uTerrainMax.value = ground.maxHeightKm;
   u.uWingRootLE.value = state.wingRootLE;
   // 巡航时翼尖静弯约 0.5 m，湍流里再叠几厘米的颤动
