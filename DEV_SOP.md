@@ -108,7 +108,7 @@
 1. 按顺序把通过审查的分支合并到主分支，解决冲突，接上各任务交付的「热点文件接入代码」。
 2. 主分支上跑完整验证：typecheck、build、0 字节检查、控制台、**回归脚本全部场景**，截图存到 `tmp/screenshot/regression/`，和上一轮对比有没有意外变化。
 3. 提交（需用户授权，见第 0 步），提交信息用中文。
-4. 清理已合并的 worktree。
+4. 清理已合并的 worktree。**不要攒**（2026-09-27 踩坑）：一天攒到 26 个 worktree 后，Agent 工具新建隔离 worktree 失败（「git metadata could not be resolved」，留下只有 `.git` 文件的半成品目录）。每合并一个就清一个。清理办法：`git worktree remove --force` 在 Windows 上常因文件占用报失败，但登记已解除——再用 PowerShell `Remove-Item -Recurse -Force` 删目录，`git worktree prune`，最后删已并入 master 的分支（`git merge-base --is-ancestor <分支> master` 为真才删）。脚本可参考 WORKLOG 当日记录。
 
 ### 6.5 开发体验检查（开发体验官）
 
