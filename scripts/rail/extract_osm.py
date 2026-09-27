@@ -80,7 +80,8 @@ def main():
     rails, routes, points, lines, areas = [], [], [], [], []
     names = LINE["lineNames"]
     area_filter = osmium.filter.KeyFilter(*AREA_KEYS)
-    fp = osmium.FileProcessor(str(pbf)).with_areas(area_filter)
+    # 没有标签的对象（绝大多数节点）不交给 Python：位置索引与多边形组装在过滤之前做，不受影响
+    fp = osmium.FileProcessor(str(pbf)).with_areas(area_filter).with_filter(osmium.filter.EmptyTagFilter())
     n_seen = 0
     for o in fp:
         n_seen += 1

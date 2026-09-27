@@ -336,6 +336,22 @@ def main():
                 crossings.append({"s": round(s, 1), "d": round(d, 1), "osmNode": p["id"],
                                   "tags": {k: v for k, v in t.items() if k.startswith("crossing") or k in ("name", "supervised", "railway")}})
     crossings.sort(key=lambda c: c["s"])
+    # 站场里同一条路跨过几股道时，OSM 每股道一个道口节点：沿 s 相距 ≤ 10 m 的并成一处
+    merged = []
+    for c in crossings:
+        if merged and c["s"] - merged[-1]["sLast"] <= 10:
+            m = merged[-1]
+            m["osmNodes"].append(c["osmNode"])
+            m["sLast"] = c["s"]
+            m["tags"].update(c["tags"])
+            if abs(c["d"]) < abs(m["d"]):
+                m["s"], m["d"] = c["s"], c["d"]
+        else:
+            merged.append({"s": c["s"], "d": c["d"], "osmNodes": [c["osmNode"]], "sLast": c["s"], "tags": dict(c["tags"])})
+    report["levelCrossingNodes"] = len(crossings)
+    for m in merged:
+        del m["sLast"]
+    crossings = merged
     for c in crossings:
         flags[np.abs(S - c["s"]) <= 3] |= FLAG["level_crossing"]
 
@@ -814,7 +830,7 @@ def main():
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUT_DIR / f"{LINE['id']}.bin").write_bytes(blob.bytes())
-    (OUT_DIR / f"{LINE['id']}.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    (OUT_DIR / f"{LINE['id']}.json").write_bytes((json.dumps(meta, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))  # 固定 LF
     print(f"✓ {LINE['id']}: bin {blob.size / 1e6:.2f} MB，json {(OUT_DIR / (LINE['id'] + '.json')).stat().st_size / 1e3:.0f} KB，"
           f"{time.time() - t0:.0f}s")
     print(json.dumps({k: stats[k] for k in ("centerline", "stations", "levelCrossings", "bridges", "tunnels", "mastsOsm", "mastsGenerated")}, ensure_ascii=False))

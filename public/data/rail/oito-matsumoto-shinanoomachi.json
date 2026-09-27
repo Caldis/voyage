@@ -125,252 +125,252 @@
   "masts.s": {
    "type": "f32",
    "offset": 1322520,
-   "length": 853,
+   "length": 855,
    "desc": "接触网支柱里程"
   },
   "masts.d": {
    "type": "f32",
-   "offset": 1325936,
-   "length": 853,
+   "offset": 1325944,
+   "length": 855,
    "desc": "接触网支柱横向偏移（米，+ = 左）"
   },
   "masts.source": {
    "type": "u8",
-   "offset": 1329352,
-   "length": 853,
+   "offset": 1329368,
+   "length": 855,
    "desc": "0 = 程序生成（示例，非真实位置），1 = OSM railway=catenary_mast"
   },
   "buildings.verts": {
    "type": "f32",
-   "offset": 1330208,
+   "offset": 1330224,
    "length": 60270,
    "desc": "顶点 xy 交错（米），环不重复首点"
   },
   "buildings.ringStart": {
    "type": "u32",
-   "offset": 1571288,
+   "offset": 1571304,
    "length": 5827,
    "desc": "每个环在 verts 里的起始顶点号（长度 = 环数 + 1）"
   },
   "buildings.ringHole": {
    "type": "u8",
-   "offset": 1594600,
+   "offset": 1594616,
    "length": 5826,
    "desc": "1 = 内环（洞）"
   },
   "buildings.featRing": {
    "type": "u32",
-   "offset": 1600432,
+   "offset": 1600448,
    "length": 5801,
    "desc": "每个要素的第一个环号（长度 = 要素数 + 1）"
   },
   "buildings.cls": {
    "type": "u8",
-   "offset": 1623640,
+   "offset": 1623656,
    "length": 5800,
    "desc": "类别下标，查 json.layers.<层>.classes"
   },
   "buildings.s": {
    "type": "f32",
-   "offset": 1629440,
+   "offset": 1629456,
    "length": 5800,
    "desc": "要素代表点的里程（已按 s 排序）"
   },
   "buildings.d": {
    "type": "f32",
-   "offset": 1652640,
+   "offset": 1652656,
    "length": 5800,
    "desc": "要素中心的横向偏移（米）"
   },
   "buildings.levels": {
    "type": "u8",
-   "offset": 1675840,
+   "offset": 1675856,
    "length": 5800,
    "desc": "building:levels，0 = 未标"
   },
   "buildings.height": {
    "type": "u16",
-   "offset": 1681640,
+   "offset": 1681656,
    "length": 5800,
    "desc": "height（0.1 m），0 = 未标"
   },
   "buildings.roof": {
    "type": "u8",
-   "offset": 1693240,
+   "offset": 1693256,
    "length": 5800,
    "desc": "roof:shape 下标，0 = 未标"
   },
   "landuse.verts": {
    "type": "f32",
-   "offset": 1699040,
+   "offset": 1699056,
    "length": 43902,
    "desc": "顶点 xy 交错（米），环不重复首点"
   },
   "landuse.ringStart": {
    "type": "u32",
-   "offset": 1874648,
+   "offset": 1874664,
    "length": 2131,
    "desc": "每个环在 verts 里的起始顶点号（长度 = 环数 + 1）"
   },
   "landuse.ringHole": {
    "type": "u8",
-   "offset": 1883176,
+   "offset": 1883192,
    "length": 2130,
    "desc": "1 = 内环（洞）"
   },
   "landuse.featRing": {
    "type": "u32",
-   "offset": 1885312,
+   "offset": 1885328,
    "length": 2120,
    "desc": "每个要素的第一个环号（长度 = 要素数 + 1）"
   },
   "landuse.cls": {
    "type": "u8",
-   "offset": 1893792,
+   "offset": 1893808,
    "length": 2119,
    "desc": "类别下标，查 json.layers.<层>.classes"
   },
   "landuse.s": {
    "type": "f32",
-   "offset": 1895912,
+   "offset": 1895928,
    "length": 2119,
    "desc": "要素代表点的里程（已按 s 排序）"
   },
   "road.verts": {
    "type": "f32",
-   "offset": 1904392,
+   "offset": 1904408,
    "length": 138048,
    "desc": "顶点 xy 交错（米）"
   },
   "road.featStart": {
    "type": "u32",
-   "offset": 2456584,
+   "offset": 2456600,
    "length": 13145,
    "desc": "每条线的起始顶点号（长度 = 条数 + 1）"
   },
   "road.cls": {
    "type": "u8",
-   "offset": 2509168,
+   "offset": 2509184,
    "length": 13144,
    "desc": "类别下标"
   },
   "road.s": {
    "type": "f32",
-   "offset": 2522312,
+   "offset": 2522328,
    "length": 13144,
    "desc": "中点里程（已按 s 排序）"
   },
   "road.struct": {
    "type": "u8",
-   "offset": 2574888,
+   "offset": 2574904,
    "length": 13144,
    "desc": "1 = 桥，2 = 隧道 / 地下"
   },
   "road.lanes": {
    "type": "u8",
-   "offset": 2588032,
+   "offset": 2588048,
    "length": 13144,
    "desc": "lanes，0 = 未标"
   },
   "water.verts": {
    "type": "f32",
-   "offset": 2601176,
+   "offset": 2601192,
    "length": 20406,
    "desc": "顶点 xy 交错（米）"
   },
   "water.featStart": {
    "type": "u32",
-   "offset": 2682800,
+   "offset": 2682816,
    "length": 1172,
    "desc": "每条线的起始顶点号（长度 = 条数 + 1）"
   },
   "water.cls": {
    "type": "u8",
-   "offset": 2687488,
+   "offset": 2687504,
    "length": 1171,
    "desc": "类别下标"
   },
   "water.s": {
    "type": "f32",
-   "offset": 2688664,
+   "offset": 2688680,
    "length": 1171,
    "desc": "中点里程（已按 s 排序）"
   },
   "power.verts": {
    "type": "f32",
-   "offset": 2693352,
+   "offset": 2693368,
    "length": 710,
    "desc": "顶点 xy 交错（米）"
   },
   "power.featStart": {
    "type": "u32",
-   "offset": 2696192,
+   "offset": 2696208,
    "length": 36,
    "desc": "每条线的起始顶点号（长度 = 条数 + 1）"
   },
   "power.cls": {
    "type": "u8",
-   "offset": 2696336,
+   "offset": 2696352,
    "length": 35,
    "desc": "类别下标"
   },
   "power.s": {
    "type": "f32",
-   "offset": 2696376,
+   "offset": 2696392,
    "length": 35,
    "desc": "中点里程（已按 s 排序）"
   },
   "power.voltage": {
    "type": "u16",
-   "offset": 2696520,
+   "offset": 2696536,
    "length": 35,
    "desc": "电压（100 V 单位，取第一个值），0 = 未标"
   },
   "barrier.verts": {
    "type": "f32",
-   "offset": 2696592,
+   "offset": 2696608,
    "length": 1086,
    "desc": "顶点 xy 交错（米）"
   },
   "barrier.featStart": {
    "type": "u32",
-   "offset": 2700936,
+   "offset": 2700952,
    "length": 136,
    "desc": "每条线的起始顶点号（长度 = 条数 + 1）"
   },
   "barrier.cls": {
    "type": "u8",
-   "offset": 2701480,
+   "offset": 2701496,
    "length": 135,
    "desc": "类别下标"
   },
   "barrier.s": {
    "type": "f32",
-   "offset": 2701616,
+   "offset": 2701632,
    "length": 135,
    "desc": "中点里程（已按 s 排序）"
   },
   "powerPts.s": {
    "type": "f32",
-   "offset": 2702160,
+   "offset": 2702176,
    "length": 297,
    "desc": "里程"
   },
   "powerPts.d": {
    "type": "f32",
-   "offset": 2703352,
+   "offset": 2703368,
    "length": 297,
    "desc": "横向偏移"
   },
   "powerPts.xy": {
    "type": "f32",
-   "offset": 2704544,
+   "offset": 2704560,
    "length": 594,
    "desc": "xy 交错"
   },
   "powerPts.cls": {
    "type": "u8",
-   "offset": 2706920,
+   "offset": 2706936,
    "length": 297,
    "desc": "0 = pole，1 = tower，2 = portal"
   }
@@ -526,7 +526,7 @@
    ]
   },
   "masts": {
-   "count": 853,
+   "count": 855,
    "note": "source = 0 的是程序生成：径间 ≤ 50 m，弯道按 √(8·R·0.2 m) 缩短，随机缩短 0–12%，避开道口 ±6 m，站间随机选一侧。位置不是真实的，只用来给节奏。"
   }
  },
@@ -1005,25 +1005,12 @@
  ],
  "levelCrossings": [
   {
-   "s": 527.2,
-   "d": -5.3,
-   "osmNode": 1623821396,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
    "s": 529.2,
    "d": -0.0,
-   "osmNode": 4058909944,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 896.2,
-   "d": -2.1,
-   "osmNode": 1623822018,
+   "osmNodes": [
+    1623821396,
+    4058909944
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1031,15 +1018,11 @@
   {
    "s": 897.3,
    "d": -0.0,
-   "osmNode": 1623822014,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 898.3,
-   "d": -6.0,
-   "osmNode": 1623822036,
+   "osmNodes": [
+    1623822018,
+    1623822014,
+    1623822036
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1047,15 +1030,10 @@
   {
    "s": 1092.2,
    "d": -0.0,
-   "osmNode": 1623822044,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 1097.9,
-   "d": -4.3,
-   "osmNode": 241787821,
+   "osmNodes": [
+    1623822044,
+    241787821
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1063,15 +1041,10 @@
   {
    "s": 1386.7,
    "d": 0.0,
-   "osmNode": 1622902790,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 1389.6,
-   "d": -4.2,
-   "osmNode": 1622902801,
+   "osmNodes": [
+    1622902790,
+    1622902801
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1079,7 +1052,9 @@
   {
    "s": 1763.4,
    "d": -0.0,
-   "osmNode": 265029750,
+   "osmNodes": [
+    265029750
+   ],
    "tags": {
     "crossing:barrier": "full",
     "railway": "level_crossing"
@@ -1088,7 +1063,9 @@
   {
    "s": 2160.5,
    "d": -0.0,
-   "osmNode": 1630601569,
+   "osmNodes": [
+    1630601569
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1096,23 +1073,10 @@
   {
    "s": 2532.4,
    "d": -0.0,
-   "osmNode": 1630601688,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 2533.6,
-   "d": -5.8,
-   "osmNode": 6110354082,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 2824.0,
-   "d": -2.3,
-   "osmNode": 6110354073,
+   "osmNodes": [
+    1630601688,
+    6110354082
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1120,7 +1084,10 @@
   {
    "s": 2827.5,
    "d": 0.0,
-   "osmNode": 1630601751,
+   "osmNodes": [
+    6110354073,
+    1630601751
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1128,7 +1095,9 @@
   {
    "s": 3157.3,
    "d": -0.0,
-   "osmNode": 265029428,
+   "osmNodes": [
+    265029428
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1136,7 +1105,9 @@
   {
    "s": 3338.2,
    "d": -0.0,
-   "osmNode": 265029431,
+   "osmNodes": [
+    265029431
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1144,7 +1115,9 @@
   {
    "s": 3496.4,
    "d": -0.0,
-   "osmNode": 4036152896,
+   "osmNodes": [
+    4036152896
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1152,7 +1125,9 @@
   {
    "s": 3876.6,
    "d": -0.0,
-   "osmNode": 265029556,
+   "osmNodes": [
+    265029556
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1160,7 +1135,9 @@
   {
    "s": 4176.4,
    "d": -0.0,
-   "osmNode": 1624578374,
+   "osmNodes": [
+    1624578374
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1168,7 +1145,9 @@
   {
    "s": 4482.2,
    "d": 0.0,
-   "osmNode": 265029618,
+   "osmNodes": [
+    265029618
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1176,7 +1155,9 @@
   {
    "s": 5049.8,
    "d": 0.0,
-   "osmNode": 265029600,
+   "osmNodes": [
+    265029600
+   ],
    "tags": {
     "crossing:barrier": "double_half",
     "crossing:bell": "yes",
@@ -1188,7 +1169,9 @@
   {
    "s": 6008.6,
    "d": -0.0,
-   "osmNode": 265033097,
+   "osmNodes": [
+    265033097
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1196,7 +1179,9 @@
   {
    "s": 6522.0,
    "d": 0.1,
-   "osmNode": 265033094,
+   "osmNodes": [
+    265033094
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1204,7 +1189,9 @@
   {
    "s": 7243.2,
    "d": 0.0,
-   "osmNode": 265030277,
+   "osmNodes": [
+    265030277
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1212,7 +1199,9 @@
   {
    "s": 7415.9,
    "d": -0.0,
-   "osmNode": 265030259,
+   "osmNodes": [
+    265030259
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1220,7 +1209,9 @@
   {
    "s": 8278.5,
    "d": -0.0,
-   "osmNode": 1659730227,
+   "osmNodes": [
+    1659730227
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1228,7 +1219,9 @@
   {
    "s": 8359.5,
    "d": 0.0,
-   "osmNode": 1663393231,
+   "osmNodes": [
+    1663393231
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1236,7 +1229,9 @@
   {
    "s": 8690.3,
    "d": -0.0,
-   "osmNode": 265029903,
+   "osmNodes": [
+    265029903
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1244,7 +1239,9 @@
   {
    "s": 8861.4,
    "d": 0.0,
-   "osmNode": 1663393479,
+   "osmNodes": [
+    1663393479
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1252,7 +1249,9 @@
   {
    "s": 9206.0,
    "d": 0.0,
-   "osmNode": 1663393647,
+   "osmNodes": [
+    1663393647
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1260,7 +1259,9 @@
   {
    "s": 9458.0,
    "d": 0.0,
-   "osmNode": 1663393845,
+   "osmNodes": [
+    1663393845
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1268,7 +1269,9 @@
   {
    "s": 9640.6,
    "d": 0.0,
-   "osmNode": 1663393994,
+   "osmNodes": [
+    1663393994
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1276,7 +1279,9 @@
   {
    "s": 9779.8,
    "d": -0.0,
-   "osmNode": 1663453793,
+   "osmNodes": [
+    1663453793
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1284,7 +1289,9 @@
   {
    "s": 10441.1,
    "d": 0.0,
-   "osmNode": 1663394696,
+   "osmNodes": [
+    1663394696
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1292,7 +1299,9 @@
   {
    "s": 10959.0,
    "d": 0.0,
-   "osmNode": 265029873,
+   "osmNodes": [
+    265029873
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1300,7 +1309,9 @@
   {
    "s": 11208.7,
    "d": -0.0,
-   "osmNode": 1663395347,
+   "osmNodes": [
+    1663395347
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1308,7 +1319,9 @@
   {
    "s": 11670.0,
    "d": 0.1,
-   "osmNode": 1663395736,
+   "osmNodes": [
+    1663395736
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1316,7 +1329,9 @@
   {
    "s": 12207.7,
    "d": -0.0,
-   "osmNode": 265030164,
+   "osmNodes": [
+    265030164
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1324,7 +1339,9 @@
   {
    "s": 12520.4,
    "d": 0.0,
-   "osmNode": 5334250421,
+   "osmNodes": [
+    5334250421
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1332,7 +1349,9 @@
   {
    "s": 12801.5,
    "d": -0.0,
-   "osmNode": 1658330357,
+   "osmNodes": [
+    1658330357
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1340,7 +1359,9 @@
   {
    "s": 13247.0,
    "d": 0.0,
-   "osmNode": 1658331659,
+   "osmNodes": [
+    1658331659
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1348,7 +1369,9 @@
   {
    "s": 13487.6,
    "d": 0.0,
-   "osmNode": 265030131,
+   "osmNodes": [
+    265030131
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1356,7 +1379,9 @@
   {
    "s": 13930.2,
    "d": -0.0,
-   "osmNode": 1658334134,
+   "osmNodes": [
+    1658334134
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1364,7 +1389,9 @@
   {
    "s": 14055.9,
    "d": 0.0,
-   "osmNode": 1658334481,
+   "osmNodes": [
+    1658334481
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1372,7 +1399,9 @@
   {
    "s": 14315.9,
    "d": 0.0,
-   "osmNode": 1659068290,
+   "osmNodes": [
+    1659068290
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1380,7 +1409,9 @@
   {
    "s": 14496.2,
    "d": 0.0,
-   "osmNode": 1659068355,
+   "osmNodes": [
+    1659068355
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1388,7 +1419,9 @@
   {
    "s": 15027.1,
    "d": -0.0,
-   "osmNode": 1659068528,
+   "osmNodes": [
+    1659068528
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1396,7 +1429,9 @@
   {
    "s": 15353.9,
    "d": -0.0,
-   "osmNode": 1659068636,
+   "osmNodes": [
+    1659068636
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1404,7 +1439,9 @@
   {
    "s": 15634.9,
    "d": -0.0,
-   "osmNode": 1659068787,
+   "osmNodes": [
+    1659068787
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1412,7 +1449,9 @@
   {
    "s": 15914.0,
    "d": -0.0,
-   "osmNode": 1659069160,
+   "osmNodes": [
+    1659069160
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1420,7 +1459,9 @@
   {
    "s": 16255.1,
    "d": 0.0,
-   "osmNode": 1659070092,
+   "osmNodes": [
+    1659070092
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1428,7 +1469,9 @@
   {
    "s": 16340.1,
    "d": 0.0,
-   "osmNode": 1659070211,
+   "osmNodes": [
+    1659070211
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1436,7 +1479,9 @@
   {
    "s": 16614.6,
    "d": -0.0,
-   "osmNode": 1659070751,
+   "osmNodes": [
+    1659070751
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1444,7 +1489,9 @@
   {
    "s": 16765.9,
    "d": 0.0,
-   "osmNode": 4887368243,
+   "osmNodes": [
+    4887368243
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1452,7 +1499,9 @@
   {
    "s": 17002.2,
    "d": -0.0,
-   "osmNode": 1659071045,
+   "osmNodes": [
+    1659071045
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1460,7 +1509,9 @@
   {
    "s": 17427.0,
    "d": -0.0,
-   "osmNode": 4878024419,
+   "osmNodes": [
+    4878024419
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1468,7 +1519,9 @@
   {
    "s": 17913.8,
    "d": -0.0,
-   "osmNode": 1661456208,
+   "osmNodes": [
+    1661456208
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1476,19 +1529,10 @@
   {
    "s": 18313.8,
    "d": -0.1,
-   "osmNode": 7006121968,
-   "tags": {
-    "crossing:barrier": "double_half",
-    "crossing:bell": "yes",
-    "crossing:light": "yes",
-    "name": "有明槍ヶ岳線踏切",
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 18314.1,
-   "d": 2.0,
-   "osmNode": 1661456979,
+   "osmNodes": [
+    7006121968,
+    1661456979
+   ],
    "tags": {
     "crossing:barrier": "double_half",
     "crossing:bell": "yes",
@@ -1500,7 +1544,9 @@
   {
    "s": 18735.8,
    "d": -0.0,
-   "osmNode": 1661457661,
+   "osmNodes": [
+    1661457661
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1508,7 +1554,9 @@
   {
    "s": 19024.9,
    "d": 0.0,
-   "osmNode": 1661458041,
+   "osmNodes": [
+    1661458041
+   ],
    "tags": {
     "crossing:barrier": "yes",
     "crossing:bell": "yes",
@@ -1519,7 +1567,9 @@
   {
    "s": 19402.8,
    "d": -0.0,
-   "osmNode": 1661458321,
+   "osmNodes": [
+    1661458321
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1527,7 +1577,9 @@
   {
    "s": 19660.3,
    "d": -0.0,
-   "osmNode": 1661458465,
+   "osmNodes": [
+    1661458465
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1535,7 +1587,9 @@
   {
    "s": 19782.5,
    "d": -4.4,
-   "osmNode": 1661458599,
+   "osmNodes": [
+    1661458599
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1543,7 +1597,9 @@
   {
    "s": 20039.7,
    "d": 0.0,
-   "osmNode": 1661458702,
+   "osmNodes": [
+    1661458702
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1551,7 +1607,9 @@
   {
    "s": 20283.4,
    "d": -0.0,
-   "osmNode": 1661458744,
+   "osmNodes": [
+    1661458744
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1559,7 +1617,9 @@
   {
    "s": 21327.9,
    "d": -0.0,
-   "osmNode": 1664343571,
+   "osmNodes": [
+    1664343571
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1567,7 +1627,9 @@
   {
    "s": 21892.8,
    "d": 0.0,
-   "osmNode": 265033159,
+   "osmNodes": [
+    265033159
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1575,7 +1637,9 @@
   {
    "s": 22843.6,
    "d": 0.0,
-   "osmNode": 265030125,
+   "osmNodes": [
+    265030125
+   ],
    "tags": {
     "crossing:barrier": "yes",
     "crossing:bell": "yes",
@@ -1586,7 +1650,9 @@
   {
    "s": 23839.8,
    "d": 0.0,
-   "osmNode": 6868368940,
+   "osmNodes": [
+    6868368940
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1594,7 +1660,9 @@
   {
    "s": 24508.5,
    "d": -0.0,
-   "osmNode": 1664344617,
+   "osmNodes": [
+    1664344617
+   ],
    "tags": {
     "crossing:barrier": "yes",
     "crossing:bell": "yes",
@@ -1605,7 +1673,9 @@
   {
    "s": 24675.8,
    "d": 0.0,
-   "osmNode": 1664344715,
+   "osmNodes": [
+    1664344715
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1613,7 +1683,9 @@
   {
    "s": 25110.2,
    "d": -0.0,
-   "osmNode": 1664344965,
+   "osmNodes": [
+    1664344965
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1621,15 +1693,9 @@
   {
    "s": 25360.0,
    "d": 0.0,
-   "osmNode": 1664345134,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 26108.0,
-   "d": -2.0,
-   "osmNode": 4859216122,
+   "osmNodes": [
+    1664345134
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1637,18 +1703,23 @@
   {
    "s": 26108.1,
    "d": 0.0,
-   "osmNode": 1664345904,
+   "osmNodes": [
+    4859216122,
+    1664345904
+   ],
    "tags": {
+    "railway": "level_crossing",
     "crossing:barrier": "yes",
     "crossing:bell": "yes",
-    "crossing:light": "yes",
-    "railway": "level_crossing"
+    "crossing:light": "yes"
    }
   },
   {
    "s": 26504.6,
    "d": 0.0,
-   "osmNode": 265029735,
+   "osmNodes": [
+    265029735
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1656,7 +1727,9 @@
   {
    "s": 26670.6,
    "d": 0.0,
-   "osmNode": 265029726,
+   "osmNodes": [
+    265029726
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1664,7 +1737,9 @@
   {
    "s": 27077.3,
    "d": 0.0,
-   "osmNode": 1664347401,
+   "osmNodes": [
+    1664347401
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1672,7 +1747,9 @@
   {
    "s": 27302.6,
    "d": -0.0,
-   "osmNode": 1664347660,
+   "osmNodes": [
+    1664347660
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1680,7 +1757,9 @@
   {
    "s": 27443.2,
    "d": 0.0,
-   "osmNode": 1664297874,
+   "osmNodes": [
+    1664297874
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1688,7 +1767,9 @@
   {
    "s": 27729.9,
    "d": 0.0,
-   "osmNode": 4849212948,
+   "osmNodes": [
+    4849212948
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1696,7 +1777,9 @@
   {
    "s": 28492.3,
    "d": -0.0,
-   "osmNode": 1664298583,
+   "osmNodes": [
+    1664298583
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1704,7 +1787,9 @@
   {
    "s": 28658.6,
    "d": -0.0,
-   "osmNode": 1664298591,
+   "osmNodes": [
+    1664298591
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1712,7 +1797,9 @@
   {
    "s": 28920.0,
    "d": 0.0,
-   "osmNode": 4849212910,
+   "osmNodes": [
+    4849212910
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1720,7 +1807,9 @@
   {
    "s": 30001.7,
    "d": -0.0,
-   "osmNode": 2524520766,
+   "osmNodes": [
+    2524520766
+   ],
    "tags": {
     "crossing:barrier": "yes",
     "crossing:bell": "yes",
@@ -1731,7 +1820,9 @@
   {
    "s": 30168.1,
    "d": -0.0,
-   "osmNode": 1596167759,
+   "osmNodes": [
+    1596167759
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1739,7 +1830,9 @@
   {
    "s": 30541.5,
    "d": -0.0,
-   "osmNode": 3820648626,
+   "osmNodes": [
+    3820648626
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1747,15 +1840,10 @@
   {
    "s": 30835.5,
    "d": -0.0,
-   "osmNode": 3820648627,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 30839.3,
-   "d": 3.9,
-   "osmNode": 4857425148,
+   "osmNodes": [
+    3820648627,
+    4857425148
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1763,15 +1851,10 @@
   {
    "s": 31006.1,
    "d": 0.0,
-   "osmNode": 3820648630,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 31006.1,
-   "d": 3.8,
-   "osmNode": 4857425149,
+   "osmNodes": [
+    3820648630,
+    4857425149
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1779,7 +1862,9 @@
   {
    "s": 31783.2,
    "d": -0.0,
-   "osmNode": 10605879187,
+   "osmNodes": [
+    10605879187
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1787,7 +1872,9 @@
   {
    "s": 31962.5,
    "d": 0.0,
-   "osmNode": 4421857612,
+   "osmNodes": [
+    4421857612
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1795,7 +1882,9 @@
   {
    "s": 32088.4,
    "d": -0.0,
-   "osmNode": 2524521617,
+   "osmNodes": [
+    2524521617
+   ],
    "tags": {
     "crossing:barrier": "yes",
     "crossing:bell": "yes",
@@ -1807,7 +1896,9 @@
   {
    "s": 32524.3,
    "d": 0.0,
-   "osmNode": 10605895142,
+   "osmNodes": [
+    10605895142
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1815,7 +1906,9 @@
   {
    "s": 32893.4,
    "d": -0.0,
-   "osmNode": 4353361138,
+   "osmNodes": [
+    4353361138
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1823,7 +1916,9 @@
   {
    "s": 33318.9,
    "d": -0.0,
-   "osmNode": 4844760662,
+   "osmNodes": [
+    4844760662
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1831,15 +1926,9 @@
   {
    "s": 34100.0,
    "d": -0.0,
-   "osmNode": 3820648632,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 34727.0,
-   "d": 5.3,
-   "osmNode": 6406041815,
+   "osmNodes": [
+    3820648632
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1847,7 +1936,10 @@
   {
    "s": 34731.0,
    "d": 1.3,
-   "osmNode": 6406041814,
+   "osmNodes": [
+    6406041815,
+    6406041814
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -1855,15 +1947,10 @@
   {
    "s": 34866.9,
    "d": 2.1,
-   "osmNode": 312904722,
-   "tags": {
-    "railway": "level_crossing"
-   }
-  },
-  {
-   "s": 34868.4,
-   "d": -3.5,
-   "osmNode": 6406041767,
+   "osmNodes": [
+    312904722,
+    6406041767
+   ],
    "tags": {
     "railway": "level_crossing"
    }
@@ -2705,9 +2792,9 @@
   },
   "stations": 20,
   "platformIntervals": 19,
-  "levelCrossings": 104,
+  "levelCrossings": 91,
   "roadGradeCrossingsWithoutNode": 11,
-  "crossingNodesWithoutRoad": 4,
+  "crossingNodesWithoutRoad": 2,
   "overpasses": 16,
   "underpasses": 22,
   "bridges": 24,
@@ -2716,7 +2803,7 @@
   "cuttings": 0,
   "waterCrossings": 31,
   "mastsOsm": 0,
-  "mastsGenerated": 853,
+  "mastsGenerated": 855,
   "buildings": {
    "inCorridor": 5800,
    "inBbox": 12341,
@@ -3247,26 +3334,27 @@
    "lengthM": 35080.0,
    "startOffsetM": -6.4
   },
+  "levelCrossingNodes": 104,
   "demCenter": {
-   "tilesFetched": 41,
+   "tilesFetched": 0,
    "hits": {
     "dem5a_png": 17520,
     "dem5b_png": 0,
     "dem5c_png": 0,
-    "dem10b_png": 0
+    "dem_png": 20
    },
-   "nodata": 20
+   "nodata": 0
   },
   "demGrid": {
-   "tilesFetched": 79,
-   "tilesMissing404": 22,
+   "tilesFetched": 0,
+   "tilesMissing404": 0,
    "hits": {
     "dem5a_png": 370712,
     "dem5b_png": 0,
     "dem5c_png": 0,
-    "dem10b_png": 0
+    "dem_png": 1136
    },
-   "nodataSamples": 1116
+   "nodataSamples": 0
   },
   "roadGradeCrossingsWithoutNode": [
    {
@@ -3360,17 +3448,12 @@
   ],
   "crossingNodesWithoutRoad": [
    {
-    "s": 34727.0,
-    "d": 5.3,
-    "osmNode": 6406041815,
-    "tags": {
-     "railway": "level_crossing"
-    }
-   },
-   {
     "s": 34731.0,
     "d": 1.3,
-    "osmNode": 6406041814,
+    "osmNodes": [
+     6406041815,
+     6406041814
+    ],
     "tags": {
      "railway": "level_crossing"
     }
@@ -3378,15 +3461,10 @@
    {
     "s": 34866.9,
     "d": 2.1,
-    "osmNode": 312904722,
-    "tags": {
-     "railway": "level_crossing"
-    }
-   },
-   {
-    "s": 34868.4,
-    "d": -3.5,
-    "osmNode": 6406041767,
+    "osmNodes": [
+     312904722,
+     6406041767
+    ],
     "tags": {
      "railway": "level_crossing"
     }

@@ -1,6 +1,6 @@
 """国土地理院 标高瓦片（PNG 编码）取样。
 
-优先级：DEM5A（激光测量，5 m）→ DEM5B（摄影测量，5 m）→ DEM5C → DEM10B（10 m，z14）。
+优先级：DEM5A（激光测量，5 m）→ DEM5B（摄影测量，5 m）→ DEM5C → DEM10B（10 m，z14；图层名是 dem_png，不是 dem10b_png）。
 PNG 编码：x = R·2^16 + G·2^8 + B；x < 2^23 → h = 0.01·x；x = 2^23 → 无数据；x > 2^23 → h = 0.01·(x − 2^24)。
 出处：https://maps.gsi.go.jp/development/demtile.html
 瓦片缓存在 <cache>/gsi/，只请求一次；请求头只带通用 UA。
@@ -19,7 +19,7 @@ from PIL import Image
 
 from common import USER_AGENT, cache_dir
 
-LAYERS = [("dem5a_png", 15), ("dem5b_png", 15), ("dem5c_png", 15), ("dem10b_png", 14)]
+LAYERS = [("dem5a_png", 15), ("dem5b_png", 15), ("dem5c_png", 15), ("dem_png", 14)]
 BASE = "https://cyberjapandata.gsi.go.jp/xyz/{layer}/{z}/{x}/{y}.png"
 
 
