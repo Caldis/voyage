@@ -6,7 +6,7 @@
  * 命名约定（研究文档 §2.1）：面板名写成「名字（致敬《作品》）」或注明典籍出处；id 用描述性英文。
  */
 
-import { W00_PROBE_KIND, WONDER_CLOUD_KINDS } from "./wonder-cloud.glsl";
+import { FOGCITY_KIND, W00_PROBE_KIND, WONDER_CLOUD_KINDS } from "./wonder-cloud.glsl";
 
 /** 奇观所在的层：sky = 天幕层（在所有云之外，云的遮挡是现成的）；cloud = 云间层（插进云的步进，W00，见 wonder-cloud.glsl.ts） */
 export type WonderLayer = "sky" | "cloud";
@@ -81,8 +81,8 @@ export interface WonderVolume {
   stepKm: number;
   /** 投影椭球（挡住云受到的直射光）：中心、三个半轴（km，局部坐标） */
   caster?: { center: [number, number, number]; radii: [number, number, number] };
-  /** 给着色器的自定义参数（uWonderParams.zw） */
-  params?: [number, number];
+  /** 给着色器的自定义参数（uWonderParams.w = params[0]；uWonderParams.z 是每次出现的随机种子，W02 起） */
+  params?: [number];
 }
 
 /** 暮色（太阳在 −12°..+6°）是这类「上段仍被阳光照亮」的奇观最美的时候 */
@@ -129,6 +129,24 @@ export const WONDERS: WonderDef[] = [
     // 深色的木质、偏暖：树干白天几乎看不见，黄昏上段被染成暗金（比天梯稍粗、稍亮）。
     // W01b：高处九根弯枝（九欘）、12–30 km 缠着树干的云气（白天最先被注意到的就是它）、树冠一带的萤光，见 render/wonder-sky.glsl.ts
     look: { radiusKm: 0.34, albedo: [0.05, 0.035, 0.022], skin: 1, beacons: false },
+  },
+  {
+    id: "fogcity",
+    // 致敬《银翼杀手》（1982）开场的「地狱城」：原创造型（阶梯金字塔、火炬、光束、车流都是程序生成），不用任何官方资产
+    name: "雾海灯城（致敬《银翼杀手》）",
+    layer: "cloud",
+    // 城区半径约 27 km：锚点在 70–130 km 外，近边 40 km 以外（10.7 km 高处俯角 5–14°，窗里的下半截）
+    distanceKm: [70, 130],
+    forwardOffsetDeg: [5, 25],
+    minAltitudeKm: 5,
+    // 只在夜里（研究文档 C6：太阳 < −12°）；民用暮光末段（−12°..−6°）灯刚亮、雾还带蓝灰，偶尔也出现；白天不自动出现
+    // （白天只剩一团偏黄褐的霾和巨塔的淡灰剪影，没有「灯城」，手动召唤时才看得到）
+    sunWeight: (a) => (a <= -12 ? 3 : a <= -6 ? 1 : 0),
+    riseS: 120,
+    holdSimS: [480, 900],
+    fadeS: 120,
+    // 包围盒：城区 ±36 km（城区椭圆外缘 ≈ 32 km）、高 7 km（光束渐隐到 6.8 km；雾只在 2.2 km 以下，介质另外收窄）
+    volume: { kind: FOGCITY_KIND, baseKm: 0, box: [[-36, 0, -36], [36, 7, 36]], surface: true, medium: true, stepKm: 0.3 },
   },
 ];
 

@@ -52,6 +52,8 @@ export interface ActiveWonder {
   baseKm: number;
   /** 是怎么来的：auto 随机触发、summon 面板 / 调试召唤、cover 借遮挡（奇观之门） */
   via: "auto" | "summon" | "cover";
+  /** 本次出现的随机种子（0..1）：云间层奇观拿它换布局 / 朝向 / 纹理（uWonderParams.z，W02） */
+  seed: number;
 }
 
 export interface TriggerOptions {
@@ -67,6 +69,8 @@ export interface TriggerOptions {
   via?: ActiveWonder["via"];
   /** 云间层奇观：局部坐标原点离海平面的高度（km），省略用 volume.baseKm（测试时用来把同一个体摆到不同高度） */
   baseKm?: number;
+  /** 本次出现的随机种子（0..1），省略按航程种子生成（截图 / 回归时写死，画面可复现） */
+  seed?: number;
 }
 
 // ---------- 小工具 ----------
@@ -272,6 +276,7 @@ export class WonderSystem {
       reveal,
       baseKm: opts.baseKm ?? def.volume?.baseKm ?? 0,
       via: opts.via ?? "summon",
+      seed: opts.seed ?? rand01(seed + 5 + this.summonCount * 7),
     };
     this.markSeen(ctx.flightKey, def.id);
     this.log.push({ id: def.id, event: "出现", via: this.active.via });
@@ -450,7 +455,7 @@ export class WonderSystem {
     u.uWonderBoxMax.value.set(...v.box[1]);
     u.uWonderUse.value.set(v.surface ? 1 : 0, v.medium ? 1 : 0);
     u.uWonderStep.value = v.stepKm;
-    u.uWonderParams.value.set(a.reveal, this.clock, v.params?.[0] ?? 0, v.params?.[1] ?? 0);
+    u.uWonderParams.value.set(a.reveal, this.clock, a.seed, v.params?.[0] ?? 0);
     if (v.caster) {
       u.uWonderCaster.value.set(...v.caster.center, 1);
       u.uWonderCasterR.value.set(...v.caster.radii);
