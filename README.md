@@ -224,4 +224,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   修法：量 CPU 时用 `ctx.suspend(t)` 每 0.25 s 停一下再 `update`，和实时一样滚动排程（`scripts/audio-check.mjs` 的 `cpu()`）。
 - **面板雷暴摆在 55–75 km 外**（T11）：雷声按 340 m/s 延迟近三分钟，隔着机舱本来也听不见。声音把打雷的距离上限放到 90 km，远雷只剩 90 Hz 以下、低于底噪约 11 dB 的闷响（一片断续的低沉滚动）；想听清楚的雷要导演把雷暴摆近（10 km 内雷声在 150 Hz 以下与底噪相当或更响）。
 - **headless 里听不见声音，但可以离线分析**（T11）：`node scripts/audio-check.mjs [--port 5211]`（没有开发服务器会自己起 vite）直接打开 `/src/audio.ts` 这个地址（同源、不启动渲染器）再动态 import，用 OfflineAudioContext 渲染各状态并输出倍频程表 / A 计权 / 峰值 / 左右相干度到 `tmp/audio-check/spectra.json`。页面上那条 404 是 favicon，无关。
+- **云步进里加「平时不走」的分支也会让整个步进变慢一倍**（W00）：把奇观的表面追踪、介质、投影直接写进 `MARCH_FRAG`，奇观关着（uniform 分支一次都不走）时 noon-cumulus 云步进 0.35 → 0.44–0.73 ms，typhoon-bands 约 ×2；逐段删掉任何一段都不够，只有全删才回到 0.35（寄存器 / FXC 的分支与展开取舍，同一份程序小改一处就可能在 0.35 和 0.72 两档之间跳）。
+  修法：可选功能做成 `#define` 变体程序（`marchWonderMat`，只在有云间层奇观时用），重活放进单独的 pass（奇观 pass 把表面 + 介质合成一层，步进只读一个 texel）；默认程序预处理后与改动前逐字相同。识别：按 pass 的 GPU 计时（`tmp/perf-cloud/passes.mjs`）加页面内逐段替换（`handoff/W00-variants-cost.mjs` + `W00-mkvar.mjs`）；普通场景（noon-cumulus）就能看出来，不要以为「分支不走就没开销」。
+- **页面内换着色器做 A/B 时，要等后台编译真的完成再计时**（W00）：`compileAsync` 还没好时画的仍是旧程序，量到的是旧程序的数（W00 因此一度以为某段代码「不花钱」）。奇观变体第一次编译 d3d11 约 13–17 s，`--variants` 的 wait 给 25 s，并看 `__voyage.clouds.wonderLayerState === "ready"`。另：typhoon-bands 的云步进在两个端口上都会随页面加载出现约 3.2 / 5.2 ms 两档（与代码无关），对照要在同一页面里交替、或多轮取同一档比较。
 

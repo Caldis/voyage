@@ -1,18 +1,25 @@
 /**
- * 云间层奇观的接口（W00）：奇观插进云的光线步进（clouds.ts 的 MARCH_FRAG），和云互相遮挡、一起做时间累积。
- * 设计依据 research/WONDERS.md §3.3 方案 A。给 W02（雾海灯城）、W03（浮空古城）用，说明见 handoff/W00.md。
+ * 云间层奇观的接口（W00）：奇观和云互相遮挡、一起做时间累积。设计依据 research/WONDERS.md §3.3 方案 A（奇观 pass + 插进云的步进）。
+ * 给 W02（雾海灯城）、W03（浮空古城）用，说明见 handoff/W00.md。
  *
- * 一个云间层奇观（「种类」，WonderCloudKind）可以提供三样东西，都在**奇观局部坐标**里（km；原点在奇观锚点正下方的海平面，
- * x 东、y 天顶、z 南，和窗外坐标同一套朝向约定），全部可选：
- *  - 表面（sdf + shade）：解析距离场。步进前沿视线在包围盒里球面追踪一次，得到命中深度 tW、覆盖率 α（按像素张角解析抗锯齿）
- *    和预乘辐亮度；云的步进走到 tW 时插进去：L += T·Lw，T *= 1 − α。α = 1 时身后的云不再步进（省步数）。
- *  - 介质（medium）：消光系数 σ（1/km）+ 单次散射反照率 + 体积自发光（辐亮度 / km）。在包围盒里和云的密度一起步进，
- *    受光用云自己的那一套（朝主光源的受光步进 = 云在它上面投的影、多次散射近似、天空光），所以雾罩和云的光照天然一致。
+ * 一个云间层奇观（「种类」，WonderCloudKind）可以提供三样东西，都在**奇观局部坐标**里（km；原点在奇观锚点正下方的海平面
+ * 再抬高 baseKm，x 东、y 天顶、z 南，和窗外坐标同一套朝向约定），全部可选：
+ *  - 表面（sdf + shade）：解析距离场，在包围盒里球面追踪，按像素张角解析抗锯齿；
+ *  - 介质（medium）：消光系数 σ（1/km）+ 单次散射反照率 + 体积自发光（kcd/m² / km），在包围盒里步进；
  *  - 投影（caster）：一个椭球，挡住云（和奇观自己的介质）受到的直射光——「岛在云海上投下影子」。
- * 没有云间层奇观时（uWonderVol = 0）步进只多几次 uniform 判断，不增加步数；普通场景的像素结果与改动前一致。
+ *
+ * 管线（clouds.ts）：
+ *  1. 奇观 pass（WONDER_SURF_FRAG，云分辨率）：每条视线在包围盒里追踪表面、步进介质，合成「一层」：
+ *     预乘辐亮度 Lw、不透明度 αw、按不透明度加权的深度 tW。
+ *  2. 云步进的奇观变体（#define WONDER_LAYER）：读这一个 texel，步进走到 tW 时插进去（L += T·Lw，T *= 1 − αw，
+ *     前面的云挡它、它挡后面的云），αw ≈ 1 时身后的云不再步进；受光时对投影椭球求一次影子。
+ *  3. 平时（没有云间层奇观）画的是不带 WONDER_LAYER 的步进程序，预处理后和改动前逐字相同：零开销、冷编译不变。
+ * 限制：整个奇观在一条视线上只算「一层」。包围盒里和奇观介质交错的云（例如雾罩里穿插的云）顺序是近似的——
+ * 云在 tW 之前的挡住整层、之后的被整层挡住。表面、介质、云分得开的场景（远处的岛、城上的雾海）不受影响。
  *
  * 加一个种类：在下面的 WONDER_CLOUD_KINDS 里加一项（glsl 源码 + 函数名），catalog.ts 里给奇观写 volume.kind。
- * 函数一律带模块前缀（GLSL 没有命名空间，见 README 坑点）；分派函数各只调用一处，FXC 按调用点内联，冷编译随种类数线性增长。
+ * 函数一律带模块前缀（GLSL 没有命名空间，见 README 坑点）；分派函数各只有一个调用点（FXC 按调用点内联）。
+ * 这些代码只进奇观 pass（和步进变体的一小段），不进窗外 / 舱内 / 机翼 / 默认步进程序。
  */
 
 import * as THREE from "three";
@@ -51,7 +58,7 @@ export interface WonderCloudKind {
 
 // ---------------- 测试体（W00 验证接口用，不参与随机挑选，不进面板） ----------------
 // 一块倒锥形的浮空岩（顶面 3 km 半径，锥尖在 2.5 km，顶上一层偏绿的「树冠」穹顶）+ 腰上一圈雾环（介质）+ 投影椭球。
-// 只在 URL 带 ?w00probe 时编进步进程序（不让它平白增加所有人的冷编译）。
+// 只在 URL 带 ?w00probe 时编进奇观 pass（测试用，不让它平白增加奇观变体的编译时间）。
 const PROBE_GLSL = /* glsl */ `
 float w00ProbeCone(vec3 p, float h, float r1, float r2) {
   // 圆台（iq）：中心在原点、半高 h，底半径 r1、顶半径 r2
@@ -110,12 +117,7 @@ function dispatch(kinds: WonderCloudKind[], field: "sdf" | "shade" | "medium", c
   return `${cases}\n  return ${fallback};`;
 }
 
-/**
- * 云间层奇观的 GLSL（只拼进云步进程序；需要 ATMOSPHERE_COMMON、VIEW_COMMON、CLOUD_COMMON、LIGHTS_COMMON 在前面）。
- * 窗外 / 舱内 / 机翼程序都不拼它，改它只重编云步进。
- */
-export function wonderCloudGlsl(kinds: WonderCloudKind[] = WONDER_CLOUD_KINDS) {
-  return /* glsl */ `
+const UNIFORMS_GLSL = /* glsl */ `
 uniform float uWonderVol;       // 0：没有云间层奇观；> 0：在场奇观的种类编号
 uniform vec2 uWonderUse;        // x：有表面；y：有介质
 uniform vec3 uWonderCam;        // 相机在奇观局部坐标里的位置（km）
@@ -125,8 +127,58 @@ uniform vec3 uWonderBoxMax;
 uniform vec4 uWonderParams;     // x：reveal（0..1）；y：时间（真实秒，循环）；zw：各奇观自用
 uniform vec4 uWonderCaster;     // 投影椭球：xyz 中心（局部坐标），w：1 = 启用
 uniform vec3 uWonderCasterR;    // 投影椭球的三个半轴（km）
-uniform float uWonderStep;      // 在介质包围盒里的最大步长（km）
+uniform float uWonderStep;      // 介质的步长（km）；包围盒里另外保证 8–96 步
+`;
 
+// 投影：光线离椭球中心的最近距离 m（椭球归一化后），m < 0.8 全影、> 1.15 没挡
+const CASTER_GLSL = /* glsl */ `
+const float WONDER_PENUMBRA_IN = 0.8;
+const float WONDER_PENUMBRA_OUT = 1.15;
+// 云步进用：视线上的点 p(t) 在归一化空间里是 t 的线性函数，m² 是 t 的二次式。每条视线在步进前算一次
+// 「落在影子柱里的区间」和二次式系数，循环里只做区间判断和一次开方（逐采样点做完整的椭球测试会拖慢整个步进，W00 实测）
+vec2 wonderCasterSegment(vec3 rd, out vec3 shQ) {
+  shQ = vec3(1e9, 0.0, 0.0);
+  if (uWonderCaster.w < 0.5) return vec2(1e9, -1e9);
+  vec3 A = (uWonderCam - uWonderCaster.xyz) / uWonderCasterR;
+  vec3 B = (uWonderToLocal * rd) / uWonderCasterR;
+  vec3 D = (uWonderToLocal * uKeyDir) / uWonderCasterR;
+  float D2 = dot(D, D);
+  // 垂直于光线的分量：P(t) = P0 + P1·t
+  vec3 P0 = A - D * (dot(A, D) / D2);
+  vec3 P1 = B - D * (dot(B, D) / D2);
+  shQ = vec3(dot(P0, P0), 2.0 * dot(P0, P1), dot(P1, P1));
+  float c = shQ.x - WONDER_PENUMBRA_OUT * WONDER_PENUMBRA_OUT;
+  float a = max(shQ.z, 1e-12);
+  float disc = shQ.y * shQ.y - 4.0 * a * c;
+  if (disc <= 0.0) return vec2(1e9, -1e9);
+  float sq = sqrt(disc);
+  vec2 seg = vec2((-shQ.y - sq) / (2.0 * a), (-shQ.y + sq) / (2.0 * a));
+  // 只在椭球背光的一侧（点到椭球中心的向量和光线方向相反）：dot(A + B·t, D) < 0
+  float s0 = dot(A, D), s1 = dot(B, D);
+  if (abs(s1) > 1e-9) {
+    float tz = -s0 / s1;
+    if (s1 > 0.0) seg.y = min(seg.y, tz); else seg.x = max(seg.x, tz);
+  } else if (s0 >= 0.0) return vec2(1e9, -1e9);
+  seg.x = max(seg.x, 0.0);
+  return seg;
+}
+float wonderCasterVis(float t, vec3 shQ) {
+  return smoothstep(WONDER_PENUMBRA_IN, WONDER_PENUMBRA_OUT, sqrt(max(shQ.x + t * (shQ.y + t * shQ.z), 0.0)));
+}
+`;
+
+/** 云步进奇观变体（#define WONDER_LAYER）里要的那一小段：uniform + 投影 */
+export function wonderMarchGlsl() {
+  return UNIFORMS_GLSL + CASTER_GLSL;
+}
+
+/**
+ * 奇观 pass 的整段 GLSL（需要 ATMOSPHERE_COMMON、VIEW_COMMON、CLOUD_COMMON、LIGHTS_COMMON 在前面），入口 wonderLayer()。
+ */
+export function wonderCloudGlsl(kinds: WonderCloudKind[] = WONDER_CLOUD_KINDS) {
+  return /* glsl */ `
+${UNIFORMS_GLSL}
+${CASTER_GLSL}
 float gWonderMat = 0.0;         // sdf 可以写它来区分材质（命中那一刻的值传给 shade）
 
 // 标准受光（给种类的 shade 用）：直射主光源 × 云影 + 天光 + 下方云海 / 海面的反射光。pW / nW 是窗外坐标
@@ -177,13 +229,10 @@ vec2 wonderInterval(vec3 ro, vec3 rd) {
   return vec2(t0, t1);
 }
 
-// 窗外坐标的点（相机相对，相机在 ro）→ 奇观局部坐标
-vec3 wonderLocal(vec3 p, vec3 ro) { return uWonderCam + uWonderToLocal * (p - ro); }
-
-// 表面：在 [seg.x, seg.y] 里球面追踪。返回 (预乘辐亮度, 覆盖率 α)，tHit 为插入深度（km）。
+// 表面：在 [seg.x, seg.y] 里球面追踪。返回 (预乘辐亮度, 覆盖率 α)，tHit 为命中深度（km）。
 // pixAng：一个像素的张角（弧度）。抗锯齿：命中 α = 1；没命中时按视线离表面最近处的「距离 / 像素足迹」给覆盖率，
 // 在那一点着色（轮廓外半个像素的渐变，和 wing / traffic 的解析覆盖同一思路）。
-// 追踪和法线的 4 次取样放在同一个循环里：wonderSdf 只有一个调用点（FXC 按调用点内联）；上界依赖 uniform，不展开
+// 追踪和法线的 4 次取样放在同一个循环里：wonderSdf 只有一个调用点；上界依赖 uniform，FXC 不展开
 const int WONDER_TRACE_STEPS = 80;
 vec4 wonderSurface(vec3 ro, vec3 rd, vec2 seg, float pixAng, out float tHit) {
   tHit = 1e9;
@@ -241,40 +290,73 @@ vec4 wonderSurface(vec3 ro, vec3 rd, vec2 seg, float pixAng, out float tHit) {
   return vec4(wonderShade(qS, n, pW, nW, rd) * alpha, alpha);
 }
 
-// 投影：视线上的点朝主光源看，被投影椭球挡住多少。按「光线离椭球中心的最近距离」m（椭球归一化后）软化半影：
-// m < 0.8 全影、> 1.15 没挡。视线上的点 p(t) 在归一化空间里是 t 的线性函数，m² 就是 t 的二次式，
-// 所以每条视线在步进前算一次「在影子柱里的区间」和二次式系数（shSeg、shQ），循环里只做区间判断和一次开方。
-// 以前逐采样点做完整的椭球测试：即使没有奇观（分支不走），云步进也从 0.35 涨到 0.71 ms（寄存器 / 编译器排布，W00 实测）
-const float WONDER_PENUMBRA_OUT = 1.15;
-vec2 wonderCasterSegment(vec3 rd, out vec3 shQ) {
-  shQ = vec3(1e9, 0.0, 0.0);
-  if (uWonderCaster.w < 0.5) return vec2(1e9, -1e9);
-  vec3 A = (uWonderCam - uWonderCaster.xyz) / uWonderCasterR;
-  vec3 B = (uWonderToLocal * rd) / uWonderCasterR;
-  vec3 D = (uWonderToLocal * uKeyDir) / uWonderCasterR;
-  float D2 = dot(D, D);
-  // 垂直于光线的分量：P(t) = P0 + P1·t
-  vec3 P0 = A - D * (dot(A, D) / D2);
-  vec3 P1 = B - D * (dot(B, D) / D2);
-  shQ = vec3(dot(P0, P0), 2.0 * dot(P0, P1), dot(P1, P1));
-  // m² < 外沿² 的区间
-  float c = shQ.x - WONDER_PENUMBRA_OUT * WONDER_PENUMBRA_OUT;
-  float a = max(shQ.z, 1e-12);
-  float disc = shQ.y * shQ.y - 4.0 * a * c;
-  if (disc <= 0.0) return vec2(1e9, -1e9);
-  float sq = sqrt(disc);
-  vec2 seg = vec2((-shQ.y - sq) / (2.0 * a), (-shQ.y + sq) / (2.0 * a));
-  // 只在椭球背光的一侧（点到椭球中心的向量和光线方向相反）：dot(A + B·t, D) < 0
-  float s0 = dot(A, D), s1 = dot(B, D);
-  if (abs(s1) > 1e-9) {
-    float tz = -s0 / s1;
-    if (s1 > 0.0) seg.y = min(seg.y, tz); else seg.x = max(seg.x, tz);
-  } else if (s0 >= 0.0) return vec2(1e9, -1e9);
-  seg.x = max(seg.x, 0.0);
-  return seg;
+float wonderHg(float c, float g) {
+  float g2 = g * g;
+  return (1.0 - g2) / (4.0 * M_PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
 }
-float wonderCasterVis(float t, vec3 shQ) {
-  return smoothstep(0.8, WONDER_PENUMBRA_OUT, sqrt(max(shQ.x + t * (shQ.y + t * shQ.z), 0.0)));
+
+// 介质的受光（每单位散射）：直射主光源 × 云影 × 投影椭球（奇观自己的影子）× 相函数（前向 + 后向两瓣），加天空光。
+// 没有沿光线步进介质本身（雾罩自己的影子只由投影椭球近似）；夜里主光源是月亮
+vec3 wonderMediumLight(vec3 pW, vec3 q, float cosT) {
+  float r = length(pW);
+  vec3 up = pW / r;
+  float vis = r - BOTTOM > uShellTop ? 1.0 : cloudShadow(pW, uKeyDir);
+  if (uWonderCaster.w > 0.5) {
+    vec3 oq = (q - uWonderCaster.xyz) / uWonderCasterR;
+    vec3 dq = (uWonderToLocal * uKeyDir) / uWonderCasterR;
+    float s = max(-dot(oq, dq) / dot(dq, dq), 0.0);
+    vis *= smoothstep(WONDER_PENUMBRA_IN, WONDER_PENUMBRA_OUT, length(oq + dq * s));
+  }
+  // 多次散射近似（和云步进同一套 Wrenninge 2013 的做法，只是光学厚度按 0 取）：每一阶更弱、相函数更平。
+  // 只算单次散射时雾罩在云旁边发灰（W00 截图）
+  float phase = 0.0;
+  float a = 1.0, c = 1.0;
+  for (int k = 0; k < 4; k++) {
+    phase += a * mix(wonderHg(cosT, -0.25 * c), wonderHg(cosT, 0.8 * c), 0.7);
+    a *= 0.62; c *= 0.5;
+  }
+  return keyLight(r, up) * vis * phase + skyIrradiance(r, up) / (2.0 * M_PI);
+}
+
+// 奇观层：表面 + 介质合成一层。返回 (预乘辐亮度, 不透明度)，tOut = 按不透明度加权的深度（km）。
+// 介质在 [seg.x, 表面) 里步进（表面完全挡住时截到表面），步长 uWonderStep，另外保证 8–96 步；jitter 让时间累积抹平步进纹
+vec4 wonderLayer(vec3 ro, vec3 rd, vec2 seg, float pixAng, float jitter, out float tOut) {
+  float tS;
+  vec4 s = wonderSurface(ro, rd, seg, pixAng, tS);
+  vec3 L = vec3(0.0);
+  float T = 1.0;
+  float dSum = 0.0, wSum = 0.0;
+  if (uWonderUse.y > 0.5) {
+    float t1 = s.a > 0.999 ? min(seg.y, tS) : seg.y;
+    float len = t1 - seg.x;
+    float n = clamp(ceil(len / max(uWonderStep, 1e-3)), 8.0, 96.0);
+    float dt = len / n;
+    vec3 dL = uWonderToLocal * rd;
+    float cosT = dot(rd, uKeyDir);
+    for (int i = 0; i < 96 + min(uStormCount, 0); i++) {
+      if (float(i) >= n || T < 0.005 || len <= 0.0) break;
+      float t = seg.x + (float(i) + jitter) * dt;
+      vec3 q = uWonderCam + dL * t;
+      vec3 alb, em;
+      float sig = wonderMedium(q, alb, em);
+      bool glow = max(em.r, max(em.g, em.b)) > 0.0;
+      if (sig <= 1e-5 && !glow) continue;
+      float stepT = exp(-sig * dt);
+      vec3 src = em;
+      if (sig > 1e-5) src += sig * alb * wonderMediumLight(ro + rd * t, q, cosT);
+      L += T * src * (sig > 1e-5 ? (1.0 - stepT) / sig : dt);
+      dSum += T * (1.0 - stepT) * t;
+      wSum += T * (1.0 - stepT);
+      T *= stepT;
+    }
+  }
+  // 表面在介质后面（边缘像素 α < 1 时，表面后面那段介质按在前面算，差别只在 1 像素的轮廓上）
+  L += T * s.rgb;
+  dSum += T * s.a * tS;
+  wSum += T * s.a;
+  T *= 1.0 - s.a;
+  tOut = wSum > 0.0 ? dSum / wSum : 0.5 * (seg.x + seg.y);
+  return vec4(L, 1.0 - T);
 }
 `;
 }

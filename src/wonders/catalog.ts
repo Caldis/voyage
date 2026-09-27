@@ -131,7 +131,7 @@ export const WONDERS: WonderDef[] = [
 
 /**
  * 调试用的奇观：不参与随机挑选、不进面板下拉，只能用 __voyage.wonders.trigger(id) 召唤。
- * W00 测试体只在 URL 带 ?w00probe 时编进云步进程序（见 wonder-cloud.glsl.ts），没编进去时召唤了也看不见。
+ * W00 测试体只在 URL 带 ?w00probe 时编进奇观 pass（见 wonder-cloud.glsl.ts），没编进去时召唤了也看不见。
  */
 export const DEBUG_WONDERS: WonderDef[] = [
   {
@@ -161,7 +161,7 @@ export function wonderById(id: string): WonderDef | undefined {
   return WONDERS.find((w) => w.id === id) ?? DEBUG_WONDERS.find((w) => w.id === id);
 }
 
-/** 云间层奇观的种类有没有编进云步进程序（没编进去的不能出现） */
+/** 云间层奇观的种类有没有编进奇观 pass（没编进去的不能出现） */
 export function wonderVolumeCompiled(def: WonderDef) {
   return def.layer !== "cloud" || (!!def.volume && WONDER_CLOUD_KINDS.some((k) => k.id === def.volume!.kind));
 }
