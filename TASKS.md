@@ -11,7 +11,7 @@
 | C10 | 第 7 波（云锐度，用户主诉求） | 5227 | worktree | Opus（云表皮消光：先诊断剖面与原型——密度 remap / 侵蚀 / 近表面细步——再做成品；不改 resolve） | — | 进行中 |
 | C12b | 第 7 波（云噪声幅度） | 5223 | `worktree-agent-a058278d72020d95c`（348f85a） | Opus | 审查：返工（小） | 已交付：云外 resolve Catmull-Rom 12 取样 + 3×3 不透明度加权重投影深度 + blend 按小数部分自适应；静止时间波动 ×0.49、对角高频 ×0.55；巡航云边更锐（σ 1.08→0.73 px）、转弯误差最差 ×1.15；云里逐位不变；cloud-resolve 冷编译 +58%（不在关键路径，待核）；**审查返工：reset 后收敛慢约 3 倍（第 16 帧误差 ×2.4–3.1）→ uSinceReset，blend ≥ 1/(n+1)** |
 | T48c | 第 7 波（T48b 审查 P2-1） | 5224 | `worktree-agent-a2abd849f48161621`（307f782） | Opus | 审查中（5229） | 已交付：1/16 粗网格对数域时间平滑 pass（τ 0.25 / 0.1 s）扣瞬态；机翼只压眩光、翼面 ×0.85；频闪变暗像素 ~6000→≤49、闪电被压像素 13653→0、翼面暗环消失；遗留：贴白灯翼面死白块 220–290 px、运动抖动在噪声内；发现 master 夜城相邻差 18→13.5（审查顺带二分） |
-| W-STAIR | 第 7 波（锯齿，C11 发现） | 5213 | worktree | Opus（机翼边 2 px 阶梯 / 点阵阴影：先诊断再修；须保持机翼 pass 无机翼处逐位照抄，TM02 依赖） | — | 进行中 |
+| W-STAIR | 第 7 波（锯齿，C11 发现） | 5213 | `worktree-agent-abbe8a37c6af3d120`（693ceeb） | Opus | 审查中（5230） | 已交付第一版：分段距离场取下界（命中落体内像素 0.58%→0，云里点阵消失）、子射线步数不足按打中、擦边 2 px、边缘 5 样本；与参考图差和降 4–10 倍；sunset 帧时间 +5.3%（压线）；遗留：商务舱正午前缘略硬、夜间频闪钝后缘虚线、白位置灯旁翼面过曝（W-LAMP） |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -24,6 +24,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| W-LAMP | 白色位置灯旁翼面色调映射前即过曝（≥250 块 220–290 px，T48c 发现）：调 `wingLampIntensity` / `lampLit` 的强度或衰减 | 中 | render/wing* | wing | 1 km 低空夜城、night-city-off 翼尖 |
 | G08-STITCH | 瓦片拼接整个挪进 Worker（消除影像位图在 Worker 同步读回的约 1 次/分 >16.7 ms 尖峰；主线程 CPU 拼接已试、出 59 ms 长任务否决；方案见 handoff/G07b.md） | 中 | ground/* | ground | 1× 巡航 20 分钟同页交替尖峰数 |
 | DX-24 | dev-browser GPU 计时钩子只抓第一个 webgl2 上下文、被抢时静默返回 null → 跳过已丢失上下文并打印警告；Vite HMR 纳入测量锁或提供 --no-hmr；G07-diffs 目录参数与 shots --out 基准不一致 | 中 | scripts/* | — | bench 出 gpu= 列 |
 | DX-23 | `freeze()` 每次调用重设冻结时刻，uTime / 云偏移 / whiteout 跳一帧（同着色器两次测量平均差 0.6）→ 加「沿用原冻结时刻」选项并核对 `shots --pair --base-shader --cloud-live`；收编 C11-ab.mjs / C09 审查的 c09rev-ab.mjs / TM01-measure.mjs 为正式同页换材质工具；shots 默认高画质档 + 降档警告；EOX 瓦片跨域报错聚合；shader-budget --baseline 缺依赖时提示 | 中 | scripts/* | — | 同代码两次测量差为 0 |
