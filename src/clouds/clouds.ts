@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { AERIAL_MAX_DISTANCE_KM, ATMOSPHERE_COMMON, FULLSCREEN_VERT } from "../atmosphere/common.glsl";
 import type { Atmosphere } from "../atmosphere/luts";
+import { EXPOSURE_WHITEOUT } from "../render/exposure";
 import type { FullscreenPass } from "../render/pass";
 import { LIGHTS_COMMON } from "../render/lights.glsl";
 import { VIEW_COMMON } from "../render/view.glsl";
@@ -181,6 +182,12 @@ float hg(float c, float g) {
   float g2 = g * g;
   return (1.0 - g2) / (4.0 * M_PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
 }
+
+// 多次散射近似的能量标定（C01）：少阶的八度近似把高阶散射的能量截掉了，受光厚云的有效反照率 πL / E（水平面照度）
+// 只有约 0.2（noon-cumulus 读回，c01-albedo），真实厚云是 0.7–0.8。单次散射是精确的，缺的是多次散射那一份，
+// 所以只给高阶乘一个与光学厚度无关的常数，标定到受光云顶的 p90 ≈ 0.75（见 handoff/C01-02.md）。
+// 它不改变高阶之间的比例，a ≤ b 的守恒结构不变；乘在 od 无关的常数上，也不会让薄云比厚云亮
+const float CLOUD_MS_ALBEDO = 6.0;
 
 void main() {
   // 深度写进深度附件（单输出，见文件头）。写了 gl_FragDepth 的程序每条路径都要写，否则深度未定义
@@ -420,29 +427,34 @@ void main() {
 #endif
       gDetailLight = false;
       od *= CLOUD_EXTINCTION;
-      // 多次散射近似（Wrenninge 2013）：每一阶散射更弱、衰减更慢、相函数更平。
-      // 原来只取 4 阶、权重每阶折半，顺光（背散射）时厚云的有效反照率只有 ~0.3，真实厚云是 0.7–0.8，
-      // 所以顺光的云普遍偏灰。改成 6 阶、权重衰减放慢，补回高阶散射的能量
       // 银边（T12）：水滴的散射里约一半是几度以内的衍射峰（g ≈ 0.9），顺着光走的光几乎不偏折，按 delta 缩放
       // （Joseph 1976）它只受约 1/4 的消光——所以朝太阳看时，云的薄边、顶上被照透的一层比「单次散射 × 全消光」亮得多。
       // 只在前向起作用（hg(0.9) 离开太阳 30° 就只剩百分之几），顺光 / 侧光的云几乎不变
-      float sunScatter = 0.6 * hg(cosT, 0.9) * exp(-0.25 * od);
-      float a = 1.0, b = 1.0, c = 1.0;
-      // 雷暴的光学厚度大得多（几百），高阶散射占比更高、整体反照率更接近 1：高阶权重衰减得更慢
+      // 单次散射（下面多次散射近似的第 0 阶）：相函数双瓣，消光不打折
+      float sunScatter = 0.6 * hg(cosT, 0.9) * exp(-0.25 * od) + mix(hg(cosT, -0.25), hg(cosT, 0.8), 0.7) * exp(-od);
+      // 多次散射近似（Wrenninge 2013 的八度法）：第 k 阶 = a^k · p(g·c^k) · exp(−b^k · od)，每一阶更弱、衰减更慢、相函数更平。
+      // C01：**a ≤ b 才守恒**（散射权重衰减不能慢于消光衰减，Wrenninge 2013；Hillaire 2016 Frostbite 沿用，常取 a = b = c = 0.5；
+      // UE Volumetric Cloud 的默认值同为 0.5，八度数最多加到 2）。原来是 a = 0.62 > b = 0.35、6 阶（T12 为补「顺光的云偏灰」加的）：
+      // od = 5 处高阶合计是单次散射的约 100 倍，背光面被灌满，受光 / 背光抹平，云芯亮度起伏只有均值的 ±6%，菜花读不出来
+      // （research/CLOUD_SHARPNESS.md §1.6）。现在 a = b = c = 0.5、共 3 阶（单次 + 2 个高阶）。
+      // 雷暴光学厚度几百、高阶占比更高，取 a = b = 0.6（同样守恒）
 #ifdef CLOUD_WEATHER
-      float aDecay = stormW > 0.5 ? 0.7 : 0.62;
+      float msDecay = stormW > 0.5 ? 0.6 : 0.5;
 #else
-      float aDecay = 0.62;
+      const float msDecay = 0.5;
 #endif
-      for (int k = 0; k < 6; k++) {
+      float msScatter = 0.0;
+      float a = msDecay, b = msDecay, c = 0.5;
+      for (int k = 1; k < 3; k++) {
         float phase = mix(hg(cosT, -0.25 * c), hg(cosT, 0.8 * c), 0.7);
-        sunScatter += a * phase * exp(-b * od);
-        a *= aDecay; b *= 0.35; c *= 0.5;
+        msScatter += a * phase * exp(-b * od);
+        a *= msDecay; b *= msDecay; c *= 0.5;
       }
-      // Beer-Powder：云团边缘朝向太阳的地方偏暗，看起来更有体积（Schneider 2015）
-      // 粉末效应只在背着太阳看时有（Schneider 2015 也按视角调）：逆光时薄边正是最亮的地方，不能再压暗（T12）
+      // Beer-Powder（Schneider 2015）：刚进云的那一薄层里多次散射还没「攒」起来，所以只压多次散射（C01）——单次散射在受光表面本来就是满的。
+      // 原来整项一起压，顺光时把受光的云边也压暗了，和真实云朵受光面的亮边相反。逆光时薄边正是最亮的地方，淡出（T12）
       float powder = 1.0 - exp(-2.0 * od - 0.5);
-      vec3 sunLight = keyLight(r, up) * sunScatter * mix(1.0, powder, 0.5 * (1.0 - smoothstep(0.3, 0.9, cosT)));
+      sunScatter += CLOUD_MS_ALBEDO * msScatter * mix(1.0, powder, 0.5 * (1.0 - smoothstep(0.3, 0.9, cosT)));
+      vec3 sunLight = keyLight(r, up) * sunScatter;
 #ifdef WONDER_LAYER
       // 奇观的投影椭球挡住直射光（岛在云海上的影子）
       float tp = t + stepLen * jitter;
@@ -1031,6 +1043,8 @@ export class Clouds {
   private probeBusy = false;
   /** 飞机所在位置的云密度（0..1，几帧前的值） */
   cameraDensity = 0;
+  /** 飞机在云里的程度（0–1，平滑过的），曝光的雪景补偿用（C02，EXPOSURE_WHITEOUT） */
+  private whiteout = 0;
   /** 从飞机朝直射主光源的云透射率、光学厚度（几帧前的值，没平滑；T31） */
   keyTransmittanceRaw = 1;
   keyOpticalDepthRaw = 0;
@@ -1588,6 +1602,10 @@ export class Clouds {
     this.keyVis.x += (tDir - this.keyVis.x) * k;
     this.keyVis.y += (Math.max(tTot - tDir, 0) - this.keyVis.y) * k;
     this.keyVis.z += (1 + (tTot - 1) * immersed - this.keyVis.z) * k;
+    // C02：飞机在云里 = 窗外一片白茫茫，交给曝光的雪景补偿（⑤）。原来靠「窗外线性均值 ≈ 对数均值」判断，
+    // C01 以后云里的雾不再被高阶散射抹得那么匀（机翼比雾亮），判据落在边缘；这里直接给曝光一个「在云里」的量，按 0.5 s 平滑（眼睛的亮适应量级）
+    this.whiteout += (immersed - this.whiteout) * (1 - Math.exp(-dt / 0.5));
+    EXPOSURE_WHITEOUT.value = this.whiteout;
     return out.copy(this.keyVis);
   }
 
