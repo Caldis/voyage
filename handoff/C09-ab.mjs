@@ -1,4 +1,4 @@
-// C09 交付对照：new = 本分支（不改），old = 页面内把受光段改回 master 的写法（前向峰整份 hg(0.9)·e^(−0.25·od)、相函数在循环里算）。
+// C09 交付对照：new = 本分支（不改），old = 页面内把受光段改回 master 的写法（前向峰整份 hg(0.9)·e^(−0.25·od)、相函数在循环里算、受光步进 60 m ×1.9）。
 // 给 handoff/C09-rim.mjs --vfile（VARIANTS 对象）；passes.mjs 用 handoff/C09-cost.mjs
 import fs from "node:fs";
 import path from "node:path";
@@ -23,9 +23,15 @@ const OLD_MS = `      float msScatter = 0.0;
 // 只把相函数挪出循环、前向峰不展宽（看「挪出循环」本身省多少）
 const HOIST_SS = "      float sunScatter = 0.6 * phPeak.x * exp(-0.25 * od) + phBody * exp(-od);";
 
+// 普通云受光步进：本分支 30 m ×2.2，master 60 m ×1.9
+const STEP_OLD = [["float lsL = 0.03;", "float lsL = 0.06;"], ["lsL *= 2.2;", "lsL *= 1.9;"]];
 export const VARIANTS = {
   new: { march: [] },
-  old: { march: [[NEW_SS, OLD_SS], [NEW_MS, OLD_MS]] },
+  old: { march: [[NEW_SS, OLD_SS], [NEW_MS, OLD_MS], ...STEP_OLD] },
+  // 只要前向峰展宽、受光步进不改
+  broadOnly: { march: STEP_OLD },
+  // 只改受光步进、前向峰不展宽
+  stepOnly: { march: [[NEW_SS, OLD_SS], [NEW_MS, OLD_MS]] },
   hoist: { march: [[NEW_SS, HOIST_SS]] },
   // 自检用：故意加一段很贵的循环，确认 passes.mjs 的变体真的换上了（换上了云步进会明显变慢）
   slow: { march: [["float pk = 0.75 * od;", "float pk = 0.75 * od; for (int q = 0; q < 64; q++) pk = pk + 1e-9 * sin(pk * float(q));"]] },
