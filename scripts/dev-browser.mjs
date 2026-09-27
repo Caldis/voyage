@@ -8,7 +8,9 @@
 // （开发体验官实测结论，见 apps/voyage/research/DX_REPORT_wave2.md §1.1）。
 //
 // 用法：
-//   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--out tmp/screenshot/dev-5230] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//   node scripts/dev-browser.mjs check --port 5230 [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--scene '<JSON>' ...]
+//                                       [--out tmp/screenshot/dev-5230] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
@@ -23,6 +25,24 @@
 // --dpr N：deviceScaleFactor，默认 1。二者组合用来模拟高分屏 / 弱 GPU（画布像素 = 视口 × DPR，
 //   例如 --viewport 1600x1200 --dpr 1.5 实际绘制 2400×1800），PERF-5 验收时就是这样手工模拟出「高分屏 + typhoon-bands」
 //   的过载场景（见 handoff/PERF-5.md）——本任务（DX-04）把这个手法从一次性验收脚本收成通用参数。
+//
+// check：只开一个页面、等 __voyageStartup 出现（启动完成）、收集期间的 console error / pageerror。
+//   有错误就打印全部并以非 0 退出码报告；没有就打印一行确认，退出码 0。用来在提交前快速确认「页面本身没炸」，
+//   比跑 shots 截一堆图快（不用等每个场景 2.5 s 的稳定等待）。
+//
+// shots 的 --scene：每个代理反复手写「T0x-shots.mjs」来拍一次性场景（例如 handoff/T35-shots.mjs 的
+// 「看前方 / 看后方」对照），DX-05 把这个模式收成通用参数，不用每个任务都新建一个脚本文件。
+//   --scene '<JSON>'：字段和 scenarios.mjs 里 SCENES 数组的条目一致（name 必填，其余同 applyScene 会读的字段）：
+//     name    场景名，同时是截图 / JSON 输出的文件名（必填）
+//     p       面板控件 id -> 值，如 { "preset": "wpac", "time": 1040, "wing-pos": "8", "cabin-class": "business" }
+//     head    头部位置：单个数字只设 z，或 [x, y, z] 三元组（见 scenarios.mjs 文件头注释，T06/T35 常用
+//             [-0.42, 0.1, -0.5] 看前方、[0.42, 0.1, -0.5] 看后方、[0, 0.02, -0.42] 默认坐姿）
+//     offset  云的世界偏移 [x, y]（uCloudOffset），不填就是 [0, 0]
+//     wait    截图前等待的毫秒数，不填是 2500
+//     ground  是否要等真实地面瓦片加载
+//   可以重复传多次 --scene 拍多个临时场景；和 --only（挑 scenarios.mjs 里的固定场景）可以同时用，
+//   两边选中的场景会拼在一起跑。都不传就是原来的行为（全量回归表，或 --only 过滤后的子集）。
+//   例：node scripts/dev-browser.mjs shots --port 5247 --scene "{\"name\":\"biz-behind\",\"p\":{\"preset\":\"wpac\",\"time\":720,\"wing-pos\":\"8\",\"cabin-class\":\"business\"},\"head\":[0.42,0.1,-0.5]}"
 
 import { chromium } from "playwright-core";
 import fs from "node:fs";
@@ -37,6 +57,8 @@ const DEFAULT_VIEWPORT = { width: 1600, height: 1200 };
 const DEFAULT_DPR = 1;
 
 // ---------- CLI 参数 ----------
+// 同名参数重复出现时合并成数组（目前只有 --scene 会用到，见文件头注释；JSON 字符串不会以 "--" 开头，
+// 不影响「下一个 token 是不是新 flag」的判断）。
 function parseArgs(argv) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -44,10 +66,13 @@ function parseArgs(argv) {
     if (a.startsWith("--")) {
       const key = a.slice(2);
       const next = argv[i + 1];
+      let val;
       if (next !== undefined && !next.startsWith("--")) {
-        out[key] = next;
+        val = next;
         i++;
-      } else out[key] = true;
+      } else val = true;
+      if (key in out) out[key] = Array.isArray(out[key]) ? [...out[key], val] : [out[key], val];
+      else out[key] = val;
     } else out._.push(a);
   }
   return out;
@@ -67,6 +92,32 @@ function parseDpr(args) {
   const n = Number(args.dpr);
   if (!Number.isFinite(n) || n <= 0) throw new Error(`--dpr 应为正数，收到 "${args.dpr}"`);
   return n;
+}
+
+/** --scene '<JSON>'（可重复）解析成场景对象数组；字段约定见文件头注释，与 scenarios.mjs 的 SCENES 条目一致 */
+function parseAdhocScenes(args) {
+  if (!args.scene) return [];
+  const list = Array.isArray(args.scene) ? args.scene : [args.scene];
+  return list.map((raw, i) => {
+    let sc;
+    try {
+      sc = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`--scene 第 ${i + 1} 个不是合法 JSON：${err.message}\n收到：${raw}`);
+    }
+    if (!sc || typeof sc !== "object" || !sc.name) throw new Error(`--scene 第 ${i + 1} 个缺少必填的 "name" 字段：${raw}`);
+    if (sc.p === undefined) sc.p = {};
+    return sc;
+  });
+}
+
+/** 合并 --only（挑 scenarios.mjs 里的固定场景）与 --scene（临时场景）：两边都给就拼在一起，
+ * 都不给就是原来的行为（pickScenes(null) 返回全量表）。 */
+function resolveScenes(args) {
+  const only = args.only ? String(args.only).split(",") : null;
+  const adhoc = parseAdhocScenes(args);
+  if (adhoc.length === 0) return pickScenes(only);
+  return [...(only ? pickScenes(only) : []), ...adhoc];
 }
 
 // ---------- 定位并启动本机缓存的完整版 chrome.exe（两个脚本共用，见 lib/chrome.mjs） ----------
@@ -133,16 +184,52 @@ function originFor(port) {
   return `http://127.0.0.1:${port}`;
 }
 
-/** viewport/dpr 不传就是默认 1600×1200 / DPR1（原行为不变），传了就用来模拟高分屏 / 弱 GPU（见文件头注释） */
-async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr = DEFAULT_DPR) {
+// ---------- check：只开页面、等启动完成、收集 console error / pageerror ----------
+async function cmdCheck(args) {
+  const port = args.port;
+  if (!port) throw new Error("check 需要 --port <端口>");
+  const angle = String(args.angle || "d3d11");
+  const viewport = parseViewport(args);
+  const dpr = parseDpr(args);
+
+  const browser = await launchBrowser(angle);
+  try {
+    const { renderer, errors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true });
+    // 启动完成（__voyageStartup 出现）后再等一小段时间，抓头几帧才触发的异常（例如某个 pass 首次
+    // draw 才暴露的问题），不然掐着 waitForFunction 一 resolve 就关页面，可能漏掉这类错误。
+    await new Promise((r) => setTimeout(r, 1500));
+    console.log(`[dev-browser] check --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
+    if (errors.length === 0) {
+      console.log(`[dev-browser] 没有 console error / pageerror。`);
+    } else {
+      console.error(`[dev-browser] 发现 ${errors.length} 条错误：`);
+      for (const e of errors) console.error(`  [${e.type}] ${e.text}`);
+    }
+    return { ok: errors.length === 0, errors };
+  } finally {
+    await closeBrowserSafely(browser);
+  }
+}
+
+/** viewport/dpr 不传就是默认 1600×1200 / DPR1（原行为不变），传了就用来模拟高分屏 / 弱 GPU（见文件头注释）。
+ * opts.collectErrors 为 true 时，在 goto 之前挂上 console/pageerror 监听，返回值里带一个 errors 数组
+ * （check 子命令用；shots/cold/bench 不传这个选项，行为完全不变）。 */
+async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr = DEFAULT_DPR, opts = {}) {
   const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
   const page = await context.newPage();
+  const errors = [];
+  if (opts.collectErrors) {
+    page.on("console", (m) => {
+      if (m.type() === "error") errors.push({ type: "console", text: m.text() });
+    });
+    page.on("pageerror", (e) => errors.push({ type: "pageerror", text: e.message }));
+  }
   await installGlProbe(page);
   const renderer = await assertRealGpu(page);
   await page.goto(`${originFor(port)}/?dev=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 180000, polling: 500 });
-  return { context, page, renderer, angle, viewport, dpr };
+  return { context, page, renderer, angle, viewport, dpr, errors };
 }
 
 // ---------- shots：跑回归场景表，截图 + 每场景一份同名 JSON ----------
@@ -150,7 +237,6 @@ async function cmdShots(args) {
   const port = args.port;
   if (!port) throw new Error("shots 需要 --port <端口>");
   const angle = String(args.angle || "d3d11");
-  const only = args.only ? String(args.only).split(",") : null;
   const outDir = path.join(REPO_ROOT, args.out || `tmp/screenshot/dev-${port}`);
   fs.mkdirSync(outDir, { recursive: true });
   const viewport = parseViewport(args);
@@ -160,7 +246,7 @@ async function cmdShots(args) {
   try {
     const { page, renderer } = await openPage(browser, port, angle, viewport, dpr);
     console.log(`[dev-browser] --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
-    const scenes = pickScenes(only);
+    const scenes = resolveScenes(args);
     const results = [];
     for (const sc of scenes) {
       const info = await page.evaluate(applyScene, { sc, defaults: DEFAULTS });
@@ -325,20 +411,24 @@ async function cmdBench(args) {
 async function main() {
   const [sub, ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
-  if (sub === "shots") await cmdShots(args);
-  else if (sub === "cold") await cmdCold(args);
-  else if (sub === "bench") await cmdBench(args);
+  let result;
+  if (sub === "check") result = await cmdCheck(args);
+  else if (sub === "shots") result = await cmdShots(args);
+  else if (sub === "cold") result = await cmdCold(args);
+  else if (sub === "bench") result = await cmdBench(args);
   else {
     console.error(
-      "用法：node scripts/dev-browser.mjs <shots|cold|bench> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--out 路径] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
+      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--out 路径] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
     );
+    console.error("  check           只开页面、等启动完成、收集 console error / pageerror，有错误就非 0 退出");
     console.error("  --viewport WxH  浏览器视口尺寸，默认 1600x1200（如 --viewport 2400x1800）");
     console.error("  --dpr N         deviceScaleFactor，默认 1（和 --viewport 组合模拟高分屏 / 弱 GPU）");
+    console.error("  --scene '<JSON>'  仅 shots：临时场景，字段同 scenarios.mjs 的 SCENES 条目，可重复，和 --only 可并用");
     process.exit(1);
   }
   // playwright-core 有时会留一些内部句柄没清干净（尤其是 GPU 争用导致渲染进程中途崩溃过一次的情况），
   // 光靠事件循环自然清空可能永远不退出；成功也强制退出，不依赖 Node 自然收尾
-  process.exit(0);
+  process.exit(sub === "check" && result && result.ok === false ? 1 : 0);
 }
 
 main().catch((err) => {
