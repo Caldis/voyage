@@ -166,6 +166,7 @@ function installTimer() {
     if (v.exposure.meterMat && mat === v.exposure.meterMat) return "测光";
     if (v.exposure.adaptMat && mat === v.exposure.adaptMat) return "曝光适应";
     if (v.exposure.finalMat && mat === v.exposure.finalMat) return "曝光合成";
+    if (v.exposure.localMat && mat === v.exposure.localMat) return "局部适应低通";
     if (v.cabinClass && v.cabinClass.variants) {
       for (const k in v.cabinClass.variants) if (v.cabinClass.variants[k] === mat) return "舱内合成";
     }

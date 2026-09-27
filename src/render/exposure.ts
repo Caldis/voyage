@@ -13,7 +13,7 @@ import type { FullscreenPass } from "./pass";
  *    窗外永远按窗外的亮度曝光（和改前一致）；舱内的曝光由窗外的曝光出发，
  *    按绝对亮度决定能独立适应多少，并且不许比窗外还亮。因为遮罩是解析算出来的，交界处没有光晕。
  *    T28：舱内再做部分色适应（von Kries / CAT02）；舱灯开、窗外暗时舱内成为主导适应区。
- * 4. 输出：曝光 × HDR → 舱内色适应 → 浦肯野（T48：窗外高饱和、够亮的发光体只保色度）→（T48b：夜里窗外按低通亮度局部适应）
+ * 4. 输出：曝光 × HDR → 舱内色适应 → 浦肯野（T48：窗外高饱和、够亮的发光体只保色度）→（T48b：夜里窗外按低通亮度局部适应；T48c：低通带时间常数、机翼不参与）
  *    →（TM01：白天窗外的高光段抬斜率）→ AgX 色调映射（T48：夜里窗外高饱和像素做色度保持，T48b 起亮度保持 AgX 的结果）
  *    → sRGB，最后加抖动避免天空渐变出现色带。
  */
@@ -222,6 +222,29 @@ void main() {
 }
 `;
 
+// T48c 夜间局部适应的低通亮度，带时间常数（半分辨率，与眩光纹理同尺寸、同类型，ping-pong）。
+//   T48b 的局部适应直接用当帧的眩光低通：翼尖频闪 / 夜间闪电这类 50–200 ms 的瞬态一亮，低通跟着涨，
+//   周围的城区灯芯、被照亮的云芯当帧就被压暗（审查 P2-1：频闪瞬间城区灯芯 −8、闪电云芯最多 −62）。
+//   人眼的局部适应有时间常数，所以这里把低通亮度在对数域里做指数平滑：变亮慢（τ ≈ 0.25 s，瞬态基本不进适应）、
+//   变暗快（τ ≈ 0.1 s，闪光过后很快复原，画面移动时亮区离开后不拖一道暗影）。
+//   存线性亮度（不是 log）：最终合成按 vUv 双线性取样，稳态时（prev = cur）与 T48b 对眩光纹理取样后再求亮度逐点相同。
+//   uDt ≥ 1e8 视为「直接收敛」：跳变（snap）与冻结（dt = 0，静止画面的稳态就是当帧）都走这条，冻结对照工具照旧逐像素可比。
+const LOCAL_FRAG = /* glsl */ `
+uniform sampler2D uBloom;
+uniform sampler2D uPrevLocal;
+uniform float uBloomLevels;
+uniform vec2 uLocalRate; // 1/秒：x = 变亮，y = 变暗
+uniform float uDt;
+varying vec2 vUv;
+void main() {
+  float cur = dot(texture(uBloom, vUv).rgb, vec3(0.2126, 0.7152, 0.0722)) / uBloomLevels;
+  float prev = texture(uPrevLocal, vUv).r;
+  float lc = log2(max(cur, 1e-30)), lp = log2(max(prev, 1e-30));
+  float k = 1.0 - exp(-uDt * (lc > lp ? uLocalRate.x : uLocalRate.y));
+  gl_FragColor = vec4(k >= 1.0 ? cur : k <= 0.0 ? prev : exp2(mix(lp, lc, k)), 0.0, 0.0, 1.0);
+}
+`;
+
 const FINAL_FRAG = /* glsl */ `
 uniform sampler2D uHdr;
 uniform sampler2D uAdapted;
@@ -240,6 +263,7 @@ uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度�
 uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 x→y、像素亮度 log10 cd/m² z→w 之间由 0 过渡到 1（只在窗外）
 uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
 uniform vec2 uNightLocal;     // T48b 夜里窗外的局部适应：低通亮度超过中灰 x 档的部分，整个像素压暗 y × 超出量（log2）；y = 0 关
+uniform sampler2D uLocalLum;  // T48c 局部适应用的低通亮度（LOCAL_FRAG 的结果：眩光亮度 ÷ uBloomLevels，带时间常数）
 uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
 uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透明度 x→y 之间由 0 过渡到 1，z = 1 开 / 0 不看云（整窗都给）
 uniform float uDayHiSatRoll;  // TM01 返工：收回段按饱和度前移的倍数（见 dayHighlightGain）
@@ -334,6 +358,7 @@ void main() {
   float logAdaptO = 0.0; // 窗外的适应亮度，log2 kcd/m²（T48 判断「夜里」用）
   vec3 catGain = vec3(1.0); // 舱内色适应的 LMS 增益（窗外不用）
   float hiGate = 0.0;       // TM01 白天窗外高光段的作用程度（窗外 × 白天 × 非均匀视野）
+  float notWing = 1.0;      // TM02 「这里看到的不是机翼 / 翼尖灯」（T48c 起夜间局部适应也乘它）
   if (uAuto) {
     vec4 adapted = texture(uAdapted, vec2(0.25, 0.5)); // log2 亮度（kcd/m²）：窗外（对数均值）、舱内（按面积）、窗外（线性均值）
     vec4 chroma = texture(uAdapted, vec2(0.75, 0.5));  // log2(R/G)、log2(B/G)：舱内 xy、窗外 zw（T28）
@@ -352,7 +377,8 @@ void main() {
     vec3 cPre = texelFetch(uPreWing, ivec2(gl_FragCoord.xy), 0).rgb;
     vec3 cWing = texelFetch(uHdr, ivec2(gl_FragCoord.xy), 0).rgb; // 与机翼 pass 同样按像素取，不经过滤
     vec3 dW = abs(cWing - cPre) / max(max(cWing, cPre), vec3(1e-12)); // 逐通道相对差：白漆与背后白云亮度相同、颜色不同时也认得出
-    hiGate *= max(max(cPre.r, cPre.g), cPre.b) > 0.0 ? 1.0 - smoothstep(uWingOcc.x, uWingOcc.y, max(max(dW.r, dW.g), dW.b)) : 1.0;
+    notWing = max(max(cPre.r, cPre.g), cPre.b) > 0.0 ? 1.0 - smoothstep(uWingOcc.x, uWingOcc.y, max(max(dW.r, dW.g), dW.b)) : 1.0;
+    hiGate *= notWing;
     float eO = em.eO, eC = em.eC, aC = em.aC, o = adapted.x, dom = em.dom;
     // T47：交界像素（遮罩 0 < a < 1，窗板开口边、座椅 / 头枕压在窗前的轮廓）按「曝光的倒数」线性混合，不在 log 域混合。
     // HDR 里这个像素 = a·窗外 + (1 − a)·舱内，窗外绝对亮度高、曝光低；log 域混合给出两者的几何平均曝光，
@@ -413,7 +439,10 @@ void main() {
     float nightO = 1.0 - smoothstep(uNightChroma.y, uNightChroma.z, (logAdaptO + 9.965784) * 0.30103);
     //    只按饱和度门控、不再乘像素亮度门限：暗处 AgX 本来就几乎不压色度（目标 ≈ AgX 自己），叠两道门限会让雾边缘的色相变化太陡
     nightChroma = uNightChroma.x * nightO * satKeep;
-    nightLoc = nightO * src.a;
+    //    T48c：再乘「非机翼」（TM02 的同一判据，dW 上面已算好，不多采样）。机翼和翼尖灯是近处的东西，
+    //    眼睛不会因为紧挨着一盏极亮的灯就把翼面局部适应掉：不乘时位置灯旁的翼面在 15–20 px 处出现约 12 级的暗环、
+    //    频闪亮起时翼梢反而变暗（审查 P2-1）。天空一侧的光晕照样按局部适应变小（宁可小，不要糊）
+    nightLoc = nightO * src.a * notWing;
   }
   gl_FragColor = vec4(c * exposure, 1.0);
   if (uDebugMask) { gl_FragColor = vec4(vec3(src.a), 1.0); return; }
@@ -426,7 +455,8 @@ void main() {
     //    超过中灰 + uNightLocal.x 档的部分，把整个像素压暗 uNightLocal.y × 超出量（软铰链，C1 连续）。
     //    低通之上的细节（单个灯点、路网）原样保留——压的是「地毯」不是「灯」，灯点与路网因此重新分开。
     //    黑地、星空、月夜的海（低通远低于拐点）逐位不变；白天 / 黄昏 nightLoc = 0。
-    float lb = log2(max(dot(glare * exposure, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18) - uNightLocal.x;
+    //    T48c：低通亮度改读 uLocalLum（同一个眩光低通，只是带了时间常数，见 LOCAL_FRAG），频闪 / 闪电不当帧进适应
+    float lb = log2(max(texture(uLocalLum, vUv).r * exposure, 1e-9) / 0.18) - uNightLocal.x;
     float lq = clamp(lb + 0.5, 0.0, 1.0);
     x *= exp2(-uNightLocal.y * (0.5 * lq * lq + max(lb - 0.5, 0.0)) * nightLoc);
     // TM01：白天窗外的受光云在 AgX 肩部保留对比（见 dayHighlightGain）；夜里、黄昏、舱内、云里 hiGate = 0，逐位不变
@@ -534,6 +564,8 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  * T48b「夜城不连成奶白平台」（只在夜里的窗外，门控同 T48 的 nightO × 窗外遮罩）：
  *   ① AgX 之前按眩光低通亮度 b 局部适应：x ·= 2^(−0.6 · 软铰链(log2(b / 0.18) − 3))，城区的地毯光被压回 AgX 的线性段，灯点 / 路网（低通之上的细节）照原样；
  *   ② T48 色度保持的目标改成「同色相、亮度 = AgX」，放不下时向同亮度的白去饱和（旧写法按 1/max 降亮度，把所有过曝的灯压到同一亮度）。
+ *   T48c：① 的门控再乘「非机翼」（TM02 的 dW 判据），机翼 / 翼尖灯不参与；① 的低通 b 改用带时间常数的版本（LOCAL_FRAG，
+ *     半分辨率 ping-pong，对数域指数平滑，变亮 τ 0.25 s / 变暗 0.1 s），频闪、闪电这类瞬态不当帧把周围压暗。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
  * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
  * 目标是用户给的屏幕亮度（白天舱壁 150–185、关灯夜里 25–45、窗最亮）。这是经验模型，不是视觉科学的定量结果。
@@ -610,6 +642,7 @@ export class Exposure {
       uNightChroma: { value: new THREE.Vector3(0.45, -1.5, 0.0) }, // 协调者合并时 0.6 → 0.45：雾芯留一点明暗层次
       // T48b：拐点中灰 +3 档、斜率 0.6（+2 / 0.5、+2.5 / 0.6 更暗，+2 / 0.7 城区发灰；见 handoff/T48b.md）
       uNightLocal: { value: new THREE.Vector2(3.0, 0.6) },
+      uLocalLum: { value: null },
       // TM01：膝点中灰 +0.5 档（显示约 144）、顶点 +2.5（约 203）、收回到 +5.0，段内斜率 1.4；w = 1 即关（见 handoff/TM01.md 的方案对比）
       // 返工：收回终点 4.0 → 5.0（+2.5→+4 档的局部对比从 0.39 回到 0.54；最亮的云边 / 砧顶细节要留住）
       uDayHiLook: { value: new THREE.Vector4(0.5, 2.5, 5.0, 1.3) }, // 协调者合并时斜率 1.4 → 1.3：云芯对比 ×1.59–1.71，最亮段（边缘高光所在）细节保到 0.94–0.95（TM01 返工取舍表）
@@ -628,6 +661,24 @@ export class Exposure {
     true,
   );
 
+  /** T48c 夜间局部适应的低通亮度（带时间常数，见 LOCAL_FRAG）：与眩光纹理同尺寸、同类型的单通道 ping-pong，第一次 render 时按眩光纹理建 */
+  private local: THREE.WebGLRenderTarget[] = [];
+  private localReset = true;
+  /** τ：变亮 0.25 s（频闪 50 ms、闪电 0.1–0.2 s 基本不进适应）、变暗 0.1 s（闪光过后很快复原）。1 km 低空画面移动快，τ 不宜更长（拖影） */
+  readonly localMat = material(LOCAL_FRAG, {
+    uBloom: { value: null },
+    uPrevLocal: { value: null },
+    uBloomLevels: { value: Bloom.WEIGHT_SUM },
+    uLocalRate: { value: new THREE.Vector2(1 / 0.25, 1 / 0.1) },
+    uDt: { value: 0 },
+  });
+  /**
+   * 调试：覆盖局部适应这一帧用的 dt（秒）。null = 按真实 dt；冻结（dt = 0）时视为直接收敛到当帧，
+   * 冻结对照照旧逐像素可比。设成 0 = 保持不动（冻结后钉亮频闪 / 按住闪电，模拟「瞬态还没进适应」），
+   * 设成 0.05 再渲染一帧 = 模拟 50 ms 的频闪进了多少适应。
+   */
+  localDt: number | null = null;
+
   constructor(private readonly pass: FullscreenPass) {
     EXPOSURE_STATE.value = this.adapted[0].texture;
   }
@@ -635,6 +686,28 @@ export class Exposure {
   /** 跳变（换地点、拖时间）后让眼睛直接适应到新亮度 */
   snap() {
     this.reset = true;
+    this.localReset = true;
+  }
+
+  /** 局部适应的低通亮度：按眩光纹理的尺寸 / 类型（半分辨率；能线性过滤 32 位浮点时是 FloatType）建目标，时间平滑后交给最终合成 */
+  private renderLocal(bloom: THREE.Texture, dt: number) {
+    const img = bloom.image as { width: number; height: number };
+    if (!this.local.length || this.local[0].width !== img.width || this.local[0].height !== img.height || this.local[0].texture.type !== bloom.type) {
+      for (const t of this.local) t.dispose();
+      const opts = { type: bloom.type, format: THREE.RedFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
+      this.local = [new THREE.WebGLRenderTarget(img.width, img.height, opts), new THREE.WebGLRenderTarget(img.width, img.height, opts)];
+      this.localReset = true;
+    }
+    const ld = this.localReset ? 1e9 : this.localDt ?? (dt > 0 ? dt : 1e9);
+    const [prev, next] = this.local;
+    const u = this.localMat.uniforms;
+    u.uBloom.value = bloom;
+    u.uPrevLocal.value = prev.texture;
+    u.uDt.value = ld;
+    this.pass.render(this.localMat, next);
+    this.local = [next, prev];
+    this.localReset = false;
+    this.finalMat.uniforms.uLocalLum.value = next.texture;
   }
 
   render(hdr: THREE.Texture, bloom: THREE.Texture, dt: number) {
@@ -652,6 +725,7 @@ export class Exposure {
     this.adapted = [next, prev];
     this.reset = false;
     EXPOSURE_STATE.value = next.texture;
+    this.renderLocal(bloom, dt);
 
     this.finalMat.uniforms.uHdr.value = hdr;
     this.finalMat.uniforms.uAdapted.value = next.texture;

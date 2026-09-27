@@ -248,6 +248,7 @@ export async function collectPrograms(server, opts = {}) {
     add("exposure-meter", exposure.meterMat);
     add("exposure-adapt", exposure.adaptMat);
     add("exposure-final", exposure.finalMat);
+    add("exposure-local", exposure.localMat); // T48c 夜间局部适应的低通时间平滑
   });
 
   // 大气 LUT：transmittance / multi-scattering / irradiance 是构造函数里的匿名材质，从没存成字段，

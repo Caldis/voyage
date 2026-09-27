@@ -76,6 +76,19 @@ try {
     await page.waitForFunction(() => !window.__voyage.ground || window.__voyage.ground.pending === 0, null, { timeout: 120000, polling: 500 }).catch(() => console.log(`  ${sc.name}: 等瓦片超时`));
     await page.waitForTimeout(2000);
     console.log(`  ${sc.name}: 冻结后等瓦片 ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    // T48c（T48b 审查 P2-2）：先拍一张丢弃的预热图。冻结、pending 0、再等 2 s 之后，有城的黄昏第一张仍与后面各张差 141–211 级
+    //   （2–5 万像素，城区灯点），排在第一个的变体总是不可比。拍到连续两张 PNG 逐字节相同为止（最多 6 张）
+    {
+      let prev = await page.screenshot({ timeout: 60000 });
+      let n = 1;
+      for (; n < 6; n++) {
+        await raf2(page);
+        const cur = await page.screenshot({ timeout: 60000 });
+        if (cur.equals(prev)) break;
+        prev = cur;
+      }
+      console.log(`  ${sc.name}: 预热 ${Math.min(n + 1, 6)} 张${n >= 6 ? "（仍未稳定）" : ""}`);
+    }
     for (const va of variants) {
       const out = await page.evaluate(async ({ js, src }) => {
         const v = window.__voyage, m = v.exposure.finalMat, u = m.uniforms;
