@@ -122,6 +122,17 @@ export interface UiDeps {
   audio: CabinAudio;
   /** 调试小地图（DX-06） */
   minimap: DebugMinimap;
+  /** 交通工具（TR02）：飞机 / 火车切换（rail/mode.ts 的 RailMode） */
+  vehicle: VehicleControl;
+}
+
+/** 面板需要的火车模式接口（rail/mode.ts 的 RailMode 满足它；这里只声明用到的部分，免得 ui.ts 引入 rail 模块） */
+export interface VehicleControl {
+  readonly active: boolean;
+  readonly loading: boolean;
+  readonly status: string;
+  onChange: (() => void) | null;
+  setVehicle(v: "plane" | "train"): Promise<void>;
 }
 
 /** 绑定面板上的所有控件。调用一次，顺序和原来 main.ts 里一致。 */
@@ -289,6 +300,7 @@ export function setupUi(deps: UiDeps) {
   setupWonderUi(deps.wonders);
   setupSoundUi(deps.audio);
   setupMinimapUi(deps.minimap);
+  setupVehicleUi(deps.vehicle);
 
   // 画质（PERF-5）：面板只负责挑档位（自动 / 高 / 中 / 低），具体分辨率 / DPR 上限与自适应逻辑都在 quality.ts
   const qualitySel = $<HTMLSelectElement>("quality");
@@ -431,6 +443,27 @@ function setupSoundUi(audio: CabinAudio) {
   chime.addEventListener("change", () => audio.setOption("chime", chime.checked));
   window.addEventListener("keydown", (e) => {
     if ((e.key === "m" || e.key === "M") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) audio.toggle();
+  });
+  sync();
+}
+
+// ---------- 交通工具（TR02） ----------
+
+/** 「交通工具」下拉：切到火车时第一次要拉线路数据（旁边显示「加载中」）；火车模式下飞机专用的控件（地点、高度、机翼位置、襟翼、
+ *  连续航程——它会按当前位置接入东亚航线网、改写地点）变灰。时间流速照常可用 */
+function setupVehicleUi(vehicle: VehicleControl) {
+  const sel = $<HTMLSelectElement>("vehicle");
+  const status = $("vehicle-status");
+  const planeOnly = ["preset", "altitude", "wing-pos", "high-lift", "voyage-on"].map((id) => $<HTMLInputElement | HTMLSelectElement>(id));
+  const sync = () => {
+    sel.value = vehicle.active || vehicle.loading ? "train" : "plane";
+    status.textContent = vehicle.status;
+    for (const el of planeOnly) el.disabled = vehicle.active;
+    document.querySelectorAll<HTMLButtonElement>("[data-alt]").forEach((b) => (b.disabled = vehicle.active));
+  };
+  vehicle.onChange = sync;
+  sel.addEventListener("change", () => {
+    void vehicle.setVehicle(sel.value === "train" ? "train" : "plane").then(sync);
   });
   sync();
 }
