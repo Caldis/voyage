@@ -7,6 +7,7 @@ import { $, type HighLiftSetting, type VoyageState } from "./state";
 import { WEATHER_PRESETS, type WeatherSystem } from "./weather";
 import { VIEW_PRESETS } from "./view-presets";
 import type { Director } from "./director";
+import { AIRPORTS } from "./routes";
 import { WONDERS } from "./wonders/catalog";
 import { RARITY_LEVELS, type WonderSystem } from "./wonders/system";
 import { isHeavyWeather, type QualityController, type QualityTier } from "./quality";
@@ -298,6 +299,7 @@ export function setupUi(deps: UiDeps) {
     if (e.key === "h" || e.key === "H") $("panel").classList.toggle("hidden");
   });
   setupVoyageUi(director);
+  setupNavUi(director, deps.vehicle, state);
   setupWonderUi(deps.wonders);
   setupSoundUi(deps.audio);
   deps.audio.attachRail(deps.vehicle); // TR07：火车模式下声音换成火车的声场（只读列车状态）
@@ -372,6 +374,113 @@ function setupVoyageUi(director: Director) {
   sync();
   // 调试 / 测试脚本用
   (window as unknown as { __voyageUi?: unknown }).__voyageUi = { setBackdrop, sync };
+}
+
+// ---------- 航向控制（T49） ----------
+
+/** 左右转按钮：点一下转 15°；按住 0.5 秒后每 0.2 秒再转 5°（像拧航向旋钮）。方向键 ← / → 每次 5°，Shift + 方向键 15° */
+const TURN_CLICK_DEG = 15;
+const TURN_REPEAT_DEG = 5;
+
+function setupNavUi(director: Director, vehicle: VehicleControl, s0: VoyageState) {
+  const modeBtns = document.querySelectorAll<HTMLButtonElement>("[data-nav]");
+  const hdg = $<HTMLInputElement>("hdg");
+  const hdgOut = $("hdg-out");
+  const dest = $<HTMLSelectElement>("nav-dest");
+  const status = $("nav-status");
+  const state = () => s0;
+  dest.innerHTML =
+    `<option value="">（选择机场）</option>` +
+    Object.values(AIRPORTS)
+      .map((a) => `<option value="${a.code}">${a.name}（${a.code}）</option>`)
+      .join("");
+
+  let dragging = false;
+  let lastStatus = "";
+  function sync() {
+    const ap = director.ap;
+    const s = state();
+    modeBtns.forEach((b) => b.classList.toggle("on", b.dataset.nav === (ap.mode === "direct" ? "route" : ap.mode)));
+    // 手动航向时滑块停在选定航向；其他方式跟着实际航向走（拖动中不去抢）
+    const shown = ap.mode === "heading" ? ap.selHeading : s.heading;
+    if (!dragging) hdg.value = String(Math.round(shown) % 360);
+    hdgOut.textContent = `${String(Math.round(shown) % 360).padStart(3, "0")}°（${compass(shown)}）`;
+    const want = ap.mode === "direct" ? (director.leg?.to.code ?? "") : "";
+    if (dest.value !== want && document.activeElement !== dest) dest.value = want;
+    const text =
+      director.describeNav() ||
+      (s.preset.dest ? "沿航线飞：到达终点上空后自动接下一段" : "保持航向直飞") + "。方向键 ← / → 转向（每次 5°，Shift 15°）";
+    if (text !== lastStatus) status.textContent = lastStatus = text;
+  }
+
+  modeBtns.forEach((b) =>
+    b.addEventListener("click", () => {
+      const m = b.dataset.nav;
+      if (m === "route") director.resumeRoute();
+      else if (m === "hold") director.hold();
+      else director.setHeading(state().heading);
+      sync();
+    }),
+  );
+  hdg.addEventListener("input", () => {
+    dragging = true;
+    director.setHeading(Number(hdg.value));
+    sync();
+  });
+  hdg.addEventListener("change", () => (dragging = false));
+  dest.addEventListener("change", () => {
+    if (dest.value) director.directTo(dest.value);
+    dest.blur(); // 焦点留在下拉框上会吃掉方向键
+    sync();
+  });
+
+  // 按住连续转
+  for (const [id, sign] of [["turn-left", -1], ["turn-right", 1]] as const) {
+    const btn = $<HTMLButtonElement>(id);
+    let delay = 0, repeat = 0;
+    const stop = () => {
+      window.clearTimeout(delay);
+      window.clearInterval(repeat);
+    };
+    btn.addEventListener("pointerdown", (e) => {
+      if (btn.disabled || e.button !== 0) return;
+      director.turnBy(sign * TURN_CLICK_DEG);
+      sync();
+      stop();
+      delay = window.setTimeout(() => {
+        repeat = window.setInterval(() => {
+          director.turnBy(sign * TURN_REPEAT_DEG);
+          sync();
+        }, 200);
+      }, 500);
+    });
+    for (const ev of ["pointerup", "pointerleave", "pointercancel"]) btn.addEventListener(ev, stop);
+    // 键盘操作按钮（Tab 到按钮上按回车 / 空格）：pointerdown 不会触发，走 click；鼠标点击的 click 的 detail > 0，已由 pointerdown 处理
+    btn.addEventListener("click", (e) => {
+      if (e.detail === 0) {
+        director.turnBy(sign * TURN_CLICK_DEG);
+        sync();
+      }
+    });
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    // 焦点在输入框 / 下拉框 / 文本框里时方向键归它们（滑块、下拉的原生操作）；火车模式下没有航向可控
+    const t = e.target as HTMLElement | null;
+    if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement || t?.isContentEditable) return;
+    if (vehicle.active) return;
+    e.preventDefault();
+    director.turnBy((e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? TURN_CLICK_DEG : TURN_REPEAT_DEG));
+    sync();
+  });
+
+  $("debug-arrive").addEventListener("click", () => {
+    director.forceArrive();
+    sync();
+  });
+  window.setInterval(sync, 250);
+  sync();
 }
 
 // ---------- 奇观模式（W01） ----------
@@ -469,12 +578,15 @@ function setupSoundUi(audio: CabinAudio) {
 function setupVehicleUi(vehicle: VehicleControl) {
   const sel = $<HTMLSelectElement>("vehicle");
   const status = $("vehicle-status");
-  const planeOnly = ["preset", "altitude", "wing-pos", "high-lift", "voyage-on"].map((id) => $<HTMLInputElement | HTMLSelectElement>(id));
+  // T49：航向控制（航向滑块、左右转、直飞、调试「到达」）也是飞机专用
+  const planeOnly = ["preset", "altitude", "wing-pos", "high-lift", "voyage-on", "hdg", "nav-dest", "turn-left", "turn-right", "debug-arrive"].map((id) =>
+    $<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(id),
+  );
   const sync = () => {
     sel.value = vehicle.active || vehicle.loading ? "train" : "plane";
     status.textContent = vehicle.status;
     for (const el of planeOnly) el.disabled = vehicle.active;
-    document.querySelectorAll<HTMLButtonElement>("[data-alt]").forEach((b) => (b.disabled = vehicle.active));
+    document.querySelectorAll<HTMLButtonElement>("[data-alt], [data-nav]").forEach((b) => (b.disabled = vehicle.active));
   };
   vehicle.onChange = sync;
   sel.addEventListener("change", () => {

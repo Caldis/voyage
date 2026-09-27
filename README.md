@@ -43,6 +43,7 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 - 鼠标移动 = 挪动头部（窗框视差），滚轮 = 靠近 / 远离舷窗，`H` 隐藏面板
 - 声音（T11）：默认关；面板勾选「声音」或按 `M` 开启（浏览器要求用户手势），背景板模式下照常播放、`M` 仍可开关
 - 时间：日期 + 当地时刻滑块，或用 60× / 600× 快进看日落
+- 航向（T49）：面板「航向」一栏——「自动航线」（默认：沿大圆航线飞，到达终点后自动接下一段）、「保持航向」、「盘旋」（以当前位置为等待点飞跑道形等待航线，一直看同一片地面）；「◀ 左转 / 右转 ▶」点一下 15°、按住连续转，或拖「选定航向」滑块；「直飞机场」选 15 个东亚机场之一，沿大圆航线飞过去、到达后在上空盘旋。键盘 `←` / `→` 每次 5°（`Shift` 15°；焦点在输入框 / 下拉框里时不响应）。转弯按真实客机：坡度 ≤ 25°，滚转约 3°/s（25° 要 8 秒多才压满）
 - 调试小地图（DX-06）：面板勾选「调试小地图」或按 `N` 开启（默认关），左下角显示航向 / 轨迹 / 航线 / 云回波 / 交通 / 奇观；点击地图切换 50 / 200 / 800 km 量程
 
 ## 渲染管线（每帧）
@@ -67,13 +68,13 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | --- | --- |
 | `src/main.ts` | 创建渲染器与各系统、主循环编排（各 pass 调度）、`setPreset` / `snapAll` / `resize`、调试句柄 `window.__voyage` |
 | `src/state.ts` | 共享类型 `VoyageState` / `Preset`、`CRUISE_PITCH_DEG`、`$` 小工具 |
-| `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进） |
+| `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进）；自动驾驶（T49，`autopilotOf(state)`：沿航线 / 手动航向 / 直飞 / 跑道形等待航线，坡度与滚转速率按真实时间限制） |
 | `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步 |
 | `src/astro.ts` | 太阳 / 月亮位置、月相、当地→赤道坐标矩阵（astronomy-engine） |
 | `src/sky-assets.ts` | 星图（RGB：BSC5 星表格子，每格最多一颗星，T41；A 通道是银河）、月面贴图 |
 | `src/light-pollution.ts` | 城市光污染的天空背景（T09）：从地面夜光估算，只压银河的可见度 |
 | `src/traffic.ts` / `src/weather.ts` | 远处飞机的运动；天气预设、雷暴 / 台风摆放、闪电调度；天气场 `WeatherField`（T19b：按经纬度 + 时间取样云型 / 云量，雷暴系统与台风的出生、寿命、漂移，粗略东亚海陆分布） |
-| `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
+| `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力（T49：优先向前、提前转弯、掉头借遮挡）、手动导航（`setHeading` / `turnBy` / `hold` / `directTo` / `resumeRoute`）、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
 | `src/rail/*` | 火车模式（TR02）：`data.ts` 读线路烘焙产物；`corridor.ts` 走廊坐标（里程 s、横向 d、高程）、平滑中心线、按规范公式估算的超高；`train.ts` 速度曲线（巡航 90 km/h、曲线限速、终点停车折返）与车体姿态（台车连线、超高侧倾、悬挂外倾）；`vibration.ts` 车体低频振动；`geodesy.ts` 线路 ENU ↔ 经纬度；`mode.ts` 接到 voyage 的相机 / 状态（`window.__voyage.rail`，`rail.teleport(s, dir)` 调试用）；单测 `node src/rail/rail.test.mjs`；飞机模式着色器零回归比对 `node src/rail/shader-parity.mjs <对照 voyage 根目录>` |
 | `src/debug/minimap.ts` | 调试小地图（DX-06）：可选的角落 2D canvas 叠层，画本机 / 轨迹 / 航线 / 交通 / 奇观，以及从天气场采样的云回波「多普勒」图；不碰任何 WebGL 程序 |
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
@@ -120,6 +121,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **罕见光学现象**（T17，`src/render/optics.ts`）：平时按条件 + 随机出现（宝光：云顶在下方且是水滴云、太阳在海平线以上、每 20 模拟分钟掷一次；幻日 / 22° 晕：卷云、每 30 分钟掷一次，常只出一侧；绿闪：每个日落都有色散，约三成日落有把它放大到看得见的逆温蜃景）。强制出现：URL `?optics=glory,halo,flash`（或 `all`），全关对照 `?optics=off`；运行时 `__voyage.optics.force = { glory: true }`、`__voyage.optics.disabled = true`；`__voyage.optics.status` 看当前强度 / 云滴半径 / 放大倍数。`__voyage.optics.pinGreenFlash(0.5)` 把模拟时间钉在绿闪那一刻（0 = 红色日像上缘刚落到海平线、1 = 绿色上缘落下；飞机在动，每帧重新对准），`pinGreenFlash(null)` 解除；`__voyage.optics.pixelOf(__voyage.sceneMat.uniforms[, 方向])` 算反日点（或任意窗外方向）落在屏幕哪个像素，找「宝光 / 幻日在窗里」的时刻用。几何上：宝光要座位背对太阳（如 wpac 左座 16:30），幻日在太阳两侧约 22°（wpac 右座 16:30 卷云）。自测场景见 `handoff/T17-shots.ps1`。
 - **调试小地图**（DX-06，`src/debug/minimap.ts`）：面板底部「调试小地图」开关，或按 `N`（不在输入框里时）；默认关，纯 2D canvas 叠层，画在左下角（约 280×300、半透明深色底，不挡舷窗中心），关着时 `update()` 第一行就返回、canvas `display:none`，零开销。内容：本机（图标固定圆心，地图始终「航向朝上」）、已飞过的轨迹、当前航线（`director.leg` 的航段或 `state.preset.dest`）、远处的其他飞机（`traffic.ts`）、奇观（`wonders.active`）、以及「云的多普勒」——仿气象雷达回波图，背景网格从 `director.weather.field.sample()`（天气场）按经纬度采样云量 / 云型换算出回波强度，叠加当前**实际渲染中**的 `weather.storms` / `weather.hurricane`（不论天气是导演按天气场摆的还是面板手选的，雷达图都和窗外一致）。点击地图本体在 50 / 200 / 800 km 三档量程间切换。雷达网格（48×48）每约 800 ms 重采样一次，且分帧算（每帧最多 4 行），避免拖帧；台风的螺旋雨带是按角度做正弦调制的近似图形（用于「看起来像螺旋回波」），不是 `clouds.glsl.ts` 里真正的密度场（CPU 侧读不到那份数据）。
 - `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
+- **航向 / 接力调试**（T49）：面板底部「立即触发到达 / 接下一段（调试）」按钮 = `__voyage.director.forceArrive()`：不等飞到终点，立即走一次「到达」（自动航线接下一段，要掉头 > 90° 时照常排进遮挡队列；直飞模式转入盘旋）。其他句柄：`__voyage.director.ap`（自动驾驶：`mode` / `selHeading` / `turnDir` / `timeScale` / `hold` / `nextCourse` / `holdCourse`）、`director.setHeading(deg, dir?)`、`director.turnBy(±deg)`、`director.hold()`、`director.directTo("ITM")`、`director.resumeRoute()`、`director.nextLeg`（离终点 400 km 内预挑的下一段）、`director.describeNav()`。离线复现 / 单测（不开浏览器，几秒跑完）：`node --import ./handoff/T49-resolve.mjs --experimental-transform-types --no-warnings handoff/T49-test.mts`；按真实时间打印航向 / 坡度曲线与 > 60° 转向事件：同样的前缀跑 `handoff/T49-sim.mts [流速] [真实分钟] [预设]`。
 - `window.__voyageStartup`：启动各阶段耗时。
 - URL 参数 `?lut16`：大气 LUT 强制用半精度（T36 改前的行为、没有 32 位浮点线性过滤的设备），用来对照深暮光的阶梯。
 - 截图前：把 `head` 固定在 `{tx:0, ty:0.02, x:0, y:0.02, tz:-0.3, z:-0.3}`、`uCloudOffset` 归零或设成固定值、隐藏面板（加 `hidden` 类），前后对比才有意义；截图放 `tmp/screenshot/voyage-*.png`。
@@ -328,6 +330,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **加速播放（连续航程 60×）会把影像瓦片服务器打到限流**（T19a）：飞机每秒走 15 km，8–32 km 的细级别 clipmap 每一两帧就重建，EOX 每分钟约 7000 个请求，被拒时返回的错误页不带 CORS 头，控制台刷出上万条 `blocked by CORS policy`（看起来像 CORS 配置错误，其实是限流）。只给 `ground.update` 加时间节流没用：请求量约正比于「飞过的距离 × 细级别数」。
   修法：`ground.setMinLevel()` 按流速停用最细几级（10× 停 1 级，≥30× 停 3 级），60× 降到每分钟约 550 个，1× 基线约 95。以后怎么识别：`handoff/T19a-voyage.mjs` 的 summary 里有 `requestsPerRealMin` 和 `consoleErrorCount`。
 - **连续航程不调 `setPreset`**（T19a）：接下一段只换 `state.preset`（导航目标、时区、霾），不换本地坐标原点，否则地面、云场都会重建。离原点太远时由导演借穿云或深夜「换原点」（`director.ts` 的 rebase 请求），经纬度、高度、航向都连续，只有云场和海浪的噪声原点会跳一下。
+- **时间加速时「原地掉头、坡度一帧打满」**（T49，用户反馈「有时飞机会大幅转向倾斜，不知道怎么触发」）：现象是连续航程 10× / 60× 到达终点接下一段时，飞机在 2–3 真实秒内掉头 100–170°、坡度一帧到 25°。根因两条：①转弯与坡度平滑都按**模拟**时间算（ω = g·tanφ / v、坡度时间常数 1.4 模拟秒），60× 下航向变化率 63°/真实秒、滚转速率 500–760°/真实秒；②`pickNextLeg` 不看方向，接力时 71% 的下一段要转 > 90°（航线网是放射状的，到了新千岁 / 那霸 / 广州这种端点只能掉头）。修法（flight.ts 自动驾驶 + director.ts）：坡度按**真实时间**以 ≤ 3°/s 趋近目标坡度，时间加速时按「窗外转动 ≤ 6°/真实秒」降低坡度上限（10× 约 15°、60× 约 2.5°，转弯半径相应变大）；航向由实际坡度按协调转弯算，不再直接设角速度；接力优先挑与到达航向夹角 ≤ 90° 的下一段（离终点 400 km 预挑），按转弯半径提前开始转；只能掉头时机翼改平直飞，等穿云（在云里直接换向）或入夜，最多等 8 模拟分钟再照常转。以后怎么识别：`handoff/T49-sim.mts 60 20` 列出的 > 60° 转向事件时长应在十几到几十真实秒、最大滚转速率 3°/s；`handoff/T49-test.mts` 全部通过。
+- **时间加速下转弯半径很大，目的地又近时会绕着它转圈**（T49）：60× 巡航时转弯半径约 170 km，直飞一个 100 km 外、在身后的机场时，一直压坡度会让机场始终落在转弯圆里。`navDiff()` 在「终点落在转弯圆内」（距离 < 2r·sin|Δ|）时先改平直飞出去，再转回来。改转弯参数时跑 `T49-test.mts` 第 6 项（直飞伊丹后盘旋）。
 - **海面天空反射不能再乘相机→海面的透射率**。天空视图 LUT 是从相机算的，本身已经包含这段衰减。
   现象：黄昏时地平线下方有一条细暗线。起初以为是 LUT 在地平线处跨行插值，改了夹取以后暗线还在，才找到真正原因。
   修法：反射贡献 = F·(L相机(反射方向) − 内散射(相机→海面))。LUT 的地平线夹取也保留了，它本身没错。
