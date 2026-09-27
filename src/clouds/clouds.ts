@@ -8,7 +8,7 @@ import { CLOUD_COMMON, CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES, OCC_LAYERS, OCC_N, OC
 import type { CloudNoise } from "./noise";
 
 /**
- * 体积云：半分辨率光线步进 + 时间累积。
+ * 体积云：光线步进 + 时间累积（默认全分辨率，面板「画质」可降到 0.75 / 0.5）。
  * 输出纹理 RGB = 已经加上空气透视的云辐亮度（预乘），A = 云的透射率（背景还剩多少）。
  *
  * 步进程序只有一个颜色输出，云的深度写进 gl_FragDepth（深度纹理，按 AERIAL_MAX_DISTANCE 归一化）（PERF-1）。
