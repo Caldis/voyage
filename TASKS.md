@@ -9,8 +9,8 @@
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | PERF-10/11 | 第 7 波（最高优先） | 5210 | worktree | Opus（云按天气拆变体 + resolve 回 0.05 ms；必审） | — | 进行中 |
-| TR03 | 第 7 波（主干，P8） | 5203 | worktree | Opus（火车远景 RAIL 变体、内陆水面 / 岸线锯齿、相机高度精度；必审） | — | 进行中 |
-| TR07 | 第 7 波（主干，P8） | — | worktree | Opus（火车声音：接缝节奏（定尺示例开关）、滚动 / 电机 / 轮缘、道口多普勒、停站与广播示意） | — | 进行中 |
+| TR03 | 第 7 波（P8） | 5203 | `worktree-agent-ac14bb478e8ff993d`（保留，未合并） | Opus（火车远景） | — | **暂停**（用户 2026-09-27：专心飞机，火车先不动） |
+| TR07 | 第 7 波（P8） | — | `worktree-agent-ab785837288ae2ca1`（保留，未合并） | Opus（火车声音） | — | **暂停**（同上） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
