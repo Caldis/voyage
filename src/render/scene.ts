@@ -5,6 +5,7 @@ import { CABIN_COMMON, PANE_COMMON } from "./cabin.glsl";
 import { CABIN_SHADING_COMMON } from "./cabin-shading.glsl";
 import { LEATHER_COMMON } from "./cabin-leather.glsl";
 import { SEATS_COMMON } from "./seats.glsl";
+import { CABIN_REFLECT_COMMON } from "./cabin-reflect.glsl";
 import { VIEW_COMMON } from "./view.glsl";
 import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
 import { LIGHTS_COMMON } from "./lights.glsl";
@@ -72,6 +73,7 @@ const vec3 PLASTIC_ALBEDO = vec3(0.78, 0.76, 0.72);
 ${CABIN_SHADING_COMMON}
 ${LEATHER_COMMON}
 ${SEATS_COMMON}
+${CABIN_REFLECT_COMMON}
 
 void main() {
   vec3 viewPre = vec3(0.0);   // 窗外加窗板效果之前的颜色，打包给机翼 pass
@@ -115,7 +117,7 @@ void main() {
   vec3 lWin = 0.5 * (eSkyH / M_PI + belowAlbedo * eDown / M_PI) * PANE_TRANSMITTANCE;
   // 舱内环境光：灯光 + 满舱窗户进来的光被来回反射后的均匀部分（经验系数，待换成辐射度近似）
   vec3 eCabin = uCabinLight * CABIN_LIGHT_COLOR + 0.06 * M_PI * lWin + 0.004 * eSunNormal * max(sunC.z, 0.0);
-  // 窗板反射舱内时仍用这一版（窗外画面与改前一致）；舱内表面的环境光里满舱窗户的回弹再多算一些（经验值）
+  // 划痕 / 擦痕被舱内光照亮时仍用这一版；舱内表面的环境光里满舱窗户的回弹再多算一些（经验值）
   vec3 eCabinRefl = eCabin;
   eCabin += 0.03 * M_PI * lWin;
   CabinLights cl;
@@ -132,6 +134,16 @@ void main() {
   cabinMoodScene(uCabinLight, uSunDir.y, uMoodLight, mainTint, moodI);
   cl.eCabin += uCabinLight * (mainTint - CABIN_LIGHT_COLOR) + moodI * 0.05; // 洗墙光在上墙、行李架之间的回弹
   cl.moodI = moodI;
+  // 窗板里的舱内倒影用的灯光（T24，见 cabin-reflect.glsl.ts）
+  ReflLights rl;
+  // 面板「关灯」时 uCabinLight 留着 0.001 的底数（别处要用），倒影里当成全关，否则曝光拉高后这 1 lux 也会显出一层灯带
+  rl.eMain = uCabinLight * mainTint * smoothstep(0.005, 0.05, uCabinLight);
+  rl.eAmb = 0.06 * M_PI * lWin + 0.004 * eSunNormal * max(sunC.z, 0.0);
+  rl.moodI = moodI;
+  rl.wash = moodI + rl.eMain * 1.2; // 主灯里行李架下沿的洗墙灯带（和氛围灯同一条灯槽）
+  rl.lOppWin = mix(cl.lGlow, lWin, 0.5);
+  rl.readOn = cl.readOn;
+  rl.pupil = mix(0.0065, 0.0045, smoothstep(0.005, 0.05, uCabinLight)); // 夜里暗适应时瞳孔更大，倒影更虚
 
   // ---- 座椅：挡在侧壁和窗前面（见 seats.glsl.ts） ----
   float tWall = rd.z > 1e-4 ? traceWall(ro, rd) : 1e3;
@@ -144,8 +156,6 @@ void main() {
   float wallSeatAO = pW.y < 0.08 ? mix(0.55, 1.0, smoothstep(0.0, 0.12, sdSeats(pW))) : 1.0;
   float seed = wi * 3.7 + 1.0;
   vec3 wall = shadeWall(pW, rd, tWall, pixAng, wq, dBezel, seed, wallSeatAO, cl);
-  // 窗板反射舱内用的平滑版本（和改前的舱壁一致，不带细节）
-  vec3 wallRefl = PLASTIC_ALBEDO / M_PI * eCabinRefl * (1.0 + 0.35 * clamp(pWall.y / 0.4, -1.0, 1.0));
   if (rd.z < 1e-4) {
     gl_FragColor = vec4(mix(wall, seatCol, seat.cov), 0.0);
     return;
@@ -211,9 +221,16 @@ void main() {
   // 内层窗板底部的透气孔（直径约 3 mm），孔边一圈暗环
   float dHole = length(q - vec2(0.0, -0.145));
   view *= 1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole));
-  // 窗板反射舱内：正对时约 4%，斜看时更多（菲涅尔）
+  // 窗板反射舱内：正对时约 4%，斜看时更多（菲涅尔）；×1.5 是多层窗板各个面的反射之和。
+  // 反射的是按方向变化的舱内倒影（T24）：自己的头肩是暗区，窗外的灯光从那里透出来
   float fr = 0.04 + 0.96 * pow(1.0 - clamp(rd.z, 0.0, 1.0), 5.0);
-  view += fr * wallRefl * 1.5;
+  // 白天窗外亮上千倍，倒影不到窗外的千分之三（色调映射后不到半个灰阶），整段跳过省掉开销；
+  // 上界按最亮的天花板灯槽 + 对面窗户估计，阅读灯亮着时（只在夜里全关灯时）不跳
+  vec3 rr = vec3(rd.xy, -rd.z);
+  float reflMax = fr * 1.5 * dot(0.3 * (rl.eAmb + 2.5 * rl.eMain + rl.moodI) + rl.lOppWin, vec3(0.2126, 0.7152, 0.0722));
+  if (rl.readOn > 0.0 || reflMax > 0.003 * dot(view, vec3(0.2126, 0.7152, 0.0722))) {
+    view += fr * 1.5 * cabinReflection(pPane, rr, length(pPane - ro), rl);
+  }
   paneK = (1.0 - 0.1 * sm) * (1.0 - 0.3 * edge) * (1.0 - 0.12 * wc)
     * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
   }
