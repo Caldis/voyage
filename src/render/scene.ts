@@ -273,7 +273,7 @@ void main() {
     vec3 surf = reflGain * reflWB * cabinReflection(pPane, rr, length(pPane - ro), rl, pts);
     // T34 面状倒影的硬上限（exposure.ts ⑧）：显示亮度不超过同屏舱内均值的 k 倍（睡眠 / 全关 k 使显示 Y ≤ 舱壁一半）。
     // 软限幅（4 次范数），低于上限的部分几乎不变，所以倒影内部的明暗结构（灯带的亮线、行李架的边）还在；
-    // 光点是灯本身，不进上限
+    // 光点是灯本身，开灯档不进上限（睡眠档见下，T41）
     ExpModel em = exposureModel(expState);
     float capL = exp2(em.reflCapLog);
     // 窗外亮的时候（黄昏开着灯，窗外显示亮度 Y 过 100 左右），倒影不超过背后窗外的 15%：
@@ -283,7 +283,12 @@ void main() {
     capL *= exp2(smoothstep(0.05, 0.15, lOut * exp2(em.eO)) * min(0.0, log2(max(0.15 * lOut, 1e-12) / capL)));
     float sl = dot(surf, vec3(0.2126, 0.7152, 0.0722)) / capL;
     surf *= inversesqrt(sqrt(1.0 + sl * sl * sl * sl));
-    reflAdd = surf + (uDebug == 33 ? vec3(0.0) : reflGain * reflWB * pts);
+    // T41：睡眠档的阅读灯光点也按同一上限软限幅（显示亮度 ≤ 面状倒影的上限，极弱）——不限时它们是夜景窗里最亮的一对点，
+    // 读成天上的「双亮星」。开灯档（lit = 1）照旧不进上限：那时舱内亮、倒影本来就认得出是灯
+    vec3 ptsR = reflGain * reflWB * pts;
+    float pl = dot(ptsR, vec3(0.2126, 0.7152, 0.0722)) / capL;
+    ptsR *= mix(inversesqrt(sqrt(1.0 + pl * pl * pl * pl)), 1.0, rl.lit);
+    reflAdd = surf + (uDebug == 33 ? vec3(0.0) : ptsR);
   }
   // 调试 31：窗内只留倒影（窗外置黑，量倒影本身的显示亮度）；32：关掉倒影（T34）
   if (uDebug == 31 || uDebug == 33) view = reflAdd;
