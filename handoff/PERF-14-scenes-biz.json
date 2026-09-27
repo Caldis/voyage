@@ -1,0 +1,207 @@
+[
+ {
+  "name": "biz-day-ahead",
+  "p": {
+   "preset": "wpac",
+   "time": 720,
+   "wing-pos": "8",
+   "cabin-light": true,
+   "cabin-class": "business",
+   "view-preset": "ahead"
+  }
+ },
+ {
+  "name": "biz-day-behind",
+  "p": {
+   "preset": "wpac",
+   "time": 720,
+   "wing-pos": "8",
+   "cabin-light": true,
+   "cabin-class": "business",
+   "view-preset": "behind"
+  }
+ },
+ {
+  "name": "biz-day-seated",
+  "p": {
+   "preset": "wpac",
+   "time": 720,
+   "wing-pos": "8",
+   "cabin-light": true,
+   "cabin-class": "business",
+   "view-preset": "seated"
+  }
+ },
+ {
+  "name": "biz-on-ahead",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": true,
+   "cabin-class": "business",
+   "view-preset": "ahead"
+  }
+ },
+ {
+  "name": "biz-on-behind",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": true,
+   "cabin-class": "business",
+   "view-preset": "behind"
+  }
+ },
+ {
+  "name": "biz-on-seated",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": true,
+   "cabin-class": "business",
+   "view-preset": "seated"
+  }
+ },
+ {
+  "name": "biz-sleep-ahead",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": false,
+   "cabin-class": "business",
+   "view-preset": "ahead"
+  }
+ },
+ {
+  "name": "biz-sleep-behind",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": false,
+   "cabin-class": "business",
+   "view-preset": "behind"
+  }
+ },
+ {
+  "name": "biz-sleep-seated",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": false,
+   "cabin-class": "business",
+   "view-preset": "seated"
+  }
+ },
+ {
+  "name": "biz-off-ahead",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": "off",
+   "cabin-class": "business",
+   "view-preset": "ahead"
+  }
+ },
+ {
+  "name": "biz-off-behind",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": "off",
+   "cabin-class": "business",
+   "view-preset": "behind"
+  }
+ },
+ {
+  "name": "biz-off-seated",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": "off",
+   "cabin-class": "business",
+   "view-preset": "seated"
+  }
+ },
+ {
+  "name": "biz-wet-day",
+  "p": {
+   "preset": "wpac",
+   "time": 720,
+   "wing-pos": "8",
+   "cabin-light": true,
+   "cabin-class": "business",
+   "view-preset": "seated"
+  },
+  "js": "v.state.wetness = 0.9; return 'wet';"
+ },
+ {
+  "name": "biz-wet-night-on",
+  "p": {
+   "preset": "scs",
+   "seat": "left",
+   "date": "2026-05-15",
+   "time": 1350,
+   "coverage": 0.15,
+   "wing-pos": "-4",
+   "cabin-light": true,
+   "cabin-class": "business",
+   "view-preset": "seated"
+  },
+  "js": "v.state.wetness = 0.9; return 'wet';"
+ },
+ {
+  "name": "in-cloud",
+  "p": {
+   "preset": "wpac",
+   "time": 720,
+   "weather": "overcast",
+   "altitude": 2.0,
+   "cabin-class": "business"
+  }
+ },
+ {
+  "name": "sunset-wing",
+  "p": {
+   "preset": "wpac",
+   "time": 1040,
+   "wing-pos": "8",
+   "cabin-class": "business"
+  }
+ }
+]
