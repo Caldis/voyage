@@ -13,6 +13,7 @@
 | T49 | 第 7 波（插单，用户需求） | 5249 | worktree | Opus（**航向控制 / 巡航方式**：手动航向盘 + 左右转、选目的地机场、等待航线式盘旋；真实时间滚转限速；保留航线接力。用户澄清：不是倾斜缺陷，是想自己控制航向） | — | 进行中 |
 | R-IMAGERY | 第 7 波（飞机地面打磨，用户提问） | — | 主仓库 research/ | Opus 研究代理（高清卫星 / 航空影像：Esri / 国土地理院 / Mapbox / Google 许可原文、实测对比、混用方案 → research/IMAGERY.md） | — | 进行中 |
 | R-CLOUD-SHARP | 第 7 波（飞机，用户提问） | — | 主仓库 research/ | Opus 研究代理（云不够锐利 / 边缘高光缺高分辨率质感：诊断分辨率 / 上采样 / TAA / 噪声 LOD / 受光，对照 MSFS 与业界 → research/CLOUD_SHARPNESS.md） | — | 进行中 |
+| R-METEO | 第 7 波（飞机，用户需求） | — | 主仓库 research/ | Opus 研究代理（气象学体检：云属 / 多层云 / 锋面 / 台风 / 雷暴 / 雾 / 山地波；真实天气数据许可；可规划功能 → research/METEOROLOGY.md） | — | 进行中 |
 | TR03 | 第 7 波（P8） | — | `worktree-agent-ac14bb478e8ff993d`（3f6af34） | Opus（火车远景） | 审查中 | 已交付，独立审查中（用户：搞完了就合，之后专心飞机） |
 | TR07 | 第 7 波（P8） | — | `worktree-agent-ab785837288ae2ca1`（84a46bb） | Opus（火车声音） | 审查中 | 已交付，独立审查中（与 T49 同改 ui.ts / index.html → 必审） |
 
