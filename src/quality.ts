@@ -1,0 +1,346 @@
+import * as THREE from "three";
+import type { Clouds } from "./clouds/clouds";
+
+/**
+ * PERF-5：画质档位与「自动」档。
+ *
+ * 背景（见 `research/PERF_REPORT_wave3.md` §2.3）：面板「画质」原来只缩放云步进的分辨率（1 / 0.75 / 0.5），
+ * 默认「高」= 云全分辨率；1.5 倍屏（实际绘制 2400×1800）上台风场景曾到 17 ms，掉出 60 fps；用户的 Mac
+ * 显卡也弱得多。这里加「自动」档并设为默认：按最近若干帧的 GPU 时间（有 `EXT_disjoint_timer_query_webgl2`
+ * 就用它）或帧间隔（没有该扩展时的兜底）自适应升降云分辨率、必要时再降 `setPixelRatio` 的上限，目标帧预算
+ * 按侦测到的显示器刷新周期动态换算，带滞回避免来回跳。
+ *
+ * 手动三档（高 / 中 / 低）行为与改动前完全一致：只缩放云步进分辨率，DPR 上限固定 1.5。自动档额外多一档
+ * 「最低」（云步进再降到 0.5 分辨率 + DPR 上限降到 1.0），手动选不到，只有自动档在前三档都不够用时才会伸到这里。
+ */
+
+export type QualityTier = "auto" | "high" | "medium" | "low";
+export type QualityLevel = "high" | "medium" | "low" | "min";
+
+interface LevelProfile {
+  level: QualityLevel;
+  label: string;
+  /** 云步进相对全屏的分辨率比例，见 clouds.ts 的 resolutionScale */
+  cloudScale: number;
+  /** setPixelRatio 的上限 */
+  dprCap: number;
+}
+
+/** 由「贵」到「省」排列；手动档只能选前三个，自动档可以一直降到最后一个 */
+const LEVELS: LevelProfile[] = [
+  { level: "high", label: "高", cloudScale: 1, dprCap: 1.5 },
+  { level: "medium", label: "中", cloudScale: 0.75, dprCap: 1.5 },
+  { level: "low", label: "低", cloudScale: 0.5, dprCap: 1.5 },
+  { level: "min", label: "最低", cloudScale: 0.5, dprCap: 1.0 },
+];
+
+/** 手动三档在 LEVELS 里的下标 */
+const MANUAL_INDEX: Record<Exclude<QualityTier, "auto">, number> = { high: 0, medium: 1, low: 2 };
+
+/** main.ts 里初始 `renderer.setPixelRatio` 用它做种子（等于 LEVELS[0].dprCap，单一出处） */
+export const DEFAULT_DPR_CAP = LEVELS[0].dprCap;
+
+/** 天气预设里公认的重负载场景（雷暴 / 飑线 / 台风三个视角），对应 weather.ts 的 WEATHER_PRESETS id，
+ * 数字见 PERF_REPORT_wave3 §2.3 的云步进耗时表（storm-day、typhoon-bands 等） */
+const HEAVY_WEATHER_IDS = new Set(["storm", "squall", "typhoon-bands", "typhoon-eye", "typhoon-outer"]);
+export const isHeavyWeather = (weatherId: string) => HEAVY_WEATHER_IDS.has(weatherId);
+
+// ---------- GPU 计时：EXT_disjoint_timer_query_webgl2，非阻塞轮询 ----------
+
+/** 扩展没有内置类型声明（非标准 WebGL 扩展），这里只声明用到的两个常量 */
+interface TimerQueryExt {
+  TIME_ELAPSED_EXT: number;
+  GPU_DISJOINT_EXT: number;
+}
+
+/**
+ * 一帧一个 query，池子里轮流用：结果通常要等 1~3 帧才就绪，同一帧读不到刚提交的查询。
+ * 没有该扩展时 `available` 为 false，所有方法都是空操作——调用方不用关心有没有扩展。
+ */
+class GpuTimer {
+  private readonly gl: WebGL2RenderingContext;
+  private readonly ext: TimerQueryExt | null;
+  private readonly free: WebGLQuery[] = [];
+  private pending: WebGLQuery[] = [];
+  private active: WebGLQuery | null = null;
+
+  constructor(renderer: THREE.WebGLRenderer, poolSize = 8) {
+    this.gl = renderer.getContext() as WebGL2RenderingContext;
+    this.ext = (this.gl.getExtension("EXT_disjoint_timer_query_webgl2") as TimerQueryExt | null) ?? null;
+    if (this.ext) {
+      for (let i = 0; i < poolSize; i++) {
+        const q = this.gl.createQuery();
+        if (q) this.free.push(q);
+      }
+    }
+  }
+
+  get available() {
+    return this.ext !== null;
+  }
+
+  begin() {
+    if (!this.ext) return;
+    const q = this.free.pop();
+    if (!q) return; // 池子暂时用完（还有帧没轮到结果）：这一帧不测，下一帧再试，不阻塞、不报错
+    this.gl.beginQuery(this.ext.TIME_ELAPSED_EXT, q);
+    this.active = q;
+  }
+
+  end() {
+    if (!this.ext || !this.active) return;
+    this.gl.endQuery(this.ext.TIME_ELAPSED_EXT);
+    this.pending.push(this.active);
+    this.active = null;
+  }
+
+  /** 非阻塞地收集这一帧已经就绪的历史查询结果（毫秒），可能一帧收到 0～多个。
+   * GPU_DISJOINT_EXT 一旦为真，说明期间发生过与本次测量无关的 GPU 中断（例如切换电源模式），这批结果整体作废。 */
+  poll(): number[] {
+    if (!this.ext) return [];
+    const disjoint = this.gl.getParameter(this.ext.GPU_DISJOINT_EXT) as boolean;
+    const out: number[] = [];
+    const stillPending: WebGLQuery[] = [];
+    for (const q of this.pending) {
+      if (this.gl.getQueryParameter(q, this.gl.QUERY_RESULT_AVAILABLE)) {
+        if (!disjoint) out.push(Number(this.gl.getQueryParameter(q, this.gl.QUERY_RESULT)) / 1e6);
+        this.free.push(q);
+      } else {
+        stillPending.push(q);
+      }
+    }
+    this.pending = stillPending;
+    return out;
+  }
+}
+
+// ---------- 判档的时间常数 ----------
+
+const TARGET_FRACTION = 0.7; // 60 fps 的 70%
+/** 有 GPU 计时：预算固定按 60 fps × 70% 算（≈11.7 ms），**不**按侦测到的刷新率换算——
+ * 踩过的坑：曾经用「挂钟帧间隔的滑动最小值」估刷新周期当分母，无头浏览器（乃至任何没有真正 vsync 节流、
+ * rAF 跑多快算多快的环境）里这个估计会一路收敛到「GPU 空闲时能跑多快」本身（观测到 6 ms 量级，
+ * 换算出来的预算不到 GPU 实际开销的一半），导致画质在完全不重的场景下也被误判过载、一路砸到「最低」再也
+ * 升不回来。GPU 计时本身已经是与显示器无关的绝对硬件耗时，不需要再靠一个不可靠的挂钟信号去换算预算；
+ * 高刷新率屏幕上这个固定预算偏保守（allow 稍多），但不会像「按检测刷新率算」那样在异常环境里直接失灵。 */
+const GPU_BUDGET_MS = (1000 / 60) * TARGET_FRACTION;
+const DOWNGRADE_RATIO = 1.0; // 实测耗时 / 预算 超过这个比例才算过载
+const UPGRADE_RATIO = 0.55; // 低于这个比例、且持续够久，才考虑升档（比降档门槛更松，形成滞回，防抖）
+const FALLBACK_OVERRUN = 1.15; // 没有 GPU 计时：帧间隔超过一次刷新周期的 15% 才判定过载（只能反应式抓「已经掉帧」）
+const DOWNGRADE_HOLD_MS = 700; // 过载要持续这么久才真正降档，滤掉单帧尖峰
+const UPGRADE_HOLD_MS = 3000; // 升档比降档保守得多
+const CHANGE_COOLDOWN_MS = 1500; // 任意两次调档之间的最短间隔（探测式回退例外，见 decideByFrameInterval）
+const PROBE_WINDOW_MS = 3000; // 无 GPU 计时时，探测式升档后的观察期
+const PROBE_BACKOFF_MIN_MS = 4000;
+const PROBE_BACKOFF_MAX_MS = 60000;
+const COST_EMA_ALPHA = 0.15;
+
+export interface QualityControllerDeps {
+  renderer: THREE.WebGLRenderer;
+  clouds: Clouds;
+  /** main.ts 的 resize()：按当前 renderer / pixelRatio 尺寸重建所有渲染目标（含 clouds.setSize，
+   *  它已经会在分辨率变化时把云的时间累积标记为 reset，不需要这里再额外处理重投影） */
+  resize: () => void;
+}
+
+export class QualityController {
+  private tierValue: QualityTier = "auto";
+  private levelIndex = 0;
+  private vsyncEstimate = 1000 / 60;
+  private vsyncSeen = 0;
+  private costEma: number | null = null;
+  private overSince: number | null = null;
+  private underSince: number | null = null;
+  private lastChangeAt = 0;
+  private readonly timer: GpuTimer;
+  // ---- 无 GPU 计时时的探测式升档：定期乐观地试着升一档，撑不住就退回并拉长下次尝试的间隔 ----
+  private probing = false;
+  private probeUntil = 0;
+  private probeBackoff = PROBE_BACKOFF_MIN_MS;
+  private nextProbeAt = 0;
+  private lastGpuMs: number | null = null;
+  private lastIntervalMs = 1000 / 60;
+
+  constructor(private readonly deps: QualityControllerDeps) {
+    this.timer = new GpuTimer(deps.renderer);
+  }
+
+  get tier() {
+    return this.tierValue;
+  }
+
+  get level(): QualityLevel {
+    return LEVELS[this.levelIndex].level;
+  }
+
+  get gpuTimingAvailable() {
+    return this.timer.available;
+  }
+
+  /** 每个真实动画帧开始时调用。**不要**在 benchFrame 这类合成测量循环里调用——那是给其他任务做性能
+   * 回归用的干净基准，被自动档中途改分辨率会污染结果（main.ts 只在 requestAnimationFrame 驱动的 frame() 里调用）。 */
+  beginFrame() {
+    this.timer.begin();
+  }
+
+  /** 每个真实动画帧结束时调用。intervalMs：这一帧到上一帧的挂钟间隔（rAF 时间戳之差），
+   * 用来估计显示器刷新周期，没有 GPU 计时扩展时也拿它兜底当作耗时信号。 */
+  endFrame(nowMs: number, intervalMs: number) {
+    this.timer.end();
+    this.updateVsync(intervalMs);
+    this.lastIntervalMs = intervalMs;
+    const samples = this.timer.poll();
+    if (this.timer.available) {
+      for (const ms of samples) this.pushCost(ms);
+      if (samples.length) this.lastGpuMs = samples[samples.length - 1];
+    } else {
+      this.pushCost(intervalMs);
+    }
+    if (this.tierValue === "auto") this.decide(nowMs);
+  }
+
+  /** 面板切换画质档位 */
+  setTier(tier: QualityTier, nowMs = performance.now()) {
+    if (tier === this.tierValue) return;
+    this.tierValue = tier;
+    this.overSince = this.underSince = null;
+    this.probing = false;
+    this.nextProbeAt = nowMs;
+    this.probeBackoff = PROBE_BACKOFF_MIN_MS;
+    this.levelIndex = tier === "auto" ? 0 : MANUAL_INDEX[tier];
+    this.lastChangeAt = nowMs;
+    this.applyLevel();
+  }
+
+  /** 天气切到雷暴 / 台风这类重负载场景时调用（ui.ts 的 applyWeather）：如果还在最高档，提前退到「中」，
+   * 不用等自适应的 DOWNGRADE_HOLD_MS 才反应过来，减少切换瞬间的第一下掉帧。只在自动档、且当前确实在
+   * 最高档时生效；不会覆盖自适应已经做出的更低选择，也不会在手动档下生效。 */
+  hintHeavyScene(heavy: boolean, nowMs = performance.now()) {
+    if (!heavy || this.tierValue !== "auto" || this.levelIndex !== 0) return;
+    this.levelIndex = 1;
+    this.lastChangeAt = nowMs;
+    this.overSince = this.underSince = null;
+    this.applyLevel();
+  }
+
+  /** 面板文字：手动档标「固定」；自动档带上依据的数字，方便用户判断是不是自己的机器偏弱 */
+  describe(): string {
+    const p = LEVELS[this.levelIndex];
+    if (this.tierValue !== "auto") return `${p.label}（固定）`;
+    const basis = this.timer.available
+      ? `GPU ${this.lastGpuMs !== null ? this.lastGpuMs.toFixed(1) : "—"} / 预算 ${GPU_BUDGET_MS.toFixed(1)} ms`
+      : `无 GPU 计时，帧间隔 ${this.lastIntervalMs.toFixed(1)} ms`;
+    return `自动 → ${p.label}（${basis}）`;
+  }
+
+  /** 刷新周期估计：出现更快的帧立刻贴过去（说明之前的估计偏保守，或者显示器 / 窗口换了）；
+   * 变慢则缓慢跟随——热身期（前 90 帧）跟得快一点尽快收敛，之后跟得很慢，避免真正的过载被「跟」没了。
+   * 夹到 [1000/240, 1000/20] 之间，防止单帧异常值（例如切后台）把估计带偏。 */
+  private updateVsync(intervalMs: number) {
+    const clamped = Math.min(Math.max(intervalMs, 1000 / 240), 1000 / 20);
+    this.vsyncSeen++;
+    if (this.vsyncSeen === 1) this.vsyncEstimate = clamped;
+    else if (clamped < this.vsyncEstimate) this.vsyncEstimate = clamped;
+    else this.vsyncEstimate += (clamped - this.vsyncEstimate) * (this.vsyncSeen < 90 ? 0.15 : 0.01);
+  }
+
+  private pushCost(ms: number) {
+    this.costEma = this.costEma === null ? ms : this.costEma + (ms - this.costEma) * COST_EMA_ALPHA;
+  }
+
+  private decide(nowMs: number) {
+    if (this.costEma === null) return;
+    if (this.timer.available) this.decideByGpuTime(nowMs);
+    else this.decideByFrameInterval(nowMs);
+  }
+
+  /** 有 GPU 计时：预算固定（GPU_BUDGET_MS），降档 / 升档用同一套「持续时间 + 滞回」判断，但两头不对称：
+   *
+   * - 降档要快、要严格：pressure 一超过 DOWNGRADE_RATIO 就开始计时，只要连续 DOWNGRADE_HOLD_MS 都在超，
+   *   立刻降档；中途哪怕有一帧回到预算内也整个重新计时（掉帧要尽快压下去，不能拖）。
+   * - 升档要慢、要宽容：**踩过的坑**——一开始 underSince 也是「一超过 UPGRADE_RATIO 就整个清零重来」，
+   *   实测在有真实地面瓦片加载、天气切换后重建阴影 / 占据网格这类正常噪声下，耗时会在 UPGRADE_RATIO 和
+   *   DOWNGRADE_RATIO 之间偶尔弹一下，导致 underSince 永远攒不满 UPGRADE_HOLD_MS，明明早就有余量了也升不回去
+   *   （实测：typhoon-bands 原生分辨率降到「中」后，实测耗时一直在预算的 45%–70% 之间，从没真正过载，
+   *   但也从没能连续 3 秒都严格低于 55%，卡在「中」出不来）。改成：只有真正过载（pressure > DOWNGRADE_RATIO）
+   *   才清零 underSince；「预算内但还没宽松到 UPGRADE_RATIO」这种中间地带不清零、只是不推进——
+   *   underSince measure 的是「最近一次真正过载」到现在的时间，而不是「最近一次波动」到现在的时间。 */
+  private decideByGpuTime(nowMs: number) {
+    const pressure = this.costEma! / GPU_BUDGET_MS;
+    if (pressure > DOWNGRADE_RATIO) {
+      this.underSince = null;
+      if (this.overSince === null) this.overSince = nowMs;
+      if (nowMs - this.overSince >= DOWNGRADE_HOLD_MS) this.tryStep(1, nowMs);
+      return;
+    }
+    this.overSince = null;
+    if (pressure < UPGRADE_RATIO) {
+      if (this.underSince === null) this.underSince = nowMs;
+      if (nowMs - this.underSince >= UPGRADE_HOLD_MS) this.tryStep(-1, nowMs);
+    }
+    // 中间地带（UPGRADE_RATIO ≤ pressure ≤ DOWNGRADE_RATIO）：不算过载也不算「已经宽松」，
+    // underSince 保持原样（可能是 null，也可能是之前已经在计时），既不重置也不新开一段。
+  }
+
+  /** 没有 GPU 计时：帧间隔本身分不清「GPU 空闲、被 vsync 卡住」和「GPU 打满、卡在 vsync 上限」，
+   * 只能反应式地抓「已经掉帧」（间隔明显超过一次刷新周期）来降档；升档没有可靠的正向信号，
+   * 改用探测式——定期乐观地试着升一档，PROBE_WINDOW_MS 内没有再掉帧就保留，掉了就退回并让下次
+   * 尝试的间隔翻倍（上限 60 s），避免在临界点反复横跳。 */
+  private decideByFrameInterval(nowMs: number) {
+    const pressure = this.costEma! / this.vsyncEstimate;
+    if (pressure > FALLBACK_OVERRUN) {
+      if (this.overSince === null) this.overSince = nowMs;
+      if (nowMs - this.overSince >= DOWNGRADE_HOLD_MS) {
+        if (this.probing) {
+          // 刚试探性升的这一档撑不住：退回去，且忽略常规冷却（frames 正在掉，越快退越好）
+          this.probing = false;
+          this.probeBackoff = Math.min(this.probeBackoff * 2, PROBE_BACKOFF_MAX_MS);
+          this.nextProbeAt = nowMs + this.probeBackoff;
+          this.tryStep(1, nowMs, true);
+        } else {
+          this.tryStep(1, nowMs);
+        }
+        this.overSince = null;
+      }
+    } else {
+      this.overSince = null;
+      if (this.probing && nowMs >= this.probeUntil) {
+        // 探测期内没有再掉帧：保留这一档，之后还可以再往上试
+        this.probing = false;
+        this.nextProbeAt = nowMs + this.probeBackoff;
+      }
+    }
+    if (!this.probing && this.levelIndex > 0 && nowMs >= this.nextProbeAt) {
+      if (this.tryStep(-1, nowMs)) {
+        this.probing = true;
+        this.probeUntil = nowMs + PROBE_WINDOW_MS;
+      } else {
+        this.nextProbeAt = nowMs + CHANGE_COOLDOWN_MS; // 冷却没过，稍后再试
+      }
+    }
+  }
+
+  /** direction：+1 降档（更省），-1 升档（更贵）。force 时忽略冷却（只在「探测失败要立刻退回」时用）。
+   * 返回是否真的调整了档位。 */
+  private tryStep(direction: 1 | -1, nowMs: number, force = false): boolean {
+    if (!force && nowMs - this.lastChangeAt < CHANGE_COOLDOWN_MS) return false;
+    const next = Math.max(0, Math.min(LEVELS.length - 1, this.levelIndex + direction));
+    if (next === this.levelIndex) return false;
+    this.levelIndex = next;
+    this.lastChangeAt = nowMs;
+    this.overSince = this.underSince = null;
+    this.applyLevel();
+    return true;
+  }
+
+  private applyLevel() {
+    const p = LEVELS[this.levelIndex];
+    this.deps.clouds.resolutionScale = p.cloudScale;
+    this.deps.renderer.setPixelRatio(Math.min(window.devicePixelRatio, p.dprCap));
+    this.deps.resize();
+  }
+}
+
+export function createQualityController(deps: QualityControllerDeps): QualityController {
+  return new QualityController(deps);
+}

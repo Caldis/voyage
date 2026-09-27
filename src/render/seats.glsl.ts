@@ -7,7 +7,10 @@
  * 材质按高端舱位做（T20，用户定「高级、先进、奢华」）：深石板灰皮革的靠背 + 暖灰白纳帕皮头枕（绗缝通道、撞色包边、双明线），
  * 背壳是珍珠灰缎面漆、胡桃木饰条、香槟色金属细线。配色是示意，不对应任何航司。
  * 舱等（T25）：几何两档共用；材质按 #define CABIN_CLASS_ECONOMY 分开编译——经济舱是 T06 的斜纹织物 + 平纹头枕套、
- * 浅灰塑料背壳（小桌板缝、锁扣、靠近上沿被扶出的一点手印），没有木饰 / 金属。
+ * 浅灰塑料背壳（娱乐屏、小桌板缝、锁扣、靠近上沿被扶出的一点手印），没有木饰 / 金属；T35 起头枕用座椅同款深色面料 + 白色头巾。
+ * T35（美术总监 wave5 第 3 处：「看前方 / 看后方」一根香肠头枕 + 白模感）：商务舱头枕改成扁圆截面（加厚、顶面放平、两侧护翼向前鼓出），
+ * 顶面两条棱上走双明线；本排外侧（靠窗一侧）加一块固定的座椅壳体（高的护翼在靠背后面，往前顺一道圆弧降到扶手台面的高度），
+ * 沿轮廓一圈香槟金属包边、内侧面嵌一条胡桃木；经济舱头枕上搭一块白色无纺布头巾（下摆略翘），背壳上加一块熄屏的娱乐屏。
  * 靠背用距离场表示，在两排的包围盒区间里球追踪；轮廓按「离表面最近的距离 / 像素宽度」算覆盖率，边缘不锯齿。
  * 所有细节按解析的像素足迹淡出（这里在分支里，不能用屏幕导数）。
  */
@@ -33,26 +36,96 @@ vec3 seatDirToCabin(vec3 d) {
 
 float seatHalfThick(float s) { return mix(0.055, 0.037, clamp(s / SEAT_TOP, 0.0, 1.0)); }
 
-float sdSeatBack(vec3 q) {
-  float th = seatHalfThick(q.y);
+// 靠背某一高度的截面：x = 截面中心相对靠背中面朝前的偏移，y = 半厚度，z = 棱边倒圆半径。wz：离座椅中线的横向距离
+vec3 seatSection(float s, float wz) {
+  float th = seatHalfThick(s);
+  float r = mix(0.025, 0.034, smoothstep(SEAT_TOP - 0.12, SEAT_TOP, s));
+#ifndef CABIN_CLASS_ECONOMY
+  // 商务舱头枕（T35）：原来是半厚 3.7 cm、倒圆 3.4 cm 的圆管（读成「香肠」）。改成扁圆截面：往背后加厚 1 cm、倒圆收到 2 cm，
+  // 顶面有一块平的；两侧 7 cm 的护翼向前鼓出 2 cm。正面只动护翼：再往前鼓，默认坐姿时本排头枕的护翼就会挤进画面右下角
+  float hz = smoothstep(SEAT_TOP - 0.27, SEAT_TOP - 0.21, s);
+  float wing = 0.02 * smoothstep(SEAT_HW - 0.12, SEAT_HW - 0.05, abs(wz)) * hz;
+  return vec3(0.5 * wing - 0.005 * hz, th + 0.005 * hz + 0.5 * wing, mix(r, 0.02, hz));
+#else
+  return vec3(0.0, th, r);
+#endif
+}
+
+#ifdef CABIN_CLASS_ECONOMY
+// 经济舱的白色头巾（T35）：约 31 cm 宽的一块白色无纺布搭在头枕上，正面垂下约 19 cm、背面约 11 cm。
+// 每张座椅的头巾位置、垂下的长度都略有不同（铁律 4）。soft：边缘的过渡宽度（距离场里用 4 mm，着色时按像素足迹）
+float seatClothMask(vec3 q, float row, float soft) {
+  float jx = 0.012 * (hash12(vec2(row, 3.7)) - 0.5);
+  float wz = q.z - SEAT_ZC - jx;
+  float hang = q.x > 0.0 ? SEAT_TOP - 0.19 + 0.02 * hash12(vec2(row, 5.1)) : SEAT_TOP - 0.11;
+  return (1.0 - smoothstep(0.155 - soft, 0.155 + soft, abs(wz))) * smoothstep(hang - soft, hang + soft, q.y);
+}
+// 头巾在距离场里的厚度：布本身约 1 mm，下摆和两侧的边略微翘起（离开头枕套 2–3 mm）
+float seatClothLift(vec3 q, float row) {
+  float m = seatClothMask(q, row, 0.004);
+  if (m <= 0.0) return 0.0;
+  float hang = q.x > 0.0 ? SEAT_TOP - 0.19 + 0.02 * hash12(vec2(row, 5.1)) : SEAT_TOP - 0.11;
+  float wz = q.z - SEAT_ZC - 0.012 * (hash12(vec2(row, 3.7)) - 0.5);
+  float curl = 0.0018 * (1.0 - smoothstep(0.0, 0.015, q.y - hang)) + 0.0008 * (1.0 - smoothstep(0.0, 0.012, 0.155 - abs(wz)));
+  return m * (0.001 + curl);
+}
+#endif
+
+float sdSeatBack(vec3 q, float row) {
   float wz = clamp((q.z - SEAT_ZC) / SEAT_HW, -1.0, 1.0);
+  vec3 sec = seatSection(q.y, q.z - SEAT_ZC);
   // 正面软垫中间略鼓
   float bulge = 0.008 * (1.0 - wz * wz) * smoothstep(-0.1, 0.1, q.x);
   // 侧面轮廓（s–z 平面）：顶角圆角的矩形
   vec2 sz = vec2(q.y - 0.5 * (SEAT_TOP + SEAT_BOTTOM), q.z - SEAT_ZC);
   float d2 = sdRoundRect(sz, vec2(0.5 * (SEAT_TOP - SEAT_BOTTOM), SEAT_HW), SEAT_CORNER);
-  // 挤出成有厚度的靠背，棱边倒圆 2.5 cm
-  float r = mix(0.025, 0.034, smoothstep(SEAT_TOP - 0.12, SEAT_TOP, q.y));
+  // 挤出成有厚度的靠背，棱边倒圆（头枕区的截面见 seatSection）
+  float r = sec.z;
   float coverPuff = 0.003 * smoothstep(SEAT_TOP - 0.26, SEAT_TOP - 0.22, q.y) * (1.0 - wz * wz);
-  vec2 w = vec2(d2 + r, abs(q.x) - th - bulge - coverPuff + r);
+  vec2 w = vec2(d2 + r, abs(q.x - sec.x) - sec.y - bulge - coverPuff + r);
   float d = min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - r;
   // 可调头枕与靠背之间的一道横缝
   d += 0.003 * (1.0 - smoothstep(0.0, 0.006, abs(q.y - (SEAT_TOP - 0.25))));
+#ifdef CABIN_CLASS_ECONOMY
+  d -= seatClothLift(q, row);
+#endif
   return d;
 }
 
+#ifndef CABIN_CLASS_ECONOMY
+// 商务舱的座椅壳体（T35）：本排外侧（靠窗一侧、离座椅 1 cm）一块 2.2 cm 厚的固定壳板，不随靠背后仰。
+// 侧面轮廓（u = 相对靠背根部朝机头的距离，y）：靠背后面是高到头枕顶的护翼，往前顺一道大圆弧降到扶手台面（离窗中心 40 cm 以下）。
+// 尺寸是示意（对标反鱼骨 / 交错式商务舱座椅的外侧壳体），不对应某个型号
+const float SHELL_ZC = -0.058, SHELL_HT = 0.011;
+float seatShellProfile(vec2 uy) {
+  float a = sdRoundRect(uy - vec2(-0.30, -0.57), vec2(0.10, 0.54), 0.05);   // 护翼：u −0.40…−0.20，顶在 y = −0.03
+  float b = sdRoundRect(uy - vec2(-0.08, -0.76), vec2(0.32, 0.36), 0.03);   // 扶手台面：u −0.40…0.24，顶在 y = −0.40
+  float h = clamp(0.5 + 0.5 * (b - a) / 0.1, 0.0, 1.0);                     // 平滑并集：两段之间是一道圆弧
+  return mix(b, a, h) - 0.1 * h * (1.0 - h);
+}
+float sdSeatShell(vec3 p, float row) {
+  float u = uSeatSign * p.x - SEAT_PIVOT.x - row * SEAT_PITCH;
+  float d2 = seatShellProfile(vec2(u, p.y));
+  const float re = 0.005;                                                    // 棱边倒圆 5 mm
+  vec2 w = vec2(d2 + re, abs(p.z - SHELL_ZC) - SHELL_HT + re);
+  return min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - re;
+}
+#endif
+
+// 某一排的某个部件（isShell = 1：壳体，只有商务舱有）
+float sdSeatPart(vec3 p, float row, float isShell) {
+#ifndef CABIN_CLASS_ECONOMY
+  if (isShell > 0.5) return sdSeatShell(p, row);
+#endif
+  return sdSeatBack(seatFrame(p, row), row);
+}
+
 float sdSeats(vec3 p) {
-  return min(sdSeatBack(seatFrame(p, 0.0)), sdSeatBack(seatFrame(p, 1.0)));
+  float d = min(sdSeatBack(seatFrame(p, 0.0), 0.0), sdSeatBack(seatFrame(p, 1.0), 1.0));
+#ifndef CABIN_CLASS_ECONOMY
+  d = min(d, min(sdSeatShell(p, 0.0), sdSeatShell(p, 1.0)));
+#endif
+  return d;
 }
 
 // 某一排靠背的包围盒（座舱系）
@@ -69,6 +142,20 @@ bool seatBox(vec3 ro, vec3 rd, float row, out vec2 tt) {
   return tt.y > max(tt.x, 0.0);
 }
 
+#ifndef CABIN_CLASS_ECONOMY
+// 某一排壳体的包围盒（座舱系，壳体不后仰，直接是轴对齐的盒子）
+bool seatShellBox(vec3 ro, vec3 rd, float row, out vec2 tt) {
+  float u0 = SEAT_PIVOT.x + row * SEAT_PITCH - 0.41, u1 = SEAT_PIVOT.x + row * SEAT_PITCH + 0.25;
+  vec3 bmin = vec3(uSeatSign > 0.0 ? u0 : -u1, -1.12, SHELL_ZC - SHELL_HT - 0.002);
+  vec3 bmax = vec3(uSeatSign > 0.0 ? u1 : -u0, -0.02, SHELL_ZC + SHELL_HT + 0.002);
+  vec3 inv = 1.0 / rd;
+  vec3 t0 = (bmin - ro) * inv, t1 = (bmax - ro) * inv;
+  vec3 tn = min(t0, t1), tf = max(t0, t1);
+  tt = vec2(max(max(tn.x, tn.y), tn.z), min(min(tf.x, tf.y), tf.z));
+  return tt.y > max(tt.x, 0.0);
+}
+#endif
+
 struct SeatHit { float cov; float t; };
 
 // 球追踪；cov = 覆盖率（命中 1；擦边而过时按最近距离 / 像素宽度给部分覆盖，轮廓就是抗锯齿的）
@@ -76,31 +163,37 @@ SeatHit traceSeats(vec3 ro, vec3 rd, float tMax, float pixAng) {
   SeatHit sh;
   sh.cov = 0.0;
   sh.t = -1.0;
-  vec2 b0, b1;
-  bool h0 = seatBox(ro, rd, 0.0, b0);
-  bool h1 = seatBox(ro, rd, 1.0, b1);
-  if (!h0 && !h1) return sh;
-  float t = max(min(h0 ? b0.x : 1e9, h1 ? b1.x : 1e9), 0.0);
-  float tEnd = min(max(h0 ? b0.y : 0.0, h1 ? b1.y : 0.0), tMax);
+  vec2 b;
+  float tS = 1e9, tE = 0.0;
+  if (seatBox(ro, rd, 0.0, b)) { tS = min(tS, b.x); tE = max(tE, b.y); }
+  if (seatBox(ro, rd, 1.0, b)) { tS = min(tS, b.x); tE = max(tE, b.y); }
+#ifndef CABIN_CLASS_ECONOMY
+  if (seatShellBox(ro, rd, 0.0, b)) { tS = min(tS, b.x); tE = max(tE, b.y); }
+  if (seatShellBox(ro, rd, 1.0, b)) { tS = min(tS, b.x); tE = max(tE, b.y); }
+#endif
+  if (tS > 1e8) return sh;
+  float t = max(tS, 0.0);
+  float tEnd = min(tE, tMax);
   float best = 1e9;
   float tBest = t;
-  for (int i = 0; i < 32 + uLoopGuard; i++) {
+  // 步数 48：「看前方」时视线顺着壳板的内侧面掠过，球追踪步长很小（循环上界带 uLoopGuard，FXC 不展开）
+  for (int i = 0; i < 48 + uLoopGuard; i++) {
     if (t > tEnd) break;
     float d = sdSeats(ro + rd * t);
     float ratio = d / (t * pixAng);
     if (ratio < best) { best = ratio; tBest = t; }
     if (ratio < 0.05) break;
-    t += max(d, 0.0004);
+    t += max(d * 0.9, 0.0004);   // 头枕护翼、头巾让距离场略超 1-Lipschitz，步长打九折
   }
   sh.cov = 1.0 - smoothstep(0.05, 1.0, best);
   sh.t = tBest;
   return sh;
 }
 
-vec3 seatNormal(vec3 p, float e, float row) {
+vec3 seatNormal(vec3 p, float e, float row, float isShell) {
   const vec2 k = vec2(1.0, -1.0);
-  return normalize(k.xyy * sdSeatBack(seatFrame(p + k.xyy * e, row)) + k.yyx * sdSeatBack(seatFrame(p + k.yyx * e, row))
-                 + k.yxy * sdSeatBack(seatFrame(p + k.yxy * e, row)) + k.xxx * sdSeatBack(seatFrame(p + k.xxx * e, row)));
+  return normalize(k.xyy * sdSeatPart(p + k.xyy * e, row, isShell) + k.yyx * sdSeatPart(p + k.yyx * e, row, isShell)
+                 + k.yxy * sdSeatPart(p + k.yxy * e, row, isShell) + k.xxx * sdSeatPart(p + k.xxx * e, row, isShell));
 }
 
 // 距离场 AO：沿法线取两个点，看离别的表面（另一排座椅、侧壁）有多近
@@ -112,9 +205,10 @@ float seatAO(vec3 p, vec3 n) {
 }
 
 #ifndef CABIN_CLASS_ECONOMY
-// 皮面上的缝：横缝（头枕的绗缝通道、头枕与靠背的接缝、背面头枕包边）+ 竖缝（头枕两侧的撞色包边、靠背正面的分片缝）。
-// 返回 x = 线覆盖率、y = 凹槽压暗、z = 横缝斜率（沿靠背向上）、w = 竖缝斜率（沿 |z| 向外）
-vec4 seatSeams(vec3 q, float fr, float wz, float pix, float coverZone) {
+// 皮面上的缝：横缝（头枕的绗缝通道、头枕与靠背的接缝、背面头枕包边）+ 竖缝（头枕两侧的撞色包边、护翼的分片缝、靠背正面的分片缝）
+// + 顶缝（T35：头枕顶面两条棱上的双明线，顶面那块皮与前后两块的接缝）。
+// 返回 x = 线覆盖率、y = 凹槽压暗；dn：法线扰动（座舱系）
+vec2 seatSeams(vec3 q, float fr, float wz, float pix, float coverZone, out vec3 dn) {
   float ys, singleH;
   if (fr > 0.45) {
     // 正面：头枕底边一道缝，往上两道绗缝通道（间距 7.5 cm），都是双明线（缝在凹槽里的单线藏在阴影里看不见）
@@ -132,23 +226,44 @@ vec4 seatSeams(vec3 q, float fr, float wz, float pix, float coverZone) {
   float xs = upper ? SEAT_HW - 0.03 : 0.11;
   float vOn = upper ? 1.0 : step(0.45, fr);
   vec4 v = leatherSeam(abs(wz) - xs, q.y, pix, upper ? 1.0 : 0.0) * vOn;
-  return vec4(max(h.x, v.x), max(h.y, v.y), h.z, v.z);
+  // 护翼的分片缝：头枕正面、离两侧 10 cm，双明线
+  vec4 vw = leatherSeam(abs(wz) - (SEAT_HW - 0.10), q.y, pix, 0.0) * (upper ? step(0.45, fr) * coverZone : 0.0);
+  // 顶缝：顶面平的那块两侧（离截面中心 半厚 − 倒圆），双明线；只在头枕顶上约 4 cm 的范围
+  vec3 sec = seatSection(q.y, wz);
+  float xc = q.x - sec.x;
+  vec4 c = leatherSeam(abs(xc) - (sec.y - sec.z), q.z, pix, 0.0) * smoothstep(SEAT_TOP - 0.05, SEAT_TOP - 0.035, q.y) * coverZone;
+  vec3 up = seatDirToCabin(vec3(0.0, 1.0, 0.0));
+  vec3 fwd = seatDirToCabin(vec3(1.0, 0.0, 0.0)) * (xc < 0.0 ? -1.0 : 1.0);
+  vec3 side = vec3(0.0, 0.0, wz < 0.0 ? -1.0 : 1.0);
+  dn = -up * h.z - side * (v.z + vw.z) - fwd * c.z;
+  return vec2(max(max(h.x, v.x), max(vw.x, c.x)), max(max(h.y, v.y), max(vw.y, c.y)));
 }
 #endif
 
 vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float shadeBottom) {
   vec3 p = ro + rd * sh.t;
   float pixRaw = sh.t * pixAng;
-  // 哪一排、局部坐标
+  // 哪一排、哪个部件、局部坐标
   vec3 q0 = seatFrame(p, 0.0), q1 = seatFrame(p, 1.0);
-  bool front = sdSeatBack(q1) < sdSeatBack(q0);
+  float dB0 = sdSeatBack(q0, 0.0), dB1 = sdSeatBack(q1, 1.0);
+  bool front = dB1 < dB0;
   vec3 q = front ? q1 : q0;
-  vec3 n = seatNormal(p, max(0.0006, pixRaw * 0.7), front ? 1.0 : 0.0);
+  float seatId = front ? 1.0 : 0.0;
+  float isShell = 0.0;
+#ifndef CABIN_CLASS_ECONOMY
+  float dS0 = sdSeatShell(p, 0.0), dS1 = sdSeatShell(p, 1.0);
+  if (min(dS0, dS1) < min(dB0, dB1)) {
+    isShell = 1.0;
+    seatId = dS1 < dS0 ? 1.0 : 0.0;
+  }
+#endif
+  vec3 n = seatNormal(p, max(0.0006, pixRaw * 0.7), seatId, isShell);
   vec3 v = -rd;
   float nvGeo = max(dot(n, v), 0.0);
   float pix = pixRaw / max(nvGeo, 0.25);
-  float th = seatHalfThick(q.y);
-  float fr = (q.x + th) / (2.0 * th);                 // 0 背面 … 1 正面
+  vec3 sec = seatSection(q.y, q.z - SEAT_ZC);
+  float th = sec.y;
+  float fr = (q.x - sec.x + th) / (2.0 * th);         // 0 背面 … 1 正面
   float wz = q.z - SEAT_ZC;
   // 局部坐标里的法线：选投影平面（在棱边处换投影，那里正好是皮面的缝）
   vec2 ay = vec2(uSeatSign * n.x, n.y);
@@ -168,7 +283,6 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
   float cover = coverZone * max(yF * step(0.45, fr), max(top, yB * step(fr, 0.45)));
   // 背壳：背面那三分之一厚度，头枕包住的地方除外
   float shell = (1.0 - smoothstep(0.26, 0.34, fr)) * (1.0 - cover) * (1.0 - top);
-  float seatId = front ? 1.0 : 0.0;
 
   vec3 albedo;
   vec3 nn = n;
@@ -176,16 +290,26 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
 #ifdef CABIN_CLASS_ECONOMY
   vec3 sheenC = vec3(0.0);
   float sheenA = 0.5;
+  // 白色头巾（T35）：盖住的地方不管底下是织物还是背壳，都按布料着色
+  float cloth = seatClothMask(q, seatId, pix);
+  shell *= 1.0 - step(0.5, cloth);
   if (shell > 0.5) {
-    // 经济舱（T06，T25 收敛使用痕迹）：浅灰塑料背壳、细磨砂；小桌板的轮廓缝和锁扣
+    // 经济舱（T06，T25 收敛使用痕迹）：浅灰塑料背壳、细磨砂；娱乐屏、小桌板的轮廓缝和锁扣
     albedo = vec3(0.50, 0.50, 0.49);
     rough = 0.42;
     vec3 nd = vnoiseD(uv * 1200.0 + seatId * 7.0);
     float fine = 1.0 - smoothstep(0.0003, 0.001, pix);
     nn = normalize(n + (tu * nd.y + tv * nd.z) * 1200.0 * 0.000015 * fine);
     albedo *= 1.0 + 0.03 * (nd.x - 0.5) * fine;
-    // 小桌板：宽 0.40、上沿在顶下 0.17 m；锁扣在上沿中间
-    float trayTop = SEAT_TOP - 0.17;
+    // 娱乐屏（T35）：约 9 英寸（20 × 11.5 cm），嵌在背壳上部、头巾下沿之下；黑玻璃 + 一圈 5 mm 的深灰塑料框
+    float dS = sdRoundRect(vec2(wz, q.y - (SEAT_TOP - 0.20)), vec2(0.10, 0.058), 0.006);
+    float bezelS = 1.0 - smoothstep(0.005 - pix * 0.5, 0.005 + pix * 0.5, dS);
+    float glassS = 1.0 - smoothstep(-pix * 0.5, pix * 0.5, dS);
+    albedo = mix(albedo, vec3(0.07, 0.07, 0.075), bezelS);
+    albedo = mix(albedo, vec3(0.008), glassS);
+    rough = mix(rough, 0.06, glassS);
+    // 小桌板：宽 0.40、上沿在顶下 0.30 m（屏幕下方）；锁扣在上沿中间
+    float trayTop = SEAT_TOP - 0.30;
     vec2 tq = vec2(wz, q.y - (trayTop - 0.15));
     float trayD = abs(sdRoundRect(tq, vec2(0.20, 0.15), 0.02));
     float trayGroove = lineCov(trayD, 0.0012, pix);
@@ -193,12 +317,13 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
     albedo *= 1.0 - 0.5 * trayGroove;
     albedo = mix(albedo, vec3(0.10, 0.10, 0.11), latch);
     // 靠近上沿被后排的人扶出的一点手印（T06 的一半）：略暗、略亮光
-    float grab = smoothstep(SEAT_TOP - 0.2, SEAT_TOP - 0.06, q.y) * smoothstep(0.4, 0.75, fbm2(uv * 30.0 + seatId));
+    float grab = smoothstep(SEAT_TOP - 0.2, SEAT_TOP - 0.06, q.y) * smoothstep(0.4, 0.75, fbm2(uv * 30.0 + seatId)) * (1.0 - bezelS);
     albedo *= 1.0 - 0.06 * grab;
     rough = mix(rough, 0.3, grab);
   } else {
-    // 织物（fabric.glsl.ts）：座椅面料是深蓝灰的斜纹提花，头枕套是浅灰平纹
-    float kind = step(0.5, cover);
+    // 织物（fabric.glsl.ts）：座椅面料是深蓝灰的斜纹提花。头枕也是同一种深色面料（T35：原来的浅灰平纹头枕套去掉，
+    // 白色头巾压在深色面料上才一眼认得出；浅灰套上再搭白布反而分不清）
+    float kind = 0.0;
     Fabric fb = fabricSample(uv + seatId * 1.37, pix, kind);
     albedo = fb.albedo;
     sheenC = fb.sheen;
@@ -212,12 +337,48 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
     // 头枕套的包边：沿边缘一道暗线
     float hem = lineCov(abs(abs(wz) - (SEAT_HW - 0.035)), 0.0015, pix) + lineCov(abs(q.y - (SEAT_TOP - 0.25)), 0.0015, pix) * step(0.45, fr);
     albedo *= 1.0 - 0.25 * clamp(hem, 0.0, 1.0) * kind;
+    // 头巾（T35）：白色的无纺布 / 亚麻混纺，纤维是不规则的短絮（不是经纬网格），比像素细时淡成均匀的白；
+    // 布边内 6 mm 一道同色的缝线
+    if (cloth > 0.0) {
+      float fF = 1.0 - smoothstep(0.0002, 0.0006, pix);
+      vec3 fb1 = vnoiseD(mat2(0.8, 0.6, -0.6, 0.8) * uv * 2200.0 + seatId * 4.0);
+      float fl = 0.6 * vnoise(uv * 700.0 + seatId) + 0.4 * fb1.x;
+      vec3 clothC = vec3(0.88, 0.88, 0.86) * (1.0 + 0.06 * (fl - 0.5) * fF);
+      float jx = 0.012 * (hash12(vec2(seatId, 3.7)) - 0.5);
+      float hang = q.x > 0.0 ? SEAT_TOP - 0.19 + 0.02 * hash12(vec2(seatId, 5.1)) : SEAT_TOP - 0.11;
+      float stitch = lineCov(abs(abs(wz - jx) - 0.149), 0.0003, pix) + lineCov(abs(q.y - hang - 0.006), 0.0003, pix);
+      clothC *= 1.0 - 0.12 * clamp(stitch, 0.0, 1.0);
+      albedo = mix(albedo, clothC, cloth);
+      sheenC = mix(sheenC, vec3(0.12), cloth);
+      sheenA = mix(sheenA, 0.6, cloth);
+      nn = normalize(mix(nn, normalize(n + (tu * fb1.y + tv * fb1.z) * 2200.0 * 0.000008 * fF), cloth));
+    }
   }
 #else
   float metal = 0.0;   // 香槟色金属饰条的覆盖率
   float glass = 0.0;   // 屏幕玻璃
   float wood = 0.0;    // 胡桃木饰条的覆盖率
-  if (shell > 0.5) {
+  // 木饰的纹理坐标与种子（壳体和背壳都有木饰，leatherWalnut 只在后面调用一次）
+  vec2 woodUV = vec2(0.0);
+  float woodSeed = 0.0;
+  if (isShell > 0.5) {
+    // 座椅壳体（T35）：珍珠灰缎面漆；沿侧面轮廓一圈 7 mm 的香槟金属包边（包住倒圆的棱）；
+    // 内侧面（朝座位）距边 1.6–4.4 cm 嵌一条胡桃木，两侧各一道金属细线
+    float u = uSeatSign * p.x - SEAT_PIVOT.x - seatId * SEAT_PITCH;
+    float d2 = -seatShellProfile(vec2(u, p.y));        // 离轮廓边缘的距离（壳板内为正）
+    albedo = vec3(0.60, 0.585, 0.56);
+    rough = 0.3;
+    vec3 nd = vnoiseD(vec2(u, p.y) * 1200.0 + seatId * 7.0 + 3.3);
+    float fine = 1.0 - smoothstep(0.0003, 0.001, pix);
+    nn = normalize(n + vec3(uSeatSign * nd.y, nd.z, 0.0) * 1200.0 * 0.00001 * fine);
+    float inner = smoothstep(0.3, 0.7, -n.z);
+    metal = 1.0 - smoothstep(0.007 - pix * 0.5, 0.007 + pix * 0.5, d2);
+    float wb = abs(d2 - 0.03);
+    wood = (1.0 - smoothstep(0.014 - pix * 0.5, 0.014 + pix * 0.5, wb)) * inner;
+    woodUV = vec2(u, d2 * 1.8);                        // 纹理顺着轮廓走；离得近，年轮收细一些，不成粗条纹
+    woodSeed = seatId * 5.0 + 9.0;
+    metal = max(metal, lineCov(abs(wb - 0.0145), 0.0005, pix) * inner);
+  } else if (shell > 0.5) {
     // 背壳：珍珠灰的缎面漆，极细的磨砂；上沿一条胡桃木饰条（上下各一道金属细线），中间一块熄屏的娱乐屏（黑玻璃 + 金属细框）
     albedo = vec3(0.60, 0.585, 0.56);
     rough = 0.32;
@@ -227,14 +388,9 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
     float inW = step(abs(wz), SEAT_HW - 0.035);
     // 木饰条：宽 2.4 cm，在头枕包边下方 2 cm
     float yb = q.y - (SEAT_TOP - 0.10);
-    float band = (1.0 - smoothstep(0.012 - pix * 0.5, 0.012 + pix * 0.5, abs(yb))) * inW;
-    if (band > 0.0) {
-      float wr;
-      vec3 woodC = leatherWalnut(vec2(wz, yb) + seatId * 0.31, pix, seatId * 5.0 + 2.0, wr);
-      albedo = mix(albedo, woodC, band);
-      rough = mix(rough, wr, band);
-      wood = band;
-    }
+    wood = (1.0 - smoothstep(0.012 - pix * 0.5, 0.012 + pix * 0.5, abs(yb))) * inW;
+    woodUV = vec2(wz, yb) + seatId * 0.31;
+    woodSeed = seatId * 5.0 + 2.0;
     metal = lineCov(abs(abs(yb) - 0.0125), 0.0005, pix) * inW;
     // 屏幕：宽 23 cm、高 15 cm，圆角 1 cm；外面一圈 1.2 mm 的金属细框
     float dS = sdRoundRect(vec2(wz, q.y - (SEAT_TOP - 0.27)), vec2(0.115, 0.075), 0.01);
@@ -247,14 +403,19 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
     Leather lt = leatherSample(uv + seatId * 1.37, pix, kind, seatId * 3.1 + 1.0);
     albedo = lt.albedo;
     rough = lt.rough;
-    vec4 sm = seatSeams(q, fr, wz, pix, coverZone);
+    vec3 dn;
+    vec2 sm = seatSeams(q, fr, wz, pix, coverZone, dn);
     // 缝线：深色皮上是暖灰的撞色线，浅色皮上是同色系略深的线
     vec3 threadC = mix(vec3(0.36, 0.33, 0.28), vec3(0.30, 0.265, 0.22), kind);
     albedo = mix(albedo * (1.0 - sm.y), threadC, sm.x);
     rough = mix(rough, 0.55, sm.x);
-    vec3 up = seatDirToCabin(vec3(0.0, 1.0, 0.0));
-    vec3 side = vec3(0.0, 0.0, wz < 0.0 ? -1.0 : 1.0);
-    nn = normalize(n + tu * lt.slope.x + tv * lt.slope.y - up * sm.z - side * sm.w);
+    nn = normalize(n + tu * lt.slope.x + tv * lt.slope.y + dn);
+  }
+  if (wood > 0.0) {
+    float wr;
+    vec3 woodC = leatherWalnut(woodUV, pix, woodSeed, wr);
+    albedo = mix(albedo, woodC, wood);
+    rough = mix(rough, wr, wood);
   }
 #endif
 

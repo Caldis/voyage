@@ -40,7 +40,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进） |
 | `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步 |
 | `src/astro.ts` | 太阳 / 月亮位置、月相、当地→赤道坐标矩阵（astronomy-engine） |
-| `src/sky-assets.ts` | 星图（BSC5 溅射成 HDR）、月面贴图 |
+| `src/sky-assets.ts` | 星图（BSC5 溅射成 HDR；A 通道是银河）、月面贴图 |
+| `src/light-pollution.ts` | 城市光污染的天空背景（T09）：从地面夜光估算，只压银河的可见度 |
 | `src/traffic.ts` / `src/weather.ts` | 远处飞机的运动；天气预设、雷暴 / 台风摆放、闪电调度；天气场 `WeatherField`（T19b：按经纬度 + 时间取样云型 / 云量，雷暴系统与台风的出生、寿命、漂移，粗略东亚海陆分布） |
 | `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
@@ -62,7 +63,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/render/cabin.glsl.ts` | 窗洞内衬（漏斗）、窗板光源、划痕 / 油污 / 水痕 |
 | `src/render/wing.glsl.ts` | 机翼 SDF、材质细节、机身投影 |
 | `src/render/lights.glsl.ts` | 太阳 / 月亮 / 夜天光、直射主光源 `uKey*` |
-| `src/render/stars.glsl.ts` | 星星、月亮圆盘 |
+| `src/render/stars.glsl.ts` | 星星、银河（物理定标 + 眼睛的对比度阈值）、月亮圆盘 |
 | `src/render/ground.glsl.ts` | clipmap 采样、地形求交、地形阴影 |
 | `src/render/islands.glsl.ts` | 程序生成的岛屿（仅在关闭真实地理数据时） |
 | `src/render/traffic.glsl.ts` | 航迹云与远处飞机 |
@@ -82,10 +83,18 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - 测帧率前先 `page.bringToFront()`（窗口被挡住时 Chrome 会节流到 1 fps）。
 - 找程序生成的岛：在浏览器里用 JS 复刻 `hash22` 列出岛心（见 WORKLOG「岛屿」）。
 
-- **私有 headless 联调**（不用共享浏览器锁）：`node scripts/dev-browser.mjs shots --port <端口> [--only a,b]`（跑回归场景表 + 截图 + 帧时间）、`cold --port <端口>`（真冷启动）、`bench --port <端口> --baseline <对照端口>`（批渲帧时间两端口对照，附 GPU timer query）。脚本会自动找本机 `ms-playwright` 缓存的完整版 `chrome.exe`，启动后校验渲染器不是 SwiftShader（用了 `chrome-headless-shell.exe` 或 `--use-angle=swiftshader` 会静默退化，见下面「坑点」）。GPU 被其他代理占满时可能报 `Target crashed`（等一等或换个时间再跑，`pnpm run` 套一层时偶发挂起，直接 `node scripts/dev-browser.mjs ...` 更稳，见 `handoff/DX.md`）。
-- **离线 GLSL 检查**：`pnpm --filter voyage check:glsl`，不开浏览器，几秒内跑完，能抓住 GLSL 保留字、同一程序内的同签名函数重名、场景 / 窗外程序 sampler 数超 16（已用真实 GPU 交叉验证过一次，见 `handoff/DX.md`「返工记录」；SC-5 以后 `scene-default` 3/16、`outside-default` / `outside-ground-detail` 16/16）。提交前跑一次比等冷编译报错快得多。`node scripts/lint-shaders.mjs --self-test` 单独测检查逻辑本身，不用起 vite。
+- **私有 headless 联调**（不用共享浏览器锁）：`node scripts/dev-browser.mjs check --port <端口>`（只开页面、等启动完成、收集 console error / pageerror，有错误就打印并以非 0 退出码报告，没有就退出 0；提交前用它比跑 `shots` 快得多，不用等每个场景 2.5 s 的稳定等待）、`shots --port <端口> [--only a,b]`（跑回归场景表 + 截图 + 帧时间）、`cold --port <端口>`（真冷启动）、`bench --port <端口> --baseline <对照端口>`（批渲帧时间两端口对照，附 GPU timer query）。脚本会自动找本机 `ms-playwright` 缓存的完整版 `chrome.exe`，启动后校验渲染器不是 SwiftShader（用了 `chrome-headless-shell.exe` 或 `--use-angle=swiftshader` 会静默退化，见下面「坑点」）。GPU 被其他代理占满时可能报 `Target crashed`（等一等或换个时间再跑，`pnpm run` 套一层时偶发挂起，直接 `node scripts/dev-browser.mjs ...` 更稳，见 `handoff/DX.md`）。
+- **临时场景（DX-05）**：`shots` 支持 `--scene '<JSON>'`（可重复，和 `--only` 可并用），不用再为每个任务新写一个 `T0x-shots.mjs`。字段和 `scenarios.mjs` 里 `SCENES` 数组的条目一致：`name`（必填，同时是文件名）、`p`（面板控件 id → 值，如 `preset` / `time` / `wing-pos` / `cabin-class` / `altitude` / `weather` / `coverage`）、`head`（数字只设 z，或 `[x,y,z]` 三元组——`[-0.42,0.1,-0.5]` 看前方、`[0.42,0.1,-0.5]` 看后方、`[0,0.02,-0.42]` 默认坐姿）、`offset`（云的世界偏移）、`wait`、`ground`（等真实地面瓦片）。例（商务舱看后方）：
+  ```bash
+  node scripts/dev-browser.mjs shots --port 5247 --out tmp/screenshot/x \
+    --scene "{\"name\":\"biz-behind\",\"p\":{\"preset\":\"wpac\",\"time\":720,\"wing-pos\":\"8\",\"cabin-class\":\"business\"},\"head\":[0.42,0.1,-0.5]}"
+  ```
+  没有 `--scene` 时行为和以前完全一样（`--only` 过滤固定场景表，或跑全量表）。
+- **截图并排对照（DX-05）**：`node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]`，把多张截图拼成一张，每张左上角标文件名（父目录/文件名，便于区分不同批次的同名场景）；不给 `--crop` 就是整图并排，给了就先裁剪再按 `--zoom` 用最近邻放大（不模糊，专门给锯齿 / 闪烁这类像素级问题用）。泛化自 `handoff/T35-crop.py`（Python + Pillow），改用 Node + Canvas2D（借一次性 headless 页面做合成，复用 `lib/chrome.mjs` 找 `chrome.exe` 的逻辑，但不需要真实 GPU）避免依赖本机 Python 环境。
+- **离线 GLSL 检查**：`pnpm --filter voyage check:glsl`，不开浏览器，几秒内跑完，能抓住 GLSL 保留字、同一程序内的同签名函数重名、场景 / 窗外程序 sampler 数超 16（已用真实 GPU 交叉验证过一次，见 `handoff/DX.md`「返工记录」；SC-5 以后 `scene-default` 3/16、`outside-default` / `outside-ground-detail` 16/16），以及 `src/` 下有没有 CRLF 行尾（DX-05；仓库靠 `.gitattributes` 统一 LF，Windows 上脚本误写 CRLF 时 git 提交才会提示，这里提前到 check:glsl 里扫一遍并列出文件，见下面坑点「Windows 上 Python 写回源文件会变成 CRLF」）。提交前跑一次比等冷编译报错快得多。`node scripts/lint-shaders.mjs --self-test` 单独测检查逻辑本身，不用起 vite。
 
 - **ANGLE 后端切换**：`dev-browser.mjs` 的 `shots` / `cold` / `bench` 都支持 `--angle d3d11|vulkan`，默认 `d3d11`（Windows 上与生产环境一致，**这是交付验收的口径，不要改**）。日常改代码想快速看效果，开一个专用的 vulkan 窗口：`node scripts/dev-browser.mjs cold --port <端口> --angle vulkan`或直接用桌面浏览器 `chrome.exe --use-angle=vulkan`（真冷启动能从约 100 秒降到几秒，见`research/DX_SHADER_COMPILE.md`）。vulkan 会藏住 D3D11 专属问题（sampler 上限 16 vs 32、FXC 编译暴涨、X3595 屏幕导数报错），**验收前一定要在默认 d3d11 上再跑一次**。
+- **模拟高分屏 / 弱 GPU**（DX-04）：`dev-browser.mjs` 的 `shots` / `cold` / `bench` 都支持 `--viewport WxH`（浏览器视口，默认 `1600x1200`）和 `--dpr N`（`deviceScaleFactor`，默认 `1`）。二者组合改变实际绘制的画布像素数（画布 = 视口 × DPR），例如 `--viewport 1600x1200 --dpr 1.5` 实际绘制 2400×1800，用来在本机高性能 GPU 上人为制造过载，测「画质自动档」这类自适应逻辑的降档 / 回升；不传时行为与之前完全一致。PERF-5 验收时就是手工这样模拟出「高分屏 + 台风天气」的过载场景（见 `handoff/PERF-5.md`），现在收成了通用参数。
 - **离线着色器编译预算**：`node scripts/shader-budget.mjs`（或 `pnpm --filter voyage shader-budget --<参数>`），不开完整浏览器场景、不占 GPU，用 ANGLE 的翻译器 + Windows SDK 的 `fxc.exe` 离线算出每个程序的真实编译时间和 sampler 数。`--only <程序>` 只测一个，`--quick` 用 `/Od` 几十秒内出「能不能编过」，`--bisect <模块>` 把场景程序里的某段换成桩，看它占了多少编译时间（`--bisect list` 看可换的模块）。和浏览器真冷编译对照过一次，误差 5.4%，在 ≤15% 的可信范围内（见 `handoff/SC-12.md`）。
 
 ## 物理依据
@@ -99,6 +108,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | 机翼 | A320 量级的尺寸估计（后掠、上反、弦长、鲨鳍小翼），不是官方图纸 |
 | 月亮 | astronomy-engine 算位置、视星等、相位；Lommel-Seeliger 反射 |
 | 星星 | 耶鲁亮星表 BSC5（Hoffleit & Warren 1991），CDS V/50 |
+| 银河 | NASA SVS Deep Star Maps 2020 的银河背景（Gaia DR2 中比约 11.5 等更暗的星，不含亮星）；绝对亮度按人马座大星云 ≈ 20.7 V 等/角秒² 定标（估算，见 `stars.glsl.ts`）；可见度按 Blackwell 大目标对比度阈值的近似拟合（估算） |
 | 舱内声音 | 巡航客舱噪声的典型形状（非计权 63–500 Hz 最高、500 Hz 以上每倍频程 −6～−8 dB、A 计权峰值 500 Hz–1 kHz，按表约 78 dBA）是按公开测量的量级近似，不是某机型实测；气流噪声随动压 q = ½ρv²（ISA 密度）变化；左右声道按扩散声场相干函数 sinc(kd) 去相关；雷声延迟按 340 m/s |
 
 ## 数据来源与许可
@@ -107,6 +117,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | --- | --- | --- |
 | `public/data/bsc5.json` | 耶鲁亮星表第 5 版，CDS VizieR V/50，`scripts/build_stars.py` 生成 | 公有领域 |
 | `public/data/moon_2k.jpg` | Solar System Scope「2k_moon」（基于 NASA LRO 数据） | CC BY 4.0，需署名：Solar System Scope |
+| `public/data/milkyway_4k.jpg` | NASA SVS「Deep Star Maps 2020」（ID 4851）的 `milkyway_2020_4k.exr`（4096×2048，J2000 等距柱状），`scripts/build_milkyway.py` 转成 8 位对数编码灰度 JPEG（3.3 MB） | NASA 作品可自由使用，需署名：NASA/Goddard Space Flight Center Scientific Visualization Studio；其中 Gaia DR2 数据署名 ESA/Gaia/DPAC（CC BY-SA 3.0 IGO） |
 | 卫星影像（运行时拉取） | EOX Sentinel-2 cloudless 2020（`tiles.maps.eox.at`） | CC BY-NC-SA 4.0，需署名；仅限非商业 |
 | 地形（运行时拉取） | AWS Terrain Tiles，Terrarium 编码（`elevation-tiles-prod`） | 开放数据，各来源署名见其说明 |
 | 水体、道路（运行时拉取） | OpenFreeMap 矢量瓦片的 water / waterway / transportation 图层（同一张瓦片、同一次请求） | © OpenStreetMap contributors，ODbL |
@@ -214,6 +225,10 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **细节噪声周期太短时，中远处 mip 滤掉细级只剩最低一级，就是规则格子**（T32）：云细节噪声 0.9 km 周期曾导致云海一排排等距小云团；已改世界坐标随机平铺。雷暴 / 台风细节侵蚀、云街（纯 4 km 正弦）仍是周期的，留意。
 - **有雷暴 / 台风时开销与距离无关**（T33）：场上一有天气系统，每个像素都切到天气模式（云壳撑到 0–15/20 km、近水平视线空走几百公里）。判断先做「放到 2000 km 外」的对照。现按视线是否够得着天气系统分路径。
 - **步数用完会表现成纱窗点阵 + 直边透明方盒**（T33）：用完位置随像素抖动变 → 半透明点阵，连起来是直边。识别：临时调大上限看是否变实心。天气模式上限 448、普通云 192。
+- **眼墙顶沿后面露出一根水平「栏杆」**（T37）：从台风眼往外看，顶沿后方任何一层处处等高的云顶（卷云盖顶约 16 km）在顶沿低处都会露成光滑横管。识别：只关卷云盖看管子是否消失。修法：卷云盖顶在眼壁附近压到顶沿以下、随顶沿起伏，探针 / 云影用同一个高度函数。
+- **往上加细节会飘出碎云**（T37）：眼壁内壁随高度起伏时，在顶沿高度往上叠细尖峰会切出悬空小片。细节只往下刻。
+- **找塔窗口截出直边**（T37）：雨带找塔的 3×3 窗口只完整覆盖离塔心约 13 km，砧 / 侧泡伸得更远就被截成直线。高处窗口顺高空风偏移 5 km；新加部件先核对窗口够不够。
+- **相机紧贴稀薄云层底面时步进变贵**（T37）：给卷云盖底面加丝缕软化使 typhoon-outer 涨 35%（+0.7 ms），因为相机正下方多出大片稀薄云、步进要走细。已撤回；这类改动先用按 pass 的 GPU 计时（handoff/T37-variants-cost.mjs）逐项归因。
 - **舱内只乘直射透射率会发蓝发暗**（T31）：被云挡掉的直射要按二流近似补成白色漫射；探针用的台风大形卷云盖高度要和完整版一致。
 - **Web Audio 的 DynamicsCompressorNode 自带补偿增益**（T11）：规范里压缩器按阈值 / 比率自动抬高输出（阈值 −6、比率 12 约 +3 dB），拿它当兜底限幅器时，所有安静的声音也被抬了。噪声床的高斯峰值因数 4–5 σ，床本身若放在 −17 dBFS 就会一直碰阈值。
   修法：噪声床放到 −26 dBFS（音量 100%），压缩器改阈值 −3 / 比率 20（补偿约 +1.7 dB），只有近雷碰得到。识别：`scripts/audio-check.mjs` 的峰值列应比阈值低 4 dB 以上。
@@ -242,3 +257,11 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **clipmap 重建时的 CPU 活要放 Worker**（T08）：一级道路几万到十几万个顶点，主线程上投影 + 逐段求距离实测每级 25–180 ms，1M 像素的浮点合成循环 15–40 ms，
   飞行中每重建一级就卡一下。现在投影、抽稀、求距离、和夜光 / 影像合成都在 `road-raster.worker.ts`，像素缓冲区转移过去再转移回来（主线程上那一遍夜光拷贝循环也省了）。
   识别：`handoff/T08-shots.mjs --longtask 30` 统计长任务。
+- **只抬高可见度阈值、不改画出来的底色，银河几乎不会变淡**（T09）：城市人工天光和舱内光幕没有画进天空，按真实背景算出的阈值只砍掉超出部分的一点点（城市里 C ≈ 0.7、阈值 0.08 → 还剩 88%），画面上的对比度照旧。修法：再乘「画出来的底色 ÷ 真实底色」，让银河相对画面底色的对比度等于真实对比度（`milkyWayVisibility`）；月光照亮的天空本来就画在底色里，这一项对它是 1。识别：强行把 `uSkyGlow` 设成几倍夜天光，截图里银河几乎不变。
+- **回归场景的日期默认是「今天」，夜景的月相每天不同**（T09）：场景只设 `time` 时日期沿用页面打开那天，月亮在不在天上、多亮随运行日期变，夜间场景的基线不可比。要稳定的夜景写 `date`（`applyScene` 对日期框发 `change`，没写 `date` 的场景恢复成页面打开时的日期）。选银河场景的办法：用 astronomy-engine 扫全年「太阳 < −18°、月亮 < −5°、人马座大星云高 4–16°、方位对着窗」，本仓库的 `night-sea-milkyway` 就是这样挑出来的（南海、左座朝东南、2026-05-15 22:30）。
+- **窗板高度只看得到仰角约 20° 以下的天**（T09）：默认头位下窗上沿约 +20°，银河要低低地在窗里才看得见；判断「银河出没出来」先算它的高度角和方位，别先怀疑着色器。
+- **`svs.gsfc.nasa.gov` 的 TLS 握手在本机经常失败**（T09）：Git Bash 的 curl（schannel）直接 `SSL/TLS connection failed`，Python 的 urllib 也会间歇 `UNEXPECTED_EOF_WHILE_READING`；重试几次就好（`build_milkyway.py` 自带重试）。
+
+- **掠射的侧壁不能用一个各向同性的像素足迹淡出纹理**（T35）：「看前方 / 看后方」时视线贴着侧壁，像素只在「视线在墙面上的投影方向」被拉长 1/cos，垂直方向不拉长。原来的 `t·pixAng / max(cos, 0.2)` 让所有细纹一起被抹平（画面上是一整片平灰墙），而在 cos < 0.2 的地方又欠估足迹、会闪。修法：`shadeWall` 算出 `pixX` / `pixY` 两个方向的足迹，沿 x、沿 y 变化的纹理和缝各按自己的淡出。识别：斜看的墙面上横纹、竖纹同时消失，或者只在极掠射处出现摩尔纹。
+- **座椅几何往正面长，就会挤进默认坐姿的画面**（T35）：本排头枕的正面离眼睛的横向视角只比视场边缘多 2°，商务舱头枕往前加厚 1 cm、护翼再鼓 2.8 cm，画面右下角就多出一大块模糊的浅色皮。修法：加厚改成往背后，护翼只往前 2 cm。识别：改了 `seatSection` / `sdSeatBack` 以后，默认坐姿（head = [0, 0.02, −0.42]）拍一张，和 master 对照（`handoff/T35-shots.mjs --only biz-seated,econ-seated`）。
+- **Windows 上 Python 写回源文件会变成 CRLF**（T35）：`open(p, 'w')` 在文本模式下会把 `\n` 写成 `\r\n`，提交时 git 会提示 "CRLF will be replaced"。修法：读写都加 `newline=''`。识别：`grep -c $'\r' 文件` 不是 0。

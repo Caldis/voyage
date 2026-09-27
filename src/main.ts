@@ -22,13 +22,17 @@ import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets
 import { BootProgress } from "./boot/progress";
 import { Director } from "./director";
 import { WonderSystem } from "./wonders/system";
+import { createQualityController, DEFAULT_DPR_CAP } from "./quality";
 import { CabinAudio, audioInputFrom } from "./audio";
+import { LightPollution } from "./light-pollution";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
 renderer.toneMapping = THREE.AgXToneMapping;
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+// 画质档位的初始 DPR 上限（PERF-5）：quality 控制器要等 resize() 定义之后才能创建，
+// 这里先用同一个常量把起点摆对，构造 quality 时不会再重复应用一次
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, DEFAULT_DPR_CAP));
 $("app").appendChild(renderer.domElement);
 
 // 启动计时（调试用，结果放在 window.__voyageStartup）
@@ -62,6 +66,9 @@ Object.assign(sceneMat.uniforms, haze.sceneUniforms);
 // 奇观（W01，wonders/system.ts）：天幕层奇观的 uniform 进场景 / 窗外共用的 uniforms（只有窗外程序用到）
 const wonders = new WonderSystem();
 Object.assign(sceneMat.uniforms, wonders.uniforms);
+// 城市天光（T09）：只用来压银河的可见度，不画进天空
+const lightPollution = new LightPollution();
+Object.assign(sceneMat.uniforms, lightPollution.uniforms);
 // 机翼增升装置的 uniform（声明在 wing.glsl.ts）。在首次渲染前加进材质即可生效；以后可以挪进 createSceneMaterial
 // uWingSteps / uWingShadowSteps 是机翼光线步进和自阴影的最大步数：用 uniform 而不是常量，FXC 就不会把循环展开，冷编译不会翻倍
 Object.assign(sceneMat.uniforms, {
@@ -109,6 +116,7 @@ const CABIN_REF_ALBEDO: Record<CabinClass, THREE.Vector3> = {
   economy: new THREE.Vector3(0.71, 0.71, 0.69),
 };
 let cabinClassUi = "";
+let qualityUi = ""; // PERF-5：面板「画质」下面那行状态文字，diff 后才写 DOM（同 cabinClassUi 的写法）
 // 机翼 pass（wing-pass.ts）：读场景的 hdr，把机翼合成上去写到 hdrWing；后面的眩光、曝光都读 hdrWing。
 // 必须在所有 Object.assign(sceneMat.uniforms, …) 之后创建：它复用的是创建那一刻场景材质里的 uniform 对象
 const wingMat = createWingMaterial(sceneMat.uniforms);
@@ -294,7 +302,11 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-setupUi({ state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, audio });
+// 画质档位（PERF-5）：默认「自动」，起点已经是 LEVELS[0]（云全分辨率 + DEFAULT_DPR_CAP），构造时不会
+// 重新应用一次分辨率 / DPR——上面的初始 renderer.setPixelRatio + resize() 已经把状态摆对了
+const quality = createQualityController({ renderer, clouds, resize });
+
+setupUi({ state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, quality, audio });
 // 奇观之门（W01 预留、T19b 接入）：遮挡开始时通知奇观系统；只有 wonders.preferGate = true 时才会借遮挡出现
 director.onCover((kind) => wonders.onCover(kind));
 
@@ -302,9 +314,17 @@ director.onCover((kind) => wonders.onCover(kind));
 setPreset(state.preset.id);
 let last = performance.now();
 let frameCount = 0;
+// PERF-5：GPU 计时 / 挂钟帧间隔只在真实的 rAF 循环里量，不进 renderFrame 本体——benchFrame 直接调用
+// renderFrame 做合成测量（不经过 rAF），如果把计时也塞进 renderFrame，benchFrame 的干净基准会被自动档中途
+// 改分辨率污染，其他任务的性能回归数字就不可信了
+let lastFrameAt = performance.now();
 
 function frame(now: number) {
+  const intervalMs = now - lastFrameAt;
+  lastFrameAt = now;
+  quality.beginFrame();
   renderFrame(now);
+  quality.endFrame(now, intervalMs);
   requestAnimationFrame(frame);
 }
 
@@ -428,6 +448,7 @@ function renderFrame(now: number) {
     ground.setMinLevel(minLevel);
   }
   if (state.groundOn) ground.update(cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y);
+  lightPollution.update(ground, cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y, state.altitudeKm, state.groundOn, now);
   u.uTerrainMax.value = ground.maxHeightKm;
   u.uWingRootLE.value = state.wingRootLE;
   // 巡航时翼尖静弯约 0.5 m，湍流里再叠几厘米的颤动
@@ -460,6 +481,10 @@ function renderFrame(now: number) {
   wingMat.uniforms.uScene.value = hdr.texture;
   pass.render(wingMat, hdrWing);
   exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
+
+  // 面板「画质」下面那行状态（PERF-5）：手动档标「固定」，自动档带上当前落在哪一档 + 依据的数字
+  const qualityText = quality.describe();
+  if (qualityText !== qualityUi) $("quality-status").textContent = qualityUi = qualityText;
 
   updateInfo(now, sun, moon, state, curLat, curLon, ground.pending, director.describe());
 }
@@ -599,4 +624,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, audio };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio };
