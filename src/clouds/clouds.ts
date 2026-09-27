@@ -735,8 +735,6 @@ void main() {
   float dCur = texelFetch(uCurrentDepth, ip, 0).r * CLOUD_DEPTH_SCALE;
   vec4 cur = texelFetch(uCurrent, ip, 0);
   if (depthHalf) cur = vec4(dCur * (1.0 - cur.a), 1.0 - cur.a, 0.0, 1.0);
-  if (uReset || (depthHalf && uResetDepth)) { gl_FragColor = cur; return; }
-
   vec4 mn = cur, mx = cur;
   vec4 nsum = vec4(0.0);
   for (int x = -1; x <= 1; x++)
@@ -756,7 +754,11 @@ void main() {
   // 3×3 里没有别的物体的边；右半（深度）不做，免得云山前 / 山后的判断被抹宽。窗板外的 (0, 0, 0, 1) 只在窗板外 0.02 的那圈里，看不到。
   // 权重从 uCloudImmersion = 0.02 起算：它出云后按 0.5 s 指数衰减、要约一分钟才真正变成 0，
   // 不设门槛的话出云后几秒内还在做 1% 量级的平均（看不出，但云外不再逐位等于改动前）；约 2 s 后 < 0.02，结果逐位等于 cur
-  if (!depthHalf) cur = mix(cur, nsum * (1.0 / 9.0), clamp(uCloudImmersion * 1.0204 - 0.0204, 0.0, 1.0));
+  // 只在权重 > 0 时混：云外（权重 0）即使邻域里有 NaN / Inf 也逐位等于 cur（C11 审查）
+  float wImm = clamp(uCloudImmersion * 1.0204 - 0.0204, 0.0, 1.0);
+  if (!depthHalf && wImm > 0.0) cur = mix(cur, nsum * (1.0 / 9.0), wImm);
+  // 重置帧在平均之后才返回：否则云里换预设 / 缩放 / 自动降档时会闪回约 0.3 s 的旧棋盘纹（C11 审查）
+  if (uReset || (depthHalf && uResetDepth)) { gl_FragColor = cur; return; }
 
   vec3 rd = uCabinToWorld * rdC;
   vec3 prevDir = normalize(rd * dCur + uMotion);
