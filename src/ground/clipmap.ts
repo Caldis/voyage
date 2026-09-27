@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { LocalFrame, latToTileY, lonToTileX, tileXToLon, tileYToLat, zoomForResolution } from "./geo";
-import { DEM_MAX_ZOOM, DEM_URL, IMAGERY_MAX_ZOOM, IMAGERY_URL, NIGHT_MAX_ZOOM, NIGHT_URL, VECTOR_MAX_ZOOM, loadBitmap, loadWater } from "./tiles";
+import { DEM_MAX_ZOOM, DEM_URL, EOX_S2, GSI_PHOTO, NIGHT_MAX_ZOOM, NIGHT_URL, VECTOR_MAX_ZOOM, imageryStats, inBounds, loadBitmap, loadImageryTile, loadWater } from "./tiles";
 import { buildGroundLevel, type GroundLevelResult, type RoadJob } from "./road-raster";
 
 /**
@@ -17,6 +17,24 @@ export const GROUND_BASE_KM = 8;
 const RES = 1024; // 影像和水体
 const HRES = 256; // 地形高度
 
+/**
+ * 高清细节层（G03）：只进最细的这几级（第 0 级 8 km、第 1 级 16 km）。研究结论（research/IMAGERY.md §1、§4.1）：
+ * 这两级 EOX 是放大后用的（z14 以上没有新信息），高清源收益最大；更粗的级别 EOX 不输航拍，而且巡航时标准视角只看得到第 3–6 级。
+ */
+const DETAIL_LEVELS = 2;
+/** GSI 从 z14 起才是航拍（z13 及更粗由卫星影像拼成、偏蓝白，实测），两级都取 z14：第 1 级是 2:1 缩小，顺带抗锯齿 */
+const DETAIL_ZOOM = 14;
+/** 一级最多取多少张高清瓦片（第 1 级 16 km 在 z14 上约 9×9 张；北海道纬度高、瓦片窄，到 10×10） */
+const DETAIL_MAX_TILES = 121;
+/** 离地高度的开关门限（km，带回差，免得在 6 km 附近来回切换、反复重建）：研究建议「离地低于约 6 km」 */
+const DETAIL_AGL_ON = 5.5;
+const DETAIL_AGL_OFF = 6.5;
+/** 航程流速上限：> 2× 时最细级别不取高清源（60× 时这两级本来就被 setMinLevel 停用了） */
+const DETAIL_MAX_RATE = 2;
+/** 太阳高度（sin）门限，带回差：夜里影像颜色看不见，细节只会扰动城市灯点 / 路灯的建成区判据，夜里一律不用 */
+const DETAIL_SUN_ON = Math.sin((-2 * Math.PI) / 180);
+const DETAIL_SUN_OFF = Math.sin((-4 * Math.PI) / 180);
+
 interface Level {
   size: number;
   cx: number;
@@ -26,6 +44,10 @@ interface Level {
   maxHeight: number;
   /** CPU 侧的粗网格（T18 高度下限 / 霾的地区统计）：GRID² 格，每格的最高点、平均高度（km）、陆地比例 */
   grid: CoarseGrid | null;
+  /** 当前数据（或正在建的这一版）要没要高清细节（G03）；和「此刻要不要」不一致时触发重建 */
+  detail: boolean;
+  /** 实际用上高清细节的像素比例（诊断） */
+  detailCoverage: number;
 }
 
 /** 每级的粗网格边长（格数）。高度图 256² → 每格 8×8 个高度像素；水体 1024² → 每格 32×32 个像素 */
@@ -91,8 +113,15 @@ export class GroundClipmap {
     building: false,
     maxHeight: 0,
     grid: null,
+    detail: false,
+    detailCoverage: 0,
   }));
   private frame: LocalFrame;
+  /** 高清细节此刻开没开（G03，setDetailContext 按高度 / 视角 / 流速 / 太阳算，带回差） */
+  private detailOn = false;
+  /** 上一次 update 的飞机位置（km），setDetailContext 算离地高度用 */
+  private lastX = 0;
+  private lastZ = 0;
   private generation = 0;
   /** 瓦片统计，面板上显示加载状态 */
   pending = 0;
@@ -151,6 +180,8 @@ export class GroundClipmap {
       l.building = false;
       l.cx = l.cz = NaN;
       l.grid = null;
+      l.detail = false;
+      l.detailCoverage = 0;
     }
     this.levelUniform.forEach((v) => (v.w = 0));
     // 排队里还没上传的批次都属于旧生成：马上要被新一轮重建覆盖，丢掉即可（PERF-8）
@@ -188,8 +219,42 @@ export class GroundClipmap {
    */
   waterwayMaxM = Infinity;
 
+  /**
+   * 高清细节层的开关条件（G03），每帧在 update 之前调用：离地 < 约 6 km 或「看机翼」视角、航程流速 ≤ 2×、白天、不在火车模式。
+   * 条件变了，最细两级按新条件重建（旧数据在新的一版建好之前照常用）。不调用时一直是关的（和 G03 之前一样）
+   */
+  /** 调试开关：false 时高清细节层整个关掉（A/B 对照用，`__voyage.ground.detailEnabled = false`，最细两级随即按纯 EOX 重建） */
+  detailEnabled = true;
+
+  setDetailContext(altitudeKm: number, wingView: boolean, rate: number, sunDirY: number, allowed = true) {
+    const on = this.detailOn;
+    const agl = altitudeKm - (this.heightAt(this.lastX, this.lastZ) ?? 0);
+    const low = agl < (on ? DETAIL_AGL_OFF : DETAIL_AGL_ON);
+    const day = sunDirY > (on ? DETAIL_SUN_OFF : DETAIL_SUN_ON);
+    this.detailOn = this.detailEnabled && allowed && (low || wingView) && rate <= DETAIL_MAX_RATE && day;
+  }
+
+  /** 第 i 级以 (cx, cz) 为中心时要不要高清细节 */
+  private wantDetail(i: number, cx: number, cz: number) {
+    if (!this.detailOn || i >= DETAIL_LEVELS) return false;
+    const [lat, lon] = this.frame.toGeo(cx, cz);
+    return inBounds(GSI_PHOTO, lat, lon, 0.1); // 放宽约半个第 1 级：级别中心在框外、边上压着日本也要
+  }
+
+  /** 调试 / 验收：各站点请求统计 + 各级的高清细节状态（`__voyage.ground.imageryStats`） */
+  get imageryStats() {
+    return {
+      source: EOX_S2.id,
+      detailOn: this.detailOn,
+      levels: this.levels.slice(0, DETAIL_LEVELS).map((l) => ({ detail: l.detail, coverage: +l.detailCoverage.toFixed(3) })),
+      hosts: imageryStats(),
+    };
+  }
+
   /** 每帧调用：飞机当前的本地坐标（km） */
   update(x: number, z: number) {
+    this.lastX = x;
+    this.lastZ = z;
     // PERF-8：先把上一批排队的纹理上传推进一格（每帧最多一张），再决定要不要触发新的重建
     this.drainUploads();
     // 粗的级别先建，远景先出来
@@ -199,8 +264,9 @@ export class GroundClipmap {
       const snap = l.size / 8;
       const cx = Math.round(x / snap) * snap;
       const cz = Math.round(z / snap) * snap;
-      if (cx === l.cx && cz === l.cz) continue;
-      void this.build(i, cx, cz);
+      const detail = this.wantDetail(i, cx, cz);
+      if (cx === l.cx && cz === l.cz && detail === l.detail) continue;
+      void this.build(i, cx, cz, detail);
     }
   }
 
@@ -300,7 +366,7 @@ export class GroundClipmap {
     return null;
   }
 
-  private async build(i: number, cx: number, cz: number) {
+  private async build(i: number, cx: number, cz: number, detail: boolean) {
     const l = this.levels[i];
     const gen = this.generation;
     l.building = true;
@@ -308,17 +374,21 @@ export class GroundClipmap {
     // 交给下面的 after 回调清（要等 3 张纹理都真正传完，见类头「PERF-8」注释）
     let queued = false;
     try {
-      const [albedo0, vec, height, nightRaw] = await Promise.all([
+      const heightP = this.buildHeight(l.size, cx, cz);
+      const [albedo0, vec, height, nightRaw, detailPx] = await Promise.all([
         this.buildImagery(l.size, cx, cz, i === GROUND_LEVELS - 1),
         this.buildWater(l.size, cx, cz),
-        this.buildHeight(l.size, cx, cz),
+        heightP,
         this.buildNight(l.size, cx, cz),
+        // 高清细节等地形先到：用 DEM 筛掉整张是海的瓦片（GSI 海上 404，见 tiles.ts 的 seaMissing）
+        detail ? heightP.then((h) => this.buildDetail(l.size, cx, cz, h.data)) : Promise.resolve(null),
       ]);
       if (gen !== this.generation || i < this.minLevel) return;
       // 水体/河道栅格化、夜光的逐像素变换、道路灯带（T08）叠加：都在 Worker 里做（road-raster.ts 的
       // buildGroundLevel，PERF-9 把水体/夜光也从主线程挪了进来，见类头「PERF-8」注释旁边的说明），
       // 像素缓冲区转移过去再转移回来，主线程上不跑 getImageData / 逐顶点投影 / 1M 像素的循环
-      const { water, albedo } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw);
+      // G03：高清细节（GSI）也交给 Worker，和 EOX 做「高频取 GSI、低频取 EOX」的合成（imagery-blend.ts）
+      const { water, albedo, detailCoverage } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailPx);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
       this.queueUpload(
@@ -332,6 +402,8 @@ export class GroundClipmap {
           if (gen !== this.generation || i < this.minLevel) return;
           l.cx = cx;
           l.cz = cz;
+          l.detail = detail;
+          l.detailCoverage = detailCoverage;
           l.valid = true;
           l.maxHeight = height.max;
           l.grid = coarseGrid(cx, cz, l.size, height.data, height.sea, water);
@@ -401,7 +473,7 @@ export class GroundClipmap {
   /** coarsest：最粗一级。其他级别里没取到的瓦片留成透明（alpha = 0），着色器用粗一级补上；最粗一级没有更粗的，只能涂深海色 */
   private async buildImagery(size: number, cx: number, cz: number, coarsest: boolean) {
     const [latC] = this.frame.toGeo(cx, cz);
-    let zoom = zoomForResolution(size / RES, latC, IMAGERY_MAX_ZOOM);
+    let zoom = zoomForResolution(size / RES, latC, EOX_S2.maxZoom);
     let cover = this.tileCover(size, cx, cz, zoom, RES);
     while (cover.tiles.length > 49 && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
     const ctx = makeCanvas(RES, RES);
@@ -415,7 +487,7 @@ export class GroundClipmap {
     this.pending += cover.tiles.length;
     await Promise.all(
       cover.tiles.map(async (t) => {
-        const bmp = await loadBitmap(IMAGERY_URL(zoom, t.x, t.y));
+        const bmp = await loadImageryTile(EOX_S2, zoom, t.x, t.y);
         this.pending--;
         if (!bmp) return;
         const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
@@ -424,6 +496,51 @@ export class GroundClipmap {
       }),
     );
     return ctx.getImageData(0, 0, RES, RES).data;
+  }
+
+  /**
+   * 高清细节层（G03）：国土地理院航拍画到这一级的 RES² 上，没取到的地方留透明（A = 覆盖率）。一张都没取到返回 null
+   * （出了日本 / 海上是 404，tiles.ts 负缓存后不再请求）。合成在 Worker 里做（imagery-blend.ts）
+   */
+  private async buildDetail(size: number, cx: number, cz: number, heightKm: Float32Array) {
+    const all = this.tileCover(size, cx, cz, DETAIL_ZOOM, RES);
+    if (all.tiles.length > DETAIL_MAX_TILES) return null;
+    const cover = { ...all, tiles: all.tiles.filter((t) => this.detailTileWanted(all.toPx, t.x, t.y, heightKm)) };
+    const ctx = makeCanvas(RES, RES);
+    ctx.clearRect(0, 0, RES, RES);
+    ctx.imageSmoothingQuality = "high"; // 第 1 级是 2:1 缩小
+    let got = 0;
+    this.pending += cover.tiles.length;
+    await Promise.all(
+      cover.tiles.map(async (t) => {
+        const bmp = await loadImageryTile(GSI_PHOTO, DETAIL_ZOOM, t.x, t.y);
+        this.pending--;
+        if (!bmp) return;
+        got++;
+        const [ax, ay] = cover.toPx(tileYToLat(t.y, DETAIL_ZOOM), tileXToLon(t.x, DETAIL_ZOOM));
+        const [bx, by] = cover.toPx(tileYToLat(t.y + 1, DETAIL_ZOOM), tileXToLon(t.x + 1, DETAIL_ZOOM));
+        ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
+      }),
+    );
+    return got > 0 ? ctx.getImageData(0, 0, RES, RES).data : null;
+  }
+
+  /**
+   * 这张高清瓦片值不值得请求：中心在覆盖框里，而且在这一级范围内至少有一个地形像素高于海平面 0.5 m。
+   * 不能只按「海底 < −5 m」判海：近岸的 DEM 来自 SRTM，海面是 0 m 而不是负值（骏河湾北岸实测整排 z14 瓦片被当成陆地、全部 404）；
+   * 整张 2 km 瓦片都 ≤ 0.5 m 的陆地极少，误筛了也只是那里没有细节（照常显示 EOX）
+   */
+  private detailTileWanted(toPx: (lat: number, lon: number) => [number, number], x: number, y: number, heightKm: Float32Array) {
+    const z = DETAIL_ZOOM;
+    if (!inBounds(GSI_PHOTO, tileYToLat(y + 0.5, z), tileXToLon(x + 0.5, z))) return false;
+    if (!GSI_PHOTO.seaMissing) return true;
+    const [ax, ay] = toPx(tileYToLat(y, z), tileXToLon(x, z));
+    const [bx, by] = toPx(tileYToLat(y + 1, z), tileXToLon(x + 1, z));
+    const s = HRES / RES;
+    const x0 = Math.max(0, Math.floor(Math.min(ax, bx) * s)), x1 = Math.min(HRES - 1, Math.ceil(Math.max(ax, bx) * s));
+    const y0 = Math.max(0, Math.floor(Math.min(ay, by) * s)), y1 = Math.min(HRES - 1, Math.ceil(Math.max(ay, by) * s));
+    for (let j = y0; j <= y1; j++) for (let i = x0; i <= x1; i++) if (heightKm[j * HRES + i] > 0.0005) return true;
+    return false;
   }
 
   /** 夜光（NASA Black Marble）：只取亮度，分辨率粗（~500 m），着色器里再用影像里的城市区域把它「落」到街区上。
@@ -521,14 +638,19 @@ let roadWorker: Worker | null | undefined;
 let roadReq = 0;
 const roadPending = new Map<number, { resolve: (r: GroundLevelResult) => void; reject: (e: Error) => void }>();
 
-function buildGroundLevelAsync(job: RoadJob, albedo: Uint8ClampedArray, nightRaw: Uint8ClampedArray): Promise<GroundLevelResult> {
+function buildGroundLevelAsync(
+  job: RoadJob,
+  albedo: Uint8ClampedArray,
+  nightRaw: Uint8ClampedArray,
+  detail: Uint8ClampedArray | null,
+): Promise<GroundLevelResult> {
   if (roadWorker === undefined) {
     try {
       roadWorker = new Worker(new URL("./road-raster.worker.ts", import.meta.url), { type: "module" });
-      roadWorker.onmessage = (e: MessageEvent<{ id: number; water: Uint8ClampedArray; albedo: Uint8ClampedArray }>) => {
+      roadWorker.onmessage = (e: MessageEvent<GroundLevelResult & { id: number }>) => {
         const req = roadPending.get(e.data.id);
         roadPending.delete(e.data.id);
-        req?.resolve({ water: e.data.water, albedo: e.data.albedo });
+        req?.resolve({ water: e.data.water, albedo: e.data.albedo, detailCoverage: e.data.detailCoverage });
       };
       roadWorker.onerror = (e) => {
         console.warn("地面栅格化 Worker 出错，改在主线程计算", e.message);
@@ -542,14 +664,15 @@ function buildGroundLevelAsync(job: RoadJob, albedo: Uint8ClampedArray, nightRaw
     }
   }
   if (!roadWorker) {
-    return Promise.resolve(buildGroundLevel(job, albedo, nightRaw));
+    return Promise.resolve(buildGroundLevel(job, albedo, nightRaw, detail));
   }
   const id = ++roadReq;
   const worker = roadWorker;
   return new Promise((resolve, reject) => {
     roadPending.set(id, { resolve, reject });
     // 瓦片水体/道路几何数据复制过去（还留在 LRU 缓存里给下次重建用），像素缓冲区转移（不复制）
-    worker.postMessage({ id, job, albedo, nightRaw }, [albedo.buffer, nightRaw.buffer]);
+    const transfer = detail ? [albedo.buffer, nightRaw.buffer, detail.buffer] : [albedo.buffer, nightRaw.buffer];
+    worker.postMessage({ id, job, albedo, nightRaw, detail }, transfer);
   });
 }
 

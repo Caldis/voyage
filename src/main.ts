@@ -496,6 +496,8 @@ function renderFrame(now: number) {
     groundMinLevel = minLevel;
     ground.setMinLevel(minLevel);
   }
+  // G03：最细两级在日本范围内混入国土地理院航拍的条件（低空 / 看机翼、流速 ≤ 2×、白天、非火车），见 clipmap.ts setDetailContext
+  ground.setDetailContext(state.altitudeKm, viewPreset.id === "wing", director.active ? director.rate : 1, u.uSunDir.value.y, !rail.active);
   if (state.groundOn) ground.update(cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y);
   lightPollution.update(ground, cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y, state.altitudeKm, state.groundOn, now);
   u.uTerrainMax.value = ground.maxHeightKm;

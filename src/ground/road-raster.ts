@@ -1,4 +1,5 @@
 import { LocalFrame, tileXToLon, tileYToLat } from "./geo";
+import { blendDetail } from "./imagery-blend";
 
 /**
  * 道路灯带的栅格（T08）：把一级 clipmap 覆盖范围里的道路折线栅格成「到最近道路中心线的有向距离」。
@@ -344,7 +345,10 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
   }
 }
 
-export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo">;
+export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo"> & {
+  /** 高清细节（G03）实际用上的像素比例；没有细节层时是 0 */
+  detailCoverage: number;
+};
 
 /**
  * 一级的水体 + 道路 + 夜光合成入口（PERF-9）：栅格化水体/河道（OffscreenCanvas，Worker 和主线程兜底都能用）
@@ -355,7 +359,12 @@ export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo">;
  * （`albedo`、`nightRaw`，两个都走 Transferable）和瓦片的几何数据（水体/河道顶点，仍然是复制——它们缓存在
  * `tiles.ts` 的 LRU 里给下次重建复用，不能转移/detach，见类头 `RoadJob.water` 注释）。
  */
-export function buildGroundLevel(job: RoadJob, albedo: Uint8ClampedArray, nightRaw: Uint8ClampedArray): GroundLevelResult {
+export function buildGroundLevel(
+  job: RoadJob,
+  albedo: Uint8ClampedArray,
+  nightRaw: Uint8ClampedArray,
+  detail: Uint8ClampedArray | null = null,
+): GroundLevelResult {
   const RES = job.res;
   const canvas = new OffscreenCanvas(RES, RES);
   const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
@@ -405,10 +414,13 @@ export function buildGroundLevel(job: RoadJob, albedo: Uint8ClampedArray, nightR
     }
   }
   const water = ctx.getImageData(0, 0, RES, RES).data;
+  // 高清细节（G03）：只改影像 RGB（要用上面刚栅格化的水体遮罩挡掉水面），必须在 packRoads 之前——
+  // packRoads 读影像 alpha 判缺影像、再把 A 改写成道路照亮宽度编码
+  const detailCoverage = detail ? blendDetail(albedo, detail, water, RES).coverage : 0;
   const night = darkenNight(nightRaw);
   const px: LevelPixels = { water, albedo, night };
   packRoads(job, px);
-  return { water: px.water, albedo: px.albedo };
+  return { water: px.water, albedo: px.albedo, detailCoverage };
 }
 
 /** Black Marble 的底图把陆地画成暗蓝色：取「亮度减去蓝色底」，只留下灯光（原来在主线程的 clipmap.ts
