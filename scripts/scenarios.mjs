@@ -17,6 +17,8 @@
 //   ground  是否要等真实地面瓦片加载（最多等 40 秒，ground.pending < 5 才继续）
 //   head    头部位置：一个数字（只设 z，向后兼容旧场景）或 [x, y, z] 三元组（DX-03「headX」，
 //           用来表达邻座 / 前排座位这类横向偏移，参考 T06 复核脚本的 forward-seat / own-seat 场景）
+//   wonder  召唤奇观（W01b）：{ id, distKm?, forwardOffsetDeg?, bearingDeg?, reveal? }，reveal 默认 1（直接显形）；
+//           不写就关掉奇观模式（每个场景都从「没有奇观」出发）
 
 export const DEFAULTS = {
   preset: "wpac",
@@ -52,6 +54,10 @@ export const SCENES = [
   { name: "economy-ahead", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "economy" }, head: [-0.42, 0.1, -0.5] },
   // T09：夜间无月（2026-05-15 22:30，残月在地平线下 53°）、关舱灯（全关）、南海上空、左座朝东南：人马座大星云低低地在窗正中
   { name: "night-sea-milkyway", p: { preset: "scs", seat: "left", date: "2026-05-15", time: 1350, coverage: 0.15, "cabin-light": "off", "wing-pos": "-4" } },
+  // W01b：奇观（天幕层）。天梯：左座朝东、日落后约 20 分钟，下段已入地影，上段与高处的中继站仍被阳光照亮，底部系留平台的灯群在地平线的霾里
+  { name: "wonder-tether-dusk", p: { preset: "wpac", seat: "left", time: 1078, coverage: 0.3, "cabin-light": false, "wing-pos": "-4" }, wonder: { id: "tether", distKm: 370 } },
+  // W01b：建木，白天（下午）：缠着树干的云气是白天最先被注意到的东西，树冠在高处
+  { name: "wonder-jianmu-day", p: { preset: "wpac", time: 900, coverage: 0.3, "wing-pos": "-4" }, wonder: { id: "jianmu", distKm: 380 } },
 ];
 
 /**
@@ -102,6 +108,17 @@ export async function applyScene(arg) {
     for (let i = 0; i < 40; i++) {
       await new Promise((r) => setTimeout(r, 1000));
       if (v.ground.pending < 5 && i > 5) break;
+    }
+  }
+  // wonder（W01b）：召唤一个奇观 { id, distKm?, forwardOffsetDeg?, bearingDeg?, reveal? }，放在窗口正对方向（偏机头 forwardOffsetDeg，默认 0）、直接显形；
+  // 不写就关掉奇观模式并清掉在场的奇观（免得上一个场景的奇观带到下一个）。召唤前等两帧，让奇观系统拿到新的座位 / 航向
+  if (v.wonders) {
+    v.wonders.clear();
+    v.wonders.enabled = !!sc.wonder;
+    if (sc.wonder) {
+      for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r));
+      const w = sc.wonder;
+      v.wonders.trigger(w.id, { forwardOffsetDeg: w.forwardOffsetDeg ?? 0, bearingDeg: w.bearingDeg, distKm: w.distKm, reveal: w.reveal ?? 1 });
     }
   }
   // 舱等（T25）：没编过的变体在后台编译，画面切过去之前不截图（最多等 120 s）
