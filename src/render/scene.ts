@@ -12,6 +12,7 @@ import { VIEW_COMMON } from "./view.glsl";
 import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
 import { LIGHTS_COMMON } from "./lights.glsl";
 import { WING_COMMON } from "./wing.glsl";
+import { STAR_MAP_COMMON, STAR_POINTS_COMMON } from "./stars.glsl";
 import type { CabinClass } from "../state";
 
 /**
@@ -86,6 +87,8 @@ ${FABRIC_COMMON}
 ${SEATS_COMMON}
 ${CABIN_REFLECT_COMMON}
 ${EXPOSURE_MODEL}
+${STAR_MAP_COMMON}
+${STAR_POINTS_COMMON}
 
 void main() {
   vec3 viewPre = vec3(0.0);   // 窗外加窗板效果之前的颜色，打包给机翼 pass
@@ -206,7 +209,15 @@ void main() {
   // 机翼和翼尖灯不在这里画：由单独的机翼 pass（wing-pass.ts）读这张结果、按 alpha（窗外遮罩）合成上去。
   // 窗外（天空、云、地面、海面、交通、闪电，已乘窗板透射率）由窗外 pass 算好（outside-pass.ts），这里按像素读回。
   // 窗外 pass 只在本窗窗洞与窗板开口以内算，判定和这个分支、inPane 同一公式（略放宽），这里读到的都是算过的值
-  view = texelFetch(uOutside, ivec2(gl_FragCoord.xy), 0).rgb;
+  vec4 outside = texelFetch(uOutside, ivec2(gl_FragCoord.xy), 0);
+  view = outside.rgb;
+  // 点星（T41，stars.glsl.ts）：窗外程序在 alpha 里写 1 + 这个像素能看到多少星（天空 × 云 × 交通的透射率），
+  // 这里补上相机上方大气的消光和窗板透射率。点星放在舱内程序是为了冷编译（放进窗外程序 d3d11 冷编译 17 → 52 s，见 handoff/T41.md）。
+  // 算进 viewPre（窗外的颜色），机翼 pass 按窗外遮罩合成时机翼会挡住它
+  if (outside.a > 1.0) {
+    vec3 rdW = uCabinToWorld * rd;
+    view += starPoints(rdW) * sunTransmittance(uCamR, rdW.y) * (PANE_TRANSMITTANCE * (outside.a - 1.0));
+  }
   viewPre = view;
 
   // ---- 窗板上的细节 ----
@@ -273,7 +284,7 @@ void main() {
     vec3 surf = reflGain * reflWB * cabinReflection(pPane, rr, length(pPane - ro), rl, pts);
     // T34 面状倒影的硬上限（exposure.ts ⑧）：显示亮度不超过同屏舱内均值的 k 倍（睡眠 / 全关 k 使显示 Y ≤ 舱壁一半）。
     // 软限幅（4 次范数），低于上限的部分几乎不变，所以倒影内部的明暗结构（灯带的亮线、行李架的边）还在；
-    // 光点是灯本身，不进上限
+    // 光点是灯本身，开灯档不进上限（睡眠档见下，T41）
     ExpModel em = exposureModel(expState);
     float capL = exp2(em.reflCapLog);
     // 窗外亮的时候（黄昏开着灯，窗外显示亮度 Y 过 100 左右），倒影不超过背后窗外的 15%：
@@ -283,7 +294,12 @@ void main() {
     capL *= exp2(smoothstep(0.05, 0.15, lOut * exp2(em.eO)) * min(0.0, log2(max(0.15 * lOut, 1e-12) / capL)));
     float sl = dot(surf, vec3(0.2126, 0.7152, 0.0722)) / capL;
     surf *= inversesqrt(sqrt(1.0 + sl * sl * sl * sl));
-    reflAdd = surf + (uDebug == 33 ? vec3(0.0) : reflGain * reflWB * pts);
+    // T41：睡眠档的阅读灯光点也按同一上限软限幅（显示亮度 ≤ 面状倒影的上限，极弱）——不限时它们是夜景窗里最亮的一对点，
+    // 读成天上的「双亮星」。开灯档（lit = 1）照旧不进上限：那时舱内亮、倒影本来就认得出是灯
+    vec3 ptsR = reflGain * reflWB * pts;
+    float pl = dot(ptsR, vec3(0.2126, 0.7152, 0.0722)) / capL;
+    ptsR *= mix(inversesqrt(sqrt(1.0 + pl * pl * pl * pl)), 1.0, rl.lit);
+    reflAdd = surf + (uDebug == 33 ? vec3(0.0) : ptsR);
   }
   // 调试 31：窗内只留倒影（窗外置黑，量倒影本身的显示亮度）；32：关掉倒影（T34）
   if (uDebug == 31 || uDebug == 33) view = reflAdd;

@@ -2,7 +2,8 @@ import * as THREE from "three";
 
 /**
  * 夜空的数据资源：
- * - 星图：public/data/bsc5.json（耶鲁亮星表，由 scripts/build_stars.py 生成）溅射成 J2000 赤道坐标的等距柱状 HDR 图（RGB）
+ * - 星表格子：public/data/bsc5.json（耶鲁亮星表，由 scripts/build_stars.py 生成）按 J2000 赤道坐标放进「每格最多一颗星」的格子（RGB，
+ *   格式见 buildStarMap；T41 前是溅射成辐亮度的等距柱状图，星点被放大成方块）
  * - 银河（T09）：public/data/milkyway_4k.jpg（NASA SVS Deep Star Maps 2020 的「milkyway」图，只含比约 11.5 等更暗的
  *   Gaia DR2 星的积分光，由 scripts/build_milkyway.py 生成），解码后放进同一张图的 A 通道——窗外程序的 sampler 已满 16/16，
  *   不能再加纹理；A 通道原来空着，和点星共用一次采样。图里没有亮星，和 BSC5 的点星不会重复成「双重星」。
@@ -57,61 +58,67 @@ async function loadMilkyWay(): Promise<Float32Array | null> {
   }
 }
 
-/** B−V 色指数 → 色温（Ballesteros 2012） */
-function bvToKelvin(bv: number) {
-  return 4600 * (1 / (0.92 * bv + 1.7) + 1 / (0.92 * bv + 0.62));
-}
-
-/** 色温 → 线性 sRGB（黑体近似，Tanner Helland 拟合），按亮度归一到 1 */
-function kelvinToRgb(k: number): [number, number, number] {
-  const t = k / 100;
-  const r = t <= 66 ? 255 : 329.7 * Math.pow(t - 60, -0.1332);
-  const g = t <= 66 ? 99.47 * Math.log(t) - 161.12 : 288.12 * Math.pow(t - 60, -0.0755);
-  const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.52 * Math.log(t - 10) - 305.04;
-  const lin = (c: number) => {
-    const s = Math.min(Math.max(c, 0), 255) / 255;
-    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  };
-  const rgb: [number, number, number] = [lin(r), lin(g), lin(b)];
-  const y = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
-  return [rgb[0] / y, rgb[1] / y, rgb[2] / y];
+/**
+ * 星表格子的每行格数（T41）：第 j 行（赤纬带）按「靠极点那条边」的纬圈长度分格，使每一格在赤经方向的张角都不小于
+ * 赤纬方向的一格（π / 2048 ≈ 5.3′），着色器查 3×3 个邻格就一定能找全核半径内的星。最多 4095 格，第 4096 个 texel 空出来存本行格数。
+ */
+export function starRowCells(j: number) {
+  const decEdge = Math.max(Math.abs(j / STAR_MAP_H - 0.5), Math.abs((j + 1) / STAR_MAP_H - 0.5)) * Math.PI;
+  return Math.min(STAR_MAP_W - 1, Math.max(1, Math.floor(STAR_MAP_W * Math.cos(decEdge))));
 }
 
 export async function buildStarMap(): Promise<THREE.DataTexture> {
   const milkyWayJob = loadMilkyWay();
   const stars: [number, number, number, number][] = await (await fetch("data/bsc5.json")).json();
-  const acc = new Float32Array(STAR_MAP_W * STAR_MAP_H * 4);
-  const dLon = (2 * Math.PI) / STAR_MAP_W;
-  const dLat = Math.PI / STAR_MAP_H;
+  // T41：点星不再溅射成辐亮度图（一个 texel 5.3′ ≈ 2 个屏幕像素，双线性放大后是菱形 / 方块，高赤纬处被拉成短划线），
+  // 改成「每格最多一颗星」的星表格子：R = 照度（klux × 1e12，6.5 等 ≈ 6.5、天狼星 ≈ 9800），G = 格内位置（32 × 32 级，qx + 32·qy），
+  // B = B−V 色指数。着色器按屏幕像素对星点做解析的点扩散积分（stars.glsl.ts）。格子是「每行格数随赤纬减少」的等面积近似，
+  // 每行格数存在该行最后一个 texel（G = 高 6 位、B = 低 6 位，半精度只精确到 2048 的整数）。
+  // 同一格里撞上两颗星（相距 < 5′，肉眼也分不开）就合并：照度相加、位置和色指数按照度加权。
+  const cells = new Float32Array(STAR_MAP_W * STAR_MAP_H * 4); // 累加：照度、Σe·x、Σe·y、Σe·bv
+  let merged = 0;
   for (const [ra, dec, vmag, bv] of stars) {
     // 大气层外的照度：E = 10^(−0.4(m + 13.98)) lux，换成 klux
     const e = Math.pow(10, -0.4 * (vmag + 13.98)) * 1e-3;
-    const color = kelvinToRgb(bvToKelvin(bv));
-    const fx = (ra / 360) * STAR_MAP_W - 0.5;
-    const fy = (0.5 + dec / 180) * STAR_MAP_H - 0.5;
-    const x0 = Math.floor(fx);
-    const y0 = Math.floor(fy);
-    // 双线性溅射到四个像素，采样时再线性过滤，星点位置和亮度都连续
-    for (let j = 0; j <= 1; j++) {
-      for (let i = 0; i <= 1; i++) {
-        const w = (i ? fx - x0 : 1 - (fx - x0)) * (j ? fy - y0 : 1 - (fy - y0));
-        const x = (((x0 + i) % STAR_MAP_W) + STAR_MAP_W) % STAR_MAP_W;
-        const y = Math.min(Math.max(y0 + j, 0), STAR_MAP_H - 1);
-        const lat = ((y + 0.5) / STAR_MAP_H - 0.5) * Math.PI;
-        const omega = dLon * dLat * Math.max(Math.cos(lat), 1e-3); // 这个像素的立体角
-        const radiance = (e * w) / omega;
-        const k = (y * STAR_MAP_W + x) * 4;
-        acc[k] += radiance * color[0];
-        acc[k + 1] += radiance * color[1];
-        acc[k + 2] += radiance * color[2];
-      }
-    }
+    const fy = (0.5 + dec / 180) * STAR_MAP_H;
+    const j = Math.min(Math.max(Math.floor(fy), 0), STAR_MAP_H - 1);
+    const n = starRowCells(j);
+    const fx = (((ra / 360) % 1) + 1) % 1 * n;
+    const i = Math.min(Math.floor(fx), n - 1);
+    const k = (j * STAR_MAP_W + i) * 4;
+    if (cells[k] > 0) merged++;
+    cells[k] += e;
+    cells[k + 1] += e * (fx - i);
+    cells[k + 2] += e * Math.min(Math.max(fy - j, 0), 1);
+    cells[k + 3] += e * bv;
   }
-  // RGB 存 ×1e4 的值，半精度浮点才装得下 6.5 等的暗星；A 存银河的相对亮度（0..1，最暗处约 3e-4，半精度的正规数够用）
+  if (merged) console.info(`[星表] ${merged} 颗星与同格的星合并（相距 < 5′）`);
+  // A 存银河的相对亮度（0..1，最暗处约 3e-4，半精度的正规数够用）
   const milkyWay = await milkyWayJob;
-  const half = new Uint16Array(acc.length);
-  for (let k = 0; k < acc.length; k++) {
-    half[k] = THREE.DataUtils.toHalfFloat(k % 4 === 3 ? (milkyWay ? milkyWay[k >> 2] : 0) : Math.min(acc[k] * 1e4, 65000));
+  const half = new Uint16Array(cells.length);
+  for (let p = 0; p < STAR_MAP_W * STAR_MAP_H; p++) {
+    const k = p * 4;
+    const e = cells[k];
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    if (e > 0) {
+      const qx = Math.min(31, Math.floor((cells[k + 1] / e) * 32));
+      const qy = Math.min(31, Math.floor((cells[k + 2] / e) * 32));
+      r = Math.min(e * 1e12, 65000);
+      g = qx + 32 * qy;
+      b = cells[k + 3] / e;
+    }
+    if (p % STAR_MAP_W === STAR_MAP_W - 1) {
+      const n = starRowCells((p / STAR_MAP_W) | 0);
+      r = 0;
+      g = n >> 6;
+      b = n & 63;
+    }
+    half[k] = THREE.DataUtils.toHalfFloat(r);
+    half[k + 1] = THREE.DataUtils.toHalfFloat(g);
+    half[k + 2] = THREE.DataUtils.toHalfFloat(b);
+    half[k + 3] = THREE.DataUtils.toHalfFloat(milkyWay ? milkyWay[p] : 0);
   }
   const tex = new THREE.DataTexture(half, STAR_MAP_W, STAR_MAP_H, THREE.RGBAFormat, THREE.HalfFloatType);
   tex.wrapS = THREE.RepeatWrapping;
