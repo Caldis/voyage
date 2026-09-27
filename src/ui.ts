@@ -265,6 +265,10 @@ export function setupUi(deps: UiDeps) {
     state.cabinLight = v === "true";
     state.moodLight = v !== "off";
   });
+  // 舱等（T25）：只改状态，main.ts 每帧按它挑舱内合成的着色器变体（没编过的先后台编译，编好才切）
+  $<HTMLSelectElement>("cabin-class").addEventListener("change", (e) => {
+    state.cabinClass = (e.target as HTMLSelectElement).value === "economy" ? "economy" : "business";
+  });
   window.addEventListener("keydown", (e) => {
     if (e.key === "h" || e.key === "H") $("panel").classList.toggle("hidden");
   });

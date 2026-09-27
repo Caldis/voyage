@@ -110,6 +110,13 @@
         </select>
       </label>
       <label class="check"><input id="ground-on" type="checkbox" checked />真实地理数据（卫星影像、地形、水体，联网）</label>
+      <label>舱等 <output id="cabin-class-status"></output>
+        <!-- T25：切到另一档时后台编译它的着色器（首次约几秒），编好之前画面保持原来的舱等 -->
+        <select id="cabin-class">
+          <option value="business" selected>商务舱（皮革、胡桃木、氛围灯）</option>
+          <option value="economy">经济舱（织物座椅、塑料侧壁、冷白灯）</option>
+        </select>
+      </label>
       <label>舱内灯光
         <!-- 选项值沿用旧复选框的 true / false，回归脚本里的 "cabin-light": true / false 不用改 -->
         <select id="cabin-light">

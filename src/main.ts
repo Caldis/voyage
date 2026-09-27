@@ -10,13 +10,13 @@ import { generateCloudNoise } from "./clouds/noise";
 import { Bloom } from "./render/bloom";
 import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
-import { createSceneMaterial } from "./render/scene";
+import { CabinClassVariant, createSceneMaterial } from "./render/scene";
 import { GroundDetailVariant, createOutsideMaterial, createOutsideTarget } from "./render/outside-pass";
 import { createWingMaterial } from "./render/wing-pass";
 import { GroundClipmap } from "./ground/clipmap";
 import { OceanWaves } from "./ocean/waves";
 import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateAltitudeFloor, updateHighLift, updateTurbulence } from "./flight";
-import { $, CRUISE_PITCH_DEG, type Preset, type VoyageState } from "./state";
+import { $, CRUISE_PITCH_DEG, type CabinClass, type Preset, type VoyageState } from "./state";
 import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
 import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets";
 import { BootProgress } from "./boot/progress";
@@ -95,6 +95,15 @@ const hdr = new THREE.WebGLRenderTarget(1, 1, {
   magFilter: THREE.LinearFilter,
   depthBuffer: false,
 });
+// 舱等（T25）：舱内合成的着色器变体。默认商务舱（sceneMat 本身，首帧的后台编译批次里就是它），选经济舱时才后台编译
+const cabinClass = new CabinClassVariant(sceneMat, hdr);
+// 各舱等侧壁 / 窗罩饰面的平均反照率（和 cabin-shading.glsl.ts 的 LINING_ALBEDO 一致）：曝光的舱内色适应按它把饰面本色
+// 从「舱内平均色」里除掉，剩下的才是光源色（T28，exposure.ts 的 uCabinRefAlbedo）。换舱等时跟着换，否则浅灰塑料会被当成冷光抵掉
+const CABIN_REF_ALBEDO: Record<CabinClass, THREE.Vector3> = {
+  business: new THREE.Vector3(0.75, 0.72, 0.665),
+  economy: new THREE.Vector3(0.71, 0.71, 0.69),
+};
+let cabinClassUi = "";
 // 机翼 pass（wing-pass.ts）：读场景的 hdr，把机翼合成上去写到 hdrWing；后面的眩光、曝光都读 hdrWing。
 // 必须在所有 Object.assign(sceneMat.uniforms, …) 之后创建：它复用的是创建那一刻场景材质里的 uniform 对象
 const wingMat = createWingMaterial(sceneMat.uniforms);
@@ -129,6 +138,7 @@ const state: VoyageState = {
   wind: 7,
   cabinLight: true,
   moodLight: true,
+  cabinClass: "business",
   cloudPreset: CLOUD_PRESETS[0],
   /** 翼根前缘在机头方向上相对窗口的距离（米）：座位在机翼前方时为负 */
   wingRootLE: 8,
@@ -412,7 +422,13 @@ function renderFrame(now: number) {
   // 窗外（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdrOutside，舱内合成读它画到 hdr，
   // 机翼 pass 再读实际画出来的 hdr 合成
   pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : outsideMat, hdrOutside);
-  pass.render(sceneMat, hdr);
+  const cabinMat = cabinClass.pick(renderer, state.cabinClass);
+  exposure.finalMat.uniforms.uCabinRefAlbedo.value.copy(CABIN_REF_ALBEDO[cabinClass.shown]);
+  pass.render(cabinMat, hdr);
+  // 面板上的舱等状态：变体后台编译时提示一下（编好之前画面保持原来的舱等）
+  const st = cabinClass.status(state.cabinClass);
+  const ui = st === "compiling" ? "（准备中…）" : st === "failed" ? "（编译失败，保持原舱等）" : "";
+  if (ui !== cabinClassUi) $("cabin-class-status").textContent = cabinClassUi = ui;
   wingMat.uniforms.uScene.value = hdr.texture;
   pass.render(wingMat, hdrWing);
   exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
@@ -533,7 +549,7 @@ function benchScene(n = 20, which: "both" | "outside" | "cabin" = "both") {
   const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
   const once = () => {
     if (which !== "cabin") pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : outsideMat, hdrOutside);
-    if (which !== "outside") pass.render(sceneMat, hdr);
+    if (which !== "outside") pass.render(cabinClass.pick(renderer, state.cabinClass), hdr);
   };
   once();
   sync();
@@ -555,4 +571,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset };

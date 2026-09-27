@@ -4,6 +4,7 @@ import type { Atmosphere } from "../atmosphere/luts";
 import { CABIN_COMMON, PANE_COMMON } from "./cabin.glsl";
 import { CABIN_SHADING_COMMON } from "./cabin-shading.glsl";
 import { LEATHER_COMMON } from "./cabin-leather.glsl";
+import { FABRIC_COMMON } from "./fabric.glsl";
 import { SEATS_COMMON } from "./seats.glsl";
 import { CABIN_REFLECT_COMMON } from "./cabin-reflect.glsl";
 import { EXPOSURE_STATE } from "./exposure";
@@ -11,6 +12,7 @@ import { VIEW_COMMON } from "./view.glsl";
 import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
 import { LIGHTS_COMMON } from "./lights.glsl";
 import { WING_COMMON } from "./wing.glsl";
+import type { CabinClass } from "../state";
 
 /**
  * 场景（舱内合成）着色器：从头部位置向屏幕每个像素发射线，穿过按真实尺寸建模的舷窗、舱壁、座椅、遮光板。
@@ -23,6 +25,10 @@ import { WING_COMMON } from "./wing.glsl";
  *
  * 不要把 CLOUD_COMMON、海面、地面这些窗外模块拼进来：这个程序的源码一变就要重编，拼进来的模块越少，
  * 别人改云、改地面时这里越不受牵连（浏览器按程序的源码文本命中缓存）。舱内只用到 uCoverage，单独声明。
+ *
+ * 舱等（T25）：同一份源码两个变体——默认（商务舱：皮革、胡桃木、香槟金属、氛围灯）和 #define CABIN_CLASS_ECONOMY
+ * （经济舱：织物座椅、浅灰塑料、冷白灯）。差别全在预处理层（cabin-shading / seats / cabin-leather / fabric / cabin-reflect
+ * 里的 #ifdef），每个变体只编自己那一套；经济舱由 CabinClassVariant 在用户选中时才后台编译。
  */
 const SCENE_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
@@ -74,6 +80,7 @@ const vec3 PLASTIC_ALBEDO = vec3(0.78, 0.76, 0.72);
 
 ${CABIN_SHADING_COMMON}
 ${LEATHER_COMMON}
+${FABRIC_COMMON}
 ${SEATS_COMMON}
 ${CABIN_REFLECT_COMMON}
 
@@ -339,4 +346,88 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uLoopGuard: { value: 0 },
     },
   });
+}
+
+/**
+ * 舱等变体（T25）：舱内合成程序按舱等切换（默认商务舱 = 传进来的 base 材质；经济舱 = 同一份源码加 #define CABIN_CLASS_ECONOMY）。
+ * 只编当前要用的那一套：首帧只有商务舱（main.ts 的后台编译批次里就是 base），用户在面板选经济舱时才用
+ * renderer.compileAsync 在后台编译（KHR_parallel_shader_compile，不阻塞渲染），编好之前继续画当前的舱等，编好了才切——
+ * 切换时没有黑屏、不卡帧。编过的变体留着，来回切不再编。变体之间共用同一份 uniforms，切换不需要同步任何状态。
+ * 做法与坑同 GroundDetailVariant（outside-pass.ts）：
+ * - 编译时绑定真正要画进去的目标（hdr，单输出）：ANGLE 的 D3D 后端按链接时绑定的帧缓冲生成输出布局，绑错会在首次使用时同步重编；
+ * - compileAsync 编译失败也会 resolve：取出程序、检查 diagnostics.runnable，失败就留在当前舱等（面板显示「编译失败」）。
+ */
+export class CabinClassVariant {
+  private readonly mats: Partial<Record<CabinClass, THREE.ShaderMaterial>> = {};
+  private readonly states: Partial<Record<CabinClass, "compiling" | "ready" | "failed">> = { business: "ready" };
+  /** 这一帧实际画的舱等（变体编好之前可能和面板选的不一样） */
+  shown: CabinClass = "business";
+  /** 最近一次变体编译的耗时（毫秒），调试 / 测量用 */
+  lastCompileMs = 0;
+
+  /** base：默认（商务舱）材质；target：舱内合成真正画进去的目标 */
+  constructor(
+    base: THREE.ShaderMaterial,
+    private readonly target: THREE.WebGLRenderTarget,
+  ) {
+    this.mats.business = base;
+  }
+
+  /** 每帧调用：want 是面板选的舱等，返回这一帧该用的材质 */
+  pick(renderer: THREE.WebGLRenderer, want: CabinClass): THREE.ShaderMaterial {
+    if (want !== this.shown) {
+      if (!this.states[want]) this.prepare(renderer, want);
+      if (this.states[want] === "ready") this.shown = want;
+    }
+    return this.mats[this.shown]!;
+  }
+
+  /** 某个舱等的状态：ready 可以直接切；compiling 后台编译中；failed 编译失败；undefined 还没开始 */
+  status(c: CabinClass) {
+    return this.states[c];
+  }
+
+  private prepare(renderer: THREE.WebGLRenderer, c: CabinClass) {
+    this.states[c] = "compiling";
+    const b = this.mats.business!;
+    const m = new THREE.ShaderMaterial({
+      vertexShader: b.vertexShader,
+      fragmentShader: b.fragmentShader,
+      uniforms: b.uniforms, // 共用同一份 uniforms
+      defines: { ...b.defines, CABIN_CLASS_ECONOMY: 1 },
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const scene = new THREE.Scene();
+    // 几何体与相机和 FullscreenPass 一致（只有 position + uv 的全屏三角形），程序缓存的键才相同
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
+    const mesh = new THREE.Mesh(geometry, m);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    const t0 = performance.now();
+    const prevTarget = renderer.getRenderTarget();
+    renderer.setRenderTarget(this.target);
+    const job = renderer.compileAsync(scene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
+    renderer.setRenderTarget(prevTarget);
+    job
+      .then(() => {
+        // compileAsync 只等「编译完成」，不管编译是否成功。取出程序、触发一次诊断，失败就不切换
+        const program = (renderer.properties.get(m) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
+        program?.getUniforms();
+        if (!program || program.diagnostics?.runnable === false) {
+          this.states[c] = "failed";
+          return;
+        }
+        this.lastCompileMs = performance.now() - t0;
+        this.mats[c] = m;
+        this.states[c] = "ready";
+      })
+      .catch(() => {
+        this.states[c] = "failed";
+      })
+      .finally(() => geometry.dispose());
+  }
 }
