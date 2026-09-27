@@ -10,8 +10,6 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | T08 | 第 6 波（主干） | 5208 | worktree | Opus（夜间道路灯带） | — | 进行中 |
 | W00 | 第 6 波（主干） | 5200 | worktree | Opus（云步进奇观层接口，W02 / W03 前提） | — | 进行中 |
-| T40 | 第 6 波（用户反馈，正常排期；派出后用户说不必插队，因已开工且小，保留完成） | 5248 | worktree | Sonnet（远处飞机航线不交错、最小距离、机体按角尺寸淡出，不露「拖尾圆球」） | — | 进行中 |
-| DX-06 | 第 6 波（工具，用户需求） | 5249 | worktree | Sonnet（调试小地图：航迹、雷达回波式云图、其他飞机、奇观） | — | 进行中 |
 | T41 | 第 6 波（协调者发现，锯齿优先） | 5241 | worktree | Opus（夜景：方块星点改亚像素圆点、窗中央双亮星查因、夜间黑色块状低云只查因） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -59,6 +57,8 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | T35 | 舱内去白模感：侧壁阴影缝分块 + 掠射纹理按方向淡出；商务舱头枕双明线、靠窗壳板（香槟金属 + 胡桃木）；经济舱深蓝灰头枕 + 随机白头巾、熄屏娱乐屏 | 2026-09-27 | Opus 实现，协调者看图合并。**遗留**：看后方窗洞下缘内衬死白、胡桃木近看偏粗、商务头枕顶缝折角、经济椅背把手；默认坐姿两舱差别只在右下角一点，偏弱。DX 待办：dev-browser 临时场景参数、局部放大对照工具、check:glsl 查 CRLF |
 | DX-05 | dev-browser `check`（收集控制台 error）与 `shots --scene` 临时场景；`scripts/compare.mjs` 拼图 + 局部放大；check:glsl 查 CRLF | 2026-09-27 | Sonnet 实现，协调者合并。反馈：派任务时提醒「路径用 worktree 前缀」；Bash 里不要嵌套 powershell，直接用 PowerShell 工具 |
 | T09 | 银河：NASA SVS Deep Star Maps 2020（署名 NASA/GSFC SVS；Gaia 数据 ESA/Gaia/DPAC CC BY-SA 3.0 IGO），星图 A 通道不增 sampler；物理面亮度定标 + 月光 / 城市天光 / 舱灯光幕按对比度阈值压制；新场景 night-sea-milkyway、场景支持 date | 2026-09-27 | Opus 实现，协调者接入 main.ts 片段并核验（check 无 error，冷编译不变）。**遗留**：6.5–11.5 等星空缺；城市光穹未画进天空；定标为估算（调 `MILKY_WAY_UNIT`）。DX 待办：dev-browser probe / 截图前覆盖 uniform、`--out` 相对仓库根写进用法、天文辅助脚本（窗里看得到哪些天体） |
+| T40 | 远处飞机不露馅（用户反馈）：平行相邻航路（交叉角 ≤ 3°），全程距本机 ≥ 18 km（机体 ≤ 3 px 反推），两机分车道不交叉；着色器机体像素封顶 + 航迹云按最近点淡出 | 2026-09-27 | Sonnet 实现，协调者合并；离线抽样 50 万次最近距离 ≥ 19.65 km、交叉 0 次。**遗留**：车道区间按当前 FOV / 分辨率硬编码。DX 待办：「世界坐标点是否落在舷窗孔径内」小工具 |
+| DX-06 | 调试小地图（用户需求）：N 键 / 面板开关；航迹、航线、雷达回波式云图、远处飞机、奇观；纯 Canvas 2D | 2026-09-27 | Sonnet 实现，协调者解 main.ts 冲突后合并；开 / 关帧时间差在噪声内。**遗留**：雷达格子偏粗、台风螺旋是近似图形。坑：`Uint8ClampedArray<ArrayBuffer>` 类型标注 |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
