@@ -13,7 +13,8 @@ import { BodyVibration, MAX_SUBSTEP, type BodyMotion } from "./vibration";
 
 /** 巡航速度（km/h）：TRAIN.md 第一期按 90 km/h；本区间营运最高 95 km/h（Wikipedia「大糸線」，二手出处，烘焙报告 §5） */
 export const CRUISE_KMH = 90;
-/** 台车中心距（米）：E231 系 13.8 m（TRAIN.md §6.1 引 Wikipedia E231 series）。车体方向 = 前后台车连线 */
+/** 台车中心距（米，估）：借用 E231 系的 13.8 m（TRAIN.md §6.1 引 Wikipedia E231 series）。本区间实际跑的是 E127 / 211 / E353 系，
+ *  20 m 级车体的台车中心距多在这个量级，但没有逐车型核对。车体方向 = 前后台车连线 */
 export const BOGIE_SPACING_M = 13.8;
 /** 眼睛离轨面的高度（米）：TRAIN.md「相机高度约 2.5 m」（地板面约 1.1–1.2 m + 坐姿眼高约 1.2–1.3 m，估） */
 export const EYE_HEIGHT_M = 2.5;
@@ -100,7 +101,7 @@ export class Train {
     this.corridor = corridor;
     const st = corridor.stations;
     this.terminalS = [corridor.stopPoint(st[0]), corridor.stopPoint(st[st.length - 1])];
-    this.s = opts.s ?? 12500;
+    this.s = Math.min(Math.max(opts.s ?? 12500, this.terminalS[0]), this.terminalS[1]);
     this.dir = opts.dir ?? 1;
     this.speed = opts.speed ?? this.cruise;
     this.stops = opts.stops ?? [];
@@ -156,13 +157,30 @@ export class Train {
     return Math.min(this.cruise, this.curveLimit(), Math.sqrt(2 * BRAKE * Math.max(dStop, 0)));
   }
 
-  /** 换位置（调试 / 进入火车模式）：落在稳态，不从 0 晃起 */
+  /**
+   * 换位置（调试 / 截图）：落在稳态，不从 0 晃起。
+   * 位置夹在两个终点停车位之间（停车位之外没有「下一个停车点」，列车会卡死）；
+   * 初速不超过「到下一个停车点的制动曲线」（进站前放下去不会一帧从 80 km/h 掉到 0）；
+   * 正好放在行驶方向的终点停车位上时，直接开始停站（停完折返）。
+   */
   teleport(s: number, dir: 1 | -1 = this.dir, speed?: number) {
-    this.s = Math.min(Math.max(s, this.corridor.sMin), this.corridor.sMax);
+    const [a, b] = this.terminalS;
+    this.s = Math.min(Math.max(s, a), b);
     this.dir = dir;
     this.dwell = 0;
-    this.speed = speed ?? Math.min(this.cruise, this.curveLimit());
+    const dStop = (this.nextStop() - this.s) * this.dir;
+    if (dStop <= 0.05) {
+      this.s = this.nextStop();
+      this.speed = 0;
+      this.dwell = this.isTerminal(this.s) ? TERMINAL_DWELL_S : STATION_DWELL_S;
+    } else {
+      this.speed = Math.min(speed ?? Infinity, this.cruise, this.curveLimit(), Math.sqrt(2 * BRAKE * dStop));
+    }
     this.vib.reset(this.s, this.speed);
+  }
+
+  private isTerminal(s: number) {
+    return Math.abs(s - this.terminalS[0]) < 1 || Math.abs(s - this.terminalS[1]) < 1;
   }
 
   /** 推进 dt 秒（模拟时间）；内部按 MAX_SUBSTEP 拆步，振动滤波器才稳定、平滑 */
@@ -182,8 +200,7 @@ export class Train {
       if (this.dwell <= 0) {
         this.dwell = 0;
         // 终点折返：车体里的乘客不动，行驶方向反过来（窗外换成另一侧的风景）
-        const atTerminal = Math.abs(this.s - this.terminalS[0]) < 1 || Math.abs(this.s - this.terminalS[1]) < 1;
-        if (atTerminal) this.dir = this.dir > 0 ? -1 : 1;
+        if (this.isTerminal(this.s)) this.dir = this.dir > 0 ? -1 : 1;
       }
       this.vib.step(this.s, 0, h);
       return;
@@ -196,13 +213,12 @@ export class Train {
     this.s += this.dir * this.speed * h;
     const after = (stop - this.s) * this.dir;
     // 到站：停稳、开始停站计时（接近到 5 cm 内或者越过了停车点）
-    if (before > 0 && (after <= 0.05 || this.speed < 0.02) && before < 5) {
+    if (before > -0.01 && (after <= 0.05 || this.speed < 0.02) && before < 5) {
       this.s = stop;
       this.speed = 0;
-      const terminal = stop === this.terminalS[0] || stop === this.terminalS[1];
-      this.dwell = terminal ? TERMINAL_DWELL_S : STATION_DWELL_S;
+      this.dwell = this.isTerminal(stop) ? TERMINAL_DWELL_S : STATION_DWELL_S;
     }
-    this.s = Math.min(Math.max(this.s, this.corridor.sMin), this.corridor.sMax);
+    this.s = Math.min(Math.max(this.s, this.terminalS[0]), this.terminalS[1]);
     this.vib.step(this.s, this.speed, h);
   }
 

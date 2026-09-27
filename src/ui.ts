@@ -449,11 +449,12 @@ function setupSoundUi(audio: CabinAudio) {
 
 // ---------- 交通工具（TR02） ----------
 
-/** 「交通工具」下拉：切到火车时第一次要拉线路数据（旁边显示「加载中」）；火车模式下飞机专用的控件（地点、高度、机翼位置、襟翼）变灰 */
+/** 「交通工具」下拉：切到火车时第一次要拉线路数据（旁边显示「加载中」）；火车模式下飞机专用的控件（地点、高度、机翼位置、襟翼、
+ *  连续航程——它会按当前位置接入东亚航线网、改写地点）变灰。时间流速照常可用 */
 function setupVehicleUi(vehicle: VehicleControl) {
   const sel = $<HTMLSelectElement>("vehicle");
   const status = $("vehicle-status");
-  const planeOnly = ["preset", "altitude", "wing-pos", "high-lift"].map((id) => $<HTMLInputElement | HTMLSelectElement>(id));
+  const planeOnly = ["preset", "altitude", "wing-pos", "high-lift", "voyage-on"].map((id) => $<HTMLInputElement | HTMLSelectElement>(id));
   const sync = () => {
     sel.value = vehicle.active || vehicle.loading ? "train" : "plane";
     status.textContent = vehicle.status;

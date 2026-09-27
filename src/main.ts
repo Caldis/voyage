@@ -298,6 +298,10 @@ const rail = new RailMode({
     sel.value = seat;
     sel.dispatchEvent(new Event("change"));
   },
+  // 连续航程开着时，导演按恢复后的飞机位置重新接入航线网（火车模式里可能被背景板模式顺手建过一段日本出发的航段）
+  afterExit: () => {
+    if (director.active) director.onPresetChanged();
+  },
 });
 
 // 奇观之门演示开关（T19b）：URL 带 ?gateDemo 时，连续航程每 2 模拟小时在航线前方放一道云墙

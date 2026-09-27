@@ -292,5 +292,83 @@ function findCurve(sign, minK) {
   check(BOGIE_SPACING_M === 13.8, "台车中心距取 13.8 m");
 }
 
+// ---------- 7. 终点附近跳转（审查 B1）：停站中 / 进站前 / 放到终点外 ----------
+{
+  const { BRAKE } = await import("./train.ts");
+  const dt = 1 / 60;
+  const run = (t, sec, fn) => { for (let i = 0; i < sec * 60; i++) { t.update(dt); fn?.(t); } };
+  const [tA, tB] = new Train(cor).terminalS;
+  for (const [name, s, dir] of [["信濃大町停车位上（往大町）", tB, 1], ["越过信濃大町、线路末端", cor.sMax - 2, 1], ["松本停车位之外（往松本）", cor.sMin + 2, -1]]) {
+    const t = new Train(cor, { s: 20000 });
+    t.teleport(s, dir);
+    const startedDwell = t.dwell > 0;
+    let reversedAt = -1, time = 0;
+    run(t, 60, (tt) => { time += dt; if (reversedAt < 0 && tt.dir === -dir) reversedAt = time; });
+    const moved = (t.s - (dir > 0 ? tB : tA)) * -dir;
+    check(startedDwell && reversedAt > 0 && reversedAt < 45 && moved > 10, `终点跳转：${name} → 立刻停站、40 s 后折返开走`, `停站 ${startedDwell}，折返于 ${fmt(reversedAt, 1)} s，已离开终点 ${fmt(moved, 1)} m`);
+  }
+  // 进站前 200 m 放下去（要求 90 km/h）：初速不超过制动曲线，之后平稳减速停在停车位上
+  const t = new Train(cor, { s: 20000 });
+  t.teleport(tB - 200, 1, 90 / 3.6);
+  const v0 = t.speed;
+  let maxDec = 0, prev = t.speed;
+  run(t, 60, (tt) => { if (tt.speed > 0.5 && prev > 0.5) maxDec = Math.max(maxDec, (prev - tt.speed) / dt); prev = tt.speed; });
+  check(v0 <= Math.sqrt(2 * BRAKE * 200) + 1e-6, "进站前跳转：初速不超过到停车位的制动曲线", `${fmt(v0 * 3.6, 1)} km/h`);
+  check(maxDec <= 1.06 && (Math.abs(t.s - tB) < 0.1 || t.dir === -1), "进站前跳转：减速 ≤ 1.05 m/s² 并停在信濃大町", `最大减速 ${fmt(maxDec, 2)} m/s²，s = ${fmt(t.s, 1)}`);
+}
+
+// ---------- 8. mode.ts：进入 / 退出的换算与状态恢复（假的 ground / host，不用浏览器） ----------
+{
+  const THREE = await import("three");
+  const { RailMode } = await import("./mode.ts");
+  const makeGround = (lat0, lon0) => ({ localFrame: new LocalFrame(lat0, lon0), resets: 0, reset(la, lo) { this.localFrame = new LocalFrame(la, lo); this.resets++; }, heightAt: () => null });
+  LocalFrame.prototype.toGeo = function (x, z) { const lat = this.lat0 - z / 110.574; return [lat, this.lon0 + x / (111.32 * Math.cos(lat * D2R))]; };
+  const ground = makeGround(30, 139.8);
+  const plane = { id: "wpac", name: "西太平洋", lat: 30, lon: 139.8, heading: 180, tz: 9, islands: 0.12 };
+  const state = { preset: plane, seat: "right", altitudeKm: 10.7, targetAltKm: 10.7, heading: 180, pitchDeg: 2.5, bankDeg: 0.3, rollDeg: 0.1, groundOn: true, floor: { km: 0.5, known: true, groundKm: 0, reason: "sea" } };
+  const offset = new THREE.Vector2(12, -34);
+  let afterExit = 0;
+  const rail = new RailMode({ state, ground, cloudOffset: offset, snapAll() {}, syncTimeUi() {}, setSeat(s) { state.seat = s; }, afterExit() { afterExit++; } });
+  rail.useData(data);
+  await rail.enter();
+  const p = rail.pose;
+  const [tx, ty] = cor.tangent(p.s);
+  const bearing = ((Math.atan2(tx, ty) / D2R) + 360) % 360;
+  const dh = Math.abs(((state.heading - bearing + 540) % 360) - 180);
+  check(rail.active && state.preset.id === "rail-oito" && Math.abs(ground.localFrame.lat0 - meta.format.crs.originLat) < 1e-9, "进入火车：地点换成线路预设、clipmap 原点换到松本站");
+  check(state.seat === "left", "第一次进入：座位在北阿尔卑斯一侧（往信濃大町是左座）");
+  check(Math.abs(state.altitudeKm * 1000 - (cor.position(p.s)[2] + 2.5)) < 0.3, "高度 = 轨面 + 2.5 m", `${fmt(state.altitudeKm * 1000, 2)} m`);
+  check(dh < 0.5, "航向与线路切向的方位一致（经 LocalFrame 换算）", `航向 ${fmt(state.heading, 2)}°，线路 ${fmt(bearing, 2)}°`);
+  const o0 = offset.clone();
+  let mx = 0, mz = 0;
+  for (let i = 0; i < 60; i++) { const r = rail.step(1 / 60); mx += r.motion.x; mz += r.motion.z; }
+  const moved = Math.hypot(offset.x - o0.x, offset.y - o0.y);
+  check(Math.abs(moved - 0.025) < 0.002 && Math.hypot(mx - (offset.x - o0.x), mz - (offset.y - o0.y)) < 1e-9, "1 s 走约 25 m（90 km/h），motion 累加 = uCloudOffset 位移", `${fmt(moved * 1000, 2)} m`);
+  const sBefore = rail.train.s, dirBefore = rail.train.dir;
+  rail.exit();
+  check(!rail.active && state.preset === plane && offset.x === 12 && offset.y === -34 && Math.abs(ground.localFrame.lat0 - 30) < 1e-12, "退出：地点、clipmap 原点、uCloudOffset 恢复");
+  check(state.altitudeKm === 10.7 && state.targetAltKm === 10.7 && state.heading === 180 && state.pitchDeg === 2.5 && state.bankDeg === 0.3 && state.rollDeg === 0.1 && state.seat === "right", "退出：高度 / 航向 / 俯仰 / 坡度 / 滚转 / 座位恢复");
+  check(state.floor.known === false && afterExit === 1, "退出：高度下限按地点重估，通知 main（导演重新接入航线网）");
+  state.seat = "right";
+  await rail.enter();
+  check(rail.train.s === sBefore && rail.train.dir === dirBefore && state.seat === "left", "再次进入（不给参数）：列车原样继续，座位沿用上次在火车里的");
+  // 终点停站中切回飞机、再切回来：停站继续、按时折返
+  rail.teleport(rail.train.terminalS[1] - 30, 1);
+  for (let i = 0; i < 60 * 20 && rail.train.dwell === 0; i++) rail.step(1 / 60);
+  const dwell0 = rail.train.dwell;
+  rail.exit();
+  await rail.enter();
+  check(dwell0 > 0 && rail.train.dwell === dwell0 && rail.train.dir === 1, "终点停站中切换：停站剩余时间和方向保持", `剩 ${fmt(dwell0, 1)} s`);
+  for (let i = 0; i < 60 * 60; i++) rail.step(1 / 60);
+  check(rail.train.dir === -1 && rail.train.s < rail.train.terminalS[1] - 20, "终点停站中切换后：照常折返开往松本", `s = ${fmt(rail.train.s, 1)}`);
+  // 加载中取消
+  const rail2 = new RailMode({ state, ground, cloudOffset: offset, snapAll() {}, syncTimeUi() {}, setSeat(s) { state.seat = s; } });
+  rail2.useData(data);
+  rail.exit();
+  const pEnter = rail2.setVehicle("train");
+  await rail2.setVehicle("plane");
+  await pEnter;
+  check(!rail2.active, "切到火车后马上切回飞机：不会在加载完成后进入火车");
+}
 console.log(`${fails ? "✗" : "✓"} ${passes} 项通过，${fails} 项失败`);
 if (fails) process.exit(1);

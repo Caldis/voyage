@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { GroundClipmap } from "../ground/clipmap";
 import { resetAltitudeFloor, type AdvanceFlightResult } from "../flight";
-import type { AltitudeFloor, Preset, VoyageState } from "../state";
+import type { Preset, VoyageState } from "../state";
 import { Corridor } from "./corridor";
 import { loadRailData, type RailData } from "./data";
 import { EnuFrame } from "./geodesy";
@@ -38,6 +38,8 @@ export interface RailHost {
   syncTimeUi(): void;
   /** 换座位（走面板的 change 事件，面板与视角预设一起同步） */
   setSeat(seat: Seat): void;
+  /** 回到飞机之后（状态已恢复）：main.ts 在这里让导演按恢复后的位置重新接入航线网（连续航程开着时） */
+  afterExit?(): void;
 }
 
 interface PlaneSnapshot {
@@ -52,7 +54,6 @@ interface PlaneSnapshot {
   bankDeg: number;
   rollDeg: number;
   seat: Seat;
-  floor?: AltitudeFloor;
   altRateKms?: number;
 }
 
@@ -76,6 +77,10 @@ export class RailMode {
   private readonly host: RailHost;
   private snapshot: PlaneSnapshot | null = null;
   private loadPromise: Promise<void> | null = null;
+  /** 加载线路数据的过程中用户又切回了飞机：加载完不进入火车 */
+  private cancelled = false;
+  /** 上一次在火车里坐的座位（再次进入时沿用）；null = 还没进过，按北阿尔卑斯一侧 */
+  private trainSeat: Seat | null = null;
   private readonly prevLocal = new THREE.Vector2();
   private readonly preset: Preset = {
     id: "rail-oito",
@@ -103,17 +108,14 @@ export class RailMode {
       this.loading = true;
       this.status = "（加载线路数据…）";
       this.changed();
+      // 构造 Corridor / Train 也放进同一条 Promise 链：数据能下载、但格式不对时也走失败分支（面板显示原因），不会一直「加载中」
       this.loadPromise = loadRailData(RAIL_LINE_ID).then(
         (data) => {
-          this.data = data;
-          this.corridor = new Corridor(data);
-          this.enu = new EnuFrame(data.meta.format.crs.originLat, data.meta.format.crs.originLon);
-          this.train = new Train(this.corridor, { s: DEFAULT_START_S, dir: 1 });
-          this.preset.lat = data.meta.format.crs.originLat;
-          this.preset.lon = data.meta.format.crs.originLon;
+          this.useData(data);
           this.loading = false;
           this.status = "";
         },
+      ).catch(
         (err: unknown) => {
           this.loading = false;
           this.loadPromise = null; // 下次切换再试
@@ -127,16 +129,41 @@ export class RailMode {
     return this.loadPromise;
   }
 
-  /** 面板「交通工具」切换 */
-  async setVehicle(v: "plane" | "train") {
-    if (v === "train") await this.enter().catch(() => undefined);
-    else this.exit();
+  /** 用已经解析好的线路数据初始化（loadRailData 之后调用；node 单测直接调它，不走 fetch） */
+  useData(data: RailData) {
+    const corridor = new Corridor(data);
+    this.data = data;
+    this.corridor = corridor;
+    this.enu = new EnuFrame(data.meta.format.crs.originLat, data.meta.format.crs.originLon);
+    this.train = new Train(corridor, { s: DEFAULT_START_S, dir: 1 });
+    this.preset.lat = data.meta.format.crs.originLat;
+    this.preset.lon = data.meta.format.crs.originLon;
+    this.loadPromise ??= Promise.resolve();
   }
 
-  /** 进入火车模式：记下飞机的状态，clipmap 原点换到松本站，列车从 startS 起步（默认已在巡航） */
-  async enter(startS?: number, dir: 1 | -1 = 1) {
+  /** 面板「交通工具」切换 */
+  async setVehicle(v: "plane" | "train") {
+    if (v === "train") {
+      this.cancelled = false;
+      await this.enter().catch(() => undefined);
+    } else {
+      this.cancelled = true; // 还在加载时切回飞机：加载完也不进入
+      this.exit();
+    }
+  }
+
+  /**
+   * 进入火车模式：记下飞机的状态，clipmap 原点换到松本站。
+   * 不给 startS：列车从上次离开时的状态继续（位置、方向、车速、停站剩余时间都不变，座位沿用上次在火车里的）；
+   * 给 startS：放到那里（dir 默认往信濃大町），座位换到北阿尔卑斯一侧。
+   */
+  async enter(startS?: number, dir?: 1 | -1) {
     await this.ensureLoaded();
-    if (this.active) return;
+    if (this.active || this.cancelled) {
+      this.cancelled = false;
+      this.changed();
+      return;
+    }
     const { state, ground, cloudOffset } = this.host;
     this.snapshot = {
       preset: state.preset,
@@ -150,7 +177,6 @@ export class RailMode {
       bankDeg: state.bankDeg,
       rollDeg: state.rollDeg,
       seat: state.seat,
-      floor: state.floor,
       altRateKms: state.altRateKms,
     };
     this.active = true;
@@ -159,9 +185,18 @@ export class RailMode {
     // 高度下限是飞机的概念（main.ts 在火车模式下不再更新它）：清掉，免得信息栏按旧地点的地形算「离地」
     state.floor = undefined;
     ground.reset(this.preset.lat, this.preset.lon);
-    // 默认坐在北阿尔卑斯一侧：往信濃大町（北）走时是左侧
-    this.host.setSeat(dir > 0 ? "left" : "right");
-    this.teleport(startS ?? this.train!.s, dir);
+    const train = this.train!;
+    // 北阿尔卑斯在线路西侧：往信濃大町（北）走时是左座，往松本走时是右座
+    const alpsSide = (d: 1 | -1): Seat => (d > 0 ? "left" : "right");
+    if (startS !== undefined) {
+      this.host.setSeat(alpsSide(dir ?? 1));
+      this.teleport(startS, dir ?? 1);
+    } else {
+      this.host.setSeat(this.trainSeat ?? alpsSide(train.dir));
+      this.groundLiftM = 0;
+      this.applyPose(true, 0);
+      this.host.snapAll();
+    }
     this.host.syncTimeUi();
     this.changed();
   }
@@ -182,14 +217,15 @@ export class RailMode {
     state.bankDeg = snap.bankDeg;
     state.rollDeg = snap.rollDeg;
     state.altRateKms = snap.altRateKms;
-    state.floor = snap.floor;
     // 地面数据按旧原点重建：下限先按预设估计，数据到了再按实际地形（和换预设同一套逻辑）
     resetAltitudeFloor(state);
+    this.trainSeat = state.seat;
     this.host.setSeat(snap.seat);
     this.headBump = 0;
     this.snapshot = null;
     this.host.snapAll();
     this.host.syncTimeUi();
+    this.host.afterExit?.();
     this.changed();
   }
 
@@ -198,14 +234,16 @@ export class RailMode {
     if (!this.train) return;
     this.train.teleport(s, dir, speedKmh === undefined ? undefined : speedKmh / 3.6);
     this.groundLiftM = 0;
-    this.applyPose(true);
+    this.applyPose(true, 0);
     this.host.snapAll();
   }
 
   /** 每帧（代替 stepFlight）：推进列车 simDt 模拟秒，把姿态写进 state / uCloudOffset，返回和 stepFlight 同形的结果 */
   step(simDt: number): AdvanceFlightResult {
     this.train!.update(simDt);
-    const moved = this.applyPose(false);
+    // 导演在火车模式下不接管，但背景板模式（B 键）会顺手打开连续航程、把地点换成航段预设：这里改回线路预设
+    if (this.host.state.preset !== this.preset) this.host.state.preset = this.preset;
+    const moved = this.applyPose(false, simDt);
     const h = THREE.MathUtils.degToRad(this.host.state.heading);
     const seatSign = this.host.state.seat === "right" ? 1 : -1;
     return {
@@ -218,7 +256,7 @@ export class RailMode {
   }
 
   /** 姿态 → state / uCloudOffset。返回这一帧在本地坐标里的水平位移（km） */
-  private applyPose(snap: boolean): THREE.Vector2 {
+  private applyPose(snap: boolean, dt: number): THREE.Vector2 {
     const { state, ground, cloudOffset } = this.host;
     const pose = this.train!.pose(state.seat);
     this.pose = pose;
@@ -233,10 +271,10 @@ export class RailMode {
     state.pitchDeg = THREE.MathUtils.radToDeg(pose.pitch);
     state.rollDeg = THREE.MathUtils.radToDeg(pose.roll);
     state.bankDeg = 0;
-    // 高度：眼睛标高；落到 clipmap 地形以下时抬起来（立刻抬，慢慢放下，免得地形级别切换时上下跳）
+    // 高度：眼睛标高；落到 clipmap 地形以下时抬起来（立刻抬，约 2 s 的时间常数慢慢放下，免得地形级别切换时上下跳）
     const gKm = state.groundOn ? ground.heightAt(lx, lz) : null;
     const need = gKm === null ? 0 : Math.max(0, gKm * 1000 + MIN_CLEARANCE_M - pose.eye[2]);
-    this.groundLiftM = need > this.groundLiftM ? need : this.groundLiftM + (need - this.groundLiftM) * 0.02;
+    this.groundLiftM = need > this.groundLiftM ? need : this.groundLiftM + (need - this.groundLiftM) * (1 - Math.exp(-dt / 2));
     state.altitudeKm = (pose.eye[2] + this.groundLiftM) / 1000;
     state.targetAltKm = state.altitudeKm;
     this.headBump = pose.vibration.heave * HEAD_BUMP_RATIO;

@@ -172,6 +172,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   TR03 做远景的 RAIL 变体时要处理（例如把相机高度拆成 uniform 里的「大数 + 小数」，或者近地部分改用相对高度）。
 - **火车：voyage 本地坐标与真实距离南北方向差约 0.35%**（TR02）：`ground/geo.ts` 的 LocalFrame 纬度方向固定 110.574 km/度（赤道附近的值），北纬 36° 真实是约 110.96 km/度。影像、地形都按它摆，所以相机必须走「线路 ENU → 真实经纬度（`rail/geodesy.ts`）→ LocalFrame」，不能把 ENU 米直接除以 1000 当本地公里（35 km 外会错开约 100 m）。
   近景 / 中景（米级、线路坐标）与远景（LocalFrame）拼接时，500 m 处的比例差约 1.7 m，TR03 / TR04 要知道。
+- **火车：停站中切回飞机再切回火车，列车冲出终点、永远卡在线路末端**（TR02 审查 B1）：终点停车位之外没有「下一个停车点」，目标速度一直是 0；旧版 `teleport` 给巡航初速、`enter()` 每次都 teleport 且把方向重置成 +1。
+  修法：位置夹在两个终点停车位之间，初速不超过到下一停车点的制动曲线，停在终点上直接进入停站；`enter()` 不给参数时列车原样继续。识别：单测第 7、8 节（终点跳转、停站中切换）。
 - **node 直接跑 .ts（类型剥离）不支持参数属性、也不补 `.ts` 扩展名**（TR02）：`ground/geo.ts` 这类用了 `constructor(readonly x…)` 的模块会报 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`；项目里 import 不写扩展名，node 找不到。
   `src/rail/rail.test.mjs` 用 `module.registerHooks` 补扩展名；想被 node 单测直接加载的模块（`src/rail/` 下除 mode.ts 以外）不要用参数属性、enum 这类非「可擦除」语法。
 - **回归场景切火车要注意面板控件的应用顺序**（TR02）：`applyScene` 先按 DEFAULTS 设 `preset`、`seat`……，再设场景自己的键。火车模式下改 `preset` 会先退出火车（`setPreset` 里 `rail.exit()`），所以火车场景要写 `"vehicle": "train"`（排在 DEFAULTS 之后生效），想要右座的话在 `js` 里再设；进入火车时座位默认换到北阿尔卑斯一侧（往信濃大町是左座）。飞机场景跟在火车场景后面时，要写 `"vehicle": "plane"`（DEFAULTS 里还没有这个键，TR08 可以加上）。
