@@ -85,6 +85,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **离线 GLSL 检查**：`pnpm --filter voyage check:glsl`，不开浏览器，几秒内跑完，能抓住 GLSL 保留字、同一程序内的同签名函数重名、场景 / 窗外程序 sampler 数超 16（已用真实 GPU 交叉验证过一次，见 `handoff/DX.md`「返工记录」；SC-5 以后 `scene-default` 3/16、`outside-default` / `outside-ground-detail` 16/16）。提交前跑一次比等冷编译报错快得多。`node scripts/lint-shaders.mjs --self-test` 单独测检查逻辑本身，不用起 vite。
 
 - **ANGLE 后端切换**：`dev-browser.mjs` 的 `shots` / `cold` / `bench` 都支持 `--angle d3d11|vulkan`，默认 `d3d11`（Windows 上与生产环境一致，**这是交付验收的口径，不要改**）。日常改代码想快速看效果，开一个专用的 vulkan 窗口：`node scripts/dev-browser.mjs cold --port <端口> --angle vulkan`或直接用桌面浏览器 `chrome.exe --use-angle=vulkan`（真冷启动能从约 100 秒降到几秒，见`research/DX_SHADER_COMPILE.md`）。vulkan 会藏住 D3D11 专属问题（sampler 上限 16 vs 32、FXC 编译暴涨、X3595 屏幕导数报错），**验收前一定要在默认 d3d11 上再跑一次**。
+- **模拟高分屏 / 弱 GPU**（DX-04）：`dev-browser.mjs` 的 `shots` / `cold` / `bench` 都支持 `--viewport WxH`（浏览器视口，默认 `1600x1200`）和 `--dpr N`（`deviceScaleFactor`，默认 `1`）。二者组合改变实际绘制的画布像素数（画布 = 视口 × DPR），例如 `--viewport 1600x1200 --dpr 1.5` 实际绘制 2400×1800，用来在本机高性能 GPU 上人为制造过载，测「画质自动档」这类自适应逻辑的降档 / 回升；不传时行为与之前完全一致。PERF-5 验收时就是手工这样模拟出「高分屏 + 台风天气」的过载场景（见 `handoff/PERF-5.md`），现在收成了通用参数。
 - **离线着色器编译预算**：`node scripts/shader-budget.mjs`（或 `pnpm --filter voyage shader-budget --<参数>`），不开完整浏览器场景、不占 GPU，用 ANGLE 的翻译器 + Windows SDK 的 `fxc.exe` 离线算出每个程序的真实编译时间和 sampler 数。`--only <程序>` 只测一个，`--quick` 用 `/Od` 几十秒内出「能不能编过」，`--bisect <模块>` 把场景程序里的某段换成桩，看它占了多少编译时间（`--bisect list` 看可换的模块）。和浏览器真冷编译对照过一次，误差 5.4%，在 ≤15% 的可信范围内（见 `handoff/SC-12.md`）。
 
 ## 物理依据

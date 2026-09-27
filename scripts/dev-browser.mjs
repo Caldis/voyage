@@ -8,9 +8,9 @@
 // （开发体验官实测结论，见 apps/voyage/research/DX_REPORT_wave2.md §1.1）。
 //
 // 用法：
-//   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--out tmp/screenshot/dev-5230] [--angle d3d11|vulkan]
-//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--angle d3d11|vulkan]
-//   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan]
+//   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--out tmp/screenshot/dev-5230] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
 //
 // --angle：ANGLE 图形后端，默认 d3d11（Windows 上与生产环境一致，**这是交付验收的口径，不要改**）。
@@ -18,7 +18,11 @@
 //   （sampler 上限 16 vs 32、FXC 编译暴涨、X3595 屏幕导数报错），验收前一定要在默认 d3d11 上再跑一次
 //   （见 research/DX_SHADER_COMPILE.md 第二节的差异表）。
 //
-// 固定视口 1600×1200、deviceScaleFactor 1（和 regression.playwright.js 的截图基线一致，DX-03 也把 MCP 版对齐到了这个尺寸）。
+// --viewport WxH：浏览器视口尺寸（如 2400x1800），默认 1600×1200（和 regression.playwright.js 的截图基线一致，
+//   DX-03 也把 MCP 版对齐到了这个尺寸；不传就完全保持原行为）。
+// --dpr N：deviceScaleFactor，默认 1。二者组合用来模拟高分屏 / 弱 GPU（画布像素 = 视口 × DPR，
+//   例如 --viewport 1600x1200 --dpr 1.5 实际绘制 2400×1800），PERF-5 验收时就是这样手工模拟出「高分屏 + typhoon-bands」
+//   的过载场景（见 handoff/PERF-5.md）——本任务（DX-04）把这个手法从一次性验收脚本收成通用参数。
 
 import { chromium } from "playwright-core";
 import fs from "node:fs";
@@ -29,7 +33,8 @@ import { launchBrowser as launchBrowserAngle, closeBrowserSafely } from "./lib/c
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
-const VIEWPORT = { width: 1600, height: 1200 };
+const DEFAULT_VIEWPORT = { width: 1600, height: 1200 };
+const DEFAULT_DPR = 1;
 
 // ---------- CLI 参数 ----------
 function parseArgs(argv) {
@@ -46,6 +51,22 @@ function parseArgs(argv) {
     } else out._.push(a);
   }
   return out;
+}
+
+/** --viewport WxH，不传就是默认 1600×1200（原行为不变） */
+function parseViewport(args) {
+  if (!args.viewport) return { ...DEFAULT_VIEWPORT };
+  const m = String(args.viewport).match(/^(\d+)x(\d+)$/i);
+  if (!m) throw new Error(`--viewport 格式应为 WxH（如 2400x1800），收到 "${args.viewport}"`);
+  return { width: Number(m[1]), height: Number(m[2]) };
+}
+
+/** --dpr N（deviceScaleFactor），不传就是默认 1（原行为不变） */
+function parseDpr(args) {
+  if (args.dpr === undefined) return DEFAULT_DPR;
+  const n = Number(args.dpr);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`--dpr 应为正数，收到 "${args.dpr}"`);
+  return n;
 }
 
 // ---------- 定位并启动本机缓存的完整版 chrome.exe（两个脚本共用，见 lib/chrome.mjs） ----------
@@ -112,15 +133,16 @@ function originFor(port) {
   return `http://127.0.0.1:${port}`;
 }
 
-async function openPage(browser, port, angle) {
-  const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
+/** viewport/dpr 不传就是默认 1600×1200 / DPR1（原行为不变），传了就用来模拟高分屏 / 弱 GPU（见文件头注释） */
+async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr = DEFAULT_DPR) {
+  const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
   const page = await context.newPage();
   await installGlProbe(page);
   const renderer = await assertRealGpu(page);
   await page.goto(`${originFor(port)}/?dev=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 180000, polling: 500 });
-  return { context, page, renderer, angle };
+  return { context, page, renderer, angle, viewport, dpr };
 }
 
 // ---------- shots：跑回归场景表，截图 + 每场景一份同名 JSON ----------
@@ -131,11 +153,13 @@ async function cmdShots(args) {
   const only = args.only ? String(args.only).split(",") : null;
   const outDir = path.join(REPO_ROOT, args.out || `tmp/screenshot/dev-${port}`);
   fs.mkdirSync(outDir, { recursive: true });
+  const viewport = parseViewport(args);
+  const dpr = parseDpr(args);
 
   const browser = await launchBrowser(angle);
   try {
-    const { page, renderer } = await openPage(browser, port, angle);
-    console.log(`[dev-browser] --angle=${angle}  GL_RENDERER = ${renderer}`);
+    const { page, renderer } = await openPage(browser, port, angle, viewport, dpr);
+    console.log(`[dev-browser] --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
     const scenes = pickScenes(only);
     const results = [];
     for (const sc of scenes) {
@@ -148,7 +172,8 @@ async function cmdShots(args) {
         scene: sc.name,
         info,
         head,
-        viewport: VIEWPORT,
+        viewport,
+        dpr,
         angle,
         renderer,
         frameMs: +frameMs.toFixed(3),
@@ -171,6 +196,8 @@ async function cmdCold(args) {
   if (!port) throw new Error("cold 需要 --port <端口>");
   const angle = String(args.angle || "d3d11");
   const repeat = Number(args.repeat || 1);
+  const viewport = parseViewport(args);
+  const dpr = parseDpr(args);
   const origin = originFor(port);
   const browser = await launchBrowser(angle);
   const results = [];
@@ -178,7 +205,7 @@ async function cmdCold(args) {
     for (let i = 0; i < repeat; i++) {
       // 每次独立浏览器上下文：非持久化 context 本身不共享磁盘 profile，加上 nonce 破缓存双重保险
       // （手法抄自 tmp/review-t02/cold.js，开发体验官已实测端到端跑通，见 DX_REPORT_wave2.md §1.2）
-      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
+      const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
       try {
         const page = await context.newPage();
         const nonce = Date.now() % 100000;
@@ -199,9 +226,11 @@ async function cmdCold(args) {
         await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 250 });
         const startup = await page.evaluate(() => window.__voyageStartup);
         const totalMs = Date.now() - t0;
-        const entry = { origin, angle, nonce, totalMs, startup, renderer };
+        const entry = { origin, angle, viewport, dpr, nonce, totalMs, startup, renderer };
         results.push(entry);
-        console.log(`[dev-browser] cold #${i + 1}/${repeat}: --angle=${angle}  totalMs=${totalMs}  renderer=${renderer}`);
+        console.log(
+          `[dev-browser] cold #${i + 1}/${repeat}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  totalMs=${totalMs}  renderer=${renderer}`,
+        );
         console.log(
           Object.entries(startup)
             .map(([k, v]) => `    ${k}: ${v}`)
@@ -229,16 +258,18 @@ async function cmdBench(args) {
   const frames = Number(args.frames || 30);
   const rounds = Number(args.rounds || 5);
   const ports = baseline ? [port, baseline] : [port];
+  const viewport = parseViewport(args);
+  const dpr = parseDpr(args);
 
   const browser = await launchBrowser(angle);
   try {
     const pages = {};
     const renderers = {};
     for (const p of ports) {
-      const { page, renderer } = await openPage(browser, p, angle);
+      const { page, renderer } = await openPage(browser, p, angle, viewport, dpr);
       pages[p] = page;
       renderers[p] = renderer;
-      console.log(`[dev-browser] ${p}: --angle=${angle}  GL_RENDERER = ${renderer}`);
+      console.log(`[dev-browser] ${p}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
     }
 
     const scenes = pickScenes(only);
@@ -283,7 +314,7 @@ async function cmdBench(args) {
       console.log(`  ${sc.name}: ` + ports.map((p) => `${p}=${row[p]}ms`).join("  ") + (baseline ? `  Δ=${row.deltaPct}%` : "") + gpuNote);
     }
     console.log(`[dev-browser] renderer: ${JSON.stringify(renderers)}`);
-    if (args.out) fs.writeFileSync(path.join(REPO_ROOT, args.out), JSON.stringify({ angle, renderers, table }, null, 2));
+    if (args.out) fs.writeFileSync(path.join(REPO_ROOT, args.out), JSON.stringify({ angle, viewport, dpr, renderers, table }, null, 2));
     return table;
   } finally {
     await closeBrowserSafely(browser);
@@ -299,8 +330,10 @@ async function main() {
   else if (sub === "bench") await cmdBench(args);
   else {
     console.error(
-      "用法：node scripts/dev-browser.mjs <shots|cold|bench> --port <端口> [--angle d3d11|vulkan] [--only a,b] [--out 路径] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
+      "用法：node scripts/dev-browser.mjs <shots|cold|bench> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--out 路径] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
     );
+    console.error("  --viewport WxH  浏览器视口尺寸，默认 1600x1200（如 --viewport 2400x1800）");
+    console.error("  --dpr N         deviceScaleFactor，默认 1（和 --viewport 组合模拟高分屏 / 弱 GPU）");
     process.exit(1);
   }
   // playwright-core 有时会留一些内部句柄没清干净（尤其是 GPU 争用导致渲染进程中途崩溃过一次的情况），
