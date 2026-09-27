@@ -12,24 +12,32 @@
  *   按粒径分布三点平均）和本机投在云顶上的影子（按太阳圆盘的半影算，远了就只剩几乎看不见的一点暗）。
  * - opticsHaloRadiance：卷云里的冰晶：水平取向的六角片状冰晶产生的幻日（与太阳同高、方位差 = Bravais 等效折射率下的
  *   最小偏向角，红色在内缘），随机取向的冰晶产生 22° 晕。按「这一像素里卷云的光学厚度 × 单次散射」算辐亮度。
+ *
+ * PERF-13：宝光 / 本机影子 / 幻日 / 晕只编进 `#ifdef OUTSIDE_OPTICS` 变体（窗外程序的按需变体，启动后后台预编），
+ * 默认程序只有太阳圆盘 + 绿闪。新加的「平时不出现」的光学现象一律写进这个宏里，并让 render/optics.ts 的 opticsWanted 认得它。
  */
 export const OPTICS_COMMON = /* glsl */ `
+uniform vec4 uOpticsFlash;   // x 地平线附近的蜃景竖直放大倍数（1 = 标准大气，随机）, y 色散开关（1 开 0 关）
+#ifdef OUTSIDE_OPTICS
+// ---- 以下到下一个 #endif：宝光 / 本机影子 / 幻日 / 22° 晕，只编进 OUTSIDE_OPTICS 变体（PERF-13；选变体见 outside-pass.ts 的 wantedOutsideKey，
+// 「这一帧有没有看得出的贡献」见 render/optics.ts 的 opticsWanted）。默认程序（冷启动关键路径）预处理后不含这些代码
 uniform vec4 uOpticsGlory;   // x 宝光强度（0 = 不出现）, y 云滴有效半径（µm）, z 粒径相对离散度, w 未用
 uniform vec4 uOpticsShadow;  // x 本机到云顶（影子落点）的高度差 km（≤ 0：下面没有云，不算）, y 影子处云辐亮度最多压暗多少
 uniform vec4 uOpticsHalo;    // x 幻日 A（太阳方位 + 侧）份额, y 幻日 B（− 侧）份额, z 22° 晕份额, w 片状冰晶倾斜的标准差（弧度）
-uniform vec4 uOpticsFlash;   // x 地平线附近的蜃景竖直放大倍数（1 = 标准大气，随机）, y 色散开关（1 开 0 关）
 uniform float uSeatSign;     // 右侧 +1，左侧 −1（wing.glsl.ts 在机翼程序里声明同名 uniform，两个程序各自声明、共用一个值）
 
 // 代表波长（µm）：红 / 绿 / 蓝三个通道各用一个
 const vec3 OPTICS_LAMBDA_UM = vec3(0.65, 0.55, 0.45);
 // 冰的折射率（同上三个波长；Warren 1984 的实部，取两位有效数字以后的量级）
 const vec3 OPTICS_ICE_N = vec3(1.3075, 1.3110, 1.3165);
+#endif
 // 空气色散：各通道的折射量相对红光多出的比例 (n_λ − n_red)/(n − 1)，Edlén 1966 公式算出（绿 0.55%、蓝 1.52%）
 const vec3 OPTICS_AIR_DISPERSION = vec3(0.0, 0.00549, 0.0152);
 // 从 10 km 看海平线时，贴着海面擦过的光线的总折射量（弧度）：地面观测者的地平折射约 35 角分，这里入射、出射两段各一次，
 // 取约 60 角分（估算）。只用来乘色散比例，得到三色日像在地平线处的上下错开量
 const float OPTICS_HORIZON_REFRACTION = 0.01745;
 
+#ifdef OUTSIDE_OPTICS
 // ---- 贝塞尔函数 J0 / J1（Abramowitz & Stegun 9.4.1–9.4.6 的多项式近似，误差 < 1e-7 量级，x ≥ 0） ----
 // 三个波长一起算（vec3），小宗量 / 大宗量两套式子都算完再按 x < 3 选：没有分支，FXC 只内联一份向量代码
 // （写成标量函数、每个波长调一次时，窗外程序的离线 FXC 编译时间多出三成多）
@@ -137,6 +145,7 @@ vec3 opticsCloudFactor(vec3 rd, float cloudOpacity) {
   if (uOpticsShadow.x > 0.0) f *= 1.0 - uOpticsShadow.y * opticsPlaneShadow(rd) * smoothstep(0.2, 0.8, cloudOpacity);
   return f;
 }
+#endif
 
 // ---- 太阳圆盘 + 绿闪 ----
 // 按列解析地算覆盖率：这个像素竖直方向 [e − p/2, e + p/2] 里，每个颜色的日像（中心高度 eS + δc）在海平线以上的那一段占多少。
@@ -195,6 +204,7 @@ vec3 opticsSunDisk(vec3 rd, bool hitGround) {
   return L;
 }
 
+#ifdef OUTSIDE_OPTICS
 // ---- 幻日与 22° 晕 ----
 // 卷云的单次散射：L = E☉ · T☉ · τ · f · p，p 是归一化（∫p dΩ = 1）的角分布，f 是这部分冰晶散射的份额（CPU 给，随机）。
 // τ 用这一像素的云透射率反推（地平线以上看到的只有卷云）
@@ -251,9 +261,16 @@ vec3 opticsHaloRadiance(vec3 rd, float cloudT) {
   }
   return uSunIlluminance * sunT * tau * L;
 }
+#endif
 
-// 窗外最后的合成：背景 × 云透射率 + 云自身的光（乘宝光 / 影子）+ 卷云里的晕
+// 窗外最后的合成：背景 × 云透射率 + 云自身的光（乘宝光 / 影子）+ 卷云里的晕。
+// 默认程序没有后两项：宝光 / 影子因子为 1、晕为 0 时 OUTSIDE_OPTICS 变体算出的也正好是 L·a + rgb（×1、+0 在浮点上精确），
+// 所以「罕见光学没有贡献」时两个程序逐像素相同。在函数体里分 #ifdef（check:glsl 的重名检查不展开条件编译，见 README 坑点）
 vec3 opticsComposite(vec3 L, vec4 cloud, vec3 rd) {
+#ifdef OUTSIDE_OPTICS
   return L * cloud.a + cloud.rgb * opticsCloudFactor(rd, 1.0 - cloud.a) + opticsHaloRadiance(rd, cloud.a);
+#else
+  return L * cloud.a + cloud.rgb;
+#endif
 }
 `;
