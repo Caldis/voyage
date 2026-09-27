@@ -1,0 +1,10 @@
+[
+  {"name":"clouds-variety","scene":"clouds-variety","crop":[820,760,360,280]},
+  {"name":"backlit-cu","scene":"backlit-cu","crop":[820,760,360,280]},
+  {"name":"backlit-close","scene":"backlit-close","crop":[640,180,400,240]},
+  {"name":"noon-cumulus","scene":"noon-cumulus","crop":[820,760,360,280]},
+  {"name":"cu-side","scene":"cu-side","crop":[820,760,360,280]},
+  {"name":"storm-day","scene":"storm-day","crop":[420,450,360,280]},
+  {"name":"typhoon-bands","scene":"typhoon-bands","crop":[480,560,360,280]},
+  {"name":"sunset-wing","scene":"sunset-wing","crop":[700,820,360,280]}
+]
