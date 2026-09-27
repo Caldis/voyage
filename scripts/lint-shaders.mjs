@@ -140,10 +140,20 @@ export async function collectPrograms(server, opts = {}) {
     const o = await server.ssrLoadModule("/src/render/outside-pass.ts");
     const outside = o.createOutsideMaterial(mat.uniforms);
     add("outside-default", outside);
-    addDerived("outside-ground-detail", outside, (m2) => ({ fragmentShader: "#define GROUND_DETAIL 1\n" + m2.fragmentShader, vertexShader: m2.vertexShader }));
-    // TR03：窗外的火车远景变体（GroundDetailVariant 火车模式下编译：源码多拼了 rail/far-view.glsl.ts 的两段，再加两个 #define）。
+    // PERF-13：窗外变体的宏与源码由 outside-pass.ts 的 outsideVariantDefines / outsideVariantFragment 给出（和运行时同一份）。
+    // 旧树（PERF-13 之前）没有这两个函数：低空细节 / 火车按原来的手拼方式，罕见光学 + 奇观变体（outside-extras）按缺失处理
+    const keyed = typeof o.outsideVariantDefines === "function";
+    const outsideKey = (key, m2) => ({
+      fragmentShader: Object.entries(o.outsideVariantDefines(key)).map(([k, v]) => `#define ${k} ${v}\n`).join("") + o.outsideVariantFragment(key),
+      vertexShader: m2.vertexShader,
+    });
+    addDerived("outside-extras", keyed ? outside : null, (m2) => outsideKey("OW", m2));
+    addDerived("outside-ground-detail", outside, (m2) => (keyed ? outsideKey("DOW", m2) : { fragmentShader: "#define GROUND_DETAIL 1\n" + m2.fragmentShader, vertexShader: m2.vertexShader }));
+    // TR03：窗外的火车远景变体（GroundDetailVariant 火车模式下编译：源码多拼了 rail/far-view.glsl.ts 的两段，再加 #define）。
     // 旧树没有 outsideRailFragment 时按缺失处理（lenient 下跳过）
-    addDerived("outside-rail", typeof o.outsideRailFragment === "function" ? outside : null, (m2) => ({ fragmentShader: "#define GROUND_DETAIL 1\n#define RAIL 1\n" + o.outsideRailFragment(), vertexShader: m2.vertexShader }));
+    addDerived("outside-rail", typeof o.outsideRailFragment === "function" ? outside : null, (m2) =>
+      keyed ? outsideKey("DROW", m2) : { fragmentShader: "#define GROUND_DETAIL 1\n#define RAIL 1\n" + o.outsideRailFragment(), vertexShader: m2.vertexShader },
+    );
   });
 
   // 机翼 pass
@@ -491,13 +501,21 @@ function samplerAudit(text, defines) {
 export const SAMPLER_LIMIT = 16;
 
 /** 需要进速查表、也需要致命检查的程序 id，顺序即表格行序。 */
-const SAMPLER_TABLE_PROGRAMS = ["scene-default", "scene-economy", "outside-default", "outside-ground-detail", "outside-rail"];
+const SAMPLER_TABLE_PROGRAMS = ["scene-default", "scene-economy", "outside-default", "outside-extras", "outside-ground-detail", "outside-rail"];
 
 export const SAMPLER_TABLE_BEGIN = "<!-- DX-09:sampler-table:begin -->";
 export const SAMPLER_TABLE_END = "<!-- DX-09:sampler-table:end -->";
 
-function samplerDefinesFor(id) {
-  return id === "outside-rail" ? new Set(["GROUND_DETAIL", "RAIL"]) : id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : id === "scene-economy" ? new Set(["CABIN_CLASS_ECONOMY"]) : new Set();
+/** 这个变体定义了哪些宏：源码开头 `#define X 1` 形式的前缀（collectPrograms 给变体补的就是这种前缀，PERF-13 起窗外变体全靠它），
+ * 再加上几个按 id 的老规矩（保留：老树 / 手拼前缀的程序也照样对） */
+function samplerDefinesFor(id, fragmentShader = "") {
+  const set = id === "outside-rail" ? new Set(["GROUND_DETAIL", "RAIL"]) : id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : id === "scene-economy" ? new Set(["CABIN_CLASS_ECONOMY"]) : new Set();
+  for (const line of fragmentShader.split("\n")) {
+    const m = line.match(/^#define\s+([A-Za-z_]\w*)\s+1\s*$/);
+    if (!m) break;
+    set.add(m[1]);
+  }
+  return set;
 }
 
 /** 对 collectPrograms() 的结果，按 SAMPLER_TABLE_PROGRAMS 逐个跑 samplerAudit，返回表格需要的行
@@ -508,7 +526,7 @@ export function computeSamplerRows(programs) {
   return SAMPLER_TABLE_PROGRAMS.map((id) => {
     const prog = byId.get(id);
     if (!prog) throw new Error(`sampler 表缺少程序 ${id}（collectPrograms 的枚举变了？README 表格和这里要一起改)`);
-    const { declaredCount, activeCount, active } = samplerAudit(prog.fragmentShader, samplerDefinesFor(id));
+    const { declaredCount, activeCount, active } = samplerAudit(prog.fragmentShader, samplerDefinesFor(id, prog.fragmentShader));
     return { id, declaredCount, activeCount, active };
   });
 }
@@ -805,6 +823,35 @@ async function main() {
         exitCode = 1;
         console.log(`  [FAIL] ${id}：预处理后仍含 ${hits.join(", ")}——天气代码要写在 #ifdef CLOUD_STORM / CLOUD_TYPHOON / CLOUD_WEATHER 里（见 README 坑点「着色器编译」PERF-10）`);
       } else console.log(`  [OK]   ${id}：${out.split("\n").filter((l) => l.trim()).length} 行，无雷暴 / 台风代码`);
+    }
+
+    // -- 1c. PERF-13：窗外默认程序预处理后不含罕见光学（宝光 / 影子 / 幻日 / 晕）与天幕层奇观代码；变体里必须有（断言有区分力） --
+    // 这两块一旦写到 #ifdef OUTSIDE_OPTICS / OUTSIDE_WONDER 外面，就又编进了冷启动关键路径上的窗外默认程序
+    console.log("\n-- 窗外默认程序不含罕见光学 / 天幕层奇观代码（PERF-13，glslangValidator -E） --");
+    const EXTRA_IDS = ["opticsGlory", "opticsPlaneShadow", "opticsCloudFactor", "opticsHaloRadiance", "uOpticsGlory", "wonderSky", "wonderStrut", "wonderSpheroid", "uWonderOn"];
+    const preprocess = (prog) => {
+      const file = path.join(tmpDir, `${prog.id}.pp13.frag`);
+      writeFileSync(file, FRAG_PREFIX + resolveIncludes(prog.fragmentShader, new Set()));
+      const res = spawnSync(bin, ["-E", "-S", "frag", file], { encoding: "utf8", maxBuffer: 64 << 20 });
+      return res.error || !res.stdout ? null : res.stdout;
+    };
+    for (const [id, expectAll] of [["outside-default", false], ["outside-extras", true], ["outside-ground-detail", true], ["outside-rail", true]]) {
+      const prog = programs.find((p) => p.id === id);
+      if (!prog) continue;
+      const out = preprocess(prog);
+      if (out === null) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：预处理失败`);
+        continue;
+      }
+      const hits = EXTRA_IDS.filter((w) => new RegExp(`\\b${w}\\b`).test(out));
+      if (!expectAll && hits.length) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：预处理后仍含 ${hits.join(", ")}——罕见光学 / 天幕层奇观要写在 #ifdef OUTSIDE_OPTICS / OUTSIDE_WONDER 里（README 坑点「着色器编译」PERF-13）`);
+      } else if (expectAll && hits.length !== EXTRA_IDS.length) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：变体里缺 ${EXTRA_IDS.filter((w) => !hits.includes(w)).join(", ")}（宏没定义上？这个变体应该带罕见光学与天幕层奇观）`);
+      } else console.log(`  [OK]   ${id}：${expectAll ? "含" : "不含"}罕见光学 / 天幕层奇观代码`);
     }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });

@@ -94,8 +94,11 @@ Object.assign(sceneMat.uniforms, {
 const outsideMat = createOutsideMaterial(sceneMat.uniforms);
 const hdrOutside = createOutsideTarget(renderer);
 sceneMat.uniforms.uOutside.value = hdrOutside.texture;
-// 低空地面细节（T02）：海拔 4 km 以下后台编译窗外程序的 GROUND_DETAIL 变体，编好才切换
+// 低空地面细节（T02）：海拔 4 km 以下后台编译窗外程序的 GROUND_DETAIL 变体，编好才切换。
+// PERF-13 起它管全部窗外变体（罕见光学 / 天幕层奇观 / 低空细节 / 火车，选择在 outside-pass.ts 的 wantedOutsideKey）
 const groundDetail = new GroundDetailVariant(outsideMat, hdrOutside);
+// 关掉真实地理数据时不用低空细节 / 火车变体（高度传 Infinity），但罕见光学与天幕层奇观照样要按需切（PERF-13；原来直接用 outsideMat）
+const pickOutside = () => groundDetail.pick(renderer, state.groundOn ? state.altitudeKm : Infinity, state.groundOn && rail.active);
 // 海浪：GPU FFT 三级级联（T14），每帧在场景 pass 之前更新
 const ocean = new OceanWaves(renderer);
 Object.assign(sceneMat.uniforms, ocean.uniforms);
@@ -253,6 +256,9 @@ function setPreset(id: string) {
 
 // ---------- 导演：连续航程 / 背景板模式（T19a，director.ts） ----------
 let lastSunAlt = 0;
+// DX-12：截图工具想在 JSON 里附一份太阳 / 月亮高度（README「调试与验证」的 shots 输出），复用这个已有的
+// 「每帧存一份供调试读」的写法，不额外算一遍天文位置
+let lastMoonAlt = 0;
 let groundMinLevel = 0;
 const director = new Director({
   state,
@@ -411,6 +417,7 @@ function renderFrame(now: number) {
   haze.update({ state, ground, x: offT18.x, z: offT18.y, lon: curLon, sunAltDeg: sun.altitude, coverage: cloudUniforms.uCoverage.value, dt });
 
   const moon = moonState(new Date(state.simTime), curLat, curLon, state.altitudeKm * 1000);
+  lastMoonAlt = moon.altitude;
   const moonDir = directionFromAzAlt(moon.azimuth, moon.altitude);
   atmosphere.updateSkyView(camR, sunDir[1], moonDir[1]);
   atmosphere.updateAerialPerspective(camR, sunDir[1]);
@@ -526,7 +533,7 @@ function renderFrame(now: number) {
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
   // 窗外（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdrOutside，舱内合成读它画到 hdr，
   // 机翼 pass 再读实际画出来的 hdr 合成
-  pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm, rail.active) : outsideMat, hdrOutside);
+  pass.render(pickOutside(), hdrOutside);
   const cabinMat = cabinClass.pick(renderer, state.cabinClass);
   exposure.finalMat.uniforms.uCabinRefAlbedo.value.copy(CABIN_REF_ALBEDO[cabinClass.shown]);
   pass.render(cabinMat, hdr);
@@ -677,7 +684,7 @@ function benchScene(n = 20, which: "both" | "outside" | "cabin" = "both") {
   const px = new Float32Array(4);
   const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
   const once = () => {
-    if (which !== "cabin") pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm, rail.active) : outsideMat, hdrOutside);
+    if (which !== "cabin") pass.render(pickOutside(), hdrOutside);
     if (which !== "outside") pass.render(cabinClass.pick(renderer, state.cabinClass), hdr);
   };
   once();
@@ -700,4 +707,6 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail };
+// DX-12：新增 sunAltDeg / moonAltDeg（截图 JSON 附太阳 / 月亮高度用，见 README「调试与验证」），
+// 复用已有的 lastSunAlt / lastMoonAlt（每帧更新，见上）——不重复算一遍天文位置
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };

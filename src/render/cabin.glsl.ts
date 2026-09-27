@@ -38,7 +38,8 @@ bool marchFunnel(vec3 ro, vec3 rd, out vec3 hit) {
     vec3 p = ro + rd * ((z - ro.z) / rd.z);
     if (sdFunnel(p) > 0.0) {
       float a = zPrev, b = z;
-      for (int k = 0; k < 7; k++) {
+      // PERF-12：上限带 uLoopGuard，原来常量 7 次被 FXC 展开成 7 份 sdFunnel
+      for (int k = 0; k < 7 + uLoopGuard; k++) {
         float m = 0.5 * (a + b);
         if (sdFunnel(ro + rd * ((m - ro.z) / rd.z)) > 0.0) b = m; else a = m;
       }
@@ -126,25 +127,36 @@ vec2 scratches(vec2 q, vec3 v, vec3 s, float pix) {
   // 越靠下划痕越多：乘客的手、清洁布都在那里
   // 用户反馈「划痕太多」：只留偶尔注意到的几道（约为最初的 1/5）
   float density = mix(0.03, 0.14, smoothstep(0.1, -0.15, q.y));
-  for (int i = -1; i <= 1; i++)
-  for (int j = -1; j <= 1; j++) {
-    vec2 c = id + vec2(i, j);
-    for (int k = 0; k < 2; k++) {
-      vec2 h = hash22(c * 1.7 + float(k) * 13.1);
-      vec2 h2 = hash22(c * 3.1 + float(k) * 7.7 + 5.0);
-      if (h2.y > density) continue;
-      // 走向：大多数是清洁时的横向擦痕，少数是随机方向
-      float ang = h2.x < 0.6 ? (h.x - 0.5) * 0.5 : h.x * M_PI;
-      vec2 t = vec2(cos(ang), sin(ang));
-      vec2 center = (c + h) * CELL;
-      float halfLen = CELL * mix(0.3, 1.6, fract(h.y * 7.3));
-      float d = segDist(q, center - t * halfLen, center + t * halfLen);
-      // 线宽远小于像素：按覆盖面积算强度，边缘按像素宽度抗锯齿
-      float cov = (WIDTH / max(WIDTH, pix)) * (1.0 - smoothstep(0.0, max(WIDTH, pix), d));
-      float mis = dot(vec3(t, 0.0), v - s);
-      lit += cov * exp(-mis * mis / 0.0004);
-      cover += cov;
+  // PERF-12：3×3 格 × 每格 2 道压成一个循环（上限「常数 + uLoopGuard」；原来三层常量循环被 FXC 展开成 18 份）。
+  // 格号用浮点递推（不用整数除法）：k 在 0 / 1 间交替，每两道换一格，格在 3×3 里先沿 y 后沿 x 走，和原来 i（x）外层、j（y）内层、
+  // k 最内层的顺序一致，所以累加顺序、结果都不变。先只算决定「这一道有没有」的那个哈希，绝大多数（86–97%）直接跳过；
+  // 再用「到中点的距离 − 半长」排除碰不到的线段，只有真正可能盖到这个像素的才算走向（三角函数）和点到线段的距离
+  vec2 cc = id - 1.0;
+  float k = 0.0;
+  for (int n = 0; n < 18 + uLoopGuard; n++) {
+    vec2 c = cc;
+    float kk = k;
+    if (k > 0.5) {
+      cc.y += 1.0;
+      if (cc.y > id.y + 1.5) { cc.y = id.y - 1.0; cc.x += 1.0; }
     }
+    k = 1.0 - k;
+    vec2 h2 = hash22(c * 3.1 + kk * 7.7 + 5.0);
+    if (h2.y > density) continue;
+    vec2 h = hash22(c * 1.7 + kk * 13.1);
+    vec2 center = (c + h) * CELL;
+    float halfLen = CELL * mix(0.3, 1.6, fract(h.y * 7.3));
+    // 到线段的距离 ≥ 到中点的距离 − 半长；超过覆盖宽度的肯定碰不到（cov 严格为 0）
+    if (length(q - center) > halfLen + max(WIDTH, pix)) continue;
+    // 走向：大多数是清洁时的横向擦痕，少数是随机方向
+    float ang = h2.x < 0.6 ? (h.x - 0.5) * 0.5 : h.x * M_PI;
+    vec2 t = vec2(cos(ang), sin(ang));
+    float d = segDist(q, center - t * halfLen, center + t * halfLen);
+    // 线宽远小于像素：按覆盖面积算强度，边缘按像素宽度抗锯齿
+    float cov = (WIDTH / max(WIDTH, pix)) * (1.0 - smoothstep(0.0, max(WIDTH, pix), d));
+    float mis = dot(vec3(t, 0.0), v - s);
+    lit += cov * exp(-mis * mis / 0.0004);
+    cover += cov;
   }
   return vec2(lit, cover);
 }
@@ -159,7 +171,7 @@ float paneLineCov(float d, float w, float pix) {
 float wipeMarks(vec2 q, float pix) {
   float cov = 0.0;
   // 两个擦拭中心，每个一组同心弧，只在部分角度上出现
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < 2 + uLoopGuard; i++) {
     vec2 c = i == 0 ? vec2(0.03, -0.06) : vec2(-0.05, 0.05);
     vec2 d = q - c;
     float r = length(d);
@@ -263,8 +275,9 @@ vec4 waterOnPane(vec2 q, float pix, float aftSign, float t, float wet) {
   if (sLine > 0.0) {
     const float ROW = 0.0085;
     float k0 = floor(v / ROW);
-    for (int dk = -2; dk <= 2; dk++) {
-      float k = k0 + float(dk);
+    // PERF-12：上限带 uLoopGuard。原来常量上限（−2..2）被 FXC 展开成 5 份，每份 4 次 vnoise + 两次 waterBand（舱内程序的一大块）
+    for (int dki = 0; dki < 5 + uLoopGuard; dki++) {
+      float k = k0 + float(dki - 2);
       float hr = hash12(vec2(k, 3.17));
       // 停一停、挪一步：每行自己的节奏，挪动的距离几毫米到一厘米
       float p = t * mix(0.25, 0.7, hr) + hr * 17.0;
@@ -324,26 +337,18 @@ vec4 waterOnPane(vec2 q, float pix, float aftSign, float t, float wet) {
 
   // ---- 水珠：两层网格，细密的小水珠 + 稀疏的大水珠，半径长尾分布 ----
   float sDrop = smoothstep(0.0, 0.45, wet);
-  {
-    const float C1 = 0.0048;
-    vec2 cell = floor(q / C1);
-    vec2 h = hash22(cell * 1.7 + 3.1);
-    if (h.x < 0.4 * sDrop) {
-      vec2 h2 = hash22(cell + 11.3);
-      float r = min(0.00018 * pow(max(1.0 - h.y, 0.02), -0.5), 0.0008);
-      vec2 c = (cell + 0.5 + (h2 - 0.5) * (1.0 - 2.0 * (r + 0.0003) / C1)) * C1;
-      waterDrop(q, c, r, fu, fv, hash22(cell + 5.9), pix, acc);
-    }
-  }
-  {
-    const float C2 = 0.013;
-    vec2 cell = floor(q / C2);
-    vec2 h = hash22(cell * 2.3 + 7.7);
-    if (h.x < 0.3 * sDrop) {
-      vec2 h2 = hash22(cell + 21.9);
-      float r = min(0.0007 * pow(max(1.0 - h.y, 0.02), -0.6), 0.0022);
-      vec2 c = (cell + 0.5 + (h2 - 0.5) * (1.0 - 2.0 * (r * 1.3 + 0.0004) / C2)) * C2;
-      waterDrop(q, c, r, fu, fv, hash22(cell + 2.2), pix, acc);
+  // PERF-12：两层写成一个两次的循环（上限带 uLoopGuard），waterDrop 只内联一份；每层的常数和原来逐字相同
+  for (int layer = 0; layer < 2 + uLoopGuard; layer++) {
+    bool big = layer == 1;
+    float C = big ? 0.013 : 0.0048;
+    vec2 cell = floor(q / C);
+    vec2 h = hash22(cell * (big ? 2.3 : 1.7) + (big ? 7.7 : 3.1));
+    if (h.x < (big ? 0.3 : 0.4) * sDrop) {
+      vec2 h2 = hash22(cell + (big ? 21.9 : 11.3));
+      float r = big ? min(0.0007 * pow(max(1.0 - h.y, 0.02), -0.6), 0.0022) : min(0.00018 * pow(max(1.0 - h.y, 0.02), -0.5), 0.0008);
+      float margin = big ? r * 1.3 + 0.0004 : r + 0.0003;
+      vec2 c = (cell + 0.5 + (h2 - 0.5) * (1.0 - 2.0 * margin / C)) * C;
+      waterDrop(q, c, r, fu, fv, hash22(cell + (big ? 2.2 : 5.9)), pix, acc);
     }
   }
   return acc;

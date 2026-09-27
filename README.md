@@ -21,6 +21,7 @@
 | 精度 | 大气 LUT（天空视图）、云缓冲（raw / history）都要用**32 位浮点**（有 `OES_texture_float_linear` 时）：半精度最小次正规数 5.96e-8，暗场景 / 无月夜会下溢成阶梯或纯黑 | [大气与曝光](#pit-atmos)、[云](#pit-cloud) |
 | 云缓冲格式 | 云的 history 缓冲是**两倍宽**（`2×w`）：左半是颜色，右半存 `(深度 × 不透明度, 不透明度)`（T38），读它一律走 `cloudBufferColor` / `cloudBufferDepth`，不要直接 `texture(uClouds, uv)`；右半**只在附近有高出海面的真实地形、或相机低于 1 km（火车 / 起降）时才写**（PERF-11，`uCloudDepthOn`，不写时 `cloudBufferDepth` 返回 0），别的用途要深度先改这个条件 | [云](#pit-cloud) |
 | 云的天气变体 | 雷暴 / 台风密度只在 `#ifdef CLOUD_STORM` / `CLOUD_TYPHOON`（共用部分 `CLOUD_WEATHER`）里，默认云步进 / 云影图 / 探针预处理后不含它们（PERF-10）；**新的天气代码一律写进这些宏里**，新的「平时不走」的功能照样做成变体，并在 `lint-shaders.mjs` 登记 | [着色器编译](#pit-shader)、[云](#pit-cloud) |
+| 窗外程序的变体 | 罕见光学（宝光 / 本机影子 / 幻日 / 晕）只在 `#ifdef OUTSIDE_OPTICS`、天幕层奇观只在 `#ifdef OUTSIDE_WONDER` 里，窗外默认程序（冷启动关键路径）预处理后不含它们（PERF-13，`check:glsl` 断言）；只有 `""` / `OW` / `DOW` / `DROW` 四个组合，选哪个只由 `outside-pass.ts` 的 `wantedOutsideKey` 决定；新的「平时不出现」的窗外效果照样写进宏，并让 `opticsWanted` / `wantedOutsideKey` 认得它 | [着色器编译](#pit-shader) |
 | 窗外输出 alpha 语义 | 窗外 pass 输出的 alpha 不是占位不透明度，是 `1 + 能看到多少点星`（T41）；改窗外输出时**别把它写回 1** | [舱内与倒影](#pit-cabin) |
 | 影像 A 通道语义 | 影像纹理的 A 通道**兼存道路照亮宽度**（T08）：< 0.5 表示「缺影像比例 / 2」，≥ 0.5 表示有影像、其余 7 位是宽度；判断缺瓦片一律用 `min(A·2, 1)`（`sampleGroundAlbedo`），不能直接读 A。G03 的高清细节合成只改 RGB、且必须在 `packRoads` 之前做 | [地面与数据](#pit-ground) |
 | 影像源与请求 | 影像源都走 `tiles.ts` 的 `ImagerySource` + `loadImageryTile`（按站点令牌桶 / 并发，`HOST_LIMITS`）；404 / 410 / 占位图负缓存，429 / 5xx / 网络错误**不**缓存；换源或混源不能改变 EOX 的低频色调（`landClasses`、城市灯点、路灯聚落地毯的阈值都按它定）；`__voyage.ground.imageryStats` 看各站点请求 | [地面与数据](#pit-ground) |
@@ -36,6 +37,7 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 | `scene-default` | 16 | 5 / 8 |
 | `scene-economy` | 16 | 5 / 8 |
 | `outside-default` | 16 | 14 / 18 |
+| `outside-extras` | 16 | 14 / 18 |
 | `outside-ground-detail` | 16 | 14 / 18 |
 | `outside-rail` | 16 | 14 / 18 |
 <!-- DX-09:sampler-table:end -->
@@ -90,7 +92,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/ground/imagery-blend.ts` | 高清细节合成（G03，在地面栅格化 Worker 里跑）：国土地理院航拍的高频 × 局部反差匹配 + EOX 的低频色调，挡水面 / 云 / 耀斑等异常 |
 | `src/ground/road-raster.ts` / `road-raster.worker.ts` | 夜间道路灯带（T08）：OSM 道路栅格成有向距离场 + 照亮宽度，在 Web Worker 里算；着色见 `ground.glsl.ts` 的 `groundRoadCoverage`、`terrain-shading.glsl.ts` 的 `groundRoadLights` |
 | `src/render/scene.ts` | 场景（舱内合成）着色器：舱内 uniform 声明、主函数（舱壁 / 内衬 / 遮光板 / 座椅 / 窗板效果、alpha 打包）、`createSceneMaterial`（持有所有 pass 共用的 uniforms） |
-| `src/render/outside-pass.ts` | 窗外着色器（SC-5）：`outsideRadiance`（地面 / 海面 / 天空的唯一调用点）、交通、闪电；`createOutsideMaterial` / `createOutsideTarget`；低空细节变体 `GroundDetailVariant` |
+| `src/render/outside-pass.ts` | 窗外着色器（SC-5）：`outsideRadiance`（地面 / 海面 / 天空的唯一调用点）、交通、闪电；`createOutsideMaterial` / `createOutsideTarget`；窗外变体（PERF-13：`""` / `OW` 罕见光学 + 天幕层奇观 / `DOW` 低空细节 / `DROW` 火车）由 `GroundDetailVariant` 管，选择只在 `wantedOutsideKey` |
 | `src/render/noise.glsl.ts` | 窗外与舱内共用的小噪声（hash12 / vnoise / hash22 / fbm2）和 `uLoopGuard`；改它两个程序都重编 |
 | `src/render/ocean.glsl.ts` | 海面：菲涅尔、12 波斜率场、风痕、`oceanRadiance` |
 | `src/render/terrain-shading.glsl.ts` | 真实地面着色 `groundRadiance` |
@@ -114,7 +116,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 
 ## 调试与验证
 
-- `window.__voyage`：`state`、`head`、`cloudUniforms`、`snapAll`、`clouds`、`resize`、`sceneMat`、`exposure`、`traffic`、`ground`、`weather`、`minimap`（DX-06 调试小地图，见下）、`optics`（T17，见下）、`freeze`（DX-08，见下）。
+- `window.__voyage`：`state`、`head`、`cloudUniforms`、`snapAll`、`clouds`、`resize`、`sceneMat`、`exposure`、`traffic`、`ground`、`weather`、`minimap`（DX-06 调试小地图，见下）、`optics`（T17，见下）、`freeze`（DX-08，见下）、`sunAltDeg()` / `moonAltDeg()`（DX-12，太阳 / 月亮几何高度角，度；main.ts 每帧更新的 `lastSunAlt` / `lastMoonAlt`，不重复算一遍天文位置——`dev-browser.mjs shots` 往截图 JSON 里附这两个数就是靠它们，见下）。
 - **冻结（DX-08，`__voyage.freeze(on)`）**：`freeze(true)` 钉住喂给主循环的挂钟时间（内部 `dt` 因此恒为 0），
   位置推进、航向、头部平滑跟随、天气（含闪电）、曝光适应、翼尖 / 航行灯频闪相位（都是按 `dt` 或冻结时刻的挂钟秒数算的）
   全部停在冻结那一刻；云的光线步进另有一个不受 `dt` 控制、每次调用都推进的抖动相位（时间累积重投影用），冻结时改成
@@ -138,6 +140,9 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   **`shots` 默认关闪电频闪**（DX-07）：调用 `weather.ts` 本来就留的调试开关（`window.__voyage.weather.hold = true` + `heldIntensity = 0`），不然截图偶尔会撞上一大团闪电白光，糊里糊涂当成回归差异（T08 开发体验反馈）；`--allow-flash` 恢复正常按泊松过程闪（雷暴 / 台风场景想专门看闪电时用）。`shots` 现在也会打印截图期间的 console error / pageerror 数（和 `check` 共用一份收集逻辑），不用另外再跑一次 `check`。
   **`shots --freeze`（DX-08）**：截图前调用 `__voyage.freeze(true)`（见上）钉住位置 / 航向 / 头部 / 模拟时间 / 曝光适应 / 闪电 / 翼尖频闪相位，冻结后连续渲染逐像素一致，适合拿两次 `shots` 的截图相减（配合 `compare.mjs --diff`）定位改动到底动了哪些像素，不必依赖「同一份代码跑两次」的噪声估计。
   **`shots --settle`（DX-08）**：等 `__voyage.ground.pending === 0` 再截，而不是原来给 `sc.ground` 场景用的更宽松的 `pending < 5`（够看大致画面，但地面瓦片可能还在陆续贴上来）；逐像素对比前建议加上，否则瓦片加载差异会被误判成回归。
+  **`shots --pair '<js1>' --pair '<js2>'`（或 `--ab`，两个值同样靠重复传参，DX-12）**：同一页面、同一机位，先后拍 a / b 两张。要解决的问题：批量截图时 `applyScene` 等地面瓦片 / 舱等 / 云变体编译的这几秒到几十秒里，飞机一直按真实挂钟往前飞（`__voyage.freeze` 之前是「摆好场景」不是「摆好场景并原地冻结」），分两次单独跑 `shots` 拍「开关前 / 开关后」根本拍不到同一机位。用法：应用场景后，先把头部 / 云偏移**钉回**场景 JSON 写的值（`scenarios.mjs` 的 `pinGeometry`，等待期间飘走的位置重新对齐），再 `freeze(true)` 并把翼尖频闪钉死为灭（同下面 `--freeze` 的 PERF-13 反馈），接着依次跑 `js1`、`js2`（各是一段 `v = window.__voyage` 的脚本），各拍一张 `<场景>.a.png` / `<场景>.b.png`，JSON（`<场景>.a.json`/`.b.json`）里除了「截图 JSON 附加信息」（见下）还附 `pairJs`（跑的是哪段 js）与 `jsOut`（js 的返回值）。
+  第二种用法 **`--pair '<js1>' --base-shader <端口|目录|提交> [--material sceneMat]`**（`--pair` 这时至多给一段「拍 a 之前」的预设置 js，可以不给）：a 是当前代码（可选先跑预设置 js）的样子，b 是把 `--material`（默认 `sceneMat`，点号路径同 `probe.mjs`）这个材质的 `fragmentShader` 换成 `--base-shader` 指向的那棵树上的原文、重新编译后拍的样子，换回来再拍一张 `<场景>.a2.png`（噪声底：理论上应与 a 逐像素一致，`compare.mjs --diff` 对照验证「钉住再冻结」这套手法本身有没有引入误差，PERF-12/TR07 反馈——想对比着色器改动前后的画面，此前只能自己写一次性脚本手动换 `fragmentShader`）。`--base-shader` 给端口号时直接读那个端口页面上材质此刻的源码（要求那个端口的开发服务器正在跑）；给目录（另一个 voyage 应用根，或含 `apps/voyage` 的仓库根）或 git 提交时离线用 `vite` 的 `ssrLoadModule` 枚举程序（和 `shader-budget.mjs --baseline`/`--chain` 同一套手法，不用真起开发服务器，但 `--material` 得在内置的材质 → 程序 id 映射表里有，见 `MATERIAL_TO_PROGRAM_ID`）。换上的着色器如果编译 / 链接失败，会在截图期间的 console error 里看到，b 那份 JSON 的 `shaderError` 标 `true` 并在控制台提示「很可能是垃圾画面，不要当真」（呼应 C01 反馈：编译失败不能悄悄出一张坏图）。
+  **截图 JSON 附加信息（DX-12）**：`shots`（含 `--pair`）写出的每份 `.json` 现在都带 `panel`（面板控件当前值，键是控件 id）、`date`（`#date` 输入框的值）、`sunAltDeg` / `moonAltDeg`（太阳 / 月亮几何高度角，度，读 `__voyage.sunAltDeg()`/`moonAltDeg()`）、`quality`（画质档，`{ tier, level }`，`tier` 是面板选的「自动 / 高 / 中 / 低」，`level` 是自动档实际落在哪一档）。回看一批旧截图时不用再去猜「这张当时是什么天、什么档位」。
   **`flicker`（DX-08，泛化自 `handoff/T08-flicker.mjs` + `T08-flicker.py` + `T43-crawl.py`）**：`node scripts/dev-browser.mjs flicker --port <端口> --only <场景> [--step 0.06] [--frames 20] [--crop x,y,w,h] [--block 48] [--debug N]`。`__voyage.freeze(true)` 之后按 `--step` 毫米（默认 0.06，亚像素）步进微移相机（`head.x`，绕过头部平滑——冻结时 `dt=0`，改 `head.tx` 目标追不上，所以直接改 `head.x` 本身），连拍 `--frames` 帧，输出：
   - 块能量变异系数（T08 法）：把画面切成 `--block` 边长的小块，每块总亮度随帧的 `std/mean`，抗锯齿做对了应接近 0；
   - 爬行指标（T43 法）：亮像素上 `|I(t+1) − 2I(t) + I(t−1)|` 的均值 ÷ 亮度均值，抓块能量法量不出的「台阶沿线爬」（块能量本身在台阶移动时也守恒）。
@@ -149,18 +154,27 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   ```
   没有 `--scene` 时行为和以前完全一样（`--only` 过滤固定场景表，或跑全量表）。
   场景还可以带 `js`（T17）：一段 async 脚本，参数 `v = window.__voyage`，在场景设好之后、截图等待之前执行，返回值附在输出 JSON 的 `info` 末尾（`js: …`）。同一次 `shots` 的场景共用一个页面，`js` 改的调试开关会带到后面的场景，**每个场景都把自己要的开关写全**（例如关的对照写 `v.optics.disabled=true; v.optics.force={}`）。
+  **`--scenes-file <场景.json>`（DX-12）**：文件里放一个场景数组（字段和 `--scene` 的 JSON、`SCENES` 条目一致），免去命令行 JSON 转义——Windows 上 PowerShell / Git Bash 各自的引号规则不一样，一个带 `js` 字段的场景拼成命令行参数经常因为转义错误直接报「不是合法 JSON」。路径相对仓库根解析（和 `--out` 一致），可以和 `--only` / `--scene` 一起用，三边选中的场景拼在一起跑。
+  **`--query '<url 参数>'`（DX-12）**：附加到导航 URL（`?dev=<时间戳>&<这里给的参数>`），例如 `--query eox=2024` 或 `--query "optics=all"`（带不带开头的 `?` 都可以）。给「只受 URL 参数控制、面板上没有对应控件」的行为用，比如地面影像切年份（`?eox=`）、强制罕见光学现象（`?optics=`）。
+  **场景 `p` 支持 `"view-preset"`（DX-12）**：给了这个键（值是 `seated` / `close` / `wing` / `ahead` / `behind` 等 `view-presets.ts` 里的预设 id）且没有同时给 `head` 时，头部位置由面板「视角」下拉本来就有的 `setView()` 决定，不用再像 `economy-ahead` 那样手抄一遍预设的 `fwd`/`y`/`z` 到 `head` 数组（抄错座位方向的符号就会看反）；显式给了 `head` 仍然优先。
+  **`applyScene` 默认关闭连续航程与时间流速（DX-12）**：每个场景开始时都会 `director.setActive(false)` 且 `state.playRate = 0`，避免「上一个场景开着连续航程 / 加速播放，下一个场景在等地面瓦片 / 舱等 / 云变体编译的这几秒到几十秒里飞机继续跑、天继续暗」这种串味（任务背景见下面 `--pair`）。场景确实想要连续航程 / 加速播放时给 `continuousJourney: true` / `playRate: <倍率>`（和 `head` / `offset` 一样是场景 JSON 的顶层字段），或者在 `p` 里给 `"voyage-on": true`（有真实面板控件，走 `set()` 那条路一样能打开，且在默认关闭之后执行，会覆盖它）。
 - **回归场景的固定日期（DX-07）**：`scenarios.mjs` / `regression.playwright.js` 里依赖月相 / 星空的夜景、黄昏场景都写了固定 `date`（不写 `date` 就用「打开页面当天」，月相每天都在变，跨波对比会误判——第 6 波美术总监报告撞上过一次，见 `research/ART_REVIEW_wave6.md`）。`night-city` 系列、`route-hnd-cts-night`、`dusk-earthshadow` 用的是无月夜（月亮在地平线下，日期与高度写在场景条目的注释里）；`night-sea-milkyway`（T09）和新增的 `night-sea-fullmoon`（DX-07，满月、高度 58°、方位几乎正对左座窗外）各自固定在原来的月相上。月亮高度 / 方位都是用仓库自带的 `astronomy-engine`（`src/astro.ts` 的 `moonState`，T09 用过的同一套）算的。
 - **`applyScene` 跨版本容错（DX-10）**：`scenarios.mjs` 的 `applyScene`（`shots` / `passes` / `flicker` / `bench` 都靠它设场景）现在能对着**老版本页面**跑而不崩——控件不存在（`document.getElementById(id)` 是 `null`）或下拉框没有这个选项，打印一句 `console.warn` 并跳过这一项，不再 `Cannot read properties of null` 整段中断；`sc.js` 执行失败也只把失败原因塞进返回的 `info`（`console.warn` 一并记一句），不抛出、不中断同一批的后面场景。用真实老提交验证过：`7436ba1`（早于经济舱 / 奇观功能）的页面完全没有 `cabin-class` 控件，`DEFAULTS` 里照常带着这个键，`shots` 照样能跑完并出截图。给 `--baseline` / `--chain` 这类跨版本对照腾出了「同一份场景表两边都能用」的前提，不用再像性能工程师第 6 波那样现场写一份容错副本（`tmp/perf-w6/w6_patch_scen.py`，没有进仓库）。
 - **截图并排对照 / 量亮度 / 逐像素求差（DX-05 / DX-07 / DX-08）**：`node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]`，把多张截图拼成一张，每张左上角标文件名（父目录/文件名，便于区分不同批次的同名场景）；不给 `--crop` 就是整图并排，给了就先裁剪再按 `--zoom` 用最近邻放大（不模糊，专门给锯齿 / 闪烁这类像素级问题用）。**`--out` 同样相对仓库根解析**（也支持绝对路径）。泛化自 `handoff/T35-crop.py`（Python + Pillow），改用 Node + Canvas2D（借一次性 headless 页面做合成，复用 `lib/chrome.mjs` 找 `chrome.exe` 的逻辑，但不需要真实 GPU）避免依赖本机 Python 环境。
-  `--measure x,y,w,h`（可重复，DX-07）：按原图像素（不受 `--crop` / `--zoom` 影响）输出每张图该区域的 Rec.709 luma（`0.2126R+0.7152G+0.0722B`，0–255，公式与 `handoff/T08-stats.py` 一致）均值与 p99，`--json` 改成打印 JSON；有 `--measure` 时 `--out` 不再是必填，可以只量亮度不出拼图（省得再手写 Python + PIL 脚本，见 `research/ART_REVIEW_wave6.md` 末尾「开发体验反馈」）。
-  **`--diff <图2> [--threshold 8] [--heatmap 差异.png] [--json] <图1>`（DX-08）**：<图1>（位置参数）与 `--diff` 的值（<图2>）必须尺寸相同，按 `(|ΔR|+|ΔG|+|ΔB|)/3`（0–255）算每个像素的差异幅度，输出均值 / p99 / 超过 `--threshold`（默认 8，和 T08.md 验收表「差 > 8 的像素」同一口径）的像素占比；`--heatmap` 额外写一张假彩色差异图（黑 = 无差异，过阈值变黄，2 倍阈值封顶到红），比读一堆数字更快看出「差异到底在画面哪里」。
+  `--measure x,y,w,h`（可重复，DX-07；DX-11 补齐更多统计量）：按原图像素（不受 `--crop` / `--zoom` 影响）输出每张图该区域的一整套统计：`mean`/`p99`（Rec.709 luma，`0.2126R+0.7152G+0.0722B`，0–255，公式与 `handoff/T08-stats.py` 一致）、`meanR`/`meanG`/`meanB`（三通道均值，判断偏色比只看 luma 直接）、`meanSaturation`（HSL 饱和度 0–100，判断「灰蒙蒙」还是「过饱和」）、`adjacentDiff`（相邻像素 luma 绝对差均值，水平 + 垂直一起平均——棋盘纹 / 锯齿指标，平滑渐变应接近 0）、`pctBright`/`pctDark`（luma ≥ 250 / ≤ 5 的像素占比，死白过曝 / 死黑欠曝的面积）、`maskedPixels`（见下面 `--mask`）。`--json` 改成打印 JSON；有 `--measure` 时 `--out` 不再是必填，可以只量数值不出拼图（省得再手写 Python + PIL 脚本，见 `research/ART_REVIEW_wave6.md` 末尾「开发体验反馈」）。
+  **`--diff <图2> [--threshold 8] [--heatmap 差异.png] [--mask x,y,w,h ...] [--json] <图1>`（DX-08；DX-11 加 `--mask`）**：<图1>（位置参数）与 `--diff` 的值（<图2>）必须尺寸相同，按 `(|ΔR|+|ΔG|+|ΔB|)/3`（0–255）算每个像素的差异幅度，输出均值 / p99 / 超过 `--threshold`（默认 8，和 T08.md 验收表「差 > 8 的像素」同一口径）的像素占比、`maskedPixels`；`--heatmap` 额外写一张假彩色差异图（黑 = 无差异，过阈值变黄，2 倍阈值封顶到红，`--mask` 排除的区域画成灰色），比读一堆数字更快看出「差异到底在画面哪里」。
+  **`--mask x,y,w,h`（可重复，DX-11）**：这个矩形（原图像素坐标，和 `--measure`/`--crop` 同一套坐标系）内的像素从 `--measure` 与 `--diff` 的统计里排除（例如遮住调试面板残留的一角、水印、小地图角标），不影响拼图 / 缩略图 / `--row`/`--col` 本身的像素内容，只影响算不算进统计。
+  **`--row y` / `--col x`（都可重复，DX-11）**：对每张输入图取第 `y` 行（或第 `x` 列）的整条像素曲线，人读模式只打印 min/max/mean（完整数组太长），`--json` 打印完整的 `{ image, row, width, r, g, b, luma }` 数组——找地平线附近的色带台阶、天空渐变有没有断层，比在截图上凭眼睛找准哪一行快。
+  **`--thumb N [--thumb-out 目录]`（DX-11）**：把每张输入图等比缩到最长边 = N 像素（默认双线性平滑，不是 `--zoom` 那种保留像素边界的最近邻——缩略图就是要靠模糊掉细节看整体剪影），写一张 `<原文件名>.thumbN.png`，默认写在原图同目录。剪影误读检查：远景的云团 / 岛屿 / 建筑轮廓缩到几十像素后还能不能一眼认出「这是什么」，是游戏美术常用的快速检验法，也呼应 3A 铁律「宁可小，不要糊」。
   **零回归判断的基准是「同一份代码跑两次」的噪声底，不是 0**：TAA、云的时间累积、海浪相位、翼尖颤动、随机闪电都会让同代码两次截图产生非零差异（前面「坑点」举过 low-sea-glint 平均差 7–9/255 的例子）。判断「这一版改动有没有引入真实差异」时，先量一次噪声底（改动前 vs 改动前，或用 `__voyage.freeze` 冻结后连拍两张——冻结后噪声底应该是 0，见上面 `flicker --step 0` 的验证），再和「改动前 vs 改动后」的数字比，明显超过噪声底才算数，不要直接看 mean/p99 是不是 0。
 - **定位专用探针（DX-08，泛化自 `handoff/T45-probe.mjs`）**：`node scripts/probe.mjs --port <端口> --scene '<JSON>' [--patch 文件.mjs] [--read '<JSON>' ...] [--out 目录] [--angle vulkan|d3d11] [--settle]`。应用一个场景 → 可选按 `--patch` 文件（导出 `PATCHES = [{ mat, replace, target? }, ...]`，`mat` 是 `window.__voyage` 下材质的点号路径，如 `"clouds.marchMat"`、`"outsideMat"`；`replace` 是若干 `[查找文本, 替换文本]`，按这个材质从未改动过的原始 `fragmentShader` 做精确替换）替换着色器片段 → 借 `clouds.pass` 内部共享的全屏三角形（`renderer.compileAsync`）等新程序真正编译完成（不是盲等几秒，也不会像直接同步渲染那样有卡死丢上下文的风险）→ 截图 → 按 `--read`（可重复）读回指定渲染目标区域的数值，坐标是目标自身分辨率下的像素坐标（不是屏幕坐标）。`target` 别名：`cloud` = 云历史缓冲、`outside` = 窗外 HDR（`hdrOutside`）、`exposure` = 曝光适应结果（`exposure.adapted.0`，2×1：左像素是三个 log2 亮度 + 倒影增益，右像素是色度），也可以直接给任意点号路径。
+  **`--patch` 编译 / 链接失败会直接报错退出（DX-11，C01 反馈）**：`renderer.compileAsync` 只保证「编译到 `KHR_parallel_shader_compile` 认为完成」，不检查链接是否成功——three.js 的链接错误检查（`WebGLProgram.js` 的 `onFirstUse`）要等这个材质真正被 `render()` 用过一次才会触发，`compileAsync` 不会主动调用它。以前的行为是：改坏的 `--patch` 编译 / 链接失败后，脚本毫无察觉地继续截图，拍出来的是一片点阵 / 乱码（GPU 用着不匹配的程序状态画的），得靠肉眼看截图才发现。现在 `compileWait` 在 `compileAsync` 之后补一次真正的 `render()`，再读 `renderer.properties.get(material).currentProgram.diagnostics`，`runnable === false` 就直接在 Node 侧抛出并带上 three.js 的 program/vertex/fragment 错误日志，不再悄悄出一张坏图。
 - **按 pass 的 GPU 计时（DX-08，收编自散落在各任务 `tmp/perf(-cloud)/passes.mjs` 的手工副本）**：`node scripts/passes.mjs --port <端口> [--only a,b] [--frames 30] [--rounds 3] [--baseline 端口] [--param k[=v]] [--wait-quiet]`，猴子补丁 `__voyage.clouds.pass.render`（所有全屏 pass 共用的同一个方法），用 `EXT_disjoint_timer_query_webgl2` 给每次调用包一个查询，按材质对象认出「窗外 / 云步进 / 云 resolve / 舱内合成 / 机翼 / 测光 / 曝光适应 / 曝光合成」。
   **按材质名识别并归类（DX-10）**：识别顺序是①`material.name`（three.js 材质自带字段，非空就直接用——目前仓库里还没有材质设置它，但以后哪个任务照建议给材质命名时这里立刻能用上，不用再改 passes.mjs）②已知的 `__voyage` 字段做对象身份匹配（窗外 / 云步进 / 舱内合成……，覆盖当前核心 pass）③**fragmentShader 里的 `#define` 常量名**兜底——认出 `CLOUD_STORM` / `CLOUD_HURRICANE`（PERF-10 计划里的雷暴 / 台风变体命名）、`WONDER_LAYER`、`CLOUD_CIRRUS`、`GROUND_DETAIL`、`CABIN_CLASS_ECONOMY`，新变体只要照这个约定用 `#define`/`#ifdef`，不用改 passes.mjs 就能被正确归类④bloom 的上 / 下采样材质没有存在 `window.__voyage` 上（对象身份够不着）也没有 `#define`，改按各自独有的 uniform 名（`uSrcTexel` / `uFalloff`）识别成 `bloom-down` / `bloom-up`（收窄了「其他」桶，此前 bloom 全部内部调用都堆在这里）；仍然认不出的才归「其他」。批渲用已有的 `__voyage.benchFrame`，不需要改 main.ts。
-  `--variants 文件.mjs`（导出 `VARIANTS = [[name, pairs], ...]`，和 `handoff/T37-variants-cost.mjs`、`handoff/W00-variants-cost.mjs` 的写法一致）：在 `--material`（默认 `clouds.marchMat`）上依次换上每个变体，等 `renderer.compileAsync` 真正编完、并检查这个材质的程序缓存数（`renderer.properties.get(mat).programs.size`）确实增加了（没增加就打印警告——量到的可能还是旧程序，W00 在坑点里踩过这个）。
+  `--variants 文件.mjs`（导出 `VARIANTS = [[name, pairs], ...]`，和 `handoff/T37-variants-cost.mjs`、`handoff/W00-variants-cost.mjs` 的写法一致）：在 `--material`（默认 `clouds.marchMat`）上依次换上每个变体，等 `renderer.compileAsync` 真正编完、并检查这个材质**真的切到了新程序**（没切换就打印警告——量到的可能还是旧程序，W00 在坑点里踩过这个）。**切换检测按 `renderer.properties.get(mat).currentProgram` 的对象身份判断（DX-11/12，PERF-12/TR07 反馈）**：原来按「程序缓存 Map 的 size 有没有涨」判断，撞上 cacheKey 巧合复用旧条目时会误报「没切换」（其实已经切了），改成直接比 `currentProgram` 是不是同一个对象——这正是 three.js 内部（`WebGLRenderer.setProgram`）自己判断「要不要走新程序」用的同一个字段，语义上更准。**编译 / 链接失败同样直接报错退出（DX-11，和 `probe.mjs --patch` 同一套 `diagnostics.runnable` 检查）**：以前一个变体改坏了，量出来的是「静默画点阵」那份坏程序的计时数字，看着像正常的性能数据，容易被当真用来判断优化有没有效果；现在编译 / 链接失败会带着 three.js 的错误日志直接中断，不会把坏数据混进对照表。
   量 `typhoon-bands` 的「云步进」时会顺带打印它更接近已知的哪一档（3.2 / 5.2 ms，见下面坑点，与代码无关），避免误判成回归。
   **测量锁 + 负载感知（DX-10）**：整段测量期间持「测量锁」（见下面「测量锁」），开始与每轮（每个场景）前采样一次 CPU 占用，超过 50% 打印警告；`--wait-quiet` 先等 CPU 降到 50% 以下再开始。
+- **node 直接跑 `src/*.ts` 离线单测的标准入口（DX-11，`scripts/lib/ts-resolve.mjs`，收编自 `handoff/T49-resolve.mjs`）**：`src/` 下的相对导入按仓库约定不带扩展名（`import { foo } from "./bar"`），但 node 原生的类型剥离（`--experimental-transform-types`）不会像 vite/tsc 那样自动补 `.ts` 后缀，直接跑会报 `ERR_MODULE_NOT_FOUND`。用法：`node --import ./scripts/lib/ts-resolve.mjs --experimental-transform-types --no-warnings <你的 .mts 脚本>`（在 `apps/voyage` 目录下跑）——它注册一个模块解析 hook，相对导入解析失败时补一个 `.ts` 后缀再试一次，其余情况原样交给下一个 resolver。已知在用：`handoff/T49-sim.mts` / `handoff/T49-test.mts`（T49 的航向 / 坡度曲线离线复现，导入 `src/*.ts` 不带扩展名，需要这个 hook）；`scripts/weather-stats.mts` 不需要这个 hook（它的导入本来就写了 `.ts` 扩展名），直接 `--experimental-transform-types` 即可，见下面「改天气场」一条。往后新的离线单测都用这一份入口，不用再各任务各自在 `handoff/` 下复制一份 resolve hook。
 - **离线 GLSL 检查**：`pnpm --filter voyage check:glsl`，不开浏览器，几秒内跑完，能抓住 GLSL 保留字、同一程序内的同签名函数重名、场景 / 窗外程序 sampler 数超 16（已用真实 GPU 交叉验证过一次，见 `handoff/DX.md`「返工记录」；当前各程序的实测用量见文首「硬约束速查表」的 sampler 表格——那张表由本工具生成，这里不重复写死数字，见下面坑点「窗外着色器的 sampler 已满」的 DX-09 校正），以及 `src/` 下有没有 CRLF 行尾（DX-05；仓库靠 `.gitattributes` 统一 LF，Windows 上脚本误写 CRLF 时 git 提交才会提示，这里提前到 check:glsl 里扫一遍并列出文件，见下面坑点「Windows 上 Python 写回源文件会变成 CRLF」），以及「硬约束速查表」里的 sampler 表格是否与实测一致（DX-09；`node scripts/lint-shaders.mjs --emit-table` 重新生成表格内容）。提交前跑一次比等冷编译报错快得多。`node scripts/lint-shaders.mjs --self-test` 单独测检查逻辑本身，不用起 vite。
 
 - **ANGLE 后端切换**：`dev-browser.mjs` 的 `shots` / `cold` / `bench` 都支持 `--angle d3d11|vulkan`，默认 `d3d11`（Windows 上与生产环境一致，**这是交付验收的口径，不要改**）。日常改代码想快速看效果，开一个专用的 vulkan 窗口：`node scripts/dev-browser.mjs cold --port <端口> --angle vulkan`或直接用桌面浏览器 `chrome.exe --use-angle=vulkan`（真冷启动能从约 100 秒降到几秒，见`research/DX_SHADER_COMPILE.md`）。vulkan 会藏住 D3D11 专属问题（sampler 上限 16 vs 32、FXC 编译暴涨、X3595 屏幕导数报错），**验收前一定要在默认 d3d11 上再跑一次**。
@@ -181,10 +195,13 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
     ["noBend", [{ file: "src/render/seats.glsl.ts", find: "if (ndv < 0.3) nn = normalize(nn + v * (0.3 - ndv));", replace: "" }]],
   ];
   ```
+  **`--variants` 会真的改动磁盘上的源文件（DX-11/12，PERF-13 反馈）**：`apply()` 是直接 `fs.writeFileSync` 改 `file` 指向的源码，跑完（或中途出错）才改回原样——**不要在正在改这个文件、或起着这个 worktree 的 dev server 的时候跑**：一是 vite 的文件监听会在改动瞬间触发一次没意义的 HMR / 重新构建（浪费一轮编译，某些情况下还可能和 `--variants` 自己的替换 / 还原时序打架，读到「改了一半」的文件）；二是如果这时候你自己也在编辑这个文件，`--variants` 还原时会用它读到的「跑之前的原文」整段覆盖回去，把你手上没保存 / 没提交的改动冲掉。安全的做法：单独开一个不跑 dev server 的 worktree（或临时 `git stash` 掉未提交的改动）专门跑 `--variants`，跑完再切回来。
   **`--wait-quiet`（DX-10）**：测量前先等 CPU 占用降到 50% 以下再开始（超时也会继续，不无限等）；每轮开始前也会采样一次 CPU 占用，超过 50% 打印警告（不阻塞，只是提醒这一轮的数字可能不可信）。
   **`--ledger`（DX-10，仅默认流程）**：测完把这次的程序 min/median/MAD 追加一行到编译预算账本（见下面「编译预算账本」），带上当前 git 提交和日期。
   **测量锁**：整段测量（含 `--baseline` / `--chain` / `--variants`）持锁，见下面「测量锁」。
+  **`instructionSlots` / `dclTemps`（DX-11/12，PERF-12/TR07 反馈）**：程序表的备注列现在带 `slots=N temps=M`——从 fxc 的反汇编清单（`/Fc`）里抠出来的两个**确定性**指标（同一份 HLSL 编出来的数字不随机器负载变，不需要像 `fxcMs` 那样跑多轮取 min），先判断「冷编译变慢是不是常量循环被展开了」：被展开的循环通常伴随 `instructionSlots` 暴涨（循环体乘上循环次数）、`dclTemps` 也可能跟着涨；两个数字都没怎么变但 `fxcMs` 涨了很多，大概率是别的原因（优化器路径、寄存器分配……），不用一上来就 `--bisect`/`--variants` 排查是不是哪个循环被展开了。`--out` 的 JSON 里每个程序也带这两个字段。
 
+- **着色器零回归对照（DX-11/12，收编自 `handoff/PERF-13-parity.mjs` 与 `src/rail/shader-parity.mjs`）**：`node scripts/shader-parity.mjs --base <目录|提交> [--only id1,id2]`。离线枚举两棵树的全部程序（`collectPrograms`，不开浏览器），逐个 id 比较：原始文本逐字相同就过；不同就用 `glslangValidator -E` 做**真预处理**（宏展开 + 条件编译 + 去掉注释/空白差异）再比一次，预处理后相同也算过（常见于只是 `#ifdef` 钩子本身文本不同，两边编译到的代码其实一样，比如火车模式在共用模块里留的 `#ifdef RAIL`）；预处理后仍不同才报差异，打印第一处不同的行（含上下文）。`--base` 传目录（另一个 voyage 应用根，或含 `apps/voyage` 的仓库根）时直接用；传 git 提交时在 `tmp/shader-parity-base`（`--workdir` 可改）建一次性对照 worktree，和 `shader-budget.mjs --chain` 同一套复用约定。只在本分支存在的程序（新增变体）不算差异，只在对照存在的（程序被删了）算差异。**`src/rail/shader-parity.mjs`（TR02/TR03 写的「文本展开版」，用 `resolveConditionals` 的简化 `#ifdef` 匹配代替真预处理）不在本任务的 `scripts/` 归属范围内，原样保留没有删除或改成转发，但往后新任务请改用这里这份**（真预处理更准，且比全部程序而不是写死几对）。
 - **编译预算账本（DX-10）**：`research/compile-ledger.json` 是权威数据源（起点两行抄自 `research/PERF_REPORT_wave6.md` §3.1 的性能工程师第 6 波复测），`shader-budget.mjs --ledger` 直接追加一行；`node scripts/compile-ledger.mjs`（等价于 `--emit-md`）把账本渲染成 Markdown 表格，方便贴回 PERF 报告或这份 README（`--programs cloud-march,outside-default` 只看这几列，不然程序多了表格会很宽）；`--list` 逐行打印条目摘要（日期、提交、备注、程序数）。账本不区分「哪一波」，靠 `date` / `commit` 两列自己认；离线不可信的程序（`exposure-meter`）账本里也会跟着标注，`compile-ledger.mjs` 渲染时打 `†` 角标并在表尾加说明。
 
 - **测量锁（DX-10）**：多个代理并行开发时，离线 FXC / 真冷启动 / 按 pass 的 GPU 计时会互相污染彼此的结果（第 6 波性能工程师开发体验反馈：「希望有…一个『测量锁』：性能工程师测量时，其他代理暂停编译 / 截图。这次靠协调者口头通知，还是撞上了一次不明来源的 `cc1`」）。约定（见 `scripts/lib/measure-lock.mjs`）：
@@ -267,13 +284,28 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   坑一：`check:glsl` 的「同名函数」检查不展开条件编译，`#ifdef A` / `#else` 里各写一份同名函数会被报重名——在**函数体里**分 `#ifdef`（见 `cloudStormsOn`）。
   坑二：`lint-shaders` 的条件展开器（sampler 统计用）只认单个 `defined(X)`，不认 `#if defined(A) || defined(B)`；需要「任一」时由 JS 端多加一个宏（本任务的 `CLOUD_WEATHER`）。
   识别：`node handoff/PERF-10-preproc.mjs` 用 glslangValidator `-E` 真预处理，逐程序列出雷暴 / 台风标识符出现次数，默认程序应只剩 uniform 声明。
+- **舱内程序的离线 FXC 时间不跟指令数、也不跟调用点数成正比**（PERF-12）：`shader-budget --variants` 消融 scene-default，
+  整个 `shadeSeat` 换成常数 −42%（7.8 → 4.5 s），可它里面任何一块（皮纹、缝线、胡桃木、高光、法线、AO、光照）单独去掉都在 ±10% 噪声里；
+  去掉 `shadeWall` / `shadeReveal` 反而**更慢**（+10–17%）。把座椅部件、四点法线、四道缝线、三路高光都改成「常数 + uLoopGuard」循环
+  （每个调用点只内联一份），fxc 指令槽 7899 → 约 6900，编译时间只 −5%（经济舱 −16%）；把 `shadeSeat` 挪到窗板分支之后调用也没用。
+  结论：这个程序的 FXC 时间主要由 `shadeSeat` 这一整块和主函数其余部分「叠在一起」决定，零碎的循环化只能拿回几个百分点，
+  要大幅下降得把座椅着色搬出这个程序（单独一个 pass），或者把各层表面的光照收成一个调用点（按层循环）。
+  识别 / 工具：`fxc /O1 /Fc` 输出的 `Approximately N instruction slots used` 与 `dcl_temps` 是确定性的（不受负载影响），
+  可以先拿它判断「常量循环有没有被展开」，编译时间仍要在安静时交替测。本次顺手找到三处还在被展开的常量循环：
+  倒影光点（`RF_NPT`，20 份 `rfPoint`）、窗上水线（`dk = −2..2`，5 份含 4 次 vnoise 的循环体）、内衬二分（7 份 `sdFunnel`），都改成了 `+ uLoopGuard`。
+- **窗外程序的罕见光学 / 天幕层奇观拆成按需变体后，真冷启动 13.4 → 11.1 s**（PERF-13）：两者平时不出现，却一直编在窗外默认程序里（离线 FXC 消融：去掉宝光 / 影子 / 晕 −15%、去掉天梯 / 建木 −20%、两者一起 −34~38%；太阳圆盘 + 绿闪只有 −2%，留在默认程序）。拆成 `OUTSIDE_OPTICS` / `OUTSIDE_WONDER` 后默认程序离线 FXC 约 5.8 s（同轮 master 8.8–11 s），组合只留 `""`、`OW`（巡航，首帧后后台预编，冷缓存约 10–12 s 编好）、`DOW`（低空，和原低空细节变体同一程序）、`DROW`（火车，同原火车变体），三个变体预处理后与改动前的对应程序逐字相同（`node handoff/PERF-13-parity.mjs <master 的 apps/voyage>`）。
+  坑一：**本机影子是纯物理的，只要下面有云、太阳在上面就开着**——白天在云上几乎总要 `OW`，所以 `OW` 必须预编而不是等「稀有」时才编；判断「看不看得出」按着色器覆盖公式取上界（`optics.ts` 的 `opticsWanted`：压暗 ≤ 0.4 × 360 m² / 半影半径² × 0.7，< 0.2% 当看不出），日落时半影大，默认程序就够。
+  坑二：**关掉真实地理数据时 main.ts 原来直接画 `outsideMat`**，拆变体后这条路会丢掉光学与奇观——现在一律走 `groundDetail.pick`（高度传 Infinity）。
+  坑三：挪 uniform 声明的顺序会让「预处理后逐字相同」失败（常量缓冲布局也跟着变）：包 `#ifdef` 时保持原来的声明顺序。
+  坑四：零回归截图里，夜景偶尔整窗发白是**翼尖频闪**被冻结在亮相（与窗外 pass 无关）；逐像素对比夜景前设 `__voyage.wingDebug.strobe = 0`（`handoff/PERF-13-shots.mjs` 已带）。
+  识别：`check:glsl` 的「窗外默认程序不含罕见光学 / 天幕层奇观代码」一节；`__voyage.groundDetail.variantStatus` 看想要 / 实际画的变体与各变体编译状态。
 
 <a id="pit-cloud"></a>
 ### 云
 
 - **天气渐变不能走 `clouds.applyPreset` / `snap()`**（T19b）：会清掉时间累积，并让云影图整张在一帧里重建（3–8 ms）；连续航程每 0.25 s 推进一次云量，就会变成持续卡顿。修法：`clouds.setParams(p, true)`（gradual），云影图按后台分片节奏跟上；借遮挡的硬切才用 `setParams(p, false)`。
 - **占据网格只保护 ±128 km 内的雷暴 / 台风**（T19b）：网格外照样逐点求值，4 个单体在 300 km 外仍 +1–1.5 ms/帧，台风在 750 km 外 +2–3 ms/帧（`handoff/T19b-storm-cost.mjs`）。天气驱动因此只在 280 km（雷暴）/ 600 km（台风）内摆放；以后要放得更远，先在云程序里给网格外的雷暴 / 台风做 LOD。
-- **改天气场（`WeatherField`）的气候倾向之前和之后都要跑 `scripts/weather-stats.mts`**（WX10）：门禁是 `node --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi`（6 个种子全部通过，约 1.5 分钟，不开浏览器；不加 `--multi` 只跑一个种子并打印完整统计表，约 15 s）。它按月份和地区统计云型、雷暴、锋面、台风（100 年样本），对照气候目标区间断言，退出码非 0 就是失败；每条断言都写了依据。T19b 的天气场就是在没有这类统计的情况下，把 1 月日本海做成了 63% 晴空、把台风做成了每年 59 个。
+- **改天气场（`WeatherField`）的气候倾向之前和之后都要跑 `scripts/weather-stats.mts`**（WX10；DX-11 挂进了 `package.json`）：门禁是 `pnpm --filter voyage weather-stats -- --multi`（等价于 `node --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi`，6 个种子全部通过，约 1.5 分钟，不开浏览器；不加 `--multi` 只跑一个种子并打印完整统计表，约 15 s）。它按月份和地区统计云型、雷暴、锋面、台风（100 年样本），对照气候目标区间断言，退出码非 0 就是失败；每条断言都写了依据。T19b 的天气场就是在没有这类统计的情况下，把 1 月日本海做成了 63% 晴空、把台风做成了每年 59 个。
   写新断言时有两个坑（WX10 审查）：①只按一个种子调通的门限会随种子翻转，比如 4 年样本里「台风 8 月最多」20 个种子有 7 个失败，所以必须用 `--multi` 验；②门限要让改前的代码失败，否则分不出改前改后（「华北七下八上晴空 ≤ 45」改前就能过，已换掉）。
 - **粗略海陆轮廓 `coarseLand` 分不出日本海一侧和太平洋一侧**（WX10）：本州是一条沿太平洋岸画的胶囊，东京落在中轴线上，新潟、金泽、秋田都算作海。拿它按「离海岸多远」判断寒潮阴雪时，北海道西部变成晴空，关东反而阴雪。修法：陆地按手画的脊梁折线 `JAPAN_SPINE` 分两侧。识别：打印 `surgeGeo(lat, lon, true)`，逐个核对札幌、新潟、东京、广岛这类城市在哪一侧。
 - **值噪声集中在 0.5 附近，不能拿阈值直接当「时间比例」**（WX10）：三维 `vnoise` 的 p10 ≈ 0.25、p90 ≈ 0.75；z 取半整数的切片更窄，p10 ≈ 0.30、p90 ≈ 0.70。要表达「某件事有 60% 的时间发生」，先用 `rank()` 拉伸，再比较「活跃度 − rank」。
@@ -457,6 +489,16 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **窗板开口边抗锯齿的那一圈不能退回侧壁色**（T47）：`inPane` 在 0..1 之间的像素，视线其实穿进了开口、`marchFunnel` 没打到内衬，`reveal` 的默认值是侧壁色；夜里开灯时侧壁亮、窗外黑，窗板边一圈带台阶的白线（和上一条叠在一起）。现在这一圈取开口边上的密封条（仍只调用一次 `shadeReveal`）。识别：白线贴着窗板开口内侧，开灯的夜景最明显。
 - **直射光穿过窗板要按入射角打折**（T47）：原来 `eSunNormal` 只乘常数 0.85，太阳高、几乎贴着窗面照进来（入射角 80° 以上）时，窗洞下缘的内衬被照成死白（看后方约 30% 的像素到 255）。三层亚克力 6 个界面的菲涅尔透射在 83° 只剩正射的约 4%。现在乘 `paneSunT(sunC.z)`（cabin.glsl.ts）。
 - **shadeWall 的细颗粒曾把亚麻压纹的斜率整个覆盖**（T47）：`slope = …` 写在 `slope += 亚麻` 之后，fA > 0（几乎总是）时压纹的法线扰动一点不剩，默认坐姿正对侧壁读成光面白板。累加量一律用 `+=`；加新的一层扰动时 grep 一下同一变量有没有别处用 `=` 赋值。
+- **舱内合成的 GPU 大头是「算完再乘 0」**（PERF-12）：窗板开口里的像素约占画面三分之一，原来侧壁（`shadeWall`）、内衬
+  （`marchFunnel` 穿过开口时一路走满 24 步）、遮光板（`shadeShade`）都照算一遍再按 0 权重混掉；座椅完全挡住的像素也照算窗板效果。
+  现在 `scene.ts` 先算合成权重（inBezel / inPane / shaded / seat.cov），权重为 0 的层不着色，调试 1–4 仍全算。GPU 消融里「去掉某一层省 0.03–0.05 ms」
+  其实大半是这种白算。以后往舱内加层：**先想清楚它的权重什么时候为 0，在分支里跳过**；新加的判断要保证跳过时结果逐像素不变
+  （`node handoff/PERF-12-ab.mjs --base <对照端口>` 同页冻结换着色器，`handoff/PERF-12-abdiff.sh` 求差，噪声底应为 0）。
+- **倒影白天也在付钱**（PERF-12）：倒影的跳过条件「上界 < 窗外 0.3%」里含对面舷窗的亮度（≈ 本窗窗外的一半），白天永远不成立，
+  正午也要算完整个倒影（约 0.11 ms）。实测正午关掉倒影，差异是对面舷窗的两团淡影（≤ 2–4/255），看得出一点「玻璃感」，所以没改跳过条件，
+  改成倒影内部省：座位列由近到远做前后合成（被近列挡满就不算远列和整个背景），视线高过这一列能画的最高处就跳过，光点只在朝上的射线上算。
+- **点星在白天也会查 3×3 星表格**（PERF-12）：窗外 pass 只要是天空就在 alpha 里标「看得见星」，正午整扇窗每个像素都在算 `starPoints`。
+  现在舱内按「窗外亮度 × 像素张角² < 6e-7」门限（天狼星峰值的 200 倍）才算，白天和黄昏亮的那半边跳过，夜景逐像素不变。
 
 <a id="pit-wonder"></a>
 ### 奇观
@@ -562,3 +604,10 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   很容易被误判成「这一批改动全炸了」。
   修法：对照 / 临时工作区一律建在仓库的 `tmp/` 下（例如 `tmp/<任务>-rev-merge`），不要放 scratchpad。
   识别：`check:glsl` 里全部程序一起失败、且看不到具体的语法错误内容时，先怀疑路径长度，不要先怀疑代码本身。
+- **测量锁按「脚本所在 worktree 的根」取路径，跨 worktree 不互斥**（PERF-12，**DX-11/12 已根治**）：`scripts/lib/measure-lock.mjs` 的锁目录原来是
+  `path.join(脚本所在仓库根, "tmp/measure.lock")`，在 worktree 里跑就落在该 worktree 自己的 `tmp/` 下，别的代理（另一个 worktree 或主仓库）看不到，
+  等于没锁。识别：`ls D:/Code/opus-test/.claude/worktrees/*/tmp/measure.lock` 能看到好几把（老版本才会这样，现在只会有一把）。
+  修法：`mainRepoRoot()` 用 `git rev-parse --path-format=absolute --git-common-dir` 找主仓库的 `.git`（worktree 与主仓库共享同一个 `.git`），
+  取上一级就是主仓库根，锁统一落在那里，所有 worktree 共用同一把；找不到（不是 git 仓库 / 没装 git）时退回原来的行为，不阻塞脚本。
+- **GPU 计时也会被别的代理污染**（PERF-12）：`passes.mjs` 同一份代码两次测舱内合成 0.317 / 0.350 ms（`nvidia-smi` 显示别的进程占 GPU 75%）。
+  判 0.01–0.03 ms 量级的差异要 `--frames 60 --rounds 4` 以上、变体表首尾各放一次 base 看漂移，或 `--baseline` 同场景交替。

@@ -122,6 +122,9 @@ async (page) => {
     const info = await page.evaluate(async (sc) => {
       const v = window.__voyage;
       document.getElementById("panel").classList.add("hidden");
+      // DX-12（与 scenarios.mjs 的 applyScene 同步）：默认关闭连续航程与「时间流速」，避免上一个场景串味
+      if (v.director && typeof v.director.setActive === "function") v.director.setActive(sc.continuousJourney === true);
+      if (v.state) v.state.playRate = typeof sc.playRate === "number" ? sc.playRate : 0;
       const set = (id, val) => {
         const el = document.getElementById(id);
         if (el.type === "checkbox") {
@@ -146,18 +149,21 @@ async (page) => {
       v.state.wetness = 0;
       v.state.turbulence = 0.03;
       // head：数字只设 z（向后兼容），[x, y, z] 三元组可以额外表达横向座位偏移（headX）
-      let hx = 0;
-      let hy = 0.02;
-      let hz = -0.3;
-      if (Array.isArray(sc.head)) {
-        hx = sc.head[0] ?? 0;
-        hy = sc.head[1] ?? 0.02;
-        hz = sc.head[2] ?? -0.3;
-      } else if (typeof sc.head === "number") {
-        hz = sc.head;
+      // DX-12（与 scenarios.mjs 同步）：给了 p["view-preset"] 又没给 sc.head 时不覆盖——setView() 已经摆好了
+      const viewPresetGiven = sc.p && sc.p["view-preset"] !== undefined;
+      if (sc.head !== undefined || !viewPresetGiven) {
+        let hx = 0;
+        let hy = 0.02;
+        let hz = -0.3;
+        if (Array.isArray(sc.head)) {
+          hx = sc.head[0] ?? 0;
+          hy = sc.head[1] ?? 0.02;
+          hz = sc.head[2] ?? -0.3;
+        } else if (typeof sc.head === "number") {
+          hz = sc.head;
+        }
+        Object.assign(v.head, { tx: hx, ty: hy, x: hx, y: hy, tz: hz, z: hz });
       }
-      Object.assign(v.head, { tx: hx, ty: hy, x: hx, y: hy, tz: hz, z: hz });
-      if (sc.offset) v.cloudUniforms.uCloudOffset.value.set(sc.offset[0], sc.offset[1]);
       // 天气要在位移设好之后重新摆放
       if (sc.p.weather) set("weather", sc.p.weather);
       if (sc.ground) {
@@ -178,6 +184,11 @@ async (page) => {
       const jsOut = sc.js ? await new (async () => {}).constructor("v", sc.js)(v) : undefined;
       // 云步进变体（PERF-10，与 scenarios.mjs 的 applyScene 同步）：雷暴 / 台风 / 卷云 / 奇观变体编好之前不截图（最多 120 s）
       for (let i = 0; i < 480 && v.clouds && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250));
+      // 窗外变体（PERF-13，与 scenarios.mjs 同步）：先跑两帧选出想要的变体，罕见光学 / 天幕层奇观变体编好之前不截图（最多 120 s）
+      for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r));
+      for (let i = 0; i < 480 && v.groundDetail && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250));
+      // DX-12（与 scenarios.mjs 同步）：云偏移放在所有变体都等完之后最后再摆一次，不然编译期间云没冻结会继续跑
+      if (sc.offset) v.cloudUniforms.uCloudOffset.value.set(sc.offset[0], sc.offset[1]);
       v.snapAll();
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
       const info = document.getElementById("info").textContent;

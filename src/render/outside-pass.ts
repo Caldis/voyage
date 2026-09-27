@@ -18,6 +18,7 @@ import { WONDER_SKY_COMMON } from "./wonder-sky.glsl";
 import { OPTICS_COMMON } from "./optics.glsl";
 import { RAIL_FAR_COMMON, RAIL_FAR_HIT } from "../rail/far-view.glsl";
 import { railFarUniforms } from "../rail/far-view";
+import { opticsWanted } from "./optics";
 
 /**
  * 窗外 pass（SC-5）：只算「穿过本窗窗板看出去」的 HDR 辐亮度（天空、太阳月亮星星、云的合成、真实地面、海面、
@@ -66,7 +67,11 @@ ${GROUND_DETAIL_COMMON}
 ${INLAND_WATER_COMMON}
 ${rail ? RAIL_FAR_COMMON : ""}${TERRAIN_SHADING_COMMON}${rail ? RAIL_FAR_HIT : ""}
 ${HAZE_COMMON}
+// 天幕层奇观（W01 / W01b）与罕见光学（T17 的宝光 / 本机影子 / 幻日 / 22° 晕）只编进 OUTSIDE_WONDER / OUTSIDE_OPTICS 变体（PERF-13），
+// 默认程序（启动批次、冷启动关键路径）预处理后不含它们；太阳圆盘 + 绿闪（opticsSunDisk）每个程序都有
+#ifdef OUTSIDE_WONDER
 ${WONDER_SKY_COMMON}
+#endif
 ${OPTICS_COMMON}
 
 // 窗外辐亮度。重函数在这里各只有一个调用点（SC-3）：真实地面上的海洋和开阔海面共用同一个 oceanRadiance，
@@ -174,8 +179,11 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   // 上面三条路径取 LUT 时就带上了，不需要逐像素步进；谷地雾贴着地形，在上面 groundFinish 之前合成。
   // 所有路径（真实地面、开阔海面、天空）都会经过这一行，调试 21–23 的提前返回除外。
   // 天幕层奇观（W01 天梯 / 建木，render/wonder-sky.glsl.ts）：画在背景上、云之前合成，所以会被云挡住；
-  // 线在地面 / 海面之前才可见（下半截沉到地平线以下时由 tGround 截掉）。奇观模式关时第一行就返回
+  // 线在地面 / 海面之前才可见（下半截沉到地平线以下时由 tGround 截掉）。奇观模式关时第一行就返回。
+  // 只在 OUTSIDE_WONDER 变体里（PERF-13）：uWonderOn = 0 时两个程序逐像素相同，选哪个由 wantedOutsideKey 决定
+#ifdef OUTSIDE_WONDER
   L = wonderSky(L, rd, hitGround ? tGround : 1e9);
+#endif
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
   L += opticsSunDisk(rd, hitGround);
   // 地形挡住它后面的云（T38，clouds.glsl.ts 的 cloudBeforeGround）：云步进不知道地形，只去掉地面之后那一段的云
@@ -191,7 +199,8 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
 #else
   if (onGround) cloud = cloudBeforeGround(cloud, cloudBufferDepth(uClouds, gl_FragCoord.xy / uResolution), tGround);
 #endif
-  // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光（T17：云的光乘宝光 / 本机影子，再加卷云里的幻日和晕）
+  // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光（T17：云的光乘宝光 / 本机影子，再加卷云里的幻日和晕；
+  // 这两项只在 OUTSIDE_OPTICS 变体里，默认程序的 opticsComposite 只剩前两项，见 optics.glsl.ts）
   return opticsComposite(L, cloud, rd);
 }
 
@@ -243,9 +252,62 @@ export function createOutsideMaterial(sharedUniforms: Record<string, THREE.IUnif
   });
 }
 
-/** 火车远景变体（TR03）的片元源码：默认源码 + rail/far-view.glsl.ts 的两段（编译时再加 #define GROUND_DETAIL / RAIL） */
+/** 火车远景变体（TR03）的片元源码：默认源码 + rail/far-view.glsl.ts 的两段（编译时再加 outsideVariantDefines("DROW") 的宏） */
 export function outsideRailFragment() {
   return outsideFragment(true);
+}
+
+/**
+ * 窗外程序的变体（PERF-13，照 PERF-10 云步进的写法）。键 = 特性字母：
+ * D 低空细节（GROUND_DETAIL，T02）、R 火车远景（RAIL，TR03，源码另拼 rail/far-view.glsl.ts）、
+ * O 罕见光学（OUTSIDE_OPTICS：宝光 / 本机影子 / 幻日 / 22° 晕，T17）、W 天幕层奇观（OUTSIDE_WONDER：天梯 / 建木，W01 / W01b）。
+ *
+ * 只有四个组合真的存在（组合矩阵的取舍见 handoff/PERF-13.md）：
+ * - ""     默认：启动批次里编，冷启动的关键路径。不含 O / W，太阳圆盘 + 绿闪照旧
+ * - "OW"   巡航（4 km 以上）时有罕见光学或天幕层奇观：首帧后后台预编（O、W 不再拆开——两者都常在巡航出现，拆开只会多一个程序）
+ * - "DOW"  低空（4 km 以下）：和改动前的低空细节变体是同一个程序（O / W 总是带着，低空细节本来就是按需后台编的，不在关键路径上）
+ * - "DROW" 火车：同上，和改动前的火车变体是同一个程序
+ * 选哪个只由 wantedOutsideKey 决定；没编好时按 OUTSIDE_FALLBACK 退到已编好的（O / W 的效果暂时不画，不会画错）。
+ */
+export type OutsideKey = "" | "OW" | "DOW" | "DROW";
+export const OUTSIDE_KEYS: readonly OutsideKey[] = ["", "OW", "DOW", "DROW"];
+const OUTSIDE_FEATURE_DEFINES: Record<string, string> = { D: "GROUND_DETAIL", R: "RAIL", O: "OUTSIDE_OPTICS", W: "OUTSIDE_WONDER" };
+
+/** 变体键 → three 的 defines（lint-shaders.mjs / shader-budget.mjs 离线枚举也用这一份，不要另写） */
+export function outsideVariantDefines(key: OutsideKey): Record<string, number> {
+  const d: Record<string, number> = {};
+  for (const c of key) d[OUTSIDE_FEATURE_DEFINES[c]] = 1;
+  return d;
+}
+
+/** 变体键 → 片元源码（不含 defines；带 R 的拼火车远景的两段） */
+export function outsideVariantFragment(key: OutsideKey): string {
+  return outsideFragment(key.includes("R"));
+}
+
+/** wantedOutsideKey 的输入：都是这一帧的状态，main.ts 不需要另外算 */
+export interface OutsideWant {
+  /** 低空细节开着（离地高度 < 4 km 打开、> 4.5 km 关闭的滞回，由 GroundDetailVariant 维护） */
+  detail: boolean;
+  /** 火车模式 */
+  rail: boolean;
+  /** 共用的 uniforms：从里面读罕见光学（opticsWanted）与天幕层奇观（uWonderOn）的当前值 */
+  uniforms: Record<string, THREE.IUniform>;
+}
+
+/**
+ * 这一帧想画哪个窗外变体，以及它没编好时依次退到哪些（只退到已编好的，退的时候不触发编译）——
+ * **选变体只由这一个函数决定**（PERF-10 教训：预编、预告、每帧选择各写一份判断会互相打架）。
+ * 低空 / 火车的变体总带 O、W；巡航时罕见光学有看得出的贡献（opticsWanted）或天幕层奇观在场（uWonderOn）才要 OW。
+ * 退路：火车 → 低空细节（沿用 TR03 的过渡）→ 带 O / W 的（只在确实要它们时）→ 默认。退到默认时 O / W 的效果暂时不画。
+ */
+export function wantedOutsideKey(w: OutsideWant): { key: OutsideKey; fallback: OutsideKey[] } {
+  const wonder = ((w.uniforms.uWonderOn?.value as number | undefined) ?? 0) > 0.5;
+  const extras = wonder || opticsWanted(w.uniforms);
+  const tail: OutsideKey[] = extras ? ["OW", ""] : [""];
+  if (w.rail) return { key: "DROW", fallback: ["DOW", ...tail] };
+  if (w.detail) return { key: "DOW", fallback: tail };
+  return extras ? { key: "OW", fallback: [""] } : { key: "", fallback: [] };
 }
 
 /**
@@ -276,6 +338,8 @@ class LazyVariant {
     private readonly target: THREE.WebGLRenderTarget | null,
     private readonly defines: Record<string, number>,
     private readonly fragmentShader: string,
+    /** 材质名（passes.mjs 按 material.name 归类；空 = 不设，按 #define 兜底归类） */
+    private readonly name = "",
   ) {}
 
   prepare(renderer: THREE.WebGLRenderer) {
@@ -292,6 +356,7 @@ class LazyVariant {
       depthWrite: false,
       toneMapped: false,
     });
+    if (this.name) m.name = this.name;
     const scene = new THREE.Scene();
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
@@ -318,6 +383,9 @@ class LazyVariant {
       .catch(() => {
         this.state = "failed";
       })
+      .then(() => {
+        if (this.state === "failed") console.warn(`窗外变体 ${JSON.stringify(this.defines)} 编译失败，保持已有的变体`);
+      })
       .finally(() => {
         this.compileMs = performance.now() - t0;
         geometry.dispose();
@@ -333,54 +401,98 @@ class LazyVariant {
  *
  * 火车远景（TR03）：火车模式下改用另一个变体（GROUND_DETAIL + RAIL，源码多拼了 rail/far-view.glsl.ts），
  * 第一次进入火车模式时才在后台编译；编好之前沿用低空细节变体 / 默认材质（火车模式下飞机的窗外程序会把近处画成海，只是过渡几秒）。
+ *
+ * PERF-13 起它管全部四个窗外变体（键见 OutsideKey，选择见 wantedOutsideKey）：base 就是默认程序（""），
+ * 罕见光学 + 天幕层奇观的 "OW" 在首帧后 PREWARM_AFTER_FRAMES 帧开始后台预编（冷缓存下约 10 s 编好，
+ * 之前宝光 / 影子 / 幻日 / 晕与天幕层奇观暂时不画）；想要它时没开始编的也立即开始。类名沿用（main.ts / 调试句柄 __voyage.groundDetail）。
  */
 export class GroundDetailVariant {
   static readonly ENABLE_BELOW_KM = 4;
   /** 高于这个高度切回默认材质（带一点滞回，免得在门限附近来回切） */
   static readonly DISABLE_ABOVE_KM = 4.5;
-  private readonly detail: LazyVariant;
-  private readonly rail: LazyVariant;
+  /** 首帧后多少帧开始后台预编 OW（让启动批次和云的天气变体预编先走；约 1–2 s） */
+  static readonly PREWARM_AFTER_FRAMES = 90;
+  private readonly variants = new Map<OutsideKey, LazyVariant>();
   private active = false;
+  private frames = 0;
+  /** 这一帧想要的变体 / 实际画的变体（调试、回归等待用） */
+  wanted: OutsideKey = "";
+  shown: OutsideKey = "";
 
   /** target：变体真正要画进去的目标。ANGLE 的 D3D 后端按链接时绑定的帧缓冲生成输出布局，绑错会在首次使用时同步重编 */
   constructor(
     private readonly base: THREE.ShaderMaterial,
     target: THREE.WebGLRenderTarget | null = null,
   ) {
-    this.detail = new LazyVariant(base, target, { GROUND_DETAIL: 1 }, base.fragmentShader);
-    this.rail = new LazyVariant(base, target, { GROUND_DETAIL: 1, RAIL: 1 }, outsideRailFragment());
+    for (const key of OUTSIDE_KEYS) {
+      if (key === "") continue;
+      // OW 取名「窗外」：和改动前的默认程序是同一份代码，passes.mjs 归进同一个桶才可比；D 系列按 GROUND_DETAIL 宏归类（和改动前一样）
+      this.variants.set(key, new LazyVariant(base, target, outsideVariantDefines(key), outsideVariantFragment(key), key === "OW" ? "窗外" : ""));
+    }
   }
 
-  /** 每帧调用：给出离地高度（km）、是不是火车模式，返回这一帧该用的材质 */
+  private materialOf(key: OutsideKey): THREE.ShaderMaterial | null {
+    if (key === "") return this.base;
+    const v = this.variants.get(key)!;
+    return v.state === "ready" ? v.material : null;
+  }
+
+  /**
+   * 每帧调用：给出离地高度（km，关掉真实地理数据时传 Infinity）、是不是火车模式，返回这一帧该用的材质。
+   * 罕见光学 / 天幕层奇观要不要从共用 uniforms 里读（调用前这一帧的 optics.update / wonders.update 已经写好）
+   */
   pick(renderer: THREE.WebGLRenderer, aglKm: number, rail = false): THREE.ShaderMaterial {
-    if (rail) {
-      this.rail.prepare(renderer);
-      if (this.rail.state === "ready" && this.rail.material) return this.rail.material;
-    }
-    if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM && !rail) this.detail.prepare(renderer);
-    if (this.detail.state !== "ready" || !this.detail.material) return this.base;
     if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM) this.active = true;
     else if (aglKm > GroundDetailVariant.DISABLE_ABOVE_KM) this.active = false;
-    return this.active ? this.detail.material : this.base;
+    const { key, fallback } = wantedOutsideKey({ detail: this.active, rail, uniforms: this.base.uniforms });
+    this.wanted = key;
+    if (key !== "") this.variants.get(key)!.prepare(renderer);
+    if (++this.frames > GroundDetailVariant.PREWARM_AFTER_FRAMES) this.variants.get("OW")!.prepare(renderer);
+    for (const k of [key, ...fallback]) {
+      const m = this.materialOf(k);
+      if (m) {
+        this.shown = k;
+        return m;
+      }
+    }
+    this.shown = "";
+    return this.base;
+  }
+
+  /** 想要的变体还在编（回归截图等它：编好之前 O / W 的效果不画）。编译失败不算等待 */
+  get pending() {
+    return this.wanted !== this.shown && this.variants.get(this.wanted as Exclude<OutsideKey, "">)?.state !== "failed";
+  }
+
+  /** 各变体的编译状态与耗时（调试看：__voyage.groundDetail.variantStatus） */
+  get variantStatus() {
+    const out: Record<string, { state: VariantState; compileMs: number }> = { "": { state: "ready", compileMs: 0 } };
+    for (const [k, v] of this.variants) out[k] = { state: v.state, compileMs: Math.round(v.compileMs) };
+    return { wanted: this.wanted, shown: this.shown, variants: out };
   }
 
   /** 低空细节变体的编译状态 */
   get status() {
-    return this.detail.state;
+    return this.variants.get("DOW")!.state;
   }
 
   /** 火车远景变体的编译状态（回归场景等它编好再截图） */
   get railStatus() {
-    return this.rail.state;
+    return this.variants.get("DROW")!.state;
   }
 
   /** 火车远景变体的后台编译耗时（毫秒） */
   get railCompileMs() {
-    return this.rail.compileMs;
+    return this.variants.get("DROW")!.compileMs;
   }
 
   /** 火车远景变体的材质（编好之前是 null；性能对照、探针用） */
   get railMaterial() {
-    return this.rail.material;
+    return this.variants.get("DROW")!.material;
+  }
+
+  /** 罕见光学 + 天幕层奇观变体的材质（编好之前是 null；性能对照、探针用） */
+  get extrasMaterial() {
+    return this.variants.get("OW")!.material;
   }
 }

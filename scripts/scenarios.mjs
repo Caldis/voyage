@@ -20,6 +20,12 @@
 //   js      （T17）一段脚本，场景设好之后、snapAll 与截图等待之前执行，参数 v = window.__voyage；
 //           用来开调试开关，例如 "v.optics.force.glory = true" 或 "v.optics.pinGreenFlash(0.5)"；
 //           有返回值时附在输出 JSON 的 info 末尾（"js: …"），在截图等待之前求值
+//   continuousJourney （DX-12）默认 false：连续航程（director.active）默认关闭，避免上一个场景串味到
+//           下一个；场景确实想要连续航程时设 true。p 里显式给 "voyage-on" 效果相同（会覆盖这里）。
+//   playRate（DX-12）默认 0：「时间流速」（state.playRate）默认关闭（同上的串味顾虑，没有对应的
+//           控件 id 能走 p 那条路）；场景想要加速播放时给一个倍率（1/10/60 等，对应面板按钮的档位）。
+//   p["view-preset"]（DX-12）给了且没有同时给 sc.head 时，头部位置由 ui.ts 的 setView() 决定（前 /
+//           后 / 舷窗中央……），不会被下面「head 没给时用硬编码默认坐姿」这条覆盖；sc.head 仍然优先。
 //
 // DX-07：依赖月相 / 星空的夜景、黄昏场景全部写死 date（不写就用「打开页面当天」，月相每天都在变，
 // 跨波对比会误判——第 6 波美术总监报告 ART_REVIEW_wave6.md 撞上过一次）。选日期原则：
@@ -111,6 +117,15 @@ export async function applyScene(arg) {
   const { sc, defaults, settle } = arg;
   const v = window.__voyage;
   document.getElementById("panel")?.classList.add("hidden");
+  // DX-12：默认关闭连续航程（director.active）与「时间流速」（state.playRate），避免上一个场景串味到
+  // 下一个——批量截图时如果上一个场景开着连续航程 / 时间加速，下一个场景在等地面瓦片 / 变体编译的这几秒
+  // 到几十秒里飞机会继续跑、天也会继续暗，「同一机位」就对不上了（DX-12 任务背景：批量截图时飞机一直在飞）。
+  // 两者都不是「按 id 设面板控件」这条路能表达的完整状态（director 没有对应的下拉框；playRate 由一组
+  // [data-rate] 按钮控制，没有单一 id），所以在这里单独处理，放在下面的 p 循环之前——场景想要连续航程 /
+  // 加速播放的话，用 sc.continuousJourney=true / sc.playRate=<倍率>（和 sc.head / sc.offset 同一类写法），
+  // 或者在 p 里给 "voyage-on"（有真实控件 id，走 set() 那条路一样能打开，且在这之后执行，会覆盖这里的默认关闭）。
+  if (v.director && typeof v.director.setActive === "function") v.director.setActive(sc.continuousJourney === true);
+  if (v.state) v.state.playRate = typeof sc.playRate === "number" ? sc.playRate : 0;
   const set = (id, val) => {
     const el = document.getElementById(id);
     if (!el) {
@@ -141,19 +156,25 @@ export async function applyScene(arg) {
   // 上一个场景留下的状态也要清掉（例如穿云后的窗上水痕、颠簸）
   v.state.wetness = 0;
   v.state.turbulence = 0.03;
-  // head：数字只设 z（向后兼容），[x,y,z] 三元组可以额外表达横向座位偏移（DX-03 headX）
-  let hx = 0;
-  let hy = 0.02;
-  let hz = -0.3;
-  if (Array.isArray(sc.head)) {
-    hx = sc.head[0] ?? 0;
-    hy = sc.head[1] ?? 0.02;
-    hz = sc.head[2] ?? -0.3;
-  } else if (typeof sc.head === "number") {
-    hz = sc.head;
+  // head：数字只设 z（向后兼容），[x,y,z] 三元组可以额外表达横向座位偏移（DX-03 headX）。
+  // DX-12：场景带了 p["view-preset"] 且没有显式给 sc.head 时，不要用下面这段硬编码默认值覆盖——
+  // set("view-preset", ...) 在上面的 p 循环里已经触发过 ui.ts 的 setView()，那边自己会把头部摆到这个
+  // 视角预设该在的位置（前 / 后 / 舷窗中央……），这里再无条件 Object.assign 会把它覆盖回硬编码的默认坐姿。
+  // sc.head 仍然优先：显式给了就按显式的来（即使同时给了 view-preset）。
+  const viewPresetGiven = sc.p && sc.p["view-preset"] !== undefined;
+  if (sc.head !== undefined || !viewPresetGiven) {
+    let hx = 0;
+    let hy = 0.02;
+    let hz = -0.3;
+    if (Array.isArray(sc.head)) {
+      hx = sc.head[0] ?? 0;
+      hy = sc.head[1] ?? 0.02;
+      hz = sc.head[2] ?? -0.3;
+    } else if (typeof sc.head === "number") {
+      hz = sc.head;
+    }
+    Object.assign(v.head, { tx: hx, ty: hy, x: hx, y: hy, tz: hz, z: hz });
   }
-  Object.assign(v.head, { tx: hx, ty: hy, x: hx, y: hy, tz: hz, z: hz });
-  if (sc.offset) v.cloudUniforms.uCloudOffset.value.set(sc.offset[0], sc.offset[1]);
   // 天气要在位移设好之后重新摆放
   if (sc.p.weather) set("weather", sc.p.weather);
   // settle（DX-08，配合 __voyage.freeze 做逐像素对比）：等 ground.pending 真正归零，不是原来的「< 5 且已经等过 5 轮」
@@ -187,6 +208,15 @@ export async function applyScene(arg) {
   // 云步进变体（PERF-10）：雷暴 / 台风 / 卷云 / 奇观及其组合第一次需要时在后台编译，编好之前画的是替代的变体（天气系统暂时不画）；
   // 等它编好再截图（最多 120 s；老版本没有 cloudVariantPending 就不等）。放在 js 之后：奇观是在 js 里召唤的
   for (let i = 0; i < 480 && v.clouds && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250));
+  // 窗外变体（PERF-13）：罕见光学 / 天幕层奇观第一次需要时在后台编译，编好之前这些效果不画。先让主循环跑两帧、按新场景选出想要的变体，
+  // 再等它编好（最多 120 s；老版本没有 pending 就不等）
+  for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r));
+  for (let i = 0; i < 480 && v.groundDetail && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250));
+  // DX-12（PERF-10 反馈）：云的世界偏移放在这里最后再摆一次，而不是更早——上面这些变体（云 + 窗外）
+  // 编译期间（最长各 120 s）如果偏移已经摆好，云本身没有被冻结，一直在按 dt 正常演化，编译完真正截图时
+  // 云已经跑到别的位置去了，「同一份场景」的云看起来会和没等编译的版本不一样。放在这里（所有变体都等完、
+  // wait 之前的最后一步）才是「编好了再摆」。
+  if (sc.offset) v.cloudUniforms.uCloudOffset.value.set(sc.offset[0], sc.offset[1]);
   v.snapAll();
   await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
   const info = document.getElementById("info")?.textContent ?? "";
@@ -199,4 +229,32 @@ export function pickScenes(only) {
   if (!only || only.length === 0) return SCENES;
   const set = new Set(only);
   return SCENES.filter((s) => set.has(s.name));
+}
+
+/**
+ * DX-12：单独把「把头部 / 云偏移钉回场景该有的值」这一步抽出来，逻辑和 applyScene 里的对应部分一致
+ * （必须是纯函数、不能引用 applyScene——page.evaluate 只序列化函数自身源码，见文件头注释，所以这里是
+ * 有意的小段重复，不是漏改）。给 dev-browser.mjs 的 `shots --pair`/`--ab` 用：批量截图时，从
+ * applyScene 设好场景到真正冻结截图之间可能隔着等地面瓦片 / 舱等 / 云变体编译好几十秒，模拟没有冻结，
+ * 飞机 / 云一直在按真实节奏往前走——冻结前用这个函数把头部与云偏移重新钉回场景 JSON 写的值，两张 A/B
+ * 截图才能确保真的是「同一机位」，不受等待耗时长短影响（DX-12 任务背景：批量截图时飞机一直在飞，
+ * 同机位对照拍不成）。
+ */
+export function pinGeometry(sc) {
+  const v = window.__voyage;
+  const viewPresetGiven = sc.p && sc.p["view-preset"] !== undefined;
+  if (sc.head !== undefined || !viewPresetGiven) {
+    let hx = 0;
+    let hy = 0.02;
+    let hz = -0.3;
+    if (Array.isArray(sc.head)) {
+      hx = sc.head[0] ?? 0;
+      hy = sc.head[1] ?? 0.02;
+      hz = sc.head[2] ?? -0.3;
+    } else if (typeof sc.head === "number") {
+      hz = sc.head;
+    }
+    Object.assign(v.head, { tx: hx, ty: hy, x: hx, y: hy, tz: hz, z: hz });
+  }
+  if (sc.offset) v.cloudUniforms.uCloudOffset.value.set(sc.offset[0], sc.offset[1]);
 }
