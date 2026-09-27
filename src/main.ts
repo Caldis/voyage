@@ -396,6 +396,7 @@ function renderFrame(now: number) {
   u.uHead.value.set(head.x, head.y + bump, head.z);
   u.uWetness.value = state.wetness;
   u.uCameraFog.value = clouds.cameraDensity * 60; // 与云着色器的 CLOUD_EXTINCTION 一致
+  clouds.keyVisibility(dt, u.uKeyCloud.value); // 飞机周围的云对舱内 / 机翼光照的影响（T31）
   const camBasis = cameraBasis();
   const c2w = cabinToWorld();
   u.uCamBasis.value = camBasis;

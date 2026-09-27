@@ -320,6 +320,11 @@ uniform vec2 uOccOrigin;        // 格点 (0, 0) 的世界坐标（km）
 uniform vec2 uOccAlt;           // (第 0 层的高度, 层距)，km
 uniform float uOccValid;        // 0：网格还没建好（程序还在后台编译），一律当作有云
 #endif
+// 这条视线（连同它的受光步进）够得着雷暴 / 台风吗（T33）。云步进程序按像素设：够不着的像素（例如雷暴在几百公里外、
+// 或在身后）把雷暴 / 台风整个当作不存在，走普通云的快路径（192 步、展开的受光步进、不查天气）。
+// 其他程序（云影图、占据网格、探针）不设，保持 true
+bool gWeatherOn = true;
+
 // 这一点可能有雷暴 / 台风的云吗（false = 肯定没有，可以不求它们的密度）
 bool cloudWeatherMaybe(vec2 xz, float alt) {
 #ifdef CLOUD_OCC
@@ -813,8 +818,13 @@ float hurricaneShadowDensity(vec2 xz, float alt) {
   float slopeK = 0.95 + 0.35 * sin(theta + 1.3);
   float rIn = Re + slopeK * (0.55 * alt + 0.045 * alt * alt) + 7.0 * pow(smoothstep(10.5, 16.2, alt), 2.0);
   float core = smoothstep(rIn, rIn + 1.0, r) * (1.0 - smoothstep(Re * 3.0, Re * 3.8, r));
+  // 卷云盖的高度范围与完整版一致（底往外抬升到约 14.2 km、顶往外降低）：旧版底恒为 12 km，
+  // typhoon-outer（13 km，卷云盖底下）被探针当成在云里（T31 发现）
+  float canopyBase = 11.8 + 2.4 * smoothstep(Re * 4.0, Re * 12.0, r);
+  float canopyTop = HUR_TOP - 1.2 * smoothstep(Re * 2.0, Re * 5.0, r) - 1.4 * smoothstep(Re * 5.0, Re * 16.0, r);
   float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * (1.0 - smoothstep(Re * 9.0, Re * 16.0, r))
-               * smoothstep(12.0, 12.8, alt) * mix(0.9, 0.25, smoothstep(Re * 3.5, Re * 10.0, r));
+               * smoothstep(canopyBase - 0.3, canopyBase + 0.4, alt) * (1.0 - smoothstep(canopyTop - 0.4, canopyTop + 0.2, alt))
+               * mix(0.9, 0.25, smoothstep(Re * 3.5, Re * 10.0, r));
   float band = smoothstep(0.3, 0.8, cos(6.0 * theta - 18.5 * log(max(r, 1.0)))) * smoothstep(Re * 2.8, Re * 4.0, r)
              * (1.0 - smoothstep(8.0, 12.0, alt)) * 0.6;
   return max(max(core, canopy), band);
@@ -826,7 +836,7 @@ float cloudDensityLite(vec3 p, float lod, bool detail, bool fullHurricane) {
   float alt = length(p) - BOTTOM;
   if (alt < uShellBottom || alt > uShellTop) return 0.0;
   float d = layerDensity(p, lod, detail);
-  if (uStormCount > 0 || uHurricane.w > 0.5) {
+  if (gWeatherOn && (uStormCount > 0 || uHurricane.w > 0.5)) {
     vec2 xz = p.xz + uCloudOffset;
     if (uHurricane.w > 0.5) d *= hurricaneLayerMask(xz);
     // 占据网格说这里没有雷暴 / 台风的云（只有云步进程序查网格，见 cloudWeatherMaybe）
@@ -855,7 +865,7 @@ float cloudDensity(vec3 p, float lod, bool detail) {
   gStormW = 0.0;
   gStormAO = 1.0;
   gStormSoft = 0.0;
-  if (uStormCount > 0 || uHurricane.w > 0.5) {
+  if (gWeatherOn && (uStormCount > 0 || uHurricane.w > 0.5)) {
     vec2 xz = p.xz + uCloudOffset;
     // 台风内部不要普通的层状云（和雷暴取最大之前先乘，与改动前的顺序等价：雷暴、台风不会同时出现）
     if (uHurricane.w > 0.5) d *= hurricaneLayerMask(xz);
@@ -891,9 +901,10 @@ vec2 raySphere2(vec3 ro, vec3 rd, float R) {
   return vec2(-r * mu - s, -r * mu + s);
 }
 
-vec2 cloudShellInterval(vec3 ro, vec3 rd) {
-  float rb = BOTTOM + uShellBottom;
-  float rt = BOTTOM + uShellTop;
+// 高度范围 [hb, ht]（km）的球壳
+vec2 cloudShellIntervalH(vec3 ro, vec3 rd, float hb, float ht) {
+  float rb = BOTTOM + hb;
+  float rt = BOTTOM + ht;
   float r = length(ro);
   vec2 outer = raySphere2(ro, rd, rt);
   vec2 inner = raySphere2(ro, rd, rb);
@@ -910,6 +921,7 @@ vec2 cloudShellInterval(vec3 ro, vec3 rd) {
   float t1 = inner.x > 0.0 ? inner.x : outer.y;
   return vec2(0.0, t1);
 }
+vec2 cloudShellInterval(vec3 ro, vec3 rd) { return cloudShellIntervalH(ro, rd, uShellBottom, uShellTop); }
 
 // 海面、地面的云影（T27）：查 clouds.ts 预先算好的云影图（见 CLOUD_SHADOW_*）。
 // 旧版在窗外程序里逐像素沿太阳方向取 5 个固定点（点距约 4 km、不抖动、每个点按 4 km 的弦长算光学厚度）：
