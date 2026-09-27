@@ -8,7 +8,7 @@
  *   色调一变，大片农田会被判成城区。
  * 做法（频率分离，只改 RGB，A 通道不碰——A 的缺影像比例 / 道路照亮宽度编码由之后的 packRoads 照旧写）：
  *   E_low、H_low = 两张图按覆盖率加权的低通（两遍盒滤波，σ ≈ 3.7 纹素，第 0 级约 30 m）；
- *   细节比 d = 1 + K·g·(H / H_low − 1)（逐通道，线性空间，夹到 [D_MIN, D_MAX]；g 是局部反差匹配增益，见 G_MIN）；
+ *   细节比 d = 1 + K·g·(L_H / L_H_low − 1)（按亮度算一个值、三通道共用，线性空间，夹到 [D_MIN, D_MAX]；g 是局部反差匹配增益，见 G_MIN）；
  *   out = mix(E, E_low · d, m)。
  *   这样一片区域的平均色仍是 EOX 的（分类、灯点判据不变），30 m 以下的纹理来自航拍。
  * 权重 m（写成「这里用不用细节」，不改缺影像语义）：
@@ -235,12 +235,14 @@ export function blendDetail(albedo: Uint8ClampedArray, detail: Uint8ClampedArray
     if (we < 1e-3 || wh < 1e-3) continue;
     if (m > 0.5) used++;
     const g = Math.min(G_MAX, Math.max(G_MIN, Math.sqrt((V[2 * i] + 1e-4) / (V[2 * i + 1] + 1e-4))));
+    // 细节比按亮度算一个值、三个通道共用（审查 S3）：逐通道算时，植被区蓝通道线性值只有约 0.02，
+    // GSI JPEG 的色度噪声经比值再放大 2 倍多会成彩色斑点；按亮度算形状细节不变，也不引入色偏
+    const hL = 0.2126 * SRGB_LIN[detail[i4]] + 0.7152 * SRGB_LIN[detail[i4 + 1]] + 0.0722 * SRGB_LIN[detail[i4 + 2]];
+    const hLowL = (0.2126 * H[i4] + 0.7152 * H[i4 + 1] + 0.0722 * H[i4 + 2]) / wh;
+    let d = 1 + K * g * ((hL + EPS) / (hLowL + EPS) - 1);
+    d = d < D_MIN ? D_MIN : d > D_MAX ? D_MAX : d;
     for (let c = 0; c < 3; c++) {
       const eLow = E[i4 + c] / we;
-      const hLow = H[i4 + c] / wh;
-      const h = SRGB_LIN[detail[i4 + c]];
-      let d = 1 + K * g * ((h + EPS) / (hLow + EPS) - 1);
-      d = d < D_MIN ? D_MIN : d > D_MAX ? D_MAX : d;
       const e = SRGB_LIN[albedo[i4 + c]];
       albedo[i4 + c] = toSrgb(e + (eLow * d - e) * m);
     }

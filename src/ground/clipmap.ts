@@ -35,9 +35,19 @@ const DETAIL_AGL_ON = 5.5;
 const DETAIL_AGL_OFF = 6.5;
 /** 航程流速上限：> 2× 时最细级别不取高清源（60× 时这两级本来就被 setMinLevel 停用了） */
 const DETAIL_MAX_RATE = 2;
-/** 太阳高度（sin）门限，带回差：夜里影像颜色看不见，细节只会扰动城市灯点 / 路灯的建成区判据，夜里一律不用 */
-const DETAIL_SUN_ON = Math.sin((-2 * Math.PI) / 180);
-const DETAIL_SUN_OFF = Math.sin((-4 * Math.PI) / 180);
+/**
+ * 太阳高度（sin）门限，带回差：+6° 开、+4.5° 关（审查 R1）。路灯在太阳约 +3.4° 就开始亮（groundRoadLights 的 uSunDir.y ≤ 0.06），
+ * 城市灯点不看太阳、天一暗就看得见；最细两级从「带细节」换回纯 EOX 要整层重建，这一步必须在灯光看得见之前、白天里做完
+ * （白天只是近处细节变淡，看不出来）。聚落地毯本身已改成用混合前的 EOX 算（road-raster.ts 的 urbanAlbedo），A 通道与细节层无关
+ */
+const DETAIL_SUN_ON = Math.sin((6 * Math.PI) / 180);
+const DETAIL_SUN_OFF = Math.sin((4.5 * Math.PI) / 180);
+/**
+ * GSI 等这么久（毫秒）还没取齐就先按纯 EOX 出这一版（审查 S2）：刚进日本 / 刚降到低空时两级要 100–160 张，
+ * 令牌桶排队最长约 20 s，这期间最细一级连 EOX、水体都不跟着重新居中，飞出范围后先退回粗级别发糊。
+ * 没取齐时这一级记成「没有细节」，下一帧 update 发现想要细节就再建一次，瓦片已在缓存 / 在途，不会重复请求
+ */
+const DETAIL_WAIT_MS = 3000;
 
 interface Level {
   size: number;
@@ -385,14 +395,16 @@ export class GroundClipmap {
         heightP,
         this.buildNight(l.size, cx, cz),
         // 高清细节等地形先到：用 DEM 筛掉整张是海的瓦片（GSI 海上 404，见 tiles.ts 的 seaMissing）
-        detail ? heightP.then((h) => this.buildDetail(l.size, cx, cz, h.data, DETAIL_ZOOMS[i])) : Promise.resolve(null),
+        detail ? heightP.then((h) => this.buildDetail(l.size, cx, cz, h.data, DETAIL_ZOOMS[i], performance.now() + DETAIL_WAIT_MS)) : Promise.resolve(null),
       ]);
       if (gen !== this.generation || i < this.minLevel) return;
       // 水体/河道栅格化、夜光的逐像素变换、道路灯带（T08）叠加：都在 Worker 里做（road-raster.ts 的
       // buildGroundLevel，PERF-9 把水体/夜光也从主线程挪了进来，见类头「PERF-8」注释旁边的说明），
       // 像素缓冲区转移过去再转移回来，主线程上不跑 getImageData / 逐顶点投影 / 1M 像素的循环
       // G03：高清细节（GSI）也交给 Worker，和 EOX 做「高频取 GSI、低频取 EOX」的合成（imagery-blend.ts）
-      const { water, albedo, detailCoverage } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailPx);
+      // 高清瓦片没在限时内取齐：这一版按纯 EOX 出，记成没有细节，下次重建补上（见 DETAIL_WAIT_MS）
+      const detailDone = detail && detailPx !== null && detailPx.complete;
+      const { water, albedo, detailCoverage } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailDone ? detailPx.px : null);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
       this.queueUpload(
@@ -406,7 +418,8 @@ export class GroundClipmap {
           if (gen !== this.generation || i < this.minLevel) return;
           l.cx = cx;
           l.cz = cz;
-          l.detail = detail;
+          // 想要细节但这版没合上（没取齐）时记成 false，update 会再建一次；一张都取不到（全是「确定没有」）算完成，不反复重建
+          l.detail = detail && (detailPx === null || detailPx.complete);
           l.detailCoverage = detailCoverage;
           l.valid = true;
           l.maxHeight = height.max;
@@ -506,7 +519,7 @@ export class GroundClipmap {
    * 高清细节层（G03）：国土地理院航拍画到这一级的 RES² 上，没取到的地方留透明（A = 覆盖率）。一张都没取到返回 null
    * （出了日本 / 海上是 404，tiles.ts 负缓存后不再请求）。合成在 Worker 里做（imagery-blend.ts）
    */
-  private async buildDetail(size: number, cx: number, cz: number, heightKm: Float32Array, zoom: number) {
+  private async buildDetail(size: number, cx: number, cz: number, heightKm: Float32Array, zoom: number, deadline: number) {
     const all = this.tileCover(size, cx, cz, zoom, RES);
     if (all.tiles.length > DETAIL_MAX_TILES) return null;
     const cover = { ...all, tiles: all.tiles.filter((t) => this.detailTileWanted(all.toPx, zoom, t.x, t.y, heightKm)) };
@@ -514,19 +527,28 @@ export class GroundClipmap {
     ctx.clearRect(0, 0, RES, RES);
     ctx.imageSmoothingQuality = "high"; // 2:1 缩小
     let got = 0;
+    let settled = 0;
     this.pending += cover.tiles.length;
-    await Promise.all(
+    const all$ = Promise.all(
       cover.tiles.map(async (t) => {
         const bmp = await loadImageryTile(GSI_PHOTO, zoom, t.x, t.y);
         this.pending--;
-        if (!bmp) return;
+        settled++;
+        if (!bmp || performance.now() > deadline) return;
         got++;
         const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
         const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
         ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
       }),
     );
-    return got > 0 ? ctx.getImageData(0, 0, RES, RES).data : null;
+    // 限时：到点还没齐就不等了（在途的请求照常完成、进缓存，给下一次重建用）
+    const wait = Math.max(0, deadline - performance.now());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([all$, new Promise<void>((r) => (timer = setTimeout(r, wait)))]);
+    clearTimeout(timer);
+    const complete = settled === cover.tiles.length;
+    if (got === 0) return complete ? null : { px: null, complete: false };
+    return { px: complete ? ctx.getImageData(0, 0, RES, RES).data : null, complete };
   }
 
   /**
