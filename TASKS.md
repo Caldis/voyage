@@ -12,6 +12,7 @@
 | T47 | 第 6 波（美术总监 wave6 第 6–12 条） | 5251 | worktree | Opus（窗板 1 px 白线锯齿、窗洞内衬死白、侧壁白板、头枕十字缝、胡桃木、小翼镀铬） | — | 进行中 |
 | W03 | 第 6 波（主干，奇观首批 3） | 5203 | worktree | Opus（浮空古城，致敬《天空之城》，用 W00 云间层） | — | 进行中 |
 | T48 | 第 6 波（W02 发现） | 5248 | worktree | Opus（夜间发光体颜色被曝光洗白：暗视觉按像素亮度、AgX 高亮去饱和） | — | 进行中 |
+| TR01 | P8 第一期（主干） | — | worktree | Opus（大糸线松本—信浓大町数据烘焙 + 待核事实核对） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
