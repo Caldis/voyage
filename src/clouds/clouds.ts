@@ -385,6 +385,13 @@ void main() {
                                : clamp((r - BOTTOM - uCloudBottom) / max(uCloudTop - uCloudBottom, 1e-3), 0.0, 1.0);
       vec3 eSky = skyIrradiance(r, up);
       vec3 ambient = eSky / (2.0 * M_PI) * mix(0.12, 1.0, pow(h01, 0.7));
+      // 夜天光（T46）：skyIrradiance 只有太阳、月亮两路 LUT，没有气辉和星光；海面却经 skyRadiance 反射了它，
+      // 无月夜云（≈ 0）成了比海还暗的纯黑剪影（美术总监 wave6 第 5 条：云 Y 9–12、海约 33）。
+      // 量级：nightglow（lights.glsl.ts）按半球积分的水平照度 E = 2π·1.6e-7·0.743（van Rhijn 增亮）≈ 7.5e-7 klux，再加积分星光（约 30–50%）和黄道光（约 20–30%），合计约 1.7 倍 ≈ 1.3e-6；
+      // 厚云顶当反照率 0.8 的朗伯面：L = 0.8·E/π ≈ 3.3e-7 kcd/m²，与远处掠射海面（菲涅尔 × 地平线气辉，2–4e-7）同一量级。
+      // 不能照搬上一行的 E/(2π) 和云底 0.12：那是白天的经验取值（按厚云反照率算少了 1.6 倍，云底再压到 0.12），
+      // T41 实验只补物理量级的 E、套用这套系数时云几乎不变（仍比海暗约 5 倍）。白天这一项比天空光小 7–8 个数量级，不影响
+      ambient += vec3(0.8, 1.0, 0.85) * (1.3e-6 * 0.8 / M_PI) * mix(0.35, 1.0, pow(h01, 0.7));
       if (stormW > 0.5) {
         // 雷暴：隆起之间的凹处、砧底、雨幡里看到的天空少（菜花状的明暗）；
         // 塔身下半截还被下方的海面 / 低云反射的光照着（中性的灰白，冲淡天空光的蓝）
@@ -471,6 +478,12 @@ void main() {
     apL *= 1.0 - HUR_BACKLIT_AP_CUT * inEye * toward * toward * (1.0 - smoothstep(0.35, 0.8, uSunDir.y));
   }
   apL *= uSunIlluminance;
+  // 夜天光的空气透视（T46）：LUT 只有太阳一路，夜里远处的云只剩「自身 × 透射率」（掠射几百公里、透射率偏红），
+  // 读成比海面、地平线天空都暗的红褐色斑。远处的云应当和白天一样淡进地平线的天光：按同方向的夜天光补上 (1 − 透射率) 那部分。
+  // 海面反射、天空用的都是同一个 nightglow（lights.glsl.ts），三者一致。白天比太阳那一路小 8 个数量级
+  // 取透射率的亮度（不按通道）：按通道补是 (1 − 偏红的透射率) = 偏蓝，远处的云发蓝；系数 0.6：
+  // 1.0 时远处的云约为同一行海面的 2 倍，0.6 约 1.3 倍（「略亮于海面」，night-sea-milkyway 读回窗外 HDR 实测）
+  apL += nightglow(rd) * (0.6 * (1.0 - dot(apT, vec3(0.2126, 0.7152, 0.0722))));
   // 透射率 < 0.005 时步进提前停了（上面的 break），剩下的 T 只是「停在哪一步」的截断残差，不是真实透射率：
   // 真实的积雨云光学厚度几百，T ≈ e^−几百。窗外 pass 按背景 × T 合成，太阳圆盘比云亮 10^5 倍，
   // 残差 4e-5 也足以让日盘从积雨云里透出来（T45 实测日盘处 T = 4.2e-5）。按阈值连续地减掉这段残差（T = 1 不变）
@@ -710,9 +723,9 @@ export function createCloudUniforms(noise: CloudNoise) {
 }
 export type CloudUniforms = ReturnType<typeof createCloudUniforms>;
 
-function target(w: number, h: number) {
+function target(w: number, h: number, type: THREE.TextureDataType = THREE.HalfFloatType) {
   return new THREE.WebGLRenderTarget(w, h, {
-    type: THREE.HalfFloatType,
+    type,
     format: THREE.RGBAFormat,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
@@ -721,11 +734,11 @@ function target(w: number, h: number) {
 }
 
 /** 步进的输出：颜色（RGB 辐亮度 + A 透射率）+ 深度附件（云的深度，gl_FragDepth） */
-function rawTarget(w: number, h: number) {
+function rawTarget(w: number, h: number, type: THREE.TextureDataType = THREE.HalfFloatType) {
   const depthTexture = new THREE.DepthTexture(w, h, THREE.FloatType);
   depthTexture.format = THREE.DepthFormat;
   return new THREE.WebGLRenderTarget(w, h, {
-    type: THREE.HalfFloatType,
+    type,
     format: THREE.RGBAFormat,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
@@ -864,6 +877,17 @@ export class Clouds {
     /** 场景着色器的 uniform（视角、太阳等），直接共享同一批对象 */
     viewUniforms: Record<string, THREE.IUniform>,
   ) {
+    // 云的步进结果和时间累积用 32 位浮点（T46）：半精度最小的次正规数是 6e-8，无月夜的云只有 1e-7 量级（kcd/m²），
+    // 存进半精度只剩 0 / 1 / 2 个最低位——云成了纯黑、边缘是量化出来的马赛克（T41 把云的环境光放大 100 倍才「修好」就是这个原因）。
+    // 和 T36 大气 LUT 的半精度下溢同一类坑。窗外 pass 按双线性读它，要浮点线性过滤；没有时退回半精度
+    // （离线 GLSL 检查 lint-shaders.mjs 传进来的 pass 是桩，没有 renderer）
+    const ext = pass.renderer?.extensions;
+    if (ext?.has("OES_texture_float_linear") && ext.has("EXT_color_buffer_float")) {
+      this.raw.dispose();
+      for (const t of this.history) t.dispose();
+      this.raw = rawTarget(1, 1, THREE.FloatType);
+      this.history = [target(1, 1, THREE.FloatType), target(1, 1, THREE.FloatType)];
+    }
     const common = { depthTest: false, depthWrite: false, toneMapped: false, vertexShader: FULLSCREEN_VERT };
     this.marchMat = new THREE.ShaderMaterial({
       ...common,

@@ -57,6 +57,12 @@ try {
         const r = c.pass.renderer;
         const sx = Math.round((x / window.innerWidth) * t.width);
         const sy = Math.round((1 - y / window.innerHeight) * t.height);
+        // T46 起支持浮点线性过滤时云缓冲是 32 位浮点
+        if (t.texture.type === 1015) {
+          const fb = new Float32Array(4);
+          r.readRenderTargetPixels(t, sx, sy, 1, 1, fb);
+          return Array.from(fb);
+        }
         const buf = new Uint16Array(4);
         r.readRenderTargetPixels(t, sx, sy, 1, 1, buf);
         const h2f = (h) => { const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, f = h & 1023; return e === 0 ? s * 2 ** -14 * (f / 1024) : e === 31 ? (f ? NaN : s * Infinity) : s * 2 ** (e - 15) * (1 + f / 1024); };
