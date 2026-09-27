@@ -30,6 +30,17 @@
 //   node scripts/shader-budget.mjs --bisect "ocean-main;ocean-in-ground;ground"   # 分号 = 各自一个变体，一次性对照
 //   node scripts/shader-budget.mjs --bisect "ocean-main,ocean-in-ground"          # 逗号 = 这几个一起换桩（同一个变体）
 //   node scripts/shader-budget.mjs --jobs 4 --out tmp/screenshot/shader-budget.json
+//   node scripts/shader-budget.mjs --keep-hlsl --only scene-default        # 编完不删临时目录，打印 HLSL 路径
+//   node scripts/shader-budget.mjs --baseline .claude/worktrees/agent-xxx/apps/voyage --rounds 5 --only scene-default
+//     # 与另一个 worktree 对照：GLSL→HLSL 翻译两侧各做一次（确定性，不重复），fxc 编译交替测 5 轮取中位数
+//
+// --keep-hlsl（DX-08，T41 反馈）：默认编完就删临时目录；传了就保留并打印路径，方便直接改 HLSL 本身再用
+//   fxc 计时（比在 GLSL 层一轮轮 --bisect 更快定位「具体是哪几行贵」）。
+// --baseline <目录> --rounds N（DX-08，泛化自 handoff/T37.md 反馈「`tmp/perf-cloud/passes.mjs` 的
+//   `--variants` 很好用，建议收进 scripts/」同一批 DX 反馈）：只接受目录（另一个 voyage 应用根，或含
+//   apps/voyage 的仓库根）——shader-budget 不连接开发服务器，Windows 也没有 /proc/<pid>/cwd 那样的机制
+//   能从端口反查目录，传端口号会报错并提示改传目录。两侧的 GLSL→HLSL 翻译各做一次（确定性），fxc 编译
+//   按「当前一轮、基线一轮」交替测 --rounds 轮，各程序取中位数，打印变化百分比。
 //
 // --bisect 的模块表（MODULE_STUBS）是人工按 scene.ts / terrain-shading.glsl.ts 当前的调用点文本维护的
 // 精确字符串替换（做法照抄开发体验官的 variants.py）。**代码演进后锚点会漂移**：找不到就跳过并在
@@ -52,7 +63,7 @@ import path from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { launchBrowser as launchBrowserAngle, closeBrowserSafely } from "./lib/chrome.mjs";
+import { launchBrowser as launchBrowserAngle, closeBrowserSafely, resolveRepoPath } from "./lib/chrome.mjs";
 import { collectPrograms, resolveIncludes, FRAG_PREFIX } from "./lint-shaders.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -238,8 +249,10 @@ function countSamplers(hlsl) {
 }
 
 // ---------- 1. 枚举程序 + 收集 GLSL（vite ssrLoadModule，不开浏览器，复用 lint-shaders.mjs） ----------
-async function loadPrograms(only) {
-  const server = await createServer({ root: VOYAGE_ROOT, server: { middlewareMode: true }, appType: "custom", logLevel: "error" });
+// root：voyage 应用根目录（含 scripts/lint-shaders.mjs），--baseline 对照模式下指向另一个 worktree 的
+// apps/voyage，其余情况都是当前的 VOYAGE_ROOT。
+async function loadPrograms(root, only) {
+  const server = await createServer({ root, server: { middlewareMode: true }, appType: "custom", logLevel: "error" });
   let programs;
   try {
     programs = await collectPrograms(server);
@@ -347,6 +360,117 @@ async function runFxc(translated, { fxc, quick, jobsN, tmpDir }) {
   return results;
 }
 
+// ---------- --baseline <目录或端口>：与另一个 worktree 对照，交替多轮取中位数（DX-08） ----------
+// 只支持目录（另一个 voyage 应用根，或含 apps/voyage 的仓库根）：shader-budget 本身不连接开发服务器，
+// 而 Windows 没有 Linux /proc/<pid>/cwd 那样的机制能从「端口」反查进程的工作目录，没法凭空把一个端口号
+// 变成目录。传端口号时给出明确的报错和替代做法（传目录，或先 `git worktree list` 查一下）。
+function resolveBaselineRoot(value) {
+  const trimmed = String(value).trim();
+  const looksLikePort = /^\d+$/.test(trimmed);
+  const candidate = path.isAbsolute(trimmed) ? trimmed : path.join(REPO_ROOT, trimmed);
+  if (fs.existsSync(candidate)) {
+    const asRepoRoot = path.join(candidate, "apps", "voyage");
+    if (fs.existsSync(asRepoRoot)) return asRepoRoot;
+    if (fs.existsSync(path.join(candidate, "scripts", "lint-shaders.mjs"))) return candidate;
+    throw new Error(`--baseline 目录 "${value}" 存在，但既不是含 apps/voyage 的仓库根，也不是 voyage 应用根（没有 scripts/lint-shaders.mjs）`);
+  }
+  if (looksLikePort) {
+    throw new Error(
+      `--baseline "${value}" 看起来是端口号：shader-budget 不连接开发服务器，Windows 也没法从端口反查进程的工作目录，` +
+        `没法凭它找到对应的 worktree 目录。请改传目录路径（例如 ".claude/worktrees/agent-xxxx/apps/voyage"），` +
+        `不确定的话先 "git worktree list" 查一下这个任务用的是哪个目录。`,
+    );
+  }
+  throw new Error(`--baseline "${value}" 不是一个存在的目录`);
+}
+
+function median(arr) {
+  if (arr.length === 0) return NaN;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/** 枚举 + 翻译一侧（GLSL → HLSL 是确定性的翻译，噪声只来自后面 fxc 本身的编译计时，不需要重复做这一步） */
+async function translateSide(root, only, bisectGroups) {
+  const programs = await loadPrograms(root, only);
+  const variants = buildVariants(programs, bisectGroups);
+  return translateAll(variants);
+}
+
+async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups }) {
+  const baselineRoot = resolveBaselineRoot(args.baseline);
+  const rounds = Number(args.rounds || 3);
+  const keepHlsl = !!args["keep-hlsl"];
+
+  console.log("== SC-2 离线着色器编译预算：--baseline 对照模式 ==");
+  console.log(`当前：${VOYAGE_ROOT}`);
+  console.log(`基线：${baselineRoot}`);
+  console.log(`轮数：${rounds}（交替测两侧、取中位数）  模式：${quick ? "/Od" : "/O1"}\n`);
+
+  console.log("[1/2] 枚举 + 翻译两侧（各一次）...");
+  const curTranslated = await translateSide(VOYAGE_ROOT, only, bisectGroups);
+  const baseTranslated = await translateSide(baselineRoot, only, bisectGroups);
+  console.log(`  当前 ${curTranslated.length} 个变体，基线 ${baseTranslated.length} 个变体`);
+
+  console.log(`\n[2/2] fxc.exe 交替计时 ${rounds} 轮...`);
+  const curSamples = new Map();
+  const baseSamples = new Map();
+  let keptCurDir = null;
+  let keptBaseDir = null;
+  for (let r = 0; r < rounds; r++) {
+    const curDir = mkdtempSync(path.join(tmpdir(), "voyage-shader-budget-cur-"));
+    const curTimed = await runFxc(curTranslated, { fxc, quick, jobsN, tmpDir: curDir });
+    for (const t of curTimed) {
+      if (!t.fxcOk) continue;
+      if (!curSamples.has(t.id)) curSamples.set(t.id, []);
+      curSamples.get(t.id).push(t.fxcMs);
+    }
+    if (keepHlsl && r === rounds - 1) keptCurDir = curDir;
+    else rmSync(curDir, { recursive: true, force: true });
+
+    const baseDir = mkdtempSync(path.join(tmpdir(), "voyage-shader-budget-base-"));
+    const baseTimed = await runFxc(baseTranslated, { fxc, quick, jobsN, tmpDir: baseDir });
+    for (const t of baseTimed) {
+      if (!t.fxcOk) continue;
+      if (!baseSamples.has(t.id)) baseSamples.set(t.id, []);
+      baseSamples.get(t.id).push(t.fxcMs);
+    }
+    if (keepHlsl && r === rounds - 1) keptBaseDir = baseDir;
+    else rmSync(baseDir, { recursive: true, force: true });
+
+    console.log(`  第 ${r + 1}/${rounds} 轮完成`);
+  }
+
+  console.log("\n== 结果（中位数，ms）==");
+  const header = `${"程序".padEnd(38)} ${"当前".padEnd(10)} ${"基线".padEnd(10)} 变化`;
+  console.log(header);
+  console.log("-".repeat(header.length + 20));
+  const ids = [...new Set([...curSamples.keys(), ...baseSamples.keys()])];
+  const rows = [];
+  for (const id of ids) {
+    const curArr = curSamples.get(id) || [];
+    const baseArr = baseSamples.get(id) || [];
+    const curMed = median(curArr);
+    const baseMed = median(baseArr);
+    const delta = Number.isFinite(curMed) && Number.isFinite(baseMed) && baseMed > 0 ? ((curMed - baseMed) / baseMed) * 100 : NaN;
+    rows.push({ id, curMed, baseMed, delta, curSamples: curArr, baseSamples: baseArr });
+    const deltaStr = Number.isFinite(delta) ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%` : "—";
+    console.log(`${id.padEnd(38)} ${(Number.isFinite(curMed) ? curMed.toFixed(1) : "—").padEnd(10)} ${(Number.isFinite(baseMed) ? baseMed.toFixed(1) : "—").padEnd(10)} ${deltaStr}`);
+  }
+  if (keepHlsl) console.log(`\nHLSL 已保留：当前 ${keptCurDir}，基线 ${keptBaseDir}`);
+
+  if (args.out) {
+    const outPath = resolveRepoPath(REPO_ROOT, args.out);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(
+      outPath,
+      JSON.stringify({ when: new Date().toISOString(), rounds, quick, current: VOYAGE_ROOT, baseline: baselineRoot, rows }, null, 2),
+    );
+    console.log(`\n结果已写入 ${path.relative(REPO_ROOT, outPath).replace(/\\/g, "/")}`);
+  }
+}
+
 // ---------- 主流程 ----------
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -366,13 +490,20 @@ async function main() {
   const bisectGroups = args.bisect ? parseBisectSpec(String(args.bisect)) : [];
   const quick = !!args.quick;
   const jobsN = Number(args.jobs || Math.max(2, Math.min(8, os.cpus().length - 2)));
+  const keepHlsl = !!args["keep-hlsl"];
+
+  // --baseline：和另一个 worktree 对照，交替多轮取中位数，走单独的流程（见 runBaselineCompare）
+  if (args.baseline) {
+    await runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups });
+    return;
+  }
 
   console.log("== SC-2 离线着色器编译预算 ==");
   console.log(`fxc: ${fxc}`);
   console.log(`模式: ${quick ? "/Od（快速，跳过优化）" : "/O1（完整优化，和浏览器实际使用的等级一致）"}  并行: ${jobsN}\n`);
 
   console.log("[1/3] 枚举程序 + 收集 GLSL（vite ssrLoadModule，不开浏览器）...");
-  const programs = await loadPrograms(only);
+  const programs = await loadPrograms(VOYAGE_ROOT, only);
   console.log(`  枚举到 ${programs.length} 个程序：${programs.map((p) => p.id).join(", ")}`);
   if (bisectGroups.length > 0) console.log(`  --bisect：${bisectGroups.map((g) => g.join("+")).join(" | ")}`);
 
@@ -395,7 +526,10 @@ async function main() {
     timed = await runFxc(translated, { fxc, quick, jobsN, tmpDir });
     console.log(`  完成，墙钟用时 ${Date.now() - t2} ms\n`);
   } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
+    // --keep-hlsl（DX-08）：T41 反馈过——排查冷编译暴涨时想直接改翻译好的 HLSL、用 fxc 计时，
+    // 但这里编译完就删了临时目录，拿不到 HLSL。默认行为不变（删），传了才保留并打印路径。
+    if (keepHlsl) console.log(`HLSL 已保留：${tmpDir}`);
+    else rmSync(tmpDir, { recursive: true, force: true });
   }
 
   // ---- 结果表 ----
@@ -426,7 +560,7 @@ async function main() {
   if (skippedTranslate.length > 0) console.log(`\n（${skippedTranslate.length} 个程序翻译失败，没有 fxc 结果，见上面的 [翻译失败]）`);
 
   if (args.out) {
-    const outPath = path.join(REPO_ROOT, args.out);
+    const outPath = resolveRepoPath(REPO_ROOT, args.out);
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     fs.writeFileSync(
       outPath,
@@ -441,7 +575,7 @@ async function main() {
         2,
       ),
     );
-    console.log(`\n结果已写入 ${args.out}`);
+    console.log(`\n结果已写入 ${path.relative(REPO_ROOT, outPath).replace(/\\/g, "/")}`);
   }
 }
 
