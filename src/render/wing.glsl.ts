@@ -96,19 +96,19 @@ WingCoord wingCoord(vec3 P) {
   return w;
 }
 
-float sdWingMain(vec3 P) {
-  WingCoord w = wingCoord(P);
+// 主翼截面的距离（不含展向边界）：flap = 按襟翼放下时的整流罩形状，slat = 按缝翼伸出时的「D 形前缘」
+float wingMainSection(vec3 P, WingCoord w, bool flap, bool slat) {
   float yU = w.yMid + w.halfT;
   float yL = w.yMid - w.halfT;
   float xiA = 0.0;
   float xiB = 1.0;
   // 襟翼放下：主翼在襟翼段只到整流罩末端，下表面向上收成一片薄的整流罩（襟翼收起时就藏在它下面）
-  if (uFlap > 1e-3 && w.s > WING_FLAP_S0 && w.s < WING_FLAP_S1) {
+  if (flap) {
     xiB = WING_SHROUD_TE;
     yL = mix(yL, yU - 0.04, smoothstep(0.52, WING_SHROUD_TE, w.xi));
   }
   // 缝翼伸出：主翼前缘退到缝翼后面，切口收圆（「D 形前缘」）
-  if (uSlat > 1e-3 && w.s > WING_SLAT_S0 && w.s < WING_SLAT_S1) {
+  if (slat) {
     xiA = WING_SLAT_XI - 0.03;
     float k = sqrt(clamp((w.xi - xiA) / 0.05, 0.0, 1.0));
     float m = 0.5 * (yU + yL);
@@ -118,8 +118,37 @@ float sdWingMain(vec3 P) {
   }
   float dy = abs(P.y - 0.5 * (yU + yL)) - 0.5 * (yU - yL);
   float dx = max(xiA - w.xi, w.xi - xiB) * w.chord * cos(SWEEP);
+  return max(dy, dx);
+}
+
+// 展向分段拼接：展向坐标在 slab（有向距离，< 0 在段内）以内用 aIn 的形状，以外用 bOut 的形状
+float wingSpanSplice(float aIn, float bOut, float slab) {
+  return min(max(aIn, slab), max(bOut, -slab));
+}
+
+float sdWingMain(vec3 P) {
+  WingCoord w = wingCoord(P);
   float dz = max(ROOT_Z - P.z, P.z - (WING_MAIN_END_Z + 0.04));
-  return max(max(dy, dx), dz);
+  bool fOn = uFlap > 1e-3;
+  bool sOn = uSlat > 1e-3;
+  if (!fOn && !sOn) return max(wingMainSection(P, w, false, false), dz);
+  // W-STAIR：襟翼段 / 缝翼段的截面和段外不同，段的两端是一道「台阶面」（例如副翼内端 s = 0.72：内侧只到整流罩末端，
+  // 外侧是完整的翼型）。旧写法按「P 在哪一段」只算那一段的截面，段外一两毫米处的点看不到隔壁更长的翼型，距离报大了——
+  // 球体追踪一步跨过副翼的内端面、落进翼型里面几个像素深，法线取的是翼内的梯度（常常朝下），
+  // 副翼内端、整流罩后面一片逐像素乱跳的点阵阴影（穿云、sunset-wing 襟翼放下时最明显）。
+  // 现在两边的截面都算，按展向的有向距离拼接（min / max 组合，仍是真实距离的下界）
+  float slabF = max(ROOT_Z + WING_FLAP_S0 * WING_SPAN - P.z, P.z - (ROOT_Z + WING_FLAP_S1 * WING_SPAN));
+  float slabS = max(ROOT_Z + WING_SLAT_S0 * WING_SPAN - P.z, P.z - (ROOT_Z + WING_SLAT_S1 * WING_SPAN));
+  float dCC = wingMainSection(P, w, false, false);
+  float d;
+  if (fOn && !sOn) d = wingSpanSplice(wingMainSection(P, w, true, false), dCC, slabF);
+  else if (!fOn) d = wingSpanSplice(wingMainSection(P, w, false, true), dCC, slabS);
+  else {
+    float dF = wingSpanSplice(wingMainSection(P, w, true, true), wingMainSection(P, w, true, false), slabS);
+    float dC = wingSpanSplice(wingMainSection(P, w, false, true), dCC, slabS);
+    d = wingSpanSplice(dF, dC, slabF);
+  }
+  return max(d, dz);
 }
 
 // ---- 翼尖弯折 + 鲨鳍小翼 ----

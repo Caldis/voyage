@@ -1,0 +1,15 @@
+[
+  {
+    "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "zoom": [[640, 440, 200, 200], [700, 300, 200, 200], [660, 760, 200, 200]],
+    "variants": [
+      { "name": "base", "js": "" },
+      { "name": "noshadow", "js": "v.sceneMat.uniforms.uWingDebug.value = 8;" },
+      { "name": "aa0", "js": "v.sceneMat.uniforms.uWingEdgeAA.value = 0;" },
+      { "name": "aa2", "js": "v.sceneMat.uniforms.uWingEdgeAA.value = 2;" },
+      { "name": "nobump", "js": "v.sceneMat.uniforms.uWingDebug.value = 1;" },
+      { "name": "noenv", "js": "v.sceneMat.uniforms.uWingDebug.value = 4;" },
+      { "name": "albedo", "js": "v.sceneMat.uniforms.uWingDebug.value = 16;" }
+    ]
+  }
+]

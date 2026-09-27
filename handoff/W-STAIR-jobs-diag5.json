@@ -1,0 +1,12 @@
+[
+  {
+    "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "zoom": [],
+    "variants": [
+      { "name": "base", "js": "" },
+      { "name": "newton", "js": "__wsPatch([['n = normalize(n);\\n        // 蒙皮在翼肋', 'vec3 gD_ = n / (4.0 * 0.0023); float gv_ = dot(gD_, dA); if (gv_ < -1e-4) { w.t += clamp(-dHit / gv_, -8.0 * pa * w.t, 8.0 * pa * w.t); P = oA + dA * w.t; }\\n        n = normalize(n);\\n        // 蒙皮在翼肋']]);" },
+      { "name": "alb", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {']]); v.sceneMat.uniforms.uWingDebug.value = 16;" },
+      { "name": "alb-newton", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['n = normalize(n);\\n        // 蒙皮在翼肋', 'vec3 gD_ = n / (4.0 * 0.0023); float gv_ = dot(gD_, dA); if (gv_ < -1e-4) { w.t += clamp(-dHit / gv_, -8.0 * pa * w.t, 8.0 * pa * w.t); P = oA + dA * w.t; }\\n        n = normalize(n);\\n        // 蒙皮在翼肋']]); v.sceneMat.uniforms.uWingDebug.value = 16;" }
+    ]
+  }
+]

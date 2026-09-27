@@ -1,0 +1,13 @@
+[
+  {
+    "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "zoom": [],
+    "variants": [
+      { "name": "linesvis", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['m.albedo *= 1.0 - 0.55 * lines;', 'm.albedo = vec3(lines, clamp(pix * 20.0, 0.0, 1.0), clamp(xi, 0.0, 1.0));']]); v.sceneMat.uniforms.uWingDebug.value = 16;" },
+      { "name": "no062", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['lines = max(lines, wingSeam(xi - 0.62, 0.004 / chord, fwX));', '']]); v.sceneMat.uniforms.uWingDebug.value = 16;" },
+      { "name": "no072", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['lines = max(lines, wingSeam(xi - 0.72, 0.006 / chord, fwX));', '']]); v.sceneMat.uniforms.uWingDebug.value = 16;" },
+      { "name": "no16", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['if (xi > 0.62) lines = max(lines, wingSeam(fract(zm / 1.6 + 0.5) - 0.5, 0.004 / 1.6, pix / 1.6));', '']]); v.sceneMat.uniforms.uWingDebug.value = 16;" },
+      { "name": "noail", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['if (s > 0.72) lines = max(lines, wingSeam(s - 0.72, 0.005 / WING_SPAN, pix / WING_SPAN) * step(0.72, xi));', '']]); v.sceneMat.uniforms.uWingDebug.value = 16;" }
+    ]
+  }
+]

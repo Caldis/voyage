@@ -1,0 +1,11 @@
+[
+  {
+    "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "zoom": [],
+    "variants": [
+      { "name": "base", "js": "" },
+      { "name": "alb", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {']]); v.sceneMat.uniforms.uWingDebug.value = 16;" },
+      { "name": "v4", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['if (done) { P = oA + dA * w.t; phase = 1; w.steps = i + 1; }', 'if (done) { P = oA + dA * w.t; phase = 1; w.steps = i + 1; w.bumpVar = dHit / (pa * w.t) + 100.0; }'], ['return diffuse + spec + envSpec + lampLit + m.emit;', 'return vec3(w.bumpVar - 100.0, uFlap, float(w.steps));'], ['w.bumpVar = bumpVar * flatness;', '']]);" }
+    ]
+  }
+]
