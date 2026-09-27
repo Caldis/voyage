@@ -26,6 +26,9 @@ const { VARIANTS } = await import(pathToFileURL(path.resolve(args.vfile)).href);
 const EXTRA = {
   "backlit-cu": { name: "backlit-cu", p: { preset: "wpac", time: 1010, altitude: 4, coverage: 0.5, "wing-pos": "-4" } },
   "cu-side": { name: "cu-side", p: { preset: "wpac", time: 840, altitude: 4.5, coverage: 0.5, "cloud-preset": "towering", "wing-pos": "-4" } },
+  // TM02：美术总监 wave7 第 1 / 5 条的场景（默认坐姿商务舱正午、台风外围 10.7 km）
+  "biz-seated": { name: "biz-seated", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "business", altitude: 10.7 }, head: [0, 0.02, -0.42] },
+  "typhoon-outer-11": { name: "typhoon-outer-11", p: { preset: "wpac", time: 900, altitude: 10.7, weather: "typhoon-outer", "wing-pos": "-4", "cabin-class": "business" }, head: [0, 0.02, -0.42] },
   "biz-behind": { name: "biz-behind", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "business" }, head: [0.42, 0.1, -0.5] },
 };
 const sceneList = String(args.scenes || "noon-cumulus").split(",").map((n) => EXTRA[n] || SCENES.find((s) => s.name === n));
