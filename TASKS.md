@@ -12,6 +12,7 @@
 | T08 | 第 6 波（主干） | 5208 | worktree | Opus（夜间道路灯带） | — | 进行中 |
 | T09 | 第 6 波（主干） | 5209 | worktree | Opus（银河：先调研许可再接入） | — | 进行中 |
 | DX-04 | 第 6 波（工具） | 5246 | worktree | Sonnet（dev-browser 加 --viewport / --dpr） | — | 进行中 |
+| W00 | 第 6 波（主干） | 5200 | worktree | Opus（云步进奇观层接口，W02 / W03 前提） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
