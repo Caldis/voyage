@@ -161,7 +161,7 @@ function thumbPathFor(imgPath, size, outDirArg) {
 
 function usage() {
   console.error("用法：node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]");
-  console.error("      node scripts/compare.mjs --measure x,y,w,h [--measure ...] [--mask x,y,w,h ...] [--json] <图1> [<图2> ...]");
+  console.error("      node scripts/compare.mjs --measure x,y,w,h [--measure ...] [--mask x,y,w,h ...] [--mask-image 图.png [--mask-channel alpha|luma] [--mask-threshold 128] [--mask-labels cloud,sky]] [--json] <图1> [<图2> ...]");
   console.error("      node scripts/compare.mjs --diff <图2> [--threshold 8] [--heatmap 差异.png] [--mask x,y,w,h ...] [--json] <图1>");
   console.error("      node scripts/compare.mjs --row y [--row ...] [--col x ...] [--json] <图1> [<图2> ...]");
   console.error("      node scripts/compare.mjs --thumb 64 [--thumb-out 目录] [--json] <图1> [<图2> ...]");

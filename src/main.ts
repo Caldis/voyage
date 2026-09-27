@@ -361,11 +361,21 @@ let lastFrameAt = performance.now();
 // 调试：冻结（DX-08）。钉住喂给 renderFrame 的挂钟时间，renderFrame 内部按它算出的 dt 就恒为 0——
 // 位置推进、头部平滑跟随、天气（含闪电）、曝光适应等所有按 dt 累积的状态不再变化；uTime（= 冻结时刻/1000）
 // 同一批喂给翼尖静弯 / 频闪相位（ts % 1.1）、海浪相位等，也一并钉住。冻结后连续渲染逐像素一致，可用来
-// 做两张截图相减定位（`scripts/probe.mjs`、`dev-browser.mjs flicker`）。只影响真实 rAF 循环，
-// 不影响 benchFrame 这类合成测量（那边本来就是每次显式推进 16 ms，语义不同，不经过 frame()）。
+// 做两张截图相减定位（`scripts/probe.mjs`、`dev-browser.mjs flicker`）。只影响真实 rAF 循环——
+// benchFrame 这类合成测量以前不受这个变量控制（每次显式推进 16 ms，不经过 frame()），DX-22 起改成
+// 冻结时也读同一个 frozenNow（见下面 benchFrame），否则 `shots --pair` 在两张截图之间调用 benchFrame
+// 计帧时间会绕开冻结，把模拟时间 / 曝光 / 飞机位置真的推进掉，「同一机位」的两张对照图其实不同机位
+// （PERF-14 发现，DEV_SOP「测量约定」记过临时绕法）。
+//
+// DX-22：`cloudLive` 选项——冻结除云以外的一切（dt 仍恒为 0），但不跳过 `clouds.render`，让云照常按真实
+// rAF 节奏渲染 / 做时间累积重投影（`clouds.render` 内部的 `uFrame` 只受调用次数控制、不读 dt，见下面
+// renderFrame 里的判断），给 `dev-browser.mjs shots|flicker --cloud-live` 用来看云的纯时间波动
+// （位置 / 航向 / 头部 / 时间 / 曝光 / 频闪 / 地面都不动，波动来源只可能是云自己）。
 let frozenNow: number | null = null;
-function freeze(on: boolean) {
+let cloudLive = false;
+function freeze(on: boolean, opts?: { cloudLive?: boolean }) {
   frozenNow = on ? performance.now() : null;
+  cloudLive = on ? Boolean(opts && opts.cloudLive) : false;
 }
 
 function frame(now: number) {
@@ -528,7 +538,9 @@ function renderFrame(now: number) {
   // 冻结时跳过（DX-08）：clouds.render 内部有一个不受 dt 控制、每次调用都推进的抖动相位（uFrame，
   // 时间累积重投影用），跳过整次调用才能让 clouds.texture 拿到的是同一块已经画好的缓冲，逐像素不变；
   // 只改 dt 会让「这一帧」仍然用不同的抖动相位重新光线步进一次，画面会有肉眼看不出但截图能测出的残留噪声。
-  if (!frozenNow) clouds.render(flightResult.motion, camBasis, c2w);
+  // DX-22：`cloudLive` 时反过来——其余状态仍然冻结（dt=0，flightResult.motion 恒为 0），但云每次真实 rAF
+  // 调用都照常渲染，用来看云单独的时间波动（`__voyage.freeze(true, { cloudLive: true })`）。
+  if (!frozenNow || cloudLive) clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
   // 窗外（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdrOutside，舱内合成读它画到 hdr，
@@ -696,13 +708,21 @@ function benchScene(n = 20, which: "both" | "outside" | "cabin" = "both") {
   return (performance.now() - t0) / n;
 }
 
-/** 调试：连续做 n 帧的全部渲染并等 GPU 做完，返回每帧的毫秒数（不受刷新率上限影响；时间按 16 ms 一帧推进） */
+/** 调试：连续做 n 帧的全部渲染并等 GPU 做完，返回每帧的毫秒数（不受刷新率上限影响；未冻结时时间按 16 ms
+ *  一帧推进）。
+ *  DX-22：冻结时（`frozenNow != null`）改成每次都喂 `frozenNow` 本身，而不是 `last + 16`——原来的写法
+ *  绕开了 `frame()` 里 `t = frozenNow ?? now` 那一层换算，直接把挂钟往前推，renderFrame 算出的 dt 不为 0，
+ *  飞机位置、模拟时间、曝光适应这些按 dt 累积的状态照样会被推进，`shots --pair` 在两张截图之间调用
+ *  benchFrame 计帧时间时，「同一机位」的第二张其实已经不是同一机位了（PERF-14 发现的冻结失效）。
+ *  喂 `frozenNow` 后，renderFrame 内部第一次调用可能有极小的非零 dt（frozenNow 定格的那一刻到 `last`
+ *  上次停留处的差），随后 `last` 被 renderFrame 自己更新为 frozenNow，dt 恒为 0，状态不再推进；
+ *  云是否跟着渲染仍由 renderFrame 内部同一个 `!frozenNow || cloudLive` 判断决定，不用在这里另外处理。 */
 function benchFrame(n = 10) {
   const px = new Float32Array(4);
   const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
   sync();
   const t0 = performance.now();
-  for (let i = 0; i < n; i++) renderFrame(last + 16);
+  for (let i = 0; i < n; i++) renderFrame(frozenNow ?? last + 16);
   sync();
   return (performance.now() - t0) / n;
 }
@@ -710,4 +730,8 @@ function benchFrame(n = 10) {
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
 // DX-12：新增 sunAltDeg / moonAltDeg（截图 JSON 附太阳 / 月亮高度用，见 README「调试与验证」），
 // 复用已有的 lastSunAlt / lastMoonAlt（每帧更新，见上）——不重复算一遍天文位置
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };
+// DX-22：新增 hdrWing——`dev-browser.mjs shots --pair --base-shader --material wingMat` 换上机翼材质的
+// 着色器原文后要在正确的目标（hdrWing，机翼 pass 真正画进去的那块）上强制编译 + 预渲染一次，不然
+// ANGLE/D3D11 按「链接时绑定的帧缓冲」生成的输出布局和真正使用时不一致，会在下一次真实渲染时同步重编
+// （README「着色器编译」坑点，PERF-1）。以前 dev-browser.mjs 只能退而求其次统一绑到 hdrOutside。
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };
