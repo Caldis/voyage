@@ -33,6 +33,8 @@ struct GroundHit {
   float fpLong; //                   像素足迹沿视线方向的长轴（米），细节按它淡出
   float alt;    //                   命中点海拔（km，相对相机算的精确值，阴影用）
   float cov;    //                   这个像素被地形盖住的比例（轮廓抗锯齿：擦着山脊 / 远处地平线过去的视线 < 1）
+  float occ;    //                   途中擦过的更近一道山脊盖住这个像素的比例，tOcc 是它的距离（km）（层叠山脊之间的抗锯齿）
+  float tOcc;
 #endif
 };
 #ifdef RAIL

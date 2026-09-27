@@ -130,11 +130,12 @@ export async function applyScene(arg) {
       el.dispatchEvent(new Event(el.tagName === "SELECT" || el.type === "date" ? "change" : "input"));
     }
   };
+  // TR03：页面打开时的日期要在设任何场景之前记下（原来在设完场景之后才记，第一个场景写了 date 时记下的就是那一天，后面没写 date 的场景都被带过去）
+  window.__voyageInitialDate ??= document.getElementById("date")?.value;
   for (const [id, val] of Object.entries({ ...defaults, ...sc.p })) set(id, val);
   if (sc.p.coverage === undefined) set("coverage", 0.42);
   // 日期（T09）：场景没写 date 时恢复成页面打开时的日期，免得上一个写了 date 的场景把后面的场景也带到那一天
   // （DX-10：老版本页面可能连 #date 控件都没有，可选链 + 判空防止整段中断）
-  window.__voyageInitialDate ??= document.getElementById("date")?.value;
   if (sc.p.date === undefined && window.__voyageInitialDate !== undefined) set("date", window.__voyageInitialDate);
   if (sc.p.time !== undefined) set("time", sc.p.time);
   // 上一个场景留下的状态也要清掉（例如穿云后的窗上水痕、颠簸）

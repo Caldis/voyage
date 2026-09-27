@@ -54,12 +54,16 @@ float railTerrainHeight(vec2 xz, float lod) {
   return mix(uRailNearGroundKm, hT, w);
 }
 
-// 视线与火车远景地形求交，返回距离（km），打不到返回 −1（天空）。
-// cov：像素被地形盖住的比例。打到了是 1；没打到、但途中离地形最近处不到一个像素（按那里的像素竖直足迹算）时，
-// 返回那一处的距离、cov = 1 − 最近距离 / 足迹（单侧的轮廓抗锯齿：贴地掠射时远处低矮的山脊几乎和地平线平行，
-// 不抗锯齿就是一段段 1 像素的水平台阶，列车一动就沿轮廓爬）
-float railTerrainHit(vec3 rd, out float cov) {
+// 视线与火车远景地形求交，返回距离（km），打不到返回 −1（天空）。顺带给出轮廓抗锯齿要的两个量（按像素的竖直足迹算）：
+// - cov：没打到、但途中离地形最近处不到一个像素时，返回那一处的距离，cov = 1 − 最近距离 / 足迹；打到了是 1。
+// - occ / tOcc：打到了（远处的山），但途中擦着一道更近的山脊过去（离它不到一个像素）时，occ = 那道山脊盖住这个像素的比例、tOcc 是它的距离，
+//   调用处把远山的颜色按 tOcc 重新加一遍空气透视，当作近处那道山脊的颜色混进来（一层层山脊主要差在雾的深浅上）。
+// 这是单侧的抗锯齿（轮廓往外扩不到一个像素）。贴地掠射时远处的山脊几乎和地平线平行，不抗锯齿就是一段段 1 像素的水平台阶，
+// 列车一动就沿轮廓爬（飞机上看不出来：视线陡，轮廓短）
+float railTerrainHit(vec3 rd, out float cov, out float occ, out float tOcc) {
   cov = 1.0;
+  occ = 0.0;
+  tOcc = 0.0;
   float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
   float lh = max(length(rd.xz), 1e-4);
   // 近处平面：250 m 内地球曲率只差几厘米，按平面解析求交
@@ -73,7 +77,8 @@ float railTerrainHit(vec3 rd, out float cov) {
   float tEnd = tSea > 0.0 ? tSea : tTop;
   if (tEnd <= 0.0) return -1.0;
   tEnd = min(tEnd, 400.0);
-  float t = RAIL_NEAR_END / lh;
+  float tNear = RAIL_NEAR_END / lh;
+  float t = tNear;
   if (t >= tEnd) return -1.0;
   float mu = rd.y;
   float altPrev = railAltAlong(uRailCamAltKm, mu, t);
@@ -82,7 +87,9 @@ float railTerrainHit(vec3 rd, out float cov) {
   float cPrev = altPrev - hPrev;
   float c = cPrev;
   bool hit = false;
-  float dMin = 1e9, tMin = t; // 途中离地形最近（以像素计）的一处
+  float dMin = 1e9, tMin = t;     // 途中离地形最近（以像素计）的一处
+  float dLoc = 1e9, tLoc = t;     // 其中是「局部最近、之后又离远」的一处（擦过的山脊，不是最后打到的那片地面）
+  float dP = 1e9, dPP = 1e9;
   // 上限用 uniform（uRailSteps）：常量上限会被 FXC 整个展开
   for (int i = 0; i < uRailSteps; i++) {
     float alt = railAltAlong(uRailCamAltKm, mu, t);
@@ -91,10 +98,13 @@ float railTerrainHit(vec3 rd, out float cov) {
     if (c < 0.0) { hit = true; break; }
     float dPx = c * lh / (t * pixelAngle); // 离地形的竖直距离，换算成像素（近水平的视线，竖直足迹 ≈ t·像素张角 / 水平分量）
     if (dPx < dMin) { dMin = dPx; tMin = t; }
+    if (dP < dPP && dPx > dP && dP < dLoc) { dLoc = dP; tLoc = tPrev; }
+    dPP = dP;
+    dP = dPx;
     if (t >= tEnd) break;
     // 步长下限按距离放大（3 km 内 4%，20 km 外 10%）：平原上掠射的视线离地只有几米，按离地高度缩步会在几十步内用完。
     // 地形朝视线逼近（这一步里地形比视线升得多）时，按逼近的速度预估还有多远会碰上，只走其中一半，免得跨过山脊；
-    // 不能一逼近就退回飞机版的小步（0.004t + 10 m）：平原上高度有起伏，一半的步都在「逼近」，步数照样用完（第一版就是这样，远处地平线成了一段段台阶）
+    // 不能一逼近就退回飞机版的小步（0.004t + 10 m）：平原上高度有起伏，一半的步都在「逼近」，步数照样用完
     float k = mix(0.04, 0.1, smoothstep(3.0, 20.0, t));
     float closeRate = ((hg - hPrev) - (alt - altPrev)) / max(t - tPrev, 1e-4);
     float floorStep = max(k * t, 0.01);
@@ -105,12 +115,30 @@ float railTerrainHit(vec3 rd, out float cov) {
     cPrev = c;
     t = min(t + max(1.5 * c, floorStep), tEnd);
   }
-  // 没打到：步数用完而视线还在往下走，当作打在最后一步处的地面（内陆线路，不退回海平面球）；否则是天空
-  if (!hit) {
-    if (t < tEnd && railAltAlong(uRailCamAltKm, mu, t) < uRailCamAltKm) return t;
-    cov = 1.0 - dMin;
-    return cov > 0.0 ? tMin : -1.0;
+  // 没打到：步数用完而视线还在往下走，当作打在最后一步处的地面（内陆线路，不退回海平面球）
+  if (!hit && t < tEnd && railAltAlong(uRailCamAltKm, mu, t) < uRailCamAltKm) return t;
+  // 轮廓附近：步长是距离的 4–10%，真正离山脊最近的一处多半落在两步之间。离轮廓不到几十个像素时细找：
+  // 先在 ±12% 内取 8 个点，再在新的最近处 ±3% 内取 8 个点（一个调用点，循环里按轮次换区间）；打到了的视线只在最后一步之前找
+  float dR = hit ? dLoc : dMin;
+  float tR = hit ? tLoc : tMin;
+  if (dR < 40.0) {
+    float tLim = hit ? tPrev : tEnd;
+    float span = 0.12 * tR;
+    float tc = tR;
+    for (int j = 0; j < 16 + uLoopGuard; j++) {
+      if (j == 8) { span *= 0.25; tc = tR; }
+      float tj = clamp(tc - span + (float(j - (j / 8) * 8) + 0.5) * (2.0 * span / 8.0), tNear, tLim);
+      float cj = railAltAlong(uRailCamAltKm, mu, tj) - railTerrainHeight(rd.xz * tj, groundLod(tj * lh, tj * pixelAngle));
+      float dj = max(cj, 0.0) * lh / (tj * pixelAngle);
+      if (dj < dR) { dR = dj; tR = tj; }
+    }
   }
+  if (!hit) {
+    cov = clamp(1.0 - dR, 0.0, 1.0);
+    return cov > 0.0 ? tR : -1.0;
+  }
+  occ = clamp(1.0 - dR, 0.0, 1.0);
+  tOcc = tR;
   // 在上一步与这一步之间二分，最后按两端的离地高度线性插值。上限「5 + uLoopGuard」防展开
   float a = tPrev, b = t, ca = cPrev, cb = c;
   for (int k = 0; k < 5 + uLoopGuard; k++) {
@@ -197,8 +225,8 @@ vec3 railNearCover(vec2 g, vec3 alb, float fp) {
 }
 
 bool railGroundHit(vec3 ro, vec3 rd, out GroundHit gh) {
-  float cov;
-  float tT = railTerrainHit(rd, cov);
+  float cov, occ, tOcc;
+  float tT = railTerrainHit(rd, cov, occ, tOcc);
   if (tT <= 0.0) return false;
   vec3 P = ro + rd * tT;   // 地心坐标：只拿去求方向、查云影 / 光照；高度一律用下面的相对量
   vec3 up = normalize(P);
@@ -246,6 +274,8 @@ bool railGroundHit(vec3 ro, vec3 rd, out GroundHit gh) {
   gh.fpLong = longM;
   gh.alt = railAltAlong(uRailCamAltKm, rd.y, tT);
   gh.cov = cov;
+  gh.occ = occ;
+  gh.tOcc = tOcc;
   return true;
 }
 `;

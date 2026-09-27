@@ -138,6 +138,15 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
       L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);
 #ifdef RAIL
       L = mix(skyRadiance(rd, false), L, gh.cov); // 火车远景（TR03）：地形轮廓抗锯齿（擦着轮廓过去的视线只盖住一部分像素）
+      // 层叠山脊之间的抗锯齿：擦过的近处山脊按「同一片地表、换成它那个距离的空气透视」估它的颜色，按覆盖比例混进来
+      if (gh.occ > 0.0) {
+        vec3 surf = (L - gh.apL) / max(gh.apT, vec3(1e-4));
+        vec3 uvwO = aerialPerspectiveUvw(rd, uSunDir, gh.tOcc);
+        vec3 nearL = texture(uAerialInscatterS, uvwO).rgb * uSunIlluminance + texture(uAerialTransmittanceS, uvwO).rgb * surf;
+        L = mix(L, nearL, gh.occ);
+      }
+      // 调试 26（只在火车变体里，不乘曝光前的量级，用 ×0.3 让它在白天的曝光下落在可读范围）：红 = 轮廓覆盖率，绿 = 命中距离 / 50 km，蓝 = 擦过的近处山脊的覆盖率
+      if (uDebug == 26) return vec3(gh.cov, gh.t / 50.0, gh.occ) * 0.3;
 #endif
     } else {
       // 开阔海面：相机到海面的透射率 = T(海面→层顶) / T(相机→层顶)，两段都是朝上的射线
@@ -170,7 +179,18 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
   L += opticsSunDisk(rd, hitGround);
   // 地形挡住它后面的云（T38，clouds.glsl.ts 的 cloudBeforeGround）：云步进不知道地形，只去掉地面之后那一段的云
+#ifdef RAIL
+  // 火车远景（TR03）：轮廓上只盖住一部分像素的地形，身后的云也只挡掉那一部分（否则云在山脊处被一刀切成台阶）
+  // 擦过的近处山脊（gh.occ）同理：按覆盖比例在「切到远山」和「切到近处山脊」之间混
+  if (onGround) {
+    float cDepth = cloudBufferDepth(uClouds, gl_FragCoord.xy / uResolution);
+    vec4 cFar = cloudBeforeGround(cloud, cDepth, tGround);
+    if (gh.occ > 0.0) cFar = mix(cFar, cloudBeforeGround(cloud, cDepth, gh.tOcc), gh.occ);
+    cloud = mix(cloud, cFar, gh.cov);
+  }
+#else
   if (onGround) cloud = cloudBeforeGround(cloud, cloudBufferDepth(uClouds, gl_FragCoord.xy / uResolution), tGround);
+#endif
   // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光（T17：云的光乘宝光 / 本机影子，再加卷云里的幻日和晕）
   return opticsComposite(L, cloud, rd);
 }
@@ -248,6 +268,8 @@ type VariantState = "idle" | "compiling" | "ready" | "failed";
 class LazyVariant {
   material: THREE.ShaderMaterial | null = null;
   state: VariantState = "idle";
+  /** 从开始后台编译到编好（或失败）的毫秒数（性能核对用；页面里的真实编译，含 KHR_parallel_shader_compile 的轮询粒度） */
+  compileMs = 0;
 
   constructor(
     private readonly base: THREE.ShaderMaterial,
@@ -259,6 +281,7 @@ class LazyVariant {
   prepare(renderer: THREE.WebGLRenderer) {
     if (this.state !== "idle") return;
     this.state = "compiling";
+    const t0 = performance.now();
     const b = this.base;
     const m = new THREE.ShaderMaterial({
       vertexShader: b.vertexShader,
@@ -295,7 +318,10 @@ class LazyVariant {
       .catch(() => {
         this.state = "failed";
       })
-      .finally(() => geometry.dispose());
+      .finally(() => {
+        this.compileMs = performance.now() - t0;
+        geometry.dispose();
+      });
   }
 }
 
@@ -346,6 +372,11 @@ export class GroundDetailVariant {
   /** 火车远景变体的编译状态（回归场景等它编好再截图） */
   get railStatus() {
     return this.rail.state;
+  }
+
+  /** 火车远景变体的后台编译耗时（毫秒） */
+  get railCompileMs() {
+    return this.rail.compileMs;
   }
 
   /** 火车远景变体的材质（编好之前是 null；性能对照、探针用） */
