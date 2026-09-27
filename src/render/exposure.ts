@@ -262,7 +262,7 @@ uniform vec2 uOffLocusAdapt; // 适应白点偏离普朗克轨迹的那部分人
 uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度限幅（log2 色度向量的长度）
 uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 x→y、像素亮度 log10 cd/m² z→w 之间由 0 过渡到 1（只在窗外）
 uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
-uniform vec2 uNightLocal;     // T48b 夜里窗外的局部适应：低通亮度超过中灰 x 档的部分，整个像素压暗 y × 超出量（log2）；y = 0 关
+uniform vec3 uNightLocal;     // T48b 夜里窗外的局部适应：低通亮度超过中灰 x 档的部分，整个像素压暗 y × 超出量（log2）；y = 0 关；z：T48c 机翼翼面自身参与的比例（见下文）
 uniform sampler2D uLocalLum;  // T48c 局部适应用的低通亮度（LOCAL_FRAG 的结果：眩光亮度 ÷ uBloomLevels，带时间常数）
 uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
 uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透明度 x→y 之间由 0 过渡到 1，z = 1 开 / 0 不看云（整窗都给）
@@ -407,6 +407,8 @@ void main() {
   vec3 hdr = src.rgb;
   vec3 glare = texture(uBloom, vUv).rgb / uBloomLevels;
   vec3 c = mix(hdr, glare, uGlare);
+  // T48c 这个像素里眩光（点扩散）占的亮度比例：机翼上夜间局部适应只压这一份（见下文 TONE_MAPPING 段）
+  float glareFrac = clamp(uGlare * dot(glare, vec3(0.2126, 0.7152, 0.0722)) / max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12), 0.0, 1.0);
   // 舱内色适应：只改色度，亮度保持（亮度适应已由上面的曝光负责）；遮罩是解析的，交界处按 alpha 过渡
   vec3 ca = max(LMS2RGB * (catGain * (RGB2LMS * c)), vec3(0.0));
   ca *= dot(c, vec3(0.2126, 0.7152, 0.0722)) / max(dot(ca, vec3(0.2126, 0.7152, 0.0722)), 1e-9);
@@ -439,10 +441,7 @@ void main() {
     float nightO = 1.0 - smoothstep(uNightChroma.y, uNightChroma.z, (logAdaptO + 9.965784) * 0.30103);
     //    只按饱和度门控、不再乘像素亮度门限：暗处 AgX 本来就几乎不压色度（目标 ≈ AgX 自己），叠两道门限会让雾边缘的色相变化太陡
     nightChroma = uNightChroma.x * nightO * satKeep;
-    //    T48c：再乘「非机翼」（TM02 的同一判据，dW 上面已算好，不多采样）。机翼和翼尖灯是近处的东西，
-    //    眼睛不会因为紧挨着一盏极亮的灯就把翼面局部适应掉：不乘时位置灯旁的翼面在 15–20 px 处出现约 12 级的暗环、
-    //    频闪亮起时翼梢反而变暗（审查 P2-1）。天空一侧的光晕照样按局部适应变小（宁可小，不要糊）
-    nightLoc = nightO * src.a * notWing;
+    nightLoc = nightO * src.a;
   }
   gl_FragColor = vec4(c * exposure, 1.0);
   if (uDebugMask) { gl_FragColor = vec4(vec3(src.a), 1.0); return; }
@@ -458,7 +457,13 @@ void main() {
     //    T48c：低通亮度改读 uLocalLum（同一个眩光低通，只是带了时间常数，见 LOCAL_FRAG），频闪 / 闪电不当帧进适应
     float lb = log2(max(texture(uLocalLum, vUv).r * exposure, 1e-9) / 0.18) - uNightLocal.x;
     float lq = clamp(lb + 0.5, 0.0, 1.0);
-    x *= exp2(-uNightLocal.y * (0.5 * lq * lq + max(lb - 0.5, 0.0)) * nightLoc);
+    float gLoc = exp2(-uNightLocal.y * (0.5 * lq * lq + max(lb - 0.5, 0.0)) * nightLoc);
+    //    T48c 机翼（TM02 的 notWing 判据，dW 上面已算好，不多采样）：落在翼面上的眩光那一份照常压，翼面自身只按 uNightLocal.z 的比例压。
+    //    整个像素一起压（z = 1，T48b）时，位置灯旁的翼面（自身中等亮、紧挨极亮的灯）出现约 12–15 级的暗环（审查 P2-1）；
+    //    整个像素都不压时，灯的眩光在翼面一侧比天空一侧大一圈、贴着白灯的翼面死白（1 km 低空 1256 px 的块）；
+    //    只压眩光（z = 0）光晕两侧一样大、翼面单调，但死白块仍有 673 px。z = 0.7：径向剖面单调、死白块 336 px（handoff/T48c.md 扫描表）。
+    //    频闪 / 闪电不当帧进适应靠的是 uLocalLum 的时间常数，不靠这里。非机翼像素 notWing = 1，与 T48b 逐点相同
+    x *= mix(1.0 + max(glareFrac, uNightLocal.z) * (gLoc - 1.0), gLoc, notWing);
     // TM01：白天窗外的受光云在 AgX 肩部保留对比（见 dayHighlightGain）；夜里、黄昏、舱内、云里 hiGate = 0，逐位不变
     //    TM02：低通取眩光（uBloom 的 mip 链，各级加权平均，已经读过），按同一个曝光换算
     vec3 a = toneMapping(x * exp2(dayHighlightGain(x, glare * exposure) * hiGate));
@@ -564,7 +569,7 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  * T48b「夜城不连成奶白平台」（只在夜里的窗外，门控同 T48 的 nightO × 窗外遮罩）：
  *   ① AgX 之前按眩光低通亮度 b 局部适应：x ·= 2^(−0.6 · 软铰链(log2(b / 0.18) − 3))，城区的地毯光被压回 AgX 的线性段，灯点 / 路网（低通之上的细节）照原样；
  *   ② T48 色度保持的目标改成「同色相、亮度 = AgX」，放不下时向同亮度的白去饱和（旧写法按 1/max 降亮度，把所有过曝的灯压到同一亮度）。
- *   T48c：① 的门控再乘「非机翼」（TM02 的 dW 判据），机翼 / 翼尖灯不参与；① 的低通 b 改用带时间常数的版本（LOCAL_FRAG，
+ *   T48c：机翼上（TM02 的 dW 判据）只压眩光那一份 + 翼面自身的 0.7；① 的低通 b 改用带时间常数的版本（LOCAL_FRAG，
  *     半分辨率 ping-pong，对数域指数平滑，变亮 τ 0.25 s / 变暗 0.1 s），频闪、闪电这类瞬态不当帧把周围压暗。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
  * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
@@ -641,7 +646,7 @@ export class Exposure {
       uMesopicKeep: { value: new THREE.Vector4(0.5, 0.85, -2.0, -0.8) },
       uNightChroma: { value: new THREE.Vector3(0.45, -1.5, 0.0) }, // 协调者合并时 0.6 → 0.45：雾芯留一点明暗层次
       // T48b：拐点中灰 +3 档、斜率 0.6（+2 / 0.5、+2.5 / 0.6 更暗，+2 / 0.7 城区发灰；见 handoff/T48b.md）
-      uNightLocal: { value: new THREE.Vector2(3.0, 0.6) },
+      uNightLocal: { value: new THREE.Vector3(3.0, 0.6, 0.7) }, // T48c z：翼面自身参与 0.7（0 时贴着白灯的翼面死白块 673 px，1 = T48b 的暗环；handoff/T48c.md）
       uLocalLum: { value: null },
       // TM01：膝点中灰 +0.5 档（显示约 144）、顶点 +2.5（约 203）、收回到 +5.0，段内斜率 1.4；w = 1 即关（见 handoff/TM01.md 的方案对比）
       // 返工：收回终点 4.0 → 5.0（+2.5→+4 档的局部对比从 0.39 回到 0.54；最亮的云边 / 砧顶细节要留住）

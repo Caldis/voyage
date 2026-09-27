@@ -124,6 +124,7 @@ try {
       if (m.fragmentShader !== window.__t48bSrc) { m.fragmentShader = window.__t48bSrc; m.needsUpdate = true; }
       window.__voyage.freeze(false);
       const w = window.__voyage.wingDebug; if (w) w.strobe = null;
+      if ("localDt" in window.__voyage.exposure) window.__voyage.exposure.localDt = null; // T48c 调试句柄，变体里可能改过
     });
   }
   console.log(errors.length ? `console error ${errors.length} 条，前 3 条：${errors.slice(0, 3).join(" | ")}` : "没有 console error");
