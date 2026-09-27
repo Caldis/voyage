@@ -11,6 +11,7 @@ import { WONDERS } from "./wonders/catalog";
 import { RARITY_LEVELS, type WonderSystem } from "./wonders/system";
 import { isHeavyWeather, type QualityController, type QualityTier } from "./quality";
 import type { CabinAudio } from "./audio";
+import type { DebugMinimap } from "./debug/minimap";
 
 /**
  * 面板：DOM 绑定、信息栏文字、方位文字（COMPASS）。从 main.ts 拆出（T01 纯重构，未改动任何取值或绑定顺序）。
@@ -119,6 +120,8 @@ export interface UiDeps {
   quality: QualityController;
   /** 声音（T11） */
   audio: CabinAudio;
+  /** 调试小地图（DX-06） */
+  minimap: DebugMinimap;
 }
 
 /** 绑定面板上的所有控件。调用一次，顺序和原来 main.ts 里一致。 */
@@ -285,6 +288,7 @@ export function setupUi(deps: UiDeps) {
   setupVoyageUi(director);
   setupWonderUi(deps.wonders);
   setupSoundUi(deps.audio);
+  setupMinimapUi(deps.minimap);
 
   // 画质（PERF-5）：面板只负责挑档位（自动 / 高 / 中 / 低），具体分辨率 / DPR 上限与自适应逻辑都在 quality.ts
   const qualitySel = $<HTMLSelectElement>("quality");
@@ -427,6 +431,22 @@ function setupSoundUi(audio: CabinAudio) {
   chime.addEventListener("change", () => audio.setOption("chime", chime.checked));
   window.addEventListener("keydown", (e) => {
     if ((e.key === "m" || e.key === "M") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) audio.toggle();
+  });
+  sync();
+}
+
+// ---------- 调试小地图（DX-06） ----------
+
+/** 面板开关 + 快捷键 N（不在输入框里时）。地图本身默认关，画在左下角，是独立于面板的 canvas 叠层 */
+function setupMinimapUi(minimap: DebugMinimap) {
+  const box = $<HTMLInputElement>("minimap-on");
+  const sync = () => (box.checked = minimap.enabled);
+  box.addEventListener("change", () => minimap.setEnabled(box.checked));
+  window.addEventListener("keydown", (e) => {
+    if ((e.key === "n" || e.key === "N") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) {
+      minimap.toggle();
+      sync();
+    }
   });
   sync();
 }

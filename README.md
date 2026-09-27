@@ -14,6 +14,7 @@
 - 鼠标移动 = 挪动头部（窗框视差），滚轮 = 靠近 / 远离舷窗，`H` 隐藏面板
 - 声音（T11）：默认关；面板勾选「声音」或按 `M` 开启（浏览器要求用户手势），背景板模式下照常播放、`M` 仍可开关
 - 时间：日期 + 当地时刻滑块，或用 60× / 600× 快进看日落
+- 调试小地图（DX-06）：面板勾选「调试小地图」或按 `N` 开启（默认关），左下角显示航向 / 轨迹 / 航线 / 云回波 / 交通 / 奇观；点击地图切换 50 / 200 / 800 km 量程
 
 ## 渲染管线（每帧）
 
@@ -43,6 +44,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/sky-assets.ts` | 星图（BSC5 溅射成 HDR）、月面贴图 |
 | `src/traffic.ts` / `src/weather.ts` | 远处飞机的运动；天气预设、雷暴 / 台风摆放、闪电调度；天气场 `WeatherField`（T19b：按经纬度 + 时间取样云型 / 云量，雷暴系统与台风的出生、寿命、漂移，粗略东亚海陆分布） |
 | `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
+| `src/debug/minimap.ts` | 调试小地图（DX-06）：可选的角落 2D canvas 叠层，画本机 / 轨迹 / 航线 / 交通 / 奇观，以及从天气场采样的云回波「多普勒」图；不碰任何 WebGL 程序 |
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
 | `src/atmosphere/luts.ts` | 透射率 / 多次散射 / 辐照度 / 天空视图 / 空气透视 LUT；`setHaze` 设边界层霾 |
 | `src/atmosphere/haze.ts` / `src/render/haze.glsl.ts` | 低空障眼法（T18）：边界层霾参数（按时段、地区、日期）、清晨谷地辐射雾 |
@@ -73,7 +75,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 
 ## 调试与验证
 
-- `window.__voyage`：`state`、`head`、`cloudUniforms`、`snapAll`、`clouds`、`resize`、`sceneMat`、`exposure`、`traffic`、`ground`、`weather`。
+- `window.__voyage`：`state`、`head`、`cloudUniforms`、`snapAll`、`clouds`、`resize`、`sceneMat`、`exposure`、`traffic`、`ground`、`weather`、`minimap`（DX-06 调试小地图，见下）。
+- **调试小地图**（DX-06，`src/debug/minimap.ts`）：面板底部「调试小地图」开关，或按 `N`（不在输入框里时）；默认关，纯 2D canvas 叠层，画在左下角（约 280×300、半透明深色底，不挡舷窗中心），关着时 `update()` 第一行就返回、canvas `display:none`，零开销。内容：本机（图标固定圆心，地图始终「航向朝上」）、已飞过的轨迹、当前航线（`director.leg` 的航段或 `state.preset.dest`）、远处的其他飞机（`traffic.ts`）、奇观（`wonders.active`）、以及「云的多普勒」——仿气象雷达回波图，背景网格从 `director.weather.field.sample()`（天气场）按经纬度采样云量 / 云型换算出回波强度，叠加当前**实际渲染中**的 `weather.storms` / `weather.hurricane`（不论天气是导演按天气场摆的还是面板手选的，雷达图都和窗外一致）。点击地图本体在 50 / 200 / 800 km 三档量程间切换。雷达网格（48×48）每约 800 ms 重采样一次，且分帧算（每帧最多 4 行），避免拖帧；台风的螺旋雨带是按角度做正弦调制的近似图形（用于「看起来像螺旋回波」），不是 `clouds.glsl.ts` 里真正的密度场（CPU 侧读不到那份数据）。
 - `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
 - `window.__voyageStartup`：启动各阶段耗时。
 - URL 参数 `?lut16`：大气 LUT 强制用半精度（T36 改前的行为、没有 32 位浮点线性过滤的设备），用来对照深暮光的阶梯。
