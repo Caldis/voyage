@@ -28,10 +28,25 @@ struct GroundHit {
   vec3 wat;     // 水体遮罩：r 水面、g 海洋通道、b 夜光
   vec3 apL;     // 相机到地面的空气透视：内散射
   vec3 apT;     //                        透射率
+#ifdef RAIL
+  vec3 nT;      // 火车远景（TR03）：地形法线（求交时已算好，groundLand 直接用）
+  float fpLong; //                   像素足迹沿视线方向的长轴（米），细节按它淡出
+  float alt;    //                   命中点海拔（km，相对相机算的精确值，阴影用）
+  float cov;    //                   这个像素被地形盖住的比例（轮廓抗锯齿：擦着山脊 / 远处地平线过去的视线 < 1）
+  float occ;    //                   途中擦过的更近一道山脊盖住这个像素的比例，tOcc 是它的距离（km）（层叠山脊之间的抗锯齿）
+  float tOcc;
+#endif
 };
+#ifdef RAIL
+// 火车远景（TR03）的求交与取样，定义在 rail/far-view.glsl.ts（只拼进火车变体）
+bool railGroundHit(vec3 ro, vec3 rd, out GroundHit gh);
+#endif
 
 // 第一步：地形求交、取影像和水体遮罩。返回 false 表示这条视线没打到地面（或还没有地面数据），交给原来的海面 / 天空处理
 bool groundHit(vec3 ro, vec3 rd, out GroundHit gh) {
+#ifdef RAIL
+  return railGroundHit(ro, rd, gh);
+#else
   float tT = terrainHit(ro, rd);
   if (tT <= 0.0) return false;
   vec3 P = ro + rd * tT;
@@ -76,6 +91,7 @@ bool groundHit(vec3 ro, vec3 rd, out GroundHit gh) {
   gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
   gh.apT = texture(uAerialTransmittanceS, uvw).rgb;
   return true;
+#endif
 }
 
 // 第二步：陆地（水体遮罩 < 1 的部分）的辐亮度，还没乘空气透视的透射率、没乘 (1 − 水面比例)。
@@ -87,16 +103,28 @@ vec4 groundLand(GroundHit gh, float cs, vec3 eFlash) {
   float lod = gh.lod;
   vec4 alb = gh.alb;
   float h = length(P) - BOTTOM;
+#ifdef RAIL
+  vec3 n = gh.nT;
+#else
   vec3 n = terrainNormal(g, up, lod);
+#endif
   float ndl = dot(n, uKeyDir);
   vec3 eKey = keyLight(BOTTOM + h, up) * cs;
+#ifdef RAIL
+  if (ndl > 0.0) eKey *= railTerrainShadow(P, gh.alt, uKeyDir, lod);
+#else
   if (ndl > 0.0) eKey *= terrainShadow(P, uKeyDir, lod);
+#endif
   vec3 eSky = skyIrradiance(BOTTOM + h, up);
   vec3 albMul = vec3(1.0);
   vec3 nD = n;
   float shadowD = 1.0, aoD = 1.0;
 #ifdef GROUND_DETAIL
+#ifdef RAIL
+  float fpM = gh.fpLong, texelM = gh.texelM; // 火车：贴地掠射，细节按足迹长轴淡出，不在斜看时闪
+#else
   float fpM = gh.fpM, texelM = gh.texelM;
+#endif
   // 低空近景细节：田块、树冠、街区与楼影（远处自动淡出，返回「无细节」）
   // 夜里（月光）细节几乎看不见，省掉；城市灯光另算，不受影响
   bool dayDetail = uSunDir.y > -0.05 && fpM < 24.0;

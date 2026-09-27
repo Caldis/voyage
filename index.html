@@ -64,6 +64,21 @@
         <button type="button" data-voyage-rate="60">60×</button>
       </div>
       <button id="backdrop-on" type="button">背景板模式（隐藏面板，按 Esc 或 B 退出）</button>
+      <!-- 航向控制（T49，flight.ts 的自动驾驶 + director.ts）：默认「自动航线」（沿大圆航线、到达后接下一段）；
+           左右转 / 航向滑块 = 手动航向，直飞机场到达后盘旋，盘旋 = 跑道形等待航线。转弯按真实客机：坡度 ≤ 25°、滚转约 3°/s -->
+      <div class="row rates" id="nav-modes">
+        <span>航向</span>
+        <button type="button" data-nav="route">自动航线</button>
+        <button type="button" data-nav="heading">保持航向</button>
+        <button type="button" data-nav="hold">盘旋</button>
+      </div>
+      <div class="row">
+        <button id="turn-left" type="button" title="左转 15°；按住连续转（方向键 ←）">◀ 左转</button>
+        <label>选定航向 <output id="hdg-out"></output><input id="hdg" type="range" min="0" max="359" step="1" value="0" /></label>
+        <button id="turn-right" type="button" title="右转 15°；按住连续转（方向键 →）">右转 ▶</button>
+      </div>
+      <label title="沿大圆航线从当前位置飞过去，到达后在机场上空盘旋">直飞机场<small>（到达后盘旋）</small><select id="nav-dest"></select></label>
+      <p id="nav-status" class="hint"></p>
       <!-- 奇观模式（W01，research/WONDERS.md）：默认关；开了之后偶尔在远方出现不真实的东西，出现时不弹任何提示 -->
       <label class="check"><input id="wonders-on" type="checkbox" />奇观模式（偶尔在远方出现不真实的东西）</label>
       <div id="wonder-controls" hidden>
@@ -76,11 +91,18 @@
         <p id="wonder-status" class="hint"></p>
       </div>
       <!-- 声音（T11，src/audio.ts）：默认关；勾选后才创建 AudioContext（浏览器的自动播放限制）。M 键开关，背景板模式下也有效 -->
-      <label class="check"><input id="sound-on" type="checkbox" />声音（舱内底噪、发动机、雷声；按 M 开关）</label>
+      <label class="check"><input id="sound-on" type="checkbox" />声音（飞机舱内 / 火车车内；按 M 开关）</label>
       <div id="sound-controls" hidden>
         <label>音量 <output id="sound-volume-out"></output><input id="sound-volume" type="range" min="0" max="100" step="1" value="60" /></label>
         <label class="check"><input id="sound-aircon" type="checkbox" checked />空调出风（很轻）</label>
         <label class="check"><input id="sound-chime" type="checkbox" />偶尔的客舱提示音（很少、很轻）</label>
+        <!-- TR07：火车的钢轨接缝。本线是否已长轨化未核实，默认「定尺（示例）」是为了听到「ガタンゴトン」 -->
+        <label>火车 · 钢轨接缝
+          <select id="sound-rail-joints">
+            <option value="jointed">定尺 25 m（示例：本线未核实）</option>
+            <option value="welded">长轨化（几乎没有接缝声）</option>
+          </select>
+        </label>
       </div>
       <label>座位
         <select id="seat">
@@ -158,11 +180,15 @@
       <label id="manual-row">手动曝光 <output id="manual-ev-out"></output><input id="manual-ev" type="range" min="-2" max="17" step="0.1" value="14" /></label>
       <!-- 调试小地图（DX-06）：默认关；纯 2D canvas 叠层，画在左下角，不碰任何 WebGL 程序 -->
       <label class="check"><input id="minimap-on" type="checkbox" />调试小地图（航向 / 云回波 / 交通 / 奇观，快捷键 N；点击地图切换量程）</label>
+      <!-- 调试（T49）：不等飞到终点，立即走一次「到达」：自动航线接下一段（含大角度掉头的遮挡排队），直飞转入盘旋。同 __voyage.director.forceArrive() -->
+      <button id="debug-arrive" type="button">立即触发到达 / 接下一段（调试）</button>
       <pre id="info"></pre>
       <p class="hint">移动鼠标 = 挪动头部，滚轮 = 靠近 / 远离舷窗</p>
       <p class="credits">影像：Sentinel-2 cloudless 2020 by EOX IT Services GmbH（含修改过的 Copernicus Sentinel 数据，CC BY-NC-SA 4.0）· 地形：AWS Terrain Tiles · 水体：© OpenStreetMap contributors（OpenFreeMap）<br />关闭真实地理数据时，岛屿为程序生成的示例，不对应真实地理。<br />星表：耶鲁亮星表 BSC5（CDS V/50）· 月面贴图 © Solar System Scope（CC BY 4.0）</p>
     </aside>
     <!-- 背景板模式：只在鼠标移动后的几秒内显示的提示与退出按钮 -->
+    <!-- 火车车内广播的字幕（TR07，示意）：广播时出现几秒 -->
+    <div id="rail-caption" aria-live="polite"></div>
     <div id="backdrop-hint" hidden>背景板模式 · 连续航程播放中 <button id="backdrop-exit" type="button">退出</button></div>
     <style>
       /* 背景板模式（T19a）：面板隐藏（#panel.hidden），鼠标静止后光标与提示一起隐去 */
@@ -177,6 +203,13 @@
       body.backdrop.backdrop-idle #backdrop-hint { opacity: 0; pointer-events: none; }
       body.backdrop.backdrop-idle, body.backdrop.backdrop-idle * { cursor: none; }
       #panel button:disabled { opacity: .4; cursor: default; }
+      #rail-caption {
+        position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%);
+        padding: 6px 16px; border-radius: 8px; background: var(--panel-bg); color: var(--text);
+        backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); letter-spacing: .04em;
+        opacity: 0; pointer-events: none; transition: opacity .6s; white-space: nowrap;
+      }
+      #rail-caption.on { opacity: 1; }
     </style>
     <script type="module" src="/src/main.ts"></script>
   </body>

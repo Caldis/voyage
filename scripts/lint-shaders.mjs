@@ -141,6 +141,9 @@ export async function collectPrograms(server, opts = {}) {
     const outside = o.createOutsideMaterial(mat.uniforms);
     add("outside-default", outside);
     addDerived("outside-ground-detail", outside, (m2) => ({ fragmentShader: "#define GROUND_DETAIL 1\n" + m2.fragmentShader, vertexShader: m2.vertexShader }));
+    // TR03：窗外的火车远景变体（GroundDetailVariant 火车模式下编译：源码多拼了 rail/far-view.glsl.ts 的两段，再加两个 #define）。
+    // 旧树没有 outsideRailFragment 时按缺失处理（lenient 下跳过）
+    addDerived("outside-rail", typeof o.outsideRailFragment === "function" ? outside : null, (m2) => ({ fragmentShader: "#define GROUND_DETAIL 1\n#define RAIL 1\n" + o.outsideRailFragment(), vertexShader: m2.vertexShader }));
   });
 
   // 机翼 pass
@@ -155,20 +158,35 @@ export async function collectPrograms(server, opts = {}) {
     const m = await server.ssrLoadModule("/src/clouds/clouds.ts");
     const { pass } = capturingPass();
     const clouds = new m.Clouds(pass, deepMock(), {}, {});
+    // 带 three defines 的材质（变体）：把 defines 补成源码开头的 #define（three 在运行时注入，这里没有 renderer）
+    // lenient（DX-10，对照老树）时缺的材质照样跳过：走 addDerived
+    const addDef = (id, mat) =>
+      addDerived(id, mat, (m2) => ({
+        fragmentShader: Object.entries(m2.defines ?? {}).map(([k, v]) => `#define ${k} ${v}\n`).join("") + m2.fragmentShader,
+        vertexShader: m2.vertexShader,
+      }));
+    // PERF-10：云步进按天气拆成变体（默认程序不含雷暴 / 台风代码）。键：W 奇观层、C 卷云、S 雷暴、T 台风（见 clouds.ts 的 MARCH_FEATURES）
+    // 老树（PERF-10 之前）没有 marchVariant：返回 undefined，addDef 在 lenient 模式下跳过
+    const march = (key) => (typeof clouds.marchVariant === "function" ? clouds.marchVariant(key).mat : undefined);
     add("cloud-march", clouds.marchMat);
-    add("cloud-occupancy", clouds.occMat);
+    addDef("cloud-march-storm", march("S"));
+    addDef("cloud-march-typhoon", march("T"));
+    addDef("cloud-march-severe", march("ST"));
+    // 占据网格只有天气版；云影图 / 探针各有默认版和天气版
+    addDef("cloud-occupancy", clouds.occMat);
     add("cloud-shadow-map", clouds.shadowMat);
+    addDef("cloud-shadow-map-weather", clouds.shadowWeatherMat);
     add("cloud-probe", clouds.probeMat);
+    addDef("cloud-probe-weather", clouds.probeWeatherMat);
     // 奇观云间层（W00）：步进变体 + 奇观表面 pass；W00_PROBE=1 时连测试体一起校验
-    addDerived("cloud-march-wonder", clouds.marchWonderMat, (m2) => ({
-      fragmentShader: "#define WONDER_LAYER 1\n#define CLOUD_CIRRUS 1\n" + m2.fragmentShader,
-      vertexShader: m2.vertexShader,
-    }));
+    addDef("cloud-march-wonder", clouds.marchWonderMat);
     // 卷云变体（T12）
-    addDerived("cloud-march-cirrus", clouds.marchCirrusMat, (m2) => ({
-      fragmentShader: "#define CLOUD_CIRRUS 1\n" + m2.fragmentShader,
-      vertexShader: m2.vertexShader,
-    }));
+    addDef("cloud-march-cirrus", clouds.marchCirrusMat);
+    // 其余按需组合（卷云 / 奇观 × 天气）：只在真的出现时才编，离线只做语法检查（opts.allCloudCombos，check:glsl 用；
+    // shader-budget 不传，免得一轮离线 FXC 多出十来个十几秒的程序）
+    if (opts.allCloudCombos) {
+      for (const key of ["CS", "CT", "CST", "WCS", "WCT", "WCST"]) addDef(`cloud-march-${key}`, march(key));
+    }
     add("wonder-layer", clouds.wonderSurfMat);
     add("cloud-resolve", clouds.resolveMat);
   });
@@ -329,7 +347,7 @@ function findDuplicatesInProgram(text) {
  * 只服务于「按文本数 sampler / 找重名」这类静态检查，不是真正的 GLSL 预处理器（不做宏替换、
  * 不展开 #define 常量、不算 #if 的算术表达式）——glslangValidator 校验用的是原始文本 + 自己的真预处理器，
  * 不经过这里。 */
-function resolveConditionals(text, defines) {
+export function resolveConditionals(text, defines) {
   const lines = text.split("\n");
   const out = [];
   const stack = []; // { active: 这一层当前分支是否被编译, taken: 这条 #if/#elif 链是否已经有分支命中过 }
@@ -473,13 +491,13 @@ function samplerAudit(text, defines) {
 export const SAMPLER_LIMIT = 16;
 
 /** 需要进速查表、也需要致命检查的程序 id，顺序即表格行序。 */
-const SAMPLER_TABLE_PROGRAMS = ["scene-default", "scene-economy", "outside-default", "outside-ground-detail"];
+const SAMPLER_TABLE_PROGRAMS = ["scene-default", "scene-economy", "outside-default", "outside-ground-detail", "outside-rail"];
 
 export const SAMPLER_TABLE_BEGIN = "<!-- DX-09:sampler-table:begin -->";
 export const SAMPLER_TABLE_END = "<!-- DX-09:sampler-table:end -->";
 
 function samplerDefinesFor(id) {
-  return id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : id === "scene-economy" ? new Set(["CABIN_CLASS_ECONOMY"]) : new Set();
+  return id === "outside-rail" ? new Set(["GROUND_DETAIL", "RAIL"]) : id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : id === "scene-economy" ? new Set(["CABIN_CLASS_ECONOMY"]) : new Set();
 }
 
 /** 对 collectPrograms() 的结果，按 SAMPLER_TABLE_PROGRAMS 逐个跑 samplerAudit，返回表格需要的行
@@ -729,7 +747,7 @@ async function main() {
   const server = await createServer({ root: VOYAGE_ROOT, server: { middlewareMode: true }, appType: "custom", logLevel: "error" });
   let programs;
   try {
-    programs = await collectPrograms(server);
+    programs = await collectPrograms(server, { allCloudCombos: true });
   } finally {
     await server.close();
   }
@@ -765,6 +783,28 @@ async function main() {
         console.log(`  [FAIL] ${label}`);
         console.log(res.output.split("\n").map((l) => `         ${l}`).join("\n"));
       }
+    }
+
+    // -- 1b. PERF-10：不带天气宏的云程序预处理后不能含雷暴 / 台风代码 --
+    // 天气密度一旦写到 #ifdef CLOUD_STORM / CLOUD_TYPHOON 外面，就又编进了默认云步进（启动关键路径，第 6 波 +51% 冷编译的根源）。
+    // 用 glslangValidator -E 做真预处理（不是按文本数），数雷暴 / 台风的函数名
+    console.log("\n-- 默认云程序不含雷暴 / 台风代码（PERF-10，glslangValidator -E） --");
+    const WEATHER_IDS = ["stormDensity", "towerSdf", "anvilDensity", "rainDensity", "hurricaneDensity", "bandTowerSdf", "hurricaneSunVis", "hurricaneCasterDensity", "cloudWeatherMaybe"];
+    for (const id of ["cloud-march", "cloud-march-cirrus", "cloud-march-wonder", "cloud-shadow-map", "cloud-probe", "outside-default", "wing"]) {
+      const prog = programs.find((p) => p.id === id);
+      if (!prog) continue;
+      const file = path.join(tmpDir, `${id}.pp.frag`);
+      writeFileSync(file, FRAG_PREFIX + resolveIncludes(prog.fragmentShader, new Set()));
+      const res = spawnSync(bin, ["-E", "-S", "frag", file], { encoding: "utf8", maxBuffer: 64 << 20 });
+      const out = res.stdout || "";
+      const hits = WEATHER_IDS.filter((w) => new RegExp(`\\b${w}\\b`).test(out));
+      if (res.error || !out) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：预处理失败 ${res.error ? res.error.message : ""}`);
+      } else if (hits.length) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：预处理后仍含 ${hits.join(", ")}——天气代码要写在 #ifdef CLOUD_STORM / CLOUD_TYPHOON / CLOUD_WEATHER 里（见 README 坑点「着色器编译」PERF-10）`);
+      } else console.log(`  [OK]   ${id}：${out.split("\n").filter((l) => l.trim()).length} 行，无雷暴 / 台风代码`);
     }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });

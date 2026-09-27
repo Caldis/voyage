@@ -40,6 +40,8 @@ export const DEFAULTS = {
   wind: 7,
   "wing-pos": "8",
   "ground-on": true,
+  // TR03：放在最后——火车场景的 vehicle: "train" 在换完地点 / 座位之后才生效；飞机场景跟在火车场景后面时自动切回飞机
+  vehicle: "plane",
 };
 
 export const SCENES = [
@@ -86,6 +88,11 @@ export const SCENES = [
   { name: "wonder-floatcity-day", p: { preset: "wpac", seat: "right", date: "2026-09-27", time: 975, "cloud-preset": "stratocumulus", coverage: 0.6, "wing-pos": "-4" }, wait: 4000, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"floatcity\", { forwardOffsetDeg: 0, distKm: 80, reveal: 1, seed: 0.23 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe() + \" · \" + v.clouds.wonderLayerState;" },
   // dusk：左座朝东、17:20（太阳约 1°，在身后）：台地与树冠被低日镀成暖色，身后是暗下去的东天
   { name: "wonder-floatcity-dusk", p: { preset: "wpac", seat: "left", date: "2026-09-27", time: 1040, "cloud-preset": "stratocumulus", coverage: 0.6, "cabin-light": false, "wing-pos": "-4" }, wait: 4000, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"floatcity\", { forwardOffsetDeg: 0, distKm: 80, reveal: 1, seed: 0.23 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe() + \" · \" + v.clouds.wonderLayerState;" },
+  // TR03：火车模式（JR 大糸线，示例）的远景。vehicle 放在 DEFAULTS 最后，火车场景在换完地点 / 座位之后才进入火车；
+  // js 等线路数据加载完、把列车放到指定里程（初速 0，截图等待期间只走一两米）、等地面瓦片和火车变体编好，再放一次。
+  // default：12.65 km 豊科过后的平原段，往信濃大町、左座朝西（北阿尔卑斯）；curve：1.79 km 松本出发后的弯道（近处有女鳥羽川 / 奈良井川）
+  { name: "rail-oito-default", p: { vehicle: "train", date: "2026-08-05", time: 720 }, wait: 3000, js: "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(12650, 1, 0); for (let i = 0; i < 90 && v.ground.pending > 0; i++) await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(12650, 1, 0); return v.rail.describe() + \" · \" + (v.groundDetail.railStatus ?? v.groundDetail.status);" },
+  { name: "rail-oito-curve", p: { vehicle: "train", date: "2026-08-05", time: 720 }, wait: 3000, js: "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(1790, 1, 0); for (let i = 0; i < 90 && v.ground.pending > 0; i++) await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(1790, 1, 0); return v.rail.describe() + \" · \" + (v.groundDetail.railStatus ?? v.groundDetail.status);" },
 ];
 
 /**
@@ -123,11 +130,12 @@ export async function applyScene(arg) {
       el.dispatchEvent(new Event(el.tagName === "SELECT" || el.type === "date" ? "change" : "input"));
     }
   };
+  // TR03：页面打开时的日期要在设任何场景之前记下（原来在设完场景之后才记，第一个场景写了 date 时记下的就是那一天，后面没写 date 的场景都被带过去）
+  window.__voyageInitialDate ??= document.getElementById("date")?.value;
   for (const [id, val] of Object.entries({ ...defaults, ...sc.p })) set(id, val);
   if (sc.p.coverage === undefined) set("coverage", 0.42);
   // 日期（T09）：场景没写 date 时恢复成页面打开时的日期，免得上一个写了 date 的场景把后面的场景也带到那一天
   // （DX-10：老版本页面可能连 #date 控件都没有，可选链 + 判空防止整段中断）
-  window.__voyageInitialDate ??= document.getElementById("date")?.value;
   if (sc.p.date === undefined && window.__voyageInitialDate !== undefined) set("date", window.__voyageInitialDate);
   if (sc.p.time !== undefined) set("time", sc.p.time);
   // 上一个场景留下的状态也要清掉（例如穿云后的窗上水痕、颠簸）
@@ -176,6 +184,9 @@ export async function applyScene(arg) {
       console.warn(`[applyScene] 场景 "${sc.name}" 的 js 执行失败，已跳过（不中断整批场景）：${jsOut}`);
     }
   }
+  // 云步进变体（PERF-10）：雷暴 / 台风 / 卷云 / 奇观及其组合第一次需要时在后台编译，编好之前画的是替代的变体（天气系统暂时不画）；
+  // 等它编好再截图（最多 120 s；老版本没有 cloudVariantPending 就不等）。放在 js 之后：奇观是在 js 里召唤的
+  for (let i = 0; i < 480 && v.clouds && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250));
   v.snapAll();
   await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
   const info = document.getElementById("info")?.textContent ?? "";

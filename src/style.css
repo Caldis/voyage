@@ -30,6 +30,8 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 #panel button.on { border-color: var(--accent); color: var(--accent); }
 #panel input[type="range"] { width: 100%; accent-color: var(--accent); }
 .row { display: flex; gap: 8px; align-items: flex-end; }
+/* .row 的 display:flex 会盖住浏览器自带的 [hidden]{display:none}（连续航程关着时「航程流速」一行也显示），这里补回来 */
+.row[hidden] { display: none; }
 .row label { flex: 1; }
 .rates { align-items: center; color: var(--muted); flex-wrap: wrap; }
 #info { margin: 0; white-space: pre-wrap; font: 12px/1.6 ui-monospace, Consolas, monospace; color: var(--text); }

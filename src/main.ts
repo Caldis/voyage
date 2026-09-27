@@ -61,7 +61,8 @@ boot.finish("atmosphere");
 const cloudUniforms = createCloudUniforms(generateCloudNoise(renderer, pass));
 tick("云噪声");
 boot.finish("cloudNoise");
-const ground = new GroundClipmap(PRESETS[0].lat, PRESETS[0].lon);
+// 高度纹理：支持浮点线性过滤时 32 位，否则半精度（TR03 审查 B1）
+const ground = new GroundClipmap(PRESETS[0].lat, PRESETS[0].lon, renderer.extensions.has("OES_texture_float_linear"));
 const sceneMat = createSceneMaterial(atmosphere, cloudUniforms, ground);
 // 低空障眼法（T18）：边界层霾进大气 LUT，谷地雾的 uniform 进场景 / 窗外共用的 uniforms（只有窗外程序用到）
 const haze = new HazeModel(atmosphere);
@@ -275,6 +276,8 @@ const director = new Director({
   toLocal: (lat, lon) => ground.localFrame.toLocal(lat, lon),
   localPos: () => [cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y],
   landBelow: () => (state.floor?.known ? state.floor.reason === "land" : null),
+  // PERF-10：导演摆雷暴 / 台风之前先让云程序编好对应的天气变体（编好之前推迟摆放）
+  weatherReady: (kind) => clouds.prepareWeather(kind === "storm", kind === "typhoon"),
 });
 // ---------- 声音（T11，audio.ts）：默认静音，面板「声音」开关 / M 键在用户手势里启用 ----------
 const audio = new CabinAudio();
@@ -521,7 +524,7 @@ function renderFrame(now: number) {
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
   // 窗外（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdrOutside，舱内合成读它画到 hdr，
   // 机翼 pass 再读实际画出来的 hdr 合成
-  pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : outsideMat, hdrOutside);
+  pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm, rail.active) : outsideMat, hdrOutside);
   const cabinMat = cabinClass.pick(renderer, state.cabinClass);
   exposure.finalMat.uniforms.uCabinRefAlbedo.value.copy(CABIN_REF_ALBEDO[cabinClass.shown]);
   pass.render(cabinMat, hdr);
@@ -672,7 +675,7 @@ function benchScene(n = 20, which: "both" | "outside" | "cabin" = "both") {
   const px = new Float32Array(4);
   const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
   const once = () => {
-    if (which !== "cabin") pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm) : outsideMat, hdrOutside);
+    if (which !== "cabin") pass.render(state.groundOn ? groundDetail.pick(renderer, state.altitudeKm, rail.active) : outsideMat, hdrOutside);
     if (which !== "outside") pass.render(cabinClass.pick(renderer, state.cabinClass), hdr);
   };
   once();

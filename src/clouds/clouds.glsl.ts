@@ -373,6 +373,7 @@ uniform vec3 uFlashB;           // 放电通道的另一端：(本地 x, 高度 
 uniform sampler2D uCloudShadowMap;
 uniform vec3 uCloudShadowSun;     // 建图时的主光源方向
 uniform vec3 uCloudShadowCenter;  // xy：建图时的中心（世界坐标 km）；z：1 = 图已建好
+uniform float uCloudDepthOn;      // 1：云缓冲右半（云的平均深度，T38）这一帧写了（PERF-11，见 cloudBufferDepth）
 
 // 雷暴 / 台风的占据网格（见文件头 OCC_*）。只有云步进程序定义 CLOUD_OCC：窗外程序的 sampler 已满 16/16，
 // 云影、探针照旧逐点求值
@@ -382,6 +383,11 @@ uniform vec2 uOccOrigin;        // 格点 (0, 0) 的世界坐标（km）
 uniform vec2 uOccAlt;           // (第 0 层的高度, 层距)，km
 uniform float uOccValid;        // 0：网格还没建好（程序还在后台编译），一律当作有云
 #endif
+// ---- 天气变体（PERF-10）----
+// 雷暴 / 台风的密度代码只编进定义了 CLOUD_STORM / CLOUD_TYPHOON 的程序（clouds.ts 的变体材质按需编译，
+// 两者任一定义时 clouds.ts 同时加 CLOUD_WEATHER，放两者共用的部分）。默认程序（晴天 / 普通云）预处理后不含任何雷暴 / 台风代码：
+// 这些代码平时靠 uniform 分支跳过、却一直编在默认程序里，云步进离线 FXC 13.9 s 中 12.4 s 是它们（第 6 波性能报告 §2.4）
+#ifdef CLOUD_WEATHER
 // 这条视线（连同它的受光步进）够得着雷暴 / 台风吗（T33）。云步进程序按像素设：够不着的像素（例如雷暴在几百公里外、
 // 或在身后）把雷暴 / 台风整个当作不存在，走普通云的快路径（192 步、展开的受光步进、不查天气）。
 // 其他程序（云影图、占据网格、探针）不设，保持 true
@@ -400,6 +406,8 @@ bool cloudWeatherMaybe(vec2 xz, float alt) {
   return true;
 #endif
 }
+float gLightLen = 0.0;   // 受光步进这一步代表的长度（km），只在雷暴 / 台风的受光步进里非 0（T38，见 HUR_BANDS_LIGHT）
+#endif
 
 const float SHAPE_TILE = 7.0;     // 形状噪声一个周期覆盖的水平距离，km
 const float DETAIL_TILE = 0.9;
@@ -471,7 +479,6 @@ float detailTap(vec2 rel, vec3 h, float qy, float lod) {
 // 云步进那一点没求细节（150 km 以外、或那一点只有雷暴 / 台风的云）时沿用上一个求过的格点：只是换了一个随机平移，仍然连续
 float gDetailRnd = 0.5;
 bool gDetailLight = false;
-float gLightLen = 0.0;   // 受光步进这一步代表的长度（km），只在雷暴 / 台风的受光步进里非 0（T38，见 HUR_BANDS_LIGHT）
 vec2 gDetailVert = vec2(0.0);
 vec3 gDetailHash = vec3(0.0);
 
@@ -629,19 +636,28 @@ float layerDensity(vec3 p, float lod, bool detail) {
 //    下风方伸得更远；底下挂着半椭球形的乳状云口袋。
 //  - 云底以下是倾斜的雨幡，截面不规则、带竖直的雨丝。
 // 旧版把砧状云的半径交给随高度变化的 Worley 噪声去调，每个高度的外缘各不相同，看起来是一层层叠起来的盘子。
-const float STORM_BASE = 1.2;
-const float STORM_OVERSHOOT = 0.9;   // 上冲云顶高出 uStorms.w（砧顶）多少，km
-
+#ifdef CLOUD_WEATHER
 // cloudDensity 的副产物（最近一次求值的点）：是否属于雷暴、雷暴的环境光遮蔽（隆起之间的凹处、砧底、雨幡里看到的天空少）
 float gStormW = 0.0;
 float gStormAO = 1.0;
 float gStormSoft = 0.0;   // 1：属于软边的部分（雷暴的砧和雨幡、台风的卷云盖和砧），见 gStormSoftHit / gHurSoft
 
+// 雷暴、台风雨带共用的两个小工具
 vec2 stormHash22(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
   p3 += dot(p3, p3.yzx + 33.33);
   return fract((p3.xx + p3.yz) * p3.zy);
 }
+
+float sminStorm(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+#endif
+
+#ifdef CLOUD_STORM
+const float STORM_BASE = 1.2;
+const float STORM_OVERSHOOT = 0.9;   // 上冲云顶高出 uStorms.w（砧顶）多少，km
 
 // 乳状云口袋：平面上的格子，每格至多一个口袋，位置几乎可以贴到格边、半径 0.3–0.75 格各不相同，约 1/4 的格子空着；
 // 返回这一点下垂的深度（格为单位，口袋剖面是半椭球 √(1 − (d/半径)²)，大口袋更深），相邻口袋重叠处取最深的（T37）。
@@ -662,11 +678,6 @@ float pouchField(vec2 p) {
     if (s > 0.0 && h2.y > 0.25) best = max(best, (0.4 + 1.2 * h2.y * h2.y) * rad * sqrt(s));
   }
   return best;
-}
-
-float sminStorm(float a, float b, float k) {
-  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
-  return mix(b, a, h) - k * h * (1.0 - h);
 }
 
 // 一座对流塔的有符号距离（km，负值在云里）。apex：穹顶最高点；R：塔身半径。ao：隆起之间凹处的遮蔽（0..1）
@@ -845,6 +856,33 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
   return max(anvil, rain);
 }
 
+// 精简版雷暴密度：塔身（含伴生塔）和砧的大形 + 雨幡，没有乳状云、细节侵蚀。
+// 给光线步进（朝太阳）、云影、探针用：这些地方只要光学厚度的大概，而完整版被内联进 4 个地方，冷编译慢了约 50%。
+// 雨幡必须在（T45）：旧版这里没有雨幡，雨幡朝太阳的受光步进一路透明、不自遮挡。黄昏太阳贴着地平线从云底下平射进来，
+// 整片雨幡被照透，逆光看又落在前向散射的峰上，云底下挂着一块边缘清楚的橙色发光椭圆（美术总监 wave6 第 4 条的「飞碟」）
+float stormDensityLite(vec4 c, vec2 xz, float alt, float lod) {
+  float top = c.w;
+  float R = c.z;
+  if (alt > top + STORM_OVERSHOOT + 0.7) return 0.0;
+  float rainL = alt < STORM_BASE + 0.1 ? rainDensity(xz, alt, c.xy, R, lod) : 0.0;
+  if (alt < STORM_BASE - 0.1) return rainL;
+  float ao;
+  float sdf = towerSdf(xz, alt, c.xy, R, top + STORM_OVERSHOOT, 0.72, lod, ao);
+  // 伴生塔数量写成「3 + 一个恒为 0 的 uniform 表达式」，FXC 就不会把塔身 SDF 展开 3 份
+  int nSat = 3 + min(uStormCount, 0);
+  for (int k = 0; k < nSat; k++) {
+    float ang = float(k) * 2.1 + c.x * 0.37;
+    vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.5 + 0.3 * float(k));
+    float tk = STORM_BASE + (top - STORM_BASE) * (0.35 + 0.12 * float(k));
+    if (alt > tk + 0.5) continue;
+    sdf = sminStorm(sdf, towerSdf(xz, alt, ax, R * 0.45, tk, 0.4, lod, ao), mix(2.2, 0.6, smoothstep(STORM_BASE + 0.5, STORM_BASE + 3.5, alt)));
+  }
+  vec3 geo;
+  return max(max(smoothstep(0.0, 0.25, -sdf), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo)), rainL);
+}
+#endif
+
+#ifdef CLOUD_TYPHOON
 // ---- 台风 ----
 // 按真实的台风眼（Hurricane Hunters 飞入眼内的照片、「体育场效应」）建模：
 //  - 眼壁是向外倾斜的「看台」：下窄上宽，各扇区倾角 30–55° 不等；表面有一级级水平的台阶（层状条纹），
@@ -949,31 +987,6 @@ float hurricaneLayerMask(vec2 xz) {
   return smoothstep(uHurricane.z * 3.0, uHurricane.z * 4.5, r);
 }
 
-// 精简版雷暴密度：塔身（含伴生塔）和砧的大形 + 雨幡，没有乳状云、细节侵蚀。
-// 给光线步进（朝太阳）、云影、探针用：这些地方只要光学厚度的大概，而完整版被内联进 4 个地方，冷编译慢了约 50%。
-// 雨幡必须在（T45）：旧版这里没有雨幡，雨幡朝太阳的受光步进一路透明、不自遮挡。黄昏太阳贴着地平线从云底下平射进来，
-// 整片雨幡被照透，逆光看又落在前向散射的峰上，云底下挂着一块边缘清楚的橙色发光椭圆（美术总监 wave6 第 4 条的「飞碟」）
-float stormDensityLite(vec4 c, vec2 xz, float alt, float lod) {
-  float top = c.w;
-  float R = c.z;
-  if (alt > top + STORM_OVERSHOOT + 0.7) return 0.0;
-  float rainL = alt < STORM_BASE + 0.1 ? rainDensity(xz, alt, c.xy, R, lod) : 0.0;
-  if (alt < STORM_BASE - 0.1) return rainL;
-  float ao;
-  float sdf = towerSdf(xz, alt, c.xy, R, top + STORM_OVERSHOOT, 0.72, lod, ao);
-  // 伴生塔数量写成「3 + 一个恒为 0 的 uniform 表达式」，FXC 就不会把塔身 SDF 展开 3 份
-  int nSat = 3 + min(uStormCount, 0);
-  for (int k = 0; k < nSat; k++) {
-    float ang = float(k) * 2.1 + c.x * 0.37;
-    vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.5 + 0.3 * float(k));
-    float tk = STORM_BASE + (top - STORM_BASE) * (0.35 + 0.12 * float(k));
-    if (alt > tk + 0.5) continue;
-    sdf = sminStorm(sdf, towerSdf(xz, alt, ax, R * 0.45, tk, 0.4, lod, ao), mix(2.2, 0.6, smoothstep(STORM_BASE + 0.5, STORM_BASE + 3.5, alt)));
-  }
-  vec3 geo;
-  return max(max(smoothstep(0.0, 0.25, -sdf), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo)), rainL);
-}
-
 // 云影用的台风大形：只有眼壁（不含隆起）、卷云盖和雨带的解析形状，不采样纹理。
 // 完整的 hurricaneDensity 放进场景着色器（海面云影）后，FXC 编译场景着色器从约 2 s 涨到 130 s
 float hurricaneShadowDensity(vec2 xz, float alt) {
@@ -997,18 +1010,24 @@ float hurricaneShadowDensity(vec2 xz, float alt) {
              * (1.0 - smoothstep(8.0, 12.0, alt)) * 0.6;
   return max(max(core, canopy), band);
 }
+#endif
 
 // 所有云的密度（精简版雷暴）：光线步进、云影、探针用；层状云与完整版相同。
-// fullHurricane = false 时台风只用解析大形（云影、探针）：完整的台风密度被内联进场景着色器会让它的冷编译慢约 60%
+// fullHurricane = false 时台风只用解析大形（云影、探针）：完整的台风密度被内联进场景着色器会让它的冷编译慢约 60%。
+// 雷暴 / 台风部分只在对应的天气变体里（PERF-10，见 CLOUD_WEATHER 的说明）；默认程序里只剩层状云
 float cloudDensityLite(vec3 p, float lod, bool detail, bool fullHurricane) {
   float alt = length(p) - BOTTOM;
   if (alt < uShellBottom || alt > uShellTop) return 0.0;
   float d = layerDensity(p, lod, detail);
+#ifdef CLOUD_WEATHER
   if (gWeatherOn && (uStormCount > 0 || uHurricane.w > 0.5)) {
     vec2 xz = p.xz + uCloudOffset;
+#ifdef CLOUD_TYPHOON
     if (uHurricane.w > 0.5) d *= hurricaneLayerMask(xz);
+#endif
     // 占据网格说这里没有雷暴 / 台风的云（只有云步进程序查网格，见 cloudWeatherMaybe）
     if (!cloudWeatherMaybe(xz, alt)) return d;
+#ifdef CLOUD_STORM
     // 循环上界用 uniform（最多 4 个）：常量上界会被 FXC 展开成 4 份完整的雷暴密度，冷编译大幅变慢
     for (int i = 0; i < uStormCount; i++) {
       vec4 c = uStorms[i];
@@ -1016,29 +1035,37 @@ float cloudDensityLite(vec3 p, float lod, bool detail, bool fullHurricane) {
       if (dot(dd, dd) > c.z * c.z * 56.0) continue;
       d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);
     }
+#endif
+#ifdef CLOUD_TYPHOON
     if (uHurricane.w > 0.5) {
       float hao;
       float hd = fullHurricane ? hurricaneDensityLight(xz, alt, lod, detail, hao) : hurricaneShadowDensity(xz, alt);
       d = max(d, hd * uCloudDensity);
     }
+#endif
   }
+#endif
   return d;
 }
 
-// 所有云的密度：层状云、雷暴、台风取最大
+// 所有云的密度：层状云、雷暴、台风取最大（雷暴 / 台风只在对应的天气变体里，PERF-10）
 float cloudDensity(vec3 p, float lod, bool detail) {
   float alt = length(p) - BOTTOM;
   if (alt < uShellBottom || alt > uShellTop) return 0.0;
   float d = layerDensity(p, lod, detail);
+#ifdef CLOUD_WEATHER
   gStormW = 0.0;
   gStormAO = 1.0;
   gStormSoft = 0.0;
   if (gWeatherOn && (uStormCount > 0 || uHurricane.w > 0.5)) {
     vec2 xz = p.xz + uCloudOffset;
+#ifdef CLOUD_TYPHOON
     // 台风内部不要普通的层状云（和雷暴取最大之前先乘，与改动前的顺序等价：雷暴、台风不会同时出现）
     if (uHurricane.w > 0.5) d *= hurricaneLayerMask(xz);
+#endif
     // 占据网格说这里没有雷暴 / 台风的云：只剩层状云（PERF-2：空白处占了雷暴 / 台风场景云步进的大半开销）
     if (!cloudWeatherMaybe(xz, alt)) return d;
+#ifdef CLOUD_STORM
     // 循环上界用 uniform（最多 4 个）：常量上界会被 FXC 展开成 4 份完整的雷暴密度，冷编译大幅变慢
     for (int i = 0; i < uStormCount; i++) {
       vec4 c = uStorms[i];
@@ -1048,13 +1075,17 @@ float cloudDensity(vec3 p, float lod, bool detail) {
       float sd = stormDensity(c, xz, alt, lod, detail, ao) * uCloudDensity;
       if (sd > d) { d = sd; gStormW = 1.0; gStormAO = ao; gStormSoft = gStormSoftHit ? 1.0 : 0.0; }
     }
+#endif
+#ifdef CLOUD_TYPHOON
     if (uHurricane.w > 0.5) {
       // 台风的受光和雷暴一样处理（凹处遮蔽、下方反射光、表面细化）
       float hao;
       float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;
       if (hd > d) { d = hd; gStormW = 1.0; gStormAO = hao; gStormSoft = gHurSoft ? (gHurCanopy ? 2.0 : 1.0) : 0.0; }
     }
+#endif
   }
+#endif
   return d;
 }
 
@@ -1099,7 +1130,9 @@ vec4 cloudBufferColor(sampler2D buf, vec2 uv) {
   float w = float(textureSize(buf, 0).x) * 0.5;
   return texture(buf, vec2(min(uv.x * w, w - 0.5) / (2.0 * w), uv.y));
 }
+// 右半只在附近有高出海面的真实地形时才写（PERF-11，clouds.ts 的 depthOn）：没写的时候返回 0（= 云都在地面之前，cloudBeforeGround 原样保留）
 float cloudBufferDepth(sampler2D buf, vec2 uv) {
+  if (uCloudDepthOn < 0.5) return 0.0;
   float w = float(textureSize(buf, 0).x) * 0.5;
   vec2 d = textureLod(buf, vec2((w + clamp(uv.x * w, 0.5, w - 0.5)) / (2.0 * w), uv.y), 0.0).rg;
   return d.x / max(d.y, 1e-4);

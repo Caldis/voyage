@@ -19,7 +19,8 @@
 | sampler 上限 | ANGLE 上 `MAX_TEXTURE_IMAGE_UNITS = 16`，场景 / 窗外程序满了会链接失败（日志可能为空）。当前用量见下表，`node scripts/lint-shaders.mjs --emit-table` 生成，`check:glsl` 自动比对 README 与实测，不一致就 FAIL | [着色器编译](#pit-shader) |
 | 冷编译门槛 | 单任务 ≤ 10%（关键路径程序的离线 FXC 最小值），一波累计 ≤ 15%；实现代理自测只作参考，**权威判定在波次收尾的安静窗口统一测**（并行开发时离线 FXC 噪声 ±30–40%） | [着色器编译](#pit-shader)、`DEV_SOP.md` 第 5 节 |
 | 精度 | 大气 LUT（天空视图）、云缓冲（raw / history）都要用**32 位浮点**（有 `OES_texture_float_linear` 时）：半精度最小次正规数 5.96e-8，暗场景 / 无月夜会下溢成阶梯或纯黑 | [大气与曝光](#pit-atmos)、[云](#pit-cloud) |
-| 云缓冲格式 | 云的 history 缓冲是**两倍宽**（`2×w`）：左半是颜色，右半存 `(深度 × 不透明度, 不透明度)`（T38），读它一律走 `cloudBufferColor` / `cloudBufferDepth`，不要直接 `texture(uClouds, uv)` | [云](#pit-cloud) |
+| 云缓冲格式 | 云的 history 缓冲是**两倍宽**（`2×w`）：左半是颜色，右半存 `(深度 × 不透明度, 不透明度)`（T38），读它一律走 `cloudBufferColor` / `cloudBufferDepth`，不要直接 `texture(uClouds, uv)`；右半**只在附近有高出海面的真实地形、或相机低于 1 km（火车 / 起降）时才写**（PERF-11，`uCloudDepthOn`，不写时 `cloudBufferDepth` 返回 0），别的用途要深度先改这个条件 | [云](#pit-cloud) |
+| 云的天气变体 | 雷暴 / 台风密度只在 `#ifdef CLOUD_STORM` / `CLOUD_TYPHOON`（共用部分 `CLOUD_WEATHER`）里，默认云步进 / 云影图 / 探针预处理后不含它们（PERF-10）；**新的天气代码一律写进这些宏里**，新的「平时不走」的功能照样做成变体，并在 `lint-shaders.mjs` 登记 | [着色器编译](#pit-shader)、[云](#pit-cloud) |
 | 窗外输出 alpha 语义 | 窗外 pass 输出的 alpha 不是占位不透明度，是 `1 + 能看到多少点星`（T41）；改窗外输出时**别把它写回 1** | [舱内与倒影](#pit-cabin) |
 | 影像 A 通道语义 | 影像纹理的 A 通道**兼存道路照亮宽度**（T08）：< 0.5 表示「缺影像比例 / 2」，≥ 0.5 表示有影像、其余 7 位是宽度；判断缺瓦片一律用 `min(A·2, 1)`（`sampleGroundAlbedo`），不能直接读 A | [地面与数据](#pit-ground) |
 | 数据真实性与许可 | 通告 / 路段 / 地理数据逐字摘录并注明来源；匹配不上的写进报告，不猜、不补全；示例数据要标「示例」 | [数据来源与许可](#数据来源与许可) |
@@ -35,6 +36,7 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 | `scene-economy` | 16 | 5 / 8 |
 | `outside-default` | 16 | 14 / 18 |
 | `outside-ground-detail` | 16 | 14 / 18 |
+| `outside-rail` | 16 | 14 / 18 |
 <!-- DX-09:sampler-table:end -->
 
 ## 使用
@@ -43,6 +45,7 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 - 鼠标移动 = 挪动头部（窗框视差），滚轮 = 靠近 / 远离舷窗，`H` 隐藏面板
 - 声音（T11）：默认关；面板勾选「声音」或按 `M` 开启（浏览器要求用户手势），背景板模式下照常播放、`M` 仍可开关
 - 时间：日期 + 当地时刻滑块，或用 60× / 600× 快进看日落
+- 航向（T49）：面板「航向」一栏——「自动航线」（默认：沿大圆航线飞，到达终点后自动接下一段）、「保持航向」、「盘旋」（以当前位置为等待点飞跑道形等待航线，一直看同一片地面）；「◀ 左转 / 右转 ▶」点一下 15°、按住连续转，或拖「选定航向」滑块；「直飞机场」选 15 个东亚机场之一，沿大圆航线飞过去、到达后在上空盘旋。键盘 `←` / `→` 每次 5°（`Shift` 15°；焦点在输入框 / 下拉框里时不响应）。转弯按真实客机：坡度 ≤ 25°，滚转约 3°/s（25° 要 8 秒多才压满）
 - 调试小地图（DX-06）：面板勾选「调试小地图」或按 `N` 开启（默认关），左下角显示航向 / 轨迹 / 航线 / 云回波 / 交通 / 奇观；点击地图切换 50 / 200 / 800 km 量程
 
 ## 渲染管线（每帧）
@@ -67,14 +70,14 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | --- | --- |
 | `src/main.ts` | 创建渲染器与各系统、主循环编排（各 pass 调度）、`setPreset` / `snapAll` / `resize`、调试句柄 `window.__voyage` |
 | `src/state.ts` | 共享类型 `VoyageState` / `Preset`、`CRUISE_PITCH_DEG`、`$` 小工具 |
-| `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进） |
+| `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进）；自动驾驶（T49，`autopilotOf(state)`：沿航线 / 手动航向 / 直飞 / 跑道形等待航线，坡度与滚转速率按真实时间限制） |
 | `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步 |
 | `src/astro.ts` | 太阳 / 月亮位置、月相、当地→赤道坐标矩阵（astronomy-engine） |
 | `src/sky-assets.ts` | 星图（RGB：BSC5 星表格子，每格最多一颗星，T41；A 通道是银河）、月面贴图 |
 | `src/light-pollution.ts` | 城市光污染的天空背景（T09）：从地面夜光估算，只压银河的可见度 |
 | `src/traffic.ts` / `src/weather.ts` | 远处飞机的运动；天气预设、雷暴 / 台风摆放、闪电调度；天气场 `WeatherField`（T19b：按经纬度 + 时间取样云型 / 云量，雷暴系统与台风的出生、寿命、漂移，粗略东亚海陆分布） |
-| `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
-| `src/rail/*` | 火车模式（TR02）：`data.ts` 读线路烘焙产物；`corridor.ts` 走廊坐标（里程 s、横向 d、高程）、平滑中心线、按规范公式估算的超高；`train.ts` 速度曲线（巡航 90 km/h、曲线限速、终点停车折返）与车体姿态（台车连线、超高侧倾、悬挂外倾）；`vibration.ts` 车体低频振动；`geodesy.ts` 线路 ENU ↔ 经纬度；`mode.ts` 接到 voyage 的相机 / 状态（`window.__voyage.rail`，`rail.teleport(s, dir)` 调试用）；单测 `node src/rail/rail.test.mjs`；飞机模式着色器零回归比对 `node src/rail/shader-parity.mjs <对照 voyage 根目录>` |
+| `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力（T49：优先向前、提前转弯、掉头借遮挡）、手动导航（`setHeading` / `turnBy` / `hold` / `directTo` / `resumeRoute`）、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
+| `src/rail/*` | 火车模式（TR02）：`data.ts` 读线路烘焙产物；`corridor.ts` 走廊坐标（里程 s、横向 d、高程）、平滑中心线、按规范公式估算的超高；`train.ts` 速度曲线（巡航 90 km/h、曲线限速、终点停车折返）与车体姿态（台车连线、超高侧倾、悬挂外倾）；`vibration.ts` 车体低频振动；`geodesy.ts` 线路 ENU ↔ 经纬度；`mode.ts` 接到 voyage 的相机 / 状态（`window.__voyage.rail`，`rail.teleport(s, dir)` 调试用）；`far-view.ts` / `far-view.glsl.ts` 窗外程序的火车远景变体（TR03，`#define RAIL`，近处国土地理院平面带、掠射步进、相对高度、轮廓抗锯齿）；单测 `node src/rail/rail.test.mjs`；飞机模式着色器零回归比对 `node src/rail/shader-parity.mjs <对照 voyage 根目录>` |
 | `src/debug/minimap.ts` | 调试小地图（DX-06）：可选的角落 2D canvas 叠层，画本机 / 轨迹 / 航线 / 交通 / 奇观，以及从天气场采样的云回波「多普勒」图；不碰任何 WebGL 程序 |
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
 | `src/atmosphere/luts.ts` | 透射率 / 多次散射 / 辐照度 / 天空视图 / 空气透视 LUT；`setHaze` 设边界层霾 |
@@ -102,6 +105,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/render/traffic.glsl.ts` | 航迹云与远处飞机 |
 | `src/render/exposure.ts` / `bloom.ts` / `pass.ts` | 曝光与色调映射；眩光；全屏 pass |
 | `src/audio.ts` | 声音（T11）：Web Audio 程序化合成（频域合成的可循环噪声床 + 发动机谐波 + 事件），`Soundscape`（可建在 OfflineAudioContext 上）/ `CabinAudio`（面板与主循环用的控制器）；`scripts/audio-check.mjs` 离线出频谱表 |
+| `src/rail/sound-model.ts`、`src/rail/audio-rail.ts` | 火车声音（TR07）：接缝节奏的几何（车轴过接缝时刻）、道口警报规格与多普勒、广播时机（纯计算，node 可跑）；`RailSoundscape` / `RailAudio`（火车模式下 `CabinAudio` 改驱动它，飞机噪声床静音、雷声照常）。`scripts/audio-check.mjs --rail` 离线出节奏周期、多普勒、频谱 |
 | `scripts/build_stars.py` | 从 CDS 下载 BSC5，生成 `public/data/bsc5.json` |
 
 **热点文件**：`src/main.ts` 和 `src/render/scene.ts` 几乎每个功能都会改到，并行开发时按 `DEV_SOP.md` 的规则分配（T01 已把它们拆小，但新增 uniform 仍要同时改 scene.ts 的声明块和 `createSceneMaterial`；新增面板状态要同时碰 state.ts / main.ts / ui.ts）。
@@ -119,6 +123,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **罕见光学现象**（T17，`src/render/optics.ts`）：平时按条件 + 随机出现（宝光：云顶在下方且是水滴云、太阳在海平线以上、每 20 模拟分钟掷一次；幻日 / 22° 晕：卷云、每 30 分钟掷一次，常只出一侧；绿闪：每个日落都有色散，约三成日落有把它放大到看得见的逆温蜃景）。强制出现：URL `?optics=glory,halo,flash`（或 `all`），全关对照 `?optics=off`；运行时 `__voyage.optics.force = { glory: true }`、`__voyage.optics.disabled = true`；`__voyage.optics.status` 看当前强度 / 云滴半径 / 放大倍数。`__voyage.optics.pinGreenFlash(0.5)` 把模拟时间钉在绿闪那一刻（0 = 红色日像上缘刚落到海平线、1 = 绿色上缘落下；飞机在动，每帧重新对准），`pinGreenFlash(null)` 解除；`__voyage.optics.pixelOf(__voyage.sceneMat.uniforms[, 方向])` 算反日点（或任意窗外方向）落在屏幕哪个像素，找「宝光 / 幻日在窗里」的时刻用。几何上：宝光要座位背对太阳（如 wpac 左座 16:30），幻日在太阳两侧约 22°（wpac 右座 16:30 卷云）。自测场景见 `handoff/T17-shots.ps1`。
 - **调试小地图**（DX-06，`src/debug/minimap.ts`）：面板底部「调试小地图」开关，或按 `N`（不在输入框里时）；默认关，纯 2D canvas 叠层，画在左下角（约 280×300、半透明深色底，不挡舷窗中心），关着时 `update()` 第一行就返回、canvas `display:none`，零开销。内容：本机（图标固定圆心，地图始终「航向朝上」）、已飞过的轨迹、当前航线（`director.leg` 的航段或 `state.preset.dest`）、远处的其他飞机（`traffic.ts`）、奇观（`wonders.active`）、以及「云的多普勒」——仿气象雷达回波图，背景网格从 `director.weather.field.sample()`（天气场）按经纬度采样云量 / 云型换算出回波强度，叠加当前**实际渲染中**的 `weather.storms` / `weather.hurricane`（不论天气是导演按天气场摆的还是面板手选的，雷达图都和窗外一致）。点击地图本体在 50 / 200 / 800 km 三档量程间切换。雷达网格（48×48）每约 800 ms 重采样一次，且分帧算（每帧最多 4 行），避免拖帧；台风的螺旋雨带是按角度做正弦调制的近似图形（用于「看起来像螺旋回波」），不是 `clouds.glsl.ts` 里真正的密度场（CPU 侧读不到那份数据）。
 - `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
+- **航向 / 接力调试**（T49）：面板底部「立即触发到达 / 接下一段（调试）」按钮 = `__voyage.director.forceArrive()`：不等飞到终点，立即走一次「到达」（自动航线接下一段，要掉头 > 90° 时照常排进遮挡队列；直飞模式转入盘旋）。其他句柄：`__voyage.director.ap`（自动驾驶：`mode` / `selHeading` / `turnDir` / `timeScale` / `hold` / `nextCourse` / `holdCourse`）、`director.setHeading(deg, dir?)`、`director.turnBy(±deg)`、`director.hold()`、`director.directTo("ITM")`、`director.resumeRoute()`、`director.nextLeg`（离终点 400 km 内预挑的下一段）、`director.describeNav()`。离线复现 / 单测（不开浏览器，几秒跑完）：`node --import ./handoff/T49-resolve.mjs --experimental-transform-types --no-warnings handoff/T49-test.mts`；按真实时间打印航向 / 坡度曲线与 > 60° 转向事件：同样的前缀跑 `handoff/T49-sim.mts [流速] [真实分钟] [预设]`。
 - `window.__voyageStartup`：启动各阶段耗时。
 - URL 参数 `?lut16`：大气 LUT 强制用半精度（T36 改前的行为、没有 32 位浮点线性过滤的设备），用来对照深暮光的阶梯。
 - 截图前：把 `head` 固定在 `{tx:0, ty:0.02, x:0, y:0.02, tz:-0.3, z:-0.3}`、`uCloudOffset` 归零或设成固定值、隐藏面板（加 `hidden` 类），前后对比才有意义；截图放 `tmp/screenshot/voyage-*.png`。
@@ -255,12 +260,21 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **窗外程序里新加的小函数也会让离线 FXC 明显变慢**（T17）：本机影子最初用 5 个四边形的多边形距离场（每个 4 条边）+ 两层展开的循环，窗外程序离线 FXC 多约 1 s；改成一个 `6 + uLoopGuard` 的循环里算 6 段带厚度的线段后回落。整组光学现象最后让窗外程序离线 FXC 约 +20%（5.6–6.2 s → 7.2 s），但浏览器真冷启动总时长不变（约 16.2–16.5 s），因为并行编译的关键路径是云程序。以后往窗外程序加东西，两个口径都要看：`shader-budget.mjs --only outside-default` 与主分支交替测两轮（单次噪声可到 +50%），再用 `dev-browser.mjs cold` 看总时长。
 - **窗外程序要用机翼程序的 uniform（如 `uSeatSign`）得自己再声明一次**（T17）：两个程序共用同一个 uniforms 对象，值会自动同步，但 GLSL 声明只在 `wing.glsl.ts` 里，窗外程序不拼它；`check:glsl` 会报 undeclared identifier。
 - **离线 FXC 计时在机器被别的代理占用时噪声可到 ±40%**（T47）：同一份程序连测 7.4–14 s 都有，5% 的预算判不出来。做法：和 master 交替 ≥ 4 轮，同时看中位数和最小值；把单个改动换掉做变体对照（`handoff/T47-fxc-bisect.py`）比整体对照更能定位。
+- **「平时不走」的天气代码占了云步进冷编译的 96%，拆成 `#define` 变体后启动关键路径换成了窗外程序**（PERF-10）：雷暴 / 台风密度按 uniform 分支跳过、却一直编在默认云步进里，离线 FXC 13.7 s；拆成 `CLOUD_STORM` / `CLOUD_TYPHOON` 变体后默认程序 0.49 s（雷暴版 3.9 s、台风版 7.3 s、两者都带 13.5 s），云影图 2.3 → 0.19 s、探针 0.76 → 0.15 s，卷云 / 奇观变体各 −96%。真冷启动（d3d11，交替 5 轮）master 21.2–22.2 s → 15.9–16.9 s；后台批次 13.4 s，现在由窗外程序（离线 9–10.6 s）决定，PERF-13 接着压。
+  坑一：`check:glsl` 的「同名函数」检查不展开条件编译，`#ifdef A` / `#else` 里各写一份同名函数会被报重名——在**函数体里**分 `#ifdef`（见 `cloudStormsOn`）。
+  坑二：`lint-shaders` 的条件展开器（sampler 统计用）只认单个 `defined(X)`，不认 `#if defined(A) || defined(B)`；需要「任一」时由 JS 端多加一个宏（本任务的 `CLOUD_WEATHER`）。
+  识别：`node handoff/PERF-10-preproc.mjs` 用 glslangValidator `-E` 真预处理，逐程序列出雷暴 / 台风标识符出现次数，默认程序应只剩 uniform 声明。
 
 <a id="pit-cloud"></a>
 ### 云
 
 - **天气渐变不能走 `clouds.applyPreset` / `snap()`**（T19b）：会清掉时间累积，并让云影图整张在一帧里重建（3–8 ms）；连续航程每 0.25 s 推进一次云量，就会变成持续卡顿。修法：`clouds.setParams(p, true)`（gradual），云影图按后台分片节奏跟上；借遮挡的硬切才用 `setParams(p, false)`。
 - **占据网格只保护 ±128 km 内的雷暴 / 台风**（T19b）：网格外照样逐点求值，4 个单体在 300 km 外仍 +1–1.5 ms/帧，台风在 750 km 外 +2–3 ms/帧（`handoff/T19b-storm-cost.mjs`）。天气驱动因此只在 280 km（雷暴）/ 600 km（台风）内摆放；以后要放得更远，先在云程序里给网格外的雷暴 / 台风做 LOD。
+- **改天气场（`WeatherField`）的气候倾向之前和之后都要跑 `scripts/weather-stats.mts`**（WX10）：门禁是 `node --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi`（6 个种子全部通过，约 1.5 分钟，不开浏览器；不加 `--multi` 只跑一个种子并打印完整统计表，约 15 s）。它按月份和地区统计云型、雷暴、锋面、台风（100 年样本），对照气候目标区间断言，退出码非 0 就是失败；每条断言都写了依据。T19b 的天气场就是在没有这类统计的情况下，把 1 月日本海做成了 63% 晴空、把台风做成了每年 59 个。
+  写新断言时有两个坑（WX10 审查）：①只按一个种子调通的门限会随种子翻转，比如 4 年样本里「台风 8 月最多」20 个种子有 7 个失败，所以必须用 `--multi` 验；②门限要让改前的代码失败，否则分不出改前改后（「华北七下八上晴空 ≤ 45」改前就能过，已换掉）。
+- **粗略海陆轮廓 `coarseLand` 分不出日本海一侧和太平洋一侧**（WX10）：本州是一条沿太平洋岸画的胶囊，东京落在中轴线上，新潟、金泽、秋田都算作海。拿它按「离海岸多远」判断寒潮阴雪时，北海道西部变成晴空，关东反而阴雪。修法：陆地按手画的脊梁折线 `JAPAN_SPINE` 分两侧。识别：打印 `surgeGeo(lat, lon, true)`，逐个核对札幌、新潟、东京、广岛这类城市在哪一侧。
+- **值噪声集中在 0.5 附近，不能拿阈值直接当「时间比例」**（WX10）：三维 `vnoise` 的 p10 ≈ 0.25、p90 ≈ 0.75；z 取半整数的切片更窄，p10 ≈ 0.30、p90 ≈ 0.70。要表达「某件事有 60% 的时间发生」，先用 `rank()` 拉伸，再比较「活跃度 − rank」。
+- **连续航程中途，白天的台风几乎摆不出来**（WX10 发现，T19b 的机制）：台风的卷云盖半径约 300 km，「整组在视野外」基本满足不了；巡航高度又在积云之上，遇不到穿云遮挡，只能等深夜。现在只有用户跳变（`onJump`）时会直接摆放，日志记 `[jump]`。截台风图的办法：场景 js 里打开连续航程，然后调用 `director.weather.onJump()`。跳变时也要先过 PERF-10 的预告门 `weatherReady`：冷启动后十几秒内换预设，如果变体还没编好，这一次不摆台风 / 雷暴。**合并时别丢掉预告门**：丢了 typecheck 照样能过，但会摆出画不出来的台风。
 - **云影起点不能正好落在球面上**：海面点 r = BOTTOM，对地球求交的根在 0 附近正负抖动，云影随机丢失。把起点抬高 10 m。
 - 渲染到 3D 目标用 `renderer.setRenderTarget(target, layer)`：第二个参数在 3D 目标上就是层号。
 - `Data3DTexture` 设 `generateMipmaps = true` 后，three 上传时会自动生成 mipmap。远处的云必须用 mip 采样，否则会严重闪烁。
@@ -293,6 +307,10 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   坑二：「视线在云壳里均匀、前段透射率 T^f」这种不看深度的估计不能用：山后的浓云 T ≈ 0 时 T^f 也 ≈ 0，整条云带原样留在山前。
   已知误差：山前一层薄云、山后还有浓云时平均深度被拉远，山前的薄云一起去掉。识别：`handoff/T38-probe-depth.mjs` / `T38-probe-k.mjs`（窗外输出地面距离、云深度、处理前后透射率）。
 - **受光步进后几步一步几公里，按中点取 0 / 1 的密度会在塔身背光面切出水平分界**（T38，T44 遗留）：受光步长逐步翻倍，雨带塔的精简密度只在中点判断在不在塔里，某个高度以上中点出了塔、以下还在塔里，光学厚度在 227 / 457 两个值之间一跳，背光面亮度跳 4 倍：近塔半腰一条分界、下半截整片发暗（「圆桶」「拱洞」）。随机取样点（每帧换）能抹平但受光面满是颗粒，已撤回。修法：把这一步的长度（`gLightLen`）交给精简密度，过渡带按步长放宽（≈ 这一步落在塔里的比例），确定性、无噪声。另外眼外的塔不再按整个台风外壳高度压暗环境光（那是给眼壁井底的，底部只剩 12%），改按 0–10 km、下限 0.4。识别：`handoff/T38-probe-tower.mjs` 读回视线透射率降到 0.6 处的直射 / 环境光 / 受光光学厚度 / 高度，光学厚度只有几个固定值就是这个问题。
+- **天气变体编好之前画的是「已编好的子集」，截图 / 计时要等 `clouds.cloudVariantPending` 变成 false**（PERF-10）：雷暴（S）、台风（T）变体启动后约 1.5 s 开始后台预编（`WEATHER_PREWARM_PROBES`，冷缓存下雷暴约 5 s、台风约 9 s 编好）；导演摆放雷暴 / 台风前先问 `weatherReady`（没编好就推迟，摆放本来就在视野外）。面板手选、组合（雷暴 + 台风、卷云 / 奇观 × 天气）第一次出现时按需编，编好之前按权重（台风 > 雷暴 > 奇观 > 卷云）画已编好的子集：天气系统暂时不画，普通云照常，不会画空、不同步卡住（`handoff/PERF-10-hitch.mjs`：编译期间和第一次进雷暴 / 台风都没有 > 50 ms 的帧）。`applyScene` 已经在等；自己写的脚本要等它，否则拍到的是没有雷暴的天。`clouds.variantStatus` 看各变体状态。
+  坑（审查返工）：「选哪个变体」只能有**一个**函数（`wantedKey`）。第一版导演预告只检查 S / T，卷云 / 奇观在场时一摆雷暴，步进要的 CS / WCS 还没编好，回退画 S，整层卷云当场变普通云、奇观消失几秒；云影图 / 探针的天气版又按「场上有天气且天气小程序编好」自己决定，比台风步进早编好 5 s，海面先有台风的影子、天上还是普通云。现在预告按 `wantedKey` 拼完整键、并等天气小程序；云影 / 探针只在步进**实际画的**变体带 S / T 时用天气版（`weatherAuxOn`）；卷云 / 奇观在场时顺带预编 CS / CT（WCS / WCT）。识别：`handoff/PERF-10-combo.mjs`（按导演流程预告 → 摆放，逐帧断言 shown === wanted）。
+- **跨页面截图对比，云的位置取决于「等编译等了多久」**（PERF-10）：场景表里没写 `offset` 的场景，飞机从打开页面起一直在飞；等卷云 / 奇观 / 天气变体编译的时间两边不同（后台预编占着编译线程），云就挪了几公里，cirrus-noon 均差 7/255、看起来像整片卷云变了。零回归对比要写死 `offset`，在等编译的 `js` 末尾再把 `uCloudOffset` 归零（`handoff/PERF-10-shots.sh`）。按 pass 计时同理：cirrus-noon 卷云带成片、视野里的云量随位置变，master 在 0.29–0.57 ms 之间跳；同一位置页面内换程序（`handoff/PERF-10-variants-cirrus.mjs`）才可比：卷云变体 0.46 ms，加回雷暴 + 台风代码（= master 的卷云变体）0.65 ms。
+- **云 resolve 的邻域夹取用 `texture()` 读 32 位浮点纹理很慢**（PERF-11）：取样点正好在纹素中心，线性过滤的结果就是纹素本身，但 RGBA32F 的过滤在 NVIDIA 上降速；改 `texelFetch`（边缘夹到 `[0, 尺寸 − 1]`，与 ClampToEdge 逐位相同）+ 窗板外（`paneDistance > 0.025`）直接写 (0, 0, 0, 1) + 右半深度只在附近有地形时写，resolve 0.114 → 0.025–0.040 ms。只做后两项时还有 0.08 ms——过滤才是大头。
 
 <a id="pit-atmos"></a>
 ### 大气与曝光
@@ -327,6 +345,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **加速播放（连续航程 60×）会把影像瓦片服务器打到限流**（T19a）：飞机每秒走 15 km，8–32 km 的细级别 clipmap 每一两帧就重建，EOX 每分钟约 7000 个请求，被拒时返回的错误页不带 CORS 头，控制台刷出上万条 `blocked by CORS policy`（看起来像 CORS 配置错误，其实是限流）。只给 `ground.update` 加时间节流没用：请求量约正比于「飞过的距离 × 细级别数」。
   修法：`ground.setMinLevel()` 按流速停用最细几级（10× 停 1 级，≥30× 停 3 级），60× 降到每分钟约 550 个，1× 基线约 95。以后怎么识别：`handoff/T19a-voyage.mjs` 的 summary 里有 `requestsPerRealMin` 和 `consoleErrorCount`。
 - **连续航程不调 `setPreset`**（T19a）：接下一段只换 `state.preset`（导航目标、时区、霾），不换本地坐标原点，否则地面、云场都会重建。离原点太远时由导演借穿云或深夜「换原点」（`director.ts` 的 rebase 请求），经纬度、高度、航向都连续，只有云场和海浪的噪声原点会跳一下。
+- **时间加速时「原地掉头、坡度一帧打满」**（T49，用户反馈「有时飞机会大幅转向倾斜，不知道怎么触发」）：现象是连续航程 10× / 60× 到达终点接下一段时，飞机在 2–3 真实秒内掉头 100–170°、坡度一帧到 25°。根因两条：①转弯与坡度平滑都按**模拟**时间算（ω = g·tanφ / v、坡度时间常数 1.4 模拟秒），60× 下航向变化率 63°/真实秒、滚转速率 500–760°/真实秒；②`pickNextLeg` 不看方向，接力时 71% 的下一段要转 > 90°（航线网是放射状的，到了新千岁 / 那霸 / 广州这种端点只能掉头）。修法（flight.ts 自动驾驶 + director.ts）：坡度按**真实时间**以 ≤ 3°/s 趋近目标坡度，时间加速时按「窗外转动 ≤ 6°/真实秒」降低坡度上限（10× 约 15°、60× 约 2.5°，转弯半径相应变大）；航向由实际坡度按协调转弯算，不再直接设角速度；接力优先挑与到达航向夹角 ≤ 90° 的下一段（离终点 400 km 预挑），按转弯半径提前开始转；只能掉头且时间加速（10× / 60×）时机翼改平直飞，等穿云（在云里直接换向）或入夜，最多等 8 模拟分钟或 45 真实秒再照常转；1× 直接照常转（25° 坡度约 3 分钟掉头）。**等待时限只能用导演自己累加的时钟**（审查 P1）：不开连续航程时 `state.simTime` 只随「时间流速」走（默认暂停），拖时间滑块还会倒退，拿它当时钟会让排队永远不放行、飞机一直直飞（`T49-test.mts` 第 9 项）。以后怎么识别：`handoff/T49-sim.mts 60 20` 列出的 > 60° 转向事件时长应在十几到几十真实秒、最大滚转速率 3°/s；`handoff/T49-test.mts` 全部通过。
+- **时间加速下转弯半径很大，目的地又近时会绕着它转圈**（T49）：60× 巡航时转弯半径约 170 km，直飞一个 100 km 外、在身后的机场时，一直压坡度会让机场始终落在转弯圆里。`navDiff()` 在「终点落在转弯圆内」（距离 < 2r·sin|Δ|）时先改平直飞出去，再转回来。改转弯参数时跑 `T49-test.mts` 第 6 项（直飞伊丹后盘旋）。
 - **海面天空反射不能再乘相机→海面的透射率**。天空视图 LUT 是从相机算的，本身已经包含这段衰减。
   现象：黄昏时地平线下方有一条细暗线。起初以为是 LUT 在地平线处跨行插值，改了夹取以后暗线还在，才找到真正原因。
   修法：反射贡献 = F·(L相机(反射方向) − 内散射(相机→海面))。LUT 的地平线夹取也保留了，它本身没错。
@@ -442,6 +462,21 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   修法：位置夹在两个终点停车位之间，初速不超过到下一停车点的制动曲线，停在终点上直接进入停站；`enter()` 不给参数时列车原样继续。识别：单测第 7、8 节（终点跳转、停站中切换）。
 - **回归场景切火车要注意面板控件的应用顺序**（TR02）：`applyScene` 先按 DEFAULTS 设 `preset`、`seat`……，再设场景自己的键。火车模式下改 `preset` 会先退出火车（`setPreset` 里 `rail.exit()`），所以火车场景要写 `"vehicle": "train"`（排在 DEFAULTS 之后生效），想要右座的话在 `js` 里再设；进入火车时座位默认换到北阿尔卑斯一侧（往信濃大町是左座）。飞机场景跟在火车场景后面时，要写 `"vehicle": "plane"`（DEFAULTS 里还没有这个键，TR08 可以加上）。
 
+- **火车声音：跳位置被当成加速播放，把广播吞掉**（TR07）：`rail/audio-rail.ts` 按「音频时钟里走了多远 / 车速」估模拟流速，加速播放（导演流速）时静掉接缝、道口、广播这类节奏事件。`rail.teleport` 一下跳 30 km，被估成约 40 倍速，fastForward 持续约 0.7 s，正好把刚触发的「まもなく」吞掉。
+  修法：位移超过「100 倍速一个更新周期能走的距离」就当跳位置，重新排程、不参与估计；字幕无论如何都显示，只是加速时不放喃喃声。识别：teleport 之后 `__voyage.audio.debug().rail.rateEst` 应仍约 1。
+- **火车声音：警报声第一版低了 25 dB，完全听不见**（TR07）：车体隔声（−27 dB）之后又乘了一遍噪声床的 RMS 参考，经过道口时警报 −65 dBFS。识别：`node scripts/audio-check.mjs --rail` 的「道口通过」行，±1 s 的总声级应与底噪相当（现在 −41.7，峰 −24）。
+- **火车声音：广播喃喃声现算是一次 63 ms 的主线程长任务**（TR07）：共振峰合成在 JS 里逐样本算，5 s 的一段约 60–90 ms。修法：建图时预合成 3 段 7 s（逐段让出主线程），广播时截取需要的长度、末尾淡出。识别：`handoff/TR07-prof.mjs` 的 `maxMs`（现在约 0.6 ms）。
+- **离线节奏检查：包络自相关会报成两倍周期**（TR07）：接缝节奏的包络在 T、2T 处的自相关几乎一样高，随机数流一变（加了一段预合成就变了），最大值就从 1 s 跳到 2 s。修法：取「≥ 最大值 90%」的局部峰里最短的滞后。以后写周期检测都要加这个防倍周期。
+- **火车声音的数值多是估值 / 示例**（TR07，详见 `handoff/TR07.md`）：本线是否已长轨化、接缝是相对式还是相互式、警报两音交替还是同时，都**未核实**；面板接缝下拉默认「定尺 25 m（示例）」。道口多普勒用**运动听者**公式 (c + v·cosθ)/c（实现为 1 − ṙ/c），`research/TRAIN.md` §6.2 写的 c/(c ∓ v) 是声源运动的公式，90 km/h 时差 0.6%。
+- **火车：贴地相机下飞机的窗外程序把近处画成海、山脚一条白带**（TR03）：三个根因叠在一起。①眼高 2.5 m 时地平线附近的视线在平原上方几米处走十几公里，飞机版「按离地高度缩步」在 96 步内用完，`terrainHit` 退回海平面球（`tSea`），画成海；②AWS 地形在近处比国土地理院轨面高（弯道处 7–30 m），视线从地形里面出发，第一步就「打中」t = 0，`groundHit` 返回 false，也退回海；③地面瓦片的河道折线按类别估宽（river 60 m），十几米的小河在铁路边画成 70 m 宽的「湖」（12.65 km 处实测，线路烘焙的 OSM 里那里根本没有水面多边形）。
+  修法：窗外程序的 `#define RAIL` 变体（`rail/far-view.glsl.ts`，只拼进火车变体，共用模块里只有 `#ifdef RAIL` 钩子）：近处 250 m 内是国土地理院标高的解析平面、600 m 渐变到 clipmap 地形（近处按基准差平移到国土地理院）；步长下限按距离放大（4–10%），地形逼近时按逼近速度预估；没打到地形的视线是天空、不退回海平面球；火车模式下河道折线限宽 12 m（`GroundClipmap.waterwayMaxM`）。眼睛不再按 clipmap 抬高。
+  识别：火车模式窗外出现大片反射天空的水面 → `uDebug = 23` 看水体遮罩（红 = 水）；是遮罩里真的有水就去查瓦片的 waterway 宽度，遮罩没水却是水面就是退回了海平面球。
+- **火车：着色器里相机高度的 float32 精度**（TR03 已处理）：`uCamR = 6360 + 海拔` 在 6360 附近只有约 0.49 m 一级。火车变体的求交、阴影全部用相对量：`uRailCamAltKm`（海拔本身，亚毫米精度）+ 沿视线的增量 `t(2·rc·μ + t) / (√(rc² + q) + rc)`（`railAltAlong`，不在 6360 附近相减）。以后往火车变体加任何「比高度」的代码都走 `railAltAlong` / `gh.alt`，不要写 `length(P) − BOTTOM`。
+- **火车：高度 clipmap 半精度把平原量化成台地**（TR03）：半精度在 0.5–1 km 海拔只有约 0.5 m 一级，飞机上看不出；贴地掠射时远处地平线是一级级台阶。高度纹理改成 R32F（`clipmap.ts`，线性过滤要 `OES_texture_float_linear`，three 已启用）。飞机模式的地形高度因此变准了一点（fuji-day 与 master 平均差 0.23/255，属噪声）。
+- **火车：斜看的影像要沿足迹长轴取样**（TR03）：1 km 外像素在地面上沿视线方向的足迹是横向的几百倍，取一个点就是严重欠采样，列车一动整片平原闪。火车变体沿长轴取最多 4 点（`railGroundSample`），级别选到每点约一个纹素；地形法线在求交时就算好（`gh.nT`），掠射角按法线算（按天顶算会把正对我们的山坡也模糊掉）。
+- **火车：远处山脊几乎和地平线平行，轮廓是 1 像素的水平台阶，列车一动就沿轮廓爬**（TR03）：两类边都要抗锯齿。①地形对天空（没打到）：步进途中记下离地形最近处（以像素竖直足迹计），在它附近两轮细找，覆盖率 = 1 − 距离，和天空按覆盖率混；②近处山脊挡远处山脊（都打到）：只记「局部最近、之后又离远」的一处，把远山的颜色按那道山脊的距离重新加一遍空气透视当作它的颜色混进来。**云的切割（`cloudBeforeGround`）也要按同一覆盖率混**，不然山脊边的云还是一刀切（第一版只改地面颜色，截图看不出变化，查了半天才发现台阶是云被切出来的）。识别：`uDebug = 26`（火车变体专用：红 = 覆盖率，绿 = 距离 / 50 km，蓝 = 近处山脊覆盖率）。仍未解决：平原上相隔几公里的低矮起伏之间的遮挡边（对比很低，放大 5 倍才看得出）。
+- **火车远景变体第一次进入火车模式时后台编译约 18–19 s（d3d11 真冷），期间沿用飞机的窗外程序，窗外会先画成海**（TR03，已知）：飞机模式不受影响（变体只在火车模式下编译）。以后若要消掉，可在面板选「火车」的同时开始编译、编好之前在状态文字里提示。
+
 <a id="pit-tools"></a>
 ### 工具与环境
 
@@ -457,7 +492,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - 回归脚本在 Playwright MCP 的 `browser_run_code_unsafe` 里运行时**没有全局 `URL`**（`ReferenceError: URL is not defined`）。只在 Node 侧可用的全局不要假设存在；取 origin 用正则。以后识别：脚本一开始就抛 ReferenceError。
 - **测帧时间**：本机 GPU 远快于刷新率，rAF 间隔被锁在约 6.2 ms，看不出着色器代价；`gl.finish()` 在 Chrome 里也不等 GPU。用 `EXT_disjoint_timer_query_webgl2`，或「一个 rAF 里连渲染 N 帧后 readPixels 1 像素」。多个代理同时占 GPU 时任何计时都不可信。
 - **真冷启动**：同一端口的着色器缓存会让「冷启动」其实是热的；测编译时间要用 addInitScript 往着色器注入随机数强制缓存不命中（审查脚本 `tmp/review-t02/cold.js`）。
-- **调试模式编号**：`uDebug` 1–10 原有；11 / 12 海浪（T14：白浪覆盖率、可分辨斜率）；21 地表分类、22 像素足迹、23 水体遮罩（T02）；24 只画道路灯带（T08，地面处辐亮度，不含空气透视）；25 去掉道路灯带（T43）。新增前先查占用。
+- **调试模式编号**：`uDebug` 1–10 原有；11 / 12 海浪（T14：白浪覆盖率、可分辨斜率）；21 地表分类、22 像素足迹、23 水体遮罩（T02）；24 只画道路灯带（T08，地面处辐亮度，不含空气透视）；25 去掉道路灯带（T43）；26 火车远景的轮廓覆盖率 / 距离 / 近处山脊覆盖率（TR03，只在火车变体里）。新增前先查占用。
 - **glslang-validator-prebuilt-predownloaded 没有 `bin` 字段**：不能 `npx` 直接跑，要 `require("glslang-validator-prebuilt-predownloaded").getPath()` 拿到可执行文件路径自己 `spawn`（`apps/voyage/scripts/lint-shaders.mjs` 已经封装好）。
 - **离线校验 THREE 的 `#include <chunk>`**：不能直接展开 `THREE.ShaderChunk` 的原文喂给 `glslangValidator`——它的 `common` chunk 里的 `average()` 函数会被 glslangValidator 误报「redeclaration of existing name」（ANGLE / 真实浏览器编译完全正常，是 glslangValidator 自己符号表的问题）。`lint-shaders.mjs` 用手写的桩替换（`INCLUDE_STUBS`）绕开。
 - **按文本数 sampler 引用，光展开 `#ifdef` 还不够，要连着做「从 main() 可达性剪枝」**：一个函数即使在源码里正常定义、正常读了某个 sampler，只要这个函数本身从场景程序的 `main()` 顺着调用链走不到（比如只被另一个程序调用），真实驱动的死代码消除会把它和它读的 sampler 一起砍掉——纯文本「这个名字出现过好几次」看不出「是否真的可达」。`lint-shaders.mjs` 的 `reachableFromMain`/`pruneUnreachable` 就是为了修这个坑（撞上的真实案例：`uMultiScatteringLut` 只被 LUT 预计算程序用，场景程序的 `main()` 到不了它）。加新的静态分析工具时留意这一条。
@@ -470,7 +505,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **对比截图前冻结翼尖姿态**：`uWingFlex` 每帧按时间摆动（turbulence 0 也在动），同一端口前后两张图边缘会错开 1 像素；1:1 对比要把它冻结。同一版本前后两次截图也可能差一两颗云 / 海面高光，看到亮点先同版本再拍一次确认。
 - **测「省了多少」要带关掉该功能的对照组**：只看总时间会被别处的开销（例如多开的数组让所有像素都慢 0.02 ms）误导。
 - **同页 `material.clone()` 做 A/B 计时，排第一个的场景数字不可信**（能差 2 倍，根因未明）；最终数字用两个端口整轮交替测。
-- **headless 里听不见声音，但可以离线分析**（T11）：`node scripts/audio-check.mjs [--port 5211]`（没有开发服务器会自己起 vite）直接打开 `/src/audio.ts` 这个地址（同源、不启动渲染器）再动态 import，用 OfflineAudioContext 渲染各状态并输出倍频程表 / A 计权 / 峰值 / 左右相干度到 `tmp/audio-check/spectra.json`。页面上那条 404 是 favicon，无关。
+- **headless 里听不见声音，但可以离线分析**（T11）：`node scripts/audio-check.mjs [--port 5211]`（没有开发服务器会自己起 vite）直接打开 `/src/audio.ts` 这个地址（同源、不启动渲染器）再动态 import，用 OfflineAudioContext 渲染各状态并输出倍频程表 / A 计权 / 峰值 / 左右相干度到 `tmp/audio-check/spectra.json`。页面上那条 404 是 favicon，无关。火车（TR07）加 `--rail`（只查火车）或 `--rail --all`，结果写 `tmp/audio-check/rail.json`。
 - **同一时刻拍「正常 / 调试」两张图做减法不可靠**（T43）：即使停掉主循环、把 uCloudOffset 拨回原点，头部 / 航向仍会漂几个像素，城市灯点整体错位，相减全是灯点。
   道路的贡献直接拍调试 24（同一冻结曝光），调试 25 = 去掉道路灯带（`handoff/T43-shots.mjs`）。
 - **回归场景的日期默认是「今天」，夜景的月相每天不同**（T09）：场景只设 `time` 时日期沿用页面打开那天，月亮在不在天上、多亮随运行日期变，夜间场景的基线不可比。要稳定的夜景写 `date`（`applyScene` 对日期框发 `change`，没写 `date` 的场景恢复成页面打开时的日期）。选银河场景的办法：用 astronomy-engine 扫全年「太阳 < −18°、月亮 < −5°、人马座大星云高 4–16°、方位对着窗」，本仓库的 `night-sea-milkyway` 就是这样挑出来的（南海、左座朝东南、2026-05-15 22:30）。

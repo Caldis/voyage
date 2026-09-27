@@ -136,10 +136,23 @@ export function airportAhead(lat: number, lon: number, headingDeg: number): Airp
 /**
  * 挑下一段：从 current 出发的所有航线里，按「这个地区 / 这个机场去过几次」降权，再乘随机数。
  * 不立刻折返上一段的起点（除非没有别的选择）。visits 由调用方维护（键是地区和机场代码）。
+ * T49：给了 inboundCourse（到达时的航向）就优先挑「继续向前」的一段——出航方位与到达航向相差 ≤ FORWARD_TURN_DEG；
+ * 一段都没有（例如北端的新千岁、南端的那霸，所有航线都在身后）才允许掉头，掉头由导演借遮挡处理。
  */
-export function pickNextLeg(current: Airport, prevFrom: Airport | null, visits: Map<string, number>, rnd: () => number = Math.random): Leg {
+export const FORWARD_TURN_DEG = 90;
+
+/** 从 from 出发去 to 要转多少度（与 course 的夹角，0–180） */
+export function turnFrom(course: number, from: Airport, to: Airport) {
+  return Math.abs(((greatCircleBearing(from.lat, from.lon, to.lat, to.lon) - course + 540) % 360) - 180);
+}
+
+export function pickNextLeg(current: Airport, prevFrom: Airport | null, visits: Map<string, number>, rnd: () => number = Math.random, inboundCourse?: number): Leg {
   let cands = neighbors(current.code);
   if (prevFrom && cands.length > 1) cands = cands.filter((a) => a.code !== prevFrom.code);
+  if (inboundCourse !== undefined) {
+    const ahead = cands.filter((a) => turnFrom(inboundCourse, current, a) <= FORWARD_TURN_DEG);
+    if (ahead.length) cands = ahead;
+  }
   let best = cands[0];
   let bestScore = -Infinity;
   for (const a of cands) {
