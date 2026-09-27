@@ -156,6 +156,8 @@ export class RailMode {
     this.active = true;
     state.preset = this.preset;
     state.bankDeg = 0;
+    // 高度下限是飞机的概念（main.ts 在火车模式下不再更新它）：清掉，免得信息栏按旧地点的地形算「离地」
+    state.floor = undefined;
     ground.reset(this.preset.lat, this.preset.lon);
     // 默认坐在北阿尔卑斯一侧：往信濃大町（北）走时是左侧
     this.host.setSeat(dir > 0 ? "left" : "right");
