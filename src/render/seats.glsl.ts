@@ -260,15 +260,6 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
   }
 #endif
   vec3 n = seatNormal(p, max(0.0006, pixRaw * 0.7), seatId, isShell);
-  // T47：轮廓上擦边而过的像素（覆盖率 < 1），着色点是视线离表面最近的那个空中的点，离表面可达一个像素。
-  // 沿法线把它落回表面再取材质分区与局部坐标：原来空中的点会被分到别的材质区（如背壳的亮漆面），
-  // 头枕轮廓外一圈 1 px、逐像素跳的白色虚线（美术总监 wave6 第 6 条）
-  float dHit = min(dB0, dB1);
-#ifndef CABIN_CLASS_ECONOMY
-  dHit = isShell > 0.5 ? min(dS0, dS1) : dHit;
-#endif
-  p -= n * max(dHit, 0.0);
-  q = seatFrame(p, seatId);
   vec3 v = -rd;
   float nvGeo = max(dot(n, v), 0.0);
   float pix = pixRaw / max(nvGeo, 0.25);
