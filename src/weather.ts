@@ -257,7 +257,11 @@ export class WeatherSystem {
 //   · 云型与云量：大尺度噪声 + 季节 / 纬度 / 海陆 / 当地时段的倾向（夏季午后陆地对流、海上信风积云、锋面带层积云 / 高积云）；
 //   · 雷暴系统：按「2.5° 格子 × 3 小时窗口」哈希出生，有出生时刻、寿命、漂移速度（西风带往东、副热带往西），
 //     飞机从它们旁边经过，而不是跟着飞机的预设；
-//   · 台风：按「8° 格子 × 4 天窗口」在西北太平洋生成，向西北移动、过 25°N 后转向东北（示意性的转向路径）。
+//   · 台风：按 12 小时窗口生成，月生成率取气象厅平年值（年约 25 个、8 月最多），生成区含南海；直行 / 转向两类路径，
+//     转向纬度随月份变化，登陆减弱、北上变性（WX10）。
+// WX10 起按东亚气候态校准：冬季风寒潮（日本海雪云街、日本海一侧阴雪、太平洋一侧背风晴空）、中国东部冷季层云、
+// 锋面带季节时间表（华南前汛期 → 梅雨 → 七下八上北跳 → 秋雨锋）、副高下晴空 / 淡积云、雷暴的季节性。
+// 统计与断言：scripts/weather-stats.mts；依据出处：handoff/WX10.md。
 // 同样的 (lat, lon, t, seed) 永远给出同样的结果：重开页面、来回飞同一处，天气一致。
 // 都是示意性的气候倾向，不是真实天气数据（没有接任何气象服务）。
 // =====================================================================================
@@ -298,6 +302,10 @@ export interface WeatherSample {
   trade: number;
   cloudiness: number;
   land: boolean;
+  /** WX10 气候态项（调试 / 统计用）：副高 0..1、寒潮云街 0..1、中国东部冷季层云 0..1 */
+  subHigh: number;
+  coldSurge: number;
+  eastChinaSt: number;
 }
 
 export interface StormCellSample {
@@ -414,6 +422,35 @@ export function coarseLand(lat: number, lon: number) {
   return false;
 }
 
+/**
+ * 日本的脊梁山脉（主分水岭）折线，西南 → 东北，(纬度, 经度)：九州山地 → 中国山地 → 飞騨 / 三国山脉 → 奥羽山脉 → 日高 / 大雪山。
+ * [估算] 按地图目测取点，误差几十公里；只用来分「日本海一侧 / 太平洋一侧」，决定冬季风寒潮下阴雪还是背风晴空
+ */
+const JAPAN_SPINE: [number, number][] = [
+  [31.8, 130.9], [32.6, 131.1], [33.3, 131.3], [34.5, 131.9], [35.0, 132.9], [35.2, 133.9], [35.3, 134.7], [35.4, 135.5], [35.6, 136.3], [36.0, 137.4],
+  [36.7, 138.7], [37.5, 139.8], [38.4, 140.4], [39.7, 140.9], [40.7, 140.9], [42.3, 142.9], [43.0, 142.8], [43.7, 142.9], [44.4, 143.0], [45.2, 142.3],
+];
+/** 日本陆地上的点在脊梁哪一侧：windward = 西北（日本海）一侧 0..1，lee = 东南（太平洋）一侧 0..1。不在日本范围返回 null */
+function japanSpineSide(lat: number, lon: number) {
+  if (lat < 31 || lat > 46 || lon < 129.5 || lon > 146) return null;
+  const kx = 111.32 * Math.cos(lat * D2R);
+  let best = Infinity, side = 0;
+  for (let i = 0; i + 1 < JAPAN_SPINE.length; i++) {
+    const [a0, o0] = JAPAN_SPINE[i], [a1, o1] = JAPAN_SPINE[i + 1];
+    const ax = (o0 - lon) * kx, ay = (a0 - lat) * 110.57;
+    const dx = (o1 - o0) * kx, dy = (a1 - a0) * 110.57;
+    const t = clamp01(-(ax * dx + ay * dy) / (dx * dx + dy * dy));
+    const d = Math.hypot(ax + dx * t, ay + dy * t);
+    if (d < best) {
+      best = d;
+      // 叉积 (b − a) × (p − a)：正 = 在折线左侧（西北）
+      side = Math.sign(dx * -ay - dy * -ax) || 1;
+    }
+  }
+  const signed = side * best;
+  return { windward: smooth(-15, 10, signed) * smooth(260, 170, best), lee: smooth(5, 35, -signed) };
+}
+
 /** 一年中的第几天（UTC） */
 function dayOfYear(t: number) {
   const y = new Date(t).getUTCFullYear();
@@ -425,10 +462,82 @@ const H = 3.6e6; // 一小时的毫秒数
 const STORM_CELL_DEG = 2.5;
 const STORM_WINDOW_H = 3;
 const STORM_LIFE_H: [number, number] = [2.5, 5.5];
-/** 台风：格子（度）、窗口（小时）、寿命（小时） */
-const TY_CELL_DEG = 8;
-const TY_WINDOW_H = 96;
-const TY_LIFE_H = 7 * 24;
+/** 台风：生成窗口（小时）、寿命范围（天）。每个窗口至多生成一个，概率 = 该月平年生成数 ÷ 该月窗口数 */
+const TY_WINDOW_H = 12;
+const TY_LIFE_D: [number, number] = [4, 10];
+
+// ---------- 气候态时间表（WX10）。出处与估算的界线见 handoff/WX10.md；统计与断言见 scripts/weather-stats.mts ----------
+
+/**
+ * 台风月平均生成数：气象厅 1991–2020 平年值（1–12 月，年 25.1 个）。
+ * https://www.data.jma.go.jp/typhoon/statistics/average/average.html
+ */
+const TY_GENESIS_PER_MONTH = [0.3, 0.3, 0.3, 0.6, 1.0, 1.7, 3.7, 5.7, 5.0, 3.4, 2.2, 1.0];
+/**
+ * 台风转向纬度（°N，按月）。[估算] 气候上盛夏在 25–30°N 转向、秋冬转向点南移到 20°N 前后甚至不转向（教科书 / 气象厅解说的定性结论），
+ * 具体数值是量级估计，不是统计值
+ */
+const TY_RECURVE_LAT = [15, 15, 16, 17, 19, 23, 27, 29, 26, 22, 18, 16];
+/** 直行（西北偏西一路走、不转向）路径的比例，按月。[估算] 盛夏多「西北行扑台湾 / 华南」，秋季转向为主，晚秋冬季低纬直行进菲律宾 / 越南 */
+const TY_STRAIGHT_FRAC = [0.55, 0.55, 0.5, 0.45, 0.4, 0.4, 0.45, 0.4, 0.3, 0.35, 0.5, 0.55];
+/** 在南海生成的比例，按月。[估算] 南海台风集中在 6–9 月，量级约两成 */
+const TY_SCS_FRAC = [0.05, 0.05, 0.05, 0.08, 0.15, 0.22, 0.2, 0.2, 0.18, 0.15, 0.12, 0.06];
+
+/**
+ * 锋面带（梅雨锋 / 秋雨锋 / 华南前汛期 / 冷季静止锋）按年内日数的中心纬度（120°E 处）与活跃度（出现的时间比例）。
+ * 依据：长江中下游常年 6/14 入梅、7/16 前后出梅（国家气候中心）；日本各地梅雨入り・明け平年值（气象厅 1991–2020：
+ * 沖縄 5/10–6/21、九州北部 6/4–7/19、関東甲信 6/7–7/19、東北北部 6/15–7/28）；华北雨季「七下八上」；
+ * 华南前汛期 4–6 月、秋雨前线 9 月到 10 月上旬（气候常识）。节点纬度与活跃度本身是 [估算]
+ */
+const FRONT_SCHEDULE: [number, number, number][] = [
+  // [年内日数, 中心纬度, 活跃度]
+  [0, 24, 0.35], // 冷季：华南—台湾附近的静止锋，常有常无
+  [45, 24.5, 0.4],
+  [75, 26, 0.5], // 江南春雨
+  [105, 24.5, 0.6], // 华南前汛期
+  [130, 24.5, 0.8], // 沖縄梅雨（5/10 起）
+  [155, 28, 0.85], // 九州南部 / 九州北部入梅
+  [166, 31, 0.9], // 长江中下游入梅（6/14）、本州梅雨
+  [192, 33, 0.9], // 梅雨末期
+  [201, 36.5, 0.7], // 梅雨明け（7/19 前后）、北跳
+  [210, 39, 0.6], // 华北雨季「七下八上」、东北北部梅雨明け（7/28）
+  [222, 40, 0.45],
+  [236, 40, 0.15], // 8 月下旬基本消失
+  [250, 36, 0.45], // 秋雨前线
+  [265, 35, 0.6],
+  [285, 31, 0.45],
+  [310, 27, 0.35],
+  [340, 24.5, 0.35],
+  [365.25, 24, 0.35],
+];
+
+/**
+ * 中国东部冷季层云的季节强度（按月，0..1）。依据 Klein & Hartmann (1993, J. Climate 6:1587)：中国东部（青藏高原下游）
+ * 是全球少有的陆上冷季层状云区，10 月到次年 3 月多，2 月和 10 月两个峰，7 月最少。逐月数值是按这一描述定的 [估算]
+ */
+const EAST_CHINA_ST_MONTHLY = [0.85, 1.0, 0.9, 0.6, 0.4, 0.25, 0.05, 0.1, 0.4, 0.95, 0.85, 0.8];
+
+/** 分段线性的年周期表插值：table 按年内日数升序，首尾相接 */
+function seasonal(doy: number, table: [number, ...number[]][], col: number) {
+  for (let i = 1; i < table.length; i++) {
+    if (doy <= table[i][0]) {
+      const a = table[i - 1], b = table[i];
+      const f = (doy - a[0]) / (b[0] - a[0]);
+      return a[col] + (b[col] - a[col]) * f;
+    }
+  }
+  return table[table.length - 1][col];
+}
+/** 按月表在月中之间线性插值（值取在每月 15 日） */
+function monthly(doy: number, table: number[]) {
+  const m = (doy - 15) / 30.44; // 0 = 1 月 15 日
+  const i = Math.floor(m);
+  const f = m - i;
+  const a = table[((i % 12) + 12) % 12], b = table[(((i + 1) % 12) + 12) % 12];
+  return a + (b - a) * f;
+}
+/** 把三维值噪声（集中在 0.5 附近）拉成近似均匀的 0..1（按实测分位数：p10 ≈ 0.25、p90 ≈ 0.75） */
+const rank = (v: number) => clamp01(0.5 + (v - 0.5) * 1.85);
 
 export class WeatherField {
   constructor(public seed = 20260927) {}
@@ -448,20 +557,108 @@ export class WeatherField {
       return Math.exp(-((d / w) ** 2));
     };
     const trop = smooth(42, 18, Math.abs(lat));
+    // WX10：副热带洋面的深对流季节性很强（冬季几乎没有，1 月冲绳以东原来 15 时有 21% 的雷暴）；只有 12°N 以南的深热带常年都有
+    const deepTrop = smooth(20, 12, Math.abs(lat));
+    const seaSeason = 0.08 + 0.92 * summer + (0.47 - 0.47 * summer) * deepTrop;
     const base = land
       ? (0.12 + 0.88 * circ(15, 3.2)) * (0.3 + 0.7 * summer) * (0.35 + 0.65 * trop)
-      : (0.3 + 0.25 * circ(5, 4)) * (0.35 + 0.65 * trop) * (0.55 + 0.45 * summer);
+      : (0.3 + 0.25 * circ(5, 4)) * (0.35 + 0.65 * trop) * seaSeason;
     const n = fbm(lon / 3.5, lat / 3.5, t / H / 8, this.seed + 11);
-    return clamp01(base * (0.35 + 1.3 * n));
+    // 副高下沉区压制对流
+    return clamp01(base * (0.35 + 1.3 * n) * (1 - (land ? 0.3 : 0.6) * this.subtropicalHigh(lat, lon, t)));
   }
 
-  /** 锋面带：一条随季节南北移动（冬 ~24°N，盛夏 ~33°N）、沿经度起伏、时有时无的带 */
-  front(lat: number, lon: number, t: number) {
+  /** 锋面带此刻在经度 lon 处的中心纬度与季节活跃度（按 FRONT_SCHEDULE，东北—西南走向，沿经度和时间起伏） */
+  frontAxis(lon: number, t: number) {
     const hours = t / H;
+    const doy = dayOfYear(t);
+    // 梅雨锋大致东北—西南走向：日本一侧比华中偏北 1–2°（[估算]）
+    const lat =
+      seasonal(doy, FRONT_SCHEDULE, 1) + 0.06 * (lon - 120) + 2.5 * (vnoise(lon / 15, hours / 48, 0.5, this.seed + 21) - 0.5) * 2 + 1.5 * Math.sin(lon * 0.15 + hours / 30);
+    return { lat, activity: seasonal(doy, FRONT_SCHEDULE, 2) };
+  }
+
+  /**
+   * 西太平洋副热带高压（0..1）：脊线在锋面带以南约 8°（6 月中约 23°N、7 月上中旬 25°N、盛夏 30°N 以北，与「副高脊线两次北跳」一致，节点为 [估算]），
+   * 6–9 月存在，盛夏西伸到约 118°E。下沉气流：晴空或信风积云，压制对流与层云
+   */
+  subtropicalHigh(lat: number, lon: number, t: number) {
     const summer = this.summer(t, lat);
-    const phiF = 24 + 9 * summer + 5 * (vnoise(lon / 15, hours / 48, 0.5, this.seed + 21) - 0.5) * 2 + 2.5 * Math.sin(lon * 0.15 + hours / 30);
-    const active = smooth(0.25, 0.55, vnoise(lon / 20, hours / 60, 3.5, this.seed + 23));
-    return { strength: Math.exp(-(((lat - phiF) / 2.8) ** 2)) * active, north: lat > phiF };
+    const g = smooth(0.55, 0.85, summer);
+    if (g <= 0) return 0;
+    const ridge = seasonal(dayOfYear(t), FRONT_SCHEDULE, 1) - 8;
+    const west = 128 - 10 * smooth(0.85, 1, summer);
+    return g * Math.exp(-(((lat - ridge) / 6) ** 2)) * smooth(west - 6, west + 4, lon) * smooth(178, 168, lon);
+  }
+
+  /** 冬季风寒潮的地理项（只和位置有关，按 0.25° 缓存）：streets = 下风海面的雪云街 / 日本海一侧沿岸阴雪，lee = 越过脊梁山脉后的背风晴空 */
+  private readonly surgeGeoCache = new Map<number, { streets: number; lee: number }>();
+  private surgeGeo(lat: number, lon: number, land: boolean) {
+    const key = (Math.round(lat * 4) * 100000 + Math.round(lon * 4)) * 2 + (land ? 1 : 0);
+    const hit = this.surgeGeoCache.get(key);
+    if (hit) return hit;
+    const la0 = Math.round(lat * 4) / 4, lo0 = Math.round(lon * 4) / 4;
+    const win = smooth(25, 31, la0) * smooth(48, 43, la0) * smooth(115, 119, lo0) * smooth(155, 147, lo0);
+    let out = { streets: 0, lee: 0 };
+    if (win > 0 && !land) {
+      // 海面：沿上风方向找最近的陆地（日本海 / 日本一带吹西北风，东海 / 黄海偏北风，冬季风气候态 [教科书]）。
+      // 离岸几十公里内是无云区（冷空气刚出海，还没被加热加湿），之后是顺风的云街、再往下游转开放单体（[教科书；距离为量级]）
+      const az = (lo0 >= 128 ? 315 : lo0 <= 120 ? 350 : 350 - ((lo0 - 120) / 8) * 35) * D2R;
+      const STEP = 20, MAX = 1000;
+      let fetch = MAX, la = la0, lo = lo0;
+      for (let d = STEP; d <= MAX; d += STEP) {
+        la += (Math.cos(az) * STEP) / 110.57;
+        lo += (Math.sin(az) * STEP) / (111.32 * Math.cos(la * D2R));
+        if (coarseLand(la, lo)) {
+          fetch = d;
+          break;
+        }
+      }
+      out = { streets: win * smooth(20, 110, fetch), lee: 0 };
+    } else if (win > 0) {
+      // 陆地：只有日本（大陆上吹来的是干冷空气，不成云）。按脊梁山脉分两侧：上风（西北）一侧阴雪，下风（东南）一侧背风晴空（焚风）
+      const s = japanSpineSide(la0, lo0);
+      if (s) out = { streets: win * s.windward, lee: win * s.lee };
+    }
+    if (this.surgeGeoCache.size > 20000) this.surgeGeoCache.clear();
+    this.surgeGeoCache.set(key, out);
+    return out;
+  }
+
+  /**
+   * 冬季风寒潮（冷空气爆发）0..1：12 月到次年 2 月最强、11 月和 3 月较弱，按几天的节奏一阵一阵（冬型气压配置在隆冬约占七到八成时间，[估算]）。
+   * 返回下风海面 / 沿岸的云街强度与背风晴空强度
+   */
+  coldSurge(lat: number, lon: number, t: number, land: boolean) {
+    const season = smooth(0.55, 0.9, 1 - this.summer(t, lat));
+    if (season <= 0) return { streets: 0, lee: 0 };
+    const geo = this.surgeGeo(lat, lon, land);
+    if (geo.streets <= 0 && geo.lee <= 0) return { streets: 0, lee: 0 };
+    const pulse = smooth(0.12, 0.32, rank(vnoise(lon / 30, lat / 30, t / H / 60, this.seed + 51)));
+    const k = season * pulse;
+    return { streets: geo.streets * k, lee: geo.lee * k };
+  }
+
+  /** 中国东部冷季层云 0..1（Klein & Hartmann 1993），25–35°N、102–122°E 的陆地；按天气尺度时有时无 */
+  eastChinaStratus(lat: number, lon: number, t: number, land: boolean) {
+    if (!land) return 0;
+    // 西段（四川盆地—贵州—湖南，103–115°E）最多，往沿海减弱到约一半（[估算]：长江下游、上海秋季多晴）
+    const r = smooth(21, 25, lat) * smooth(36, 32.5, lat) * smooth(101, 105, lon) * smooth(124, 121.5, lon) * (0.5 + 0.5 * smooth(120, 112, lon));
+    if (r <= 0) return 0;
+    const u = rank(vnoise(lon / 8, lat / 8, t / H / 36, this.seed + 61));
+    return r * monthly(dayOfYear(t), EAST_CHINA_ST_MONTHLY) * (0.15 + 0.9 * u);
+  }
+
+  /**
+   * 锋面带：按 FRONT_SCHEDULE 的季节时间表南北移动（冷季 ~24°N → 5 月华南 / 冲绳 → 6 月中到 7 月中 30–34°N 梅雨锋 →
+   * 7 月下旬北跳 37–40°N → 8 月下旬基本消失 → 9 月秋雨锋 35–36°N → 秋冬退回南方），沿经度起伏、时有时无（出现的时间比例 ≈ 活跃度）
+   */
+  front(lat: number, lon: number, t: number) {
+    const ax = this.frontAxis(lon, t);
+    // 这一处的噪声切片 z 取半整数，分布比三维值噪声更窄，拉伸系数 2.3（实测分位数）
+    const u = clamp01(0.5 + (vnoise(lon / 20, t / H / 60, 3.5, this.seed + 23) - 0.5) * 2.3);
+    const active = smooth(-0.1, 0.1, ax.activity - u);
+    return { strength: Math.exp(-(((lat - ax.lat) / 2.8) ** 2)) * active, north: lat > ax.lat };
   }
 
   /** 取样一处的云层。land 省略时按粗略海陆分布 */
@@ -472,21 +669,29 @@ export class WeatherField {
     const fr = this.front(lat, lon, t);
     const front = fr.strength;
     const trade = isLand ? 0 : smooth(28, 18, lat) * smooth(2, 8, lat);
-    const cl = fbm(lon / 5, lat / 5, hours / 18, this.seed + 31);
+    // WX10 气候态项：副高（晴空 / 信风积云）、冬季风寒潮（雪云街 / 背风晴空）、中国东部冷季层云
+    const sh = this.subtropicalHigh(lat, lon, t);
+    const surge = this.coldSurge(lat, lon, t, isLand);
+    const ecs = this.eastChinaStratus(lat, lon, t, isLand);
+    const cl = fbm(lon / 5, lat / 5, hours / 18, this.seed + 31) * (1 - 0.5 * sh);
     const nHigh = fbm(lon / 7 + 3.1, lat / 7, hours / 24, this.seed + 41);
     const nMid = fbm(lon / 6, lat / 6 + 2.3, hours / 20, this.seed + 43);
     const cool = !isLand && lat > 26 ? 1 - this.summer(t, lat) * 0.6 : 0;
     const scores: Record<CloudRegime, number> = {
-      clear: 0.78 - 0.95 * cl - 0.7 * front - 0.55 * conv,
-      cumulus: 0.08 + 0.45 * trade + 0.55 * Math.min(conv, 0.5) + 0.3 * (cl - 0.5),
+      clear: 0.78 - 0.95 * cl - 0.7 * front - 0.55 * conv + 0.15 * sh - 0.9 * surge.streets + 0.5 * surge.lee - 0.5 * ecs,
+      // 副高下是晴空或零散的淡积云（信风积云），所以副高同时给积云加分
+      cumulus: 0.08 + 0.45 * trade + 0.55 * Math.min(conv, 0.5) + 0.3 * (cl - 0.5) + 0.5 * sh + 1.2 * surge.streets,
       towering: -0.2 + 1.05 * conv + 0.15 * trade * conv,
-      stratocumulus: -0.15 + 0.95 * front * (fr.north ? 0.55 : 1) + 0.9 * Math.max(0, cl - 0.5) * (isLand ? 0.5 : 1) + 0.25 * cool,
-      altocumulus: -0.25 + 0.9 * front * (fr.north ? 1 : 0.4) + 0.8 * Math.max(0, nMid - 0.5),
+      stratocumulus: -0.15 + 0.95 * front * (fr.north ? 0.55 : 1) + 0.9 * Math.max(0, cl - 0.5) * (isLand ? 0.5 : 1) + 0.25 * cool - 0.35 * sh + 1.0 * ecs,
+      altocumulus: -0.25 + 0.9 * front * (fr.north ? 1 : 0.4) + 0.8 * Math.max(0, nMid - 0.5) - 0.35 * sh,
       cirrus: -0.2 + 0.9 * Math.max(0, nHigh - 0.45) + 0.1 * cl,
     };
     let regime: CloudRegime = "clear";
     for (const k of Object.keys(scores) as CloudRegime[]) if (scores[k] > scores[regime]) regime = k;
-    const out: WeatherSample = { regime, bottom: 1.2, top: 3.4, coverage: 0, type: 1, density: 1, scores, convection: conv, front, trade, cloudiness: cl, land: isLand };
+    const out: WeatherSample = {
+      regime, bottom: 1.2, top: 3.4, coverage: 0, type: 1, density: 1, scores, convection: conv, front, trade, cloudiness: cl, land: isLand,
+      subHigh: sh, coldSurge: surge.streets, eastChinaSt: ecs,
+    };
     // 各云型的参数：高度与 CLOUD_PRESETS 同源，云量 / 云顶随驱动量连续变化
     const cu = smooth(0.3, 0.85, conv);
     switch (regime) {
@@ -494,15 +699,26 @@ export class WeatherField {
         out.coverage = 0;
         break;
       case "cumulus":
-      case "towering":
+      case "towering": {
         // 积状云族：云顶随对流潜势从 ~3 km（淡积云）长到 ~6.8 km（浓积云），云量随大尺度云量与信风
         out.bottom = 1.2 + 0.25 * cu;
         out.top = 3.0 + 3.8 * cu;
         out.coverage = clamp01(0.18 + 0.3 * cl + 0.12 * trade + 0.1 * cu);
         out.density = 1 + 0.2 * cu;
+        // 寒潮下风的雪云街 / 开放单体：云底低（约 0.8 km）、云顶受冬季边界层逆温限制在 2–3.5 km、云量高（[教科书；量级]）
+        const k = smooth(0.15, 0.6, surge.streets);
+        if (k > 0) {
+          const mix = (a: number, b: number) => a + (b - a) * k;
+          out.bottom = mix(out.bottom, 0.8);
+          out.top = mix(out.top, 2.2 + 1.3 * surge.streets);
+          out.coverage = mix(out.coverage, clamp01(0.42 + 0.38 * surge.streets + 0.12 * cl));
+          out.density = mix(out.density, 1.1);
+        }
         break;
+      }
       case "stratocumulus":
-        Object.assign(out, { bottom: 1.0, top: 2.2, type: 0.2, density: 0.8, coverage: clamp01(0.58 + 0.28 * Math.max(front, cl)) });
+        // 中国东部冷季层云：连成片（云量 0.75–0.95）
+        Object.assign(out, { bottom: 1.0, top: 2.2, type: 0.2, density: 0.8, coverage: clamp01(Math.max(0.58 + 0.28 * Math.max(front, cl), ecs > 0.05 ? 0.7 + 0.25 * ecs : 0)) });
         break;
       case "altocumulus":
         Object.assign(out, { bottom: 4.5, top: 6.0, type: 0.45, density: 0.7, coverage: clamp01(0.45 + 0.25 * Math.max(front, nMid)) });
@@ -523,9 +739,10 @@ export class WeatherField {
     const tBirth = (k + hash(i, j, k, s + 3)) * STORM_WINDOW_H * H;
     const life = (STORM_LIFE_H[0] + (STORM_LIFE_H[1] - STORM_LIFE_H[0]) * hash(i, j, k, s + 4)) * H;
     const land = coarseLand(lat, lon);
-    // 出生概率：成熟时刻的对流潜势 + 锋面上的嵌入对流（梅雨锋）
+    // 出生概率：成熟时刻的对流潜势 + 锋面上的嵌入对流（梅雨锋、华南前汛期；WX10：只在暖季，冷季的静止锋是层状云、几乎不嵌深对流）
     const conv = this.convection(lat, lon, tBirth + life / 2, land);
-    const p = clamp01((conv - 0.35) * 1.8) * 0.8 + 0.35 * this.front(lat, lon, tBirth).strength;
+    const warm = smooth(0.3, 0.6, this.summer(tBirth, lat));
+    const p = clamp01((conv - 0.35) * 1.8) * 0.8 + 0.35 * warm * this.front(lat, lon, tBirth).strength;
     if (r0 >= p) return null;
     const rk = hash(i, j, k, s + 5);
     const kind: StormSystemSample["kind"] = rk < 0.55 ? "isolated" : rk < 0.82 ? "cluster" : "squall";
@@ -592,31 +809,70 @@ export class WeatherField {
     return out.sort((a, b) => a.d - b.d).map((o) => o.s);
   }
 
-  /** 台风位置：出生后向西北移动约 18 km/h，过 25°N 逐渐转向东北并加速（示意性的转向路径） */
-  private typhoonAt(i: number, j: number, k: number, t: number): TyphoonSample | null {
+  /**
+   * 第 k 个生成窗口（12 小时）里有没有台风生成；有就返回它的静态描述。
+   * 生成概率 = 该月平年生成数 ÷ 该月窗口数（气象厅 1991–2020 平年值，年 25.1 个、8 月最多）；
+   * 生成区：主体 125–165°E、纬度随季节（冬季约 9°N、盛夏约 17°N，±5°），另有一部分在南海（12–20°N、111–119°E）；
+   * 路径两类：直行（西北偏西一路走，扑菲律宾 / 台湾 / 华南 / 越南）和转向（西北行，到转向纬度附近折向东北并加速），比例和转向纬度按月（[估算]）
+   */
+  private typhoonSeed(k: number) {
     const s = this.seed + 301;
-    const lat0 = 8 + (j + hash(i, j, k, s + 1)) * TY_CELL_DEG;
-    const lon0 = (i + hash(i, j, k, s + 2)) * TY_CELL_DEG;
-    if (lat0 > 22 || lon0 < 125 || lon0 > 155) return null; // 西北太平洋的生成区
-    const tBirth = (k + hash(i, j, k, s + 3)) * TY_WINDOW_H * H;
-    const age = t - tBirth;
-    if (age < 0 || age > TY_LIFE_H * H) return null;
-    const season = this.summer(tBirth, 20) ** 1.5;
-    if (hash(i, j, k, s) >= 0.22 * season) return null;
-    // 按 2 小时步长积分路径（最多 84 步，只在调用时算）：西北行，纬度过 22–30°N 时转向东北并加速
-    let lat = lat0, lon = lon0;
+    const tBirth = (k + hash(k, 0, 0, s + 3)) * TY_WINDOW_H * H;
+    const d = new Date(tBirth);
+    const mon = d.getUTCMonth();
+    const days = new Date(Date.UTC(d.getUTCFullYear(), mon + 1, 0)).getUTCDate();
+    if (hash(k, 0, 0, s) >= TY_GENESIS_PER_MONTH[mon] / (days * (24 / TY_WINDOW_H))) return null;
+    let lat0: number, lon0: number;
+    if (hash(k, 0, 0, s + 6) < TY_SCS_FRAC[mon]) {
+      lat0 = 12 + 8 * hash(k, 0, 0, s + 1);
+      lon0 = 111 + 8 * hash(k, 0, 0, s + 2);
+    } else {
+      lat0 = Math.max(5, 9 + 8 * this.summer(tBirth, 15) + (hash(k, 0, 0, s + 1) - 0.5) * 10);
+      // 经度偏向西侧（中位约 137°E，125–160°E），[估算]
+      lon0 = 125 + 35 * hash(k, 0, 0, s + 2) ** 1.5;
+    }
+    if (coarseLand(lat0, lon0)) return null;
+    return {
+      id: `ty${k}`,
+      tBirth,
+      lat0,
+      lon0,
+      life: (TY_LIFE_D[0] + (TY_LIFE_D[1] - TY_LIFE_D[0]) * hash(k, 0, 0, s + 4)) * 24 * H,
+      straight: hash(k, 0, 0, s + 7) < TY_STRAIGHT_FRAC[mon],
+      recurve: TY_RECURVE_LAT[mon] + (hash(k, 0, 0, s + 8) - 0.5) * 6,
+      eye: 16 + 8 * hash(k, 0, 0, s + 5),
+    };
+  }
+
+  /** 台风此刻的位置与强度：按 2 小时步长积分路径（只在调用时算）；登陆后按陆上时间衰减（e 折约 12 小时，[估算]），北上 34–40°N 变性消失 */
+  private typhoonAt(k: number, t: number): TyphoonSample | null {
+    const sd = this.typhoonSeed(k);
+    if (!sd) return null;
+    const age = t - sd.tBirth;
+    if (age < 0 || age > sd.life) return null;
+    let lat = sd.lat0, lon = sd.lon0, landH = 0;
     const steps = Math.floor(age / H / 2);
     for (let h = 0; h < steps; h++) {
-      const rc = smooth(22, 30, lat);
-      const spd = (18 + 22 * rc) * 2; // km / 2 h
-      const east = -0.8 + 1.5 * rc; // 西北（东分量 −0.8）→ 东北（+0.7）
-      const north = 0.6 + 0.1 * rc;
-      lon += (east * spd) / (111.32 * Math.cos(lat * D2R));
-      lat += (north * spd) / 110.57;
+      let east: number, north: number, spd: number;
+      if (sd.straight) {
+        // 西北偏西，约 20 km/h
+        east = -0.9;
+        north = 0.35;
+        spd = 20;
+      } else {
+        // 西北行 → 在转向纬度附近折向东北并加速（西风带）
+        const rc = smooth(sd.recurve - 2, sd.recurve + 4, lat);
+        east = -0.65 + 1.4 * rc;
+        north = 0.72;
+        spd = 21 + 24 * rc;
+      }
+      lon += (east * spd * 2) / (111.32 * Math.cos(lat * D2R));
+      lat += (north * spd * 2) / 110.57;
+      if (coarseLand(lat, lon)) landH += 2;
     }
-    const strength = Math.sin((Math.PI * age) / (TY_LIFE_H * H));
-    if (strength < 0.35 || lat > 38) return null; // 太弱或已经北上变性
-    return { id: `ty${i}_${j}_${k}`, lat, lon, eye: 16 + 8 * hash(i, j, k, s + 5), strength };
+    const strength = Math.sin((Math.PI * age) / sd.life) ** 0.6 * Math.exp(-landH / 12) * smooth(41, 35, lat);
+    if (strength < 0.35) return null; // 太弱、登陆减弱或已经北上变性
+    return { id: sd.id, lat, lon, eye: sd.eye, strength };
   }
 
   /** radiusKm 内最近的活跃台风（没有返回 null） */
@@ -637,13 +893,11 @@ export class WeatherField {
   activeTyphoons(t: number): TyphoonSample[] {
     const out: TyphoonSample[] = [];
     const kMax = Math.floor(t / (TY_WINDOW_H * H));
-    const kMin = Math.floor((t - TY_LIFE_H * H) / (TY_WINDOW_H * H));
-    for (let i = Math.floor(125 / TY_CELL_DEG); i <= Math.floor(155 / TY_CELL_DEG); i++)
-      for (let j = 0; j <= 1; j++)
-        for (let k = kMin; k <= kMax; k++) {
-          const ty = this.typhoonAt(i, j, k, t);
-          if (ty) out.push(ty);
-        }
+    const kMin = Math.floor((t - TY_LIFE_D[1] * 24 * H) / (TY_WINDOW_H * H));
+    for (let k = kMin; k <= kMax; k++) {
+      const ty = this.typhoonAt(k, t);
+      if (ty) out.push(ty);
+    }
     return out;
   }
 }
