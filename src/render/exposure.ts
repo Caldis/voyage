@@ -13,8 +13,8 @@ import type { FullscreenPass } from "./pass";
  *    窗外永远按窗外的亮度曝光（和改前一致）；舱内的曝光由窗外的曝光出发，
  *    按绝对亮度决定能独立适应多少，并且不许比窗外还亮。因为遮罩是解析算出来的，交界处没有光晕。
  *    T28：舱内再做部分色适应（von Kries / CAT02）；舱灯开、窗外暗时舱内成为主导适应区。
- * 4. 输出：曝光 × HDR → 舱内色适应 → 浦肯野（T48：窗外高饱和、够亮的发光体只保色度）→ AgX 色调映射
- *    （T48：夜里窗外高饱和像素做色度保持）→ sRGB，最后加抖动避免天空渐变出现色带。
+ * 4. 输出：曝光 × HDR → 舱内色适应 → 浦肯野（T48：窗外高饱和、够亮的发光体只保色度）→（TM01：白天窗外的高光段抬斜率）
+ *    → AgX 色调映射（T48：夜里窗外高饱和像素做色度保持）→ sRGB，最后加抖动避免天空渐变出现色带。
  */
 
 // 测光目标是 2×1：左像素是亮度（本段），右像素是色度（CHROMA_METER，T28）
@@ -107,7 +107,7 @@ uniform float uSnowEv;      // 窗外是均匀而明亮的视野（云中、雪�
 uniform vec2 uUniformRange; // 「均匀视野」判据：窗外线性均值与对数均值之差（log2）在此区间内由 1 过渡到 0
 uniform float uWhiteout;    // C02 飞机在云里的程度（0–1），云里窗外是白茫茫一片：直接算「均匀视野」
 uniform vec2 uDayEvAnchor;  // C02 白天窗外曝光的下限：x = 相当于 EV100 多少的相机曝光（再亮的视野不再往下压），y = 强度（0 = 关）
-uniform vec2 uDayEvSoft;    // TM01 锚定的软过渡：x = 拐角过渡宽度（EV），y = 比锚点亮的视野仍保留的自适应比例（0 = C02 的硬下限）
+uniform float uDayEvSoft;   // TM01 锚定的软拐角（宽 ±0.5 档）：1 = 开，0 = C02 的硬 max
 uniform vec2 uPhotopicRange;// 「白天」判定：窗外适应亮度的 log10(cd/m²) 区间
 uniform vec2 uDominanceRange; // 「舱内主导」判据：舱内与窗外适应亮度之差 c − o（log2）在此区间内由 0 过渡到 1
 uniform vec2 uCabinLitRange;  // 「舱灯开着」判据：舱内适应亮度 log10(cd/m²) 在此区间内由 0 过渡到 1
@@ -138,14 +138,14 @@ ExpModel exposureModel(vec4 adapted) {
     //    天空为主的窗）照旧自动曝光、一点不变。强度 uDayEvAnchor.y（0 = 关）。
     //    放在舱内的约束之前：锚定之后眼睛就适应在这个水平上，③ ④ 的「舱内相对窗外」都按它算——否则云越亮、窗外对数均值越高，
     //    ④「舱内最多比窗外多提亮 4.5 档」把舱壁一起压暗（clouds-variety 舱壁 139 → 123）
-    //    TM01：硬 max 换成软过渡。锚点以上（视野比锚点亮）照样留 uDayEvSoft.y 的自适应（0 = 完全不再往下压，即 C02），
-    //    拐角用宽 uDayEvSoft.x 档的二次过渡（C1 连续）；离锚点超过 x 档的视野与改前逐位相同
-    float evFloor = log2(1000.0 / 1.2) - uDayEvAnchor.x;
-    float g = (1.0 - uDayEvSoft.y) * (evFloor - eO);   // > 0：比锚点亮，max 会抬高多少
-    float kw = max(uDayEvSoft.x, 1e-3);
-    float kq = max(kw - abs(g), 0.0);
-    float lift = max(g, 0.0) + kq * kq / (4.0 * kw);
-    eO += lift * day * uDayEvAnchor.y;
+    //    TM01：硬 max 换成软拐角——锚点两侧各 0.5 档内用二次过渡（C1 连续，锚点处多抬 0.125 档），
+    //    离锚点 0.5 档以外与 C02 逐位相同。uDayEvSoft = 0 即 C02 的硬 max（同页 A/B 用）。
+    //    没做「锚点以上仍留一部分自适应」：它会经 ③ ④ 连舱壁一起压暗（留 30% 时 clouds-variety 舱壁 148 → 140）
+    float g = log2(1000.0 / 1.2) - uDayEvAnchor.x - eO; // > 0：比锚点亮，硬 max 会抬高多少
+    //    软拐角写成铰链 0.5·clamp(g + 0.5, 0, 1)² + max(g − 0.5, 0)（与 max(g, 0) + 0.5·max(0.5 − |g|, 0)² 逐点相等）：
+    //    带 abs 的写法离线 FXC 让 exposure-final 慢 10–15%，这种写法持平（handoff/TM01-fxc.mjs）
+    float kq = clamp(g + 0.5, 0.0, 1.0);
+    eO += mix(max(g, 0.0), 0.5 * kq * kq + max(g - 0.5, 0.0), uDayEvSoft) * day * uDayEvAnchor.y;
     // ① 局部适应：舱内的适应亮度从窗外出发，向舱内自身的亮度靠拢一部分；明视时周边视网膜能独立适应得更多
     // T28「舱内主导」：舱内比窗外亮得多（dom），并且舱内本身够亮、是明视 / 高中间视（lit：开着舱灯，不是睡眠 / 全关），
     //    这时眼睛适应的是舱内：舱内按自身完全适应（β → 1）、明度恒常照样成立、不再受「不许比窗外亮」的约束。
@@ -238,14 +238,7 @@ uniform vec2 uOffLocusAdapt; // 适应白点偏离普朗克轨迹的那部分人
 uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度限幅（log2 色度向量的长度）
 uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 x→y、像素亮度 log10 cd/m² z→w 之间由 0 过渡到 1（只在窗外）
 uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
-uniform vec4 uDayHiLook;      // TM01 白天窗外高光段：x = 膝点、y = 顶点（相对中灰 0.18 的档）、z = 段内斜率、w = 强度（0 = 关）
-uniform float uTmMode;        // TM01 实验：0 = 高光段斜率，1 = AgX Punchy，2 = PBR Neutral
-uniform float uTmAux;         // TM01 实验：方案 1 / 2 的预增益（EV）
-uniform vec2 uTmPunchy;       // TM01 实验：Punchy 的 power、sat
-uniform float uTmRoll;        // TM01 实验：顶点以上收回（1 = 到 uTmRollEnd 档时增量回到 0）
-uniform float uTmRollEnd;
-uniform float uTmRollMax;     // TM01 实验：收回段按最大通道（1）还是亮度（0）定位
-uniform vec3 uTmSat;          // TM01 实验：饱和度 x→y 之间淡出，z = 强度（0 = 不淡出）
+uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
 #include <common>
 #include <dithering_pars_fragment>
 varying vec2 vUv;
@@ -274,42 +267,23 @@ float planckDev(vec2 w) {
   return w.y - y;
 }
 
-// TM01 高光段的软铰链：u ≤ −W 时恰为 0、u ≥ W 时恰为 u，中间是二次过渡（C1 连续）
-float hiHinge(float u) {
-  const float W = 0.5;
-  float q = clamp(u + W, 0.0, 2.0 * W);
-  return q * q / (4.0 * W) + max(u - W, 0.0);
+// TM01 白天窗外高光段的增益（log2，≥ 0，乘在 AgX 的输入上；x 是曝光后的线性 sRGB）。
+//   AgX（three 的默认版）在中灰以上斜率一路变缓：显示值 d ln(sRGB)/d ln(输入) 在 160/255 处约 0.28，在 203 处只剩 0.18。
+//   C02 把满窗受光的云抬进了这一段，HDR 里 ×1.8 的云芯对比到显示上只剩 ×1.45（handoff/C01-02.md「还不够好」第 1 条）。
+//   这里在膝点 k 与顶点 T 之间（按亮度）把对数斜率抬到 s，局部对比 ×s；T 以上按最大通道收回，到 R 时增益回到 0，
+//   白点附近不再被往上推（夕照云边这类高饱和的亮橙色，最大通道先到顶，按亮度收回会被推过 250，sunset-wing 1.1% → 4.3%）。
+//   亮度在 k − 0.5 档以下的像素（海、天空、地面、舱内一侧）逐位不变；只乘标量，不改色度。
+float dayHighlightGain(vec3 x) {
+  vec4 p = uDayHiLook;
+  float l = log2(max(dot(x, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18);
+  float m = log2(max(max(max(x.r, x.g), x.b), 1e-9) / 0.18);
+  // 四个软铰链一次算：u ≤ −0.5 时恰为 0、u ≥ 0.5 时恰为 u，中间二次过渡（C1 连续）
+  vec4 u = vec4(l, l, m, m) - p.xyyz;
+  vec4 q = clamp(u + 0.5, 0.0, 1.0);
+  vec4 h = 0.5 * q * q + max(u - 0.5, 0.0);
+  float r = (p.y - p.x) / (p.z - p.y);
+  return max((p.w - 1.0) * dot(h, vec4(1.0, -1.0, -r, r)), 0.0); // 高饱和像素的两段错开时可能略负，不许比 AgX 原样还暗
 }
-
-#ifdef TONE_MAPPING
-// TM01 实验：AgX + Blender「Punchy」look（Filament 的 agxLook：slope 1、power 1.35、sat 1.4）
-vec3 agxPunchy(vec3 color) {
-  const mat3 AgXInsetMatrix = mat3(
-    vec3(0.856627153315983, 0.137318972929847, 0.11189821299995),
-    vec3(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
-    vec3(0.0482516061458583, 0.101439036467562, 0.811302368396859));
-  const mat3 AgXOutsetMatrix = mat3(
-    vec3(1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
-    vec3(-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
-    vec3(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405));
-  const float AgxMinEv = -12.47393;
-  const float AgxMaxEv = 4.026069;
-  color = LINEAR_SRGB_TO_LINEAR_REC2020 * color;
-  color = AgXInsetMatrix * color;
-  color = max(color, 1e-10);
-  color = log2(color);
-  color = (color - AgxMinEv) / (AgxMaxEv - AgxMinEv);
-  color = clamp(color, 0.0, 1.0);
-  color = agxDefaultContrastApprox(color);
-  float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-  color = pow(max(color, 0.0), vec3(uTmPunchy.x));
-  color = luma + uTmPunchy.y * (color - luma);
-  color = AgXOutsetMatrix * color;
-  color = pow(max(vec3(0.0), color), vec3(2.2));
-  color = LINEAR_REC2020_TO_LINEAR_SRGB * color;
-  return clamp(color, 0.0, 1.0);
-}
-#endif
 
 vec3 vonKries(vec3 w, float D) {
   vec3 lw = RGB2LMS * (w / max(dot(w, vec3(0.2126, 0.7152, 0.0722)), 1e-6));
@@ -328,7 +302,8 @@ void main() {
     vec4 adapted = texture(uAdapted, vec2(0.25, 0.5)); // log2 亮度（kcd/m²）：窗外（对数均值）、舱内（按面积）、窗外（线性均值）
     vec4 chroma = texture(uAdapted, vec2(0.75, 0.5));  // log2(R/G)、log2(B/G)：舱内 xy、窗外 zw（T28）
     ExpModel em = exposureModel(adapted);
-    hiGate = uDayHiLook.w * em.day * (1.0 - em.uniformField) * src.a;
+    //    白天程度 × 不是「均匀视野」（云里的雾、雪原已由 ⑤ 抬成白色，不再加对比）× 窗外遮罩（交界按 alpha，只会更靠近舱内一侧，不过冲）
+    hiGate = em.day * (1.0 - em.uniformField) * src.a;
     float eO = em.eO, eC = em.eC, aC = em.aC, o = adapted.x, dom = em.dom;
     // T47：交界像素（遮罩 0 < a < 1，窗板开口边、座椅 / 头枕压在窗前的轮廓）按「曝光的倒数」线性混合，不在 log 域混合。
     // HDR 里这个像素 = a·窗外 + (1 − a)·舱内，窗外绝对亮度高、曝光低；log 域混合给出两者的几何平均曝光，
@@ -392,14 +367,8 @@ void main() {
   #ifdef TONE_MAPPING
   {
     vec3 x = gl_FragColor.rgb;
-    float lx = log2(max(dot(x, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18);
-    float hiE = (uDayHiLook.z - 1.0) * (hiHinge(lx - uDayHiLook.x) - hiHinge(lx - uDayHiLook.y));
-    float mx = mix(lx, log2(max(max(max(x.r, x.g), x.b), 1e-9) / 0.18), uTmRollMax);
-    hiE -= uTmRoll * (uDayHiLook.z - 1.0) * (uDayHiLook.y - uDayHiLook.x) / (uTmRollEnd - uDayHiLook.y) * (hiHinge(mx - uDayHiLook.y) - hiHinge(mx - uTmRollEnd));
-    hiE *= 1.0 - uTmSat.z * smoothstep(uTmSat.x, uTmSat.y, satIn);
-    vec3 a = toneMapping(x * exp2(max(hiE, 0.0) * hiGate * step(uTmMode, 0.5)));
-    if (uTmMode > 0.5 && uTmMode < 1.5) a = mix(a, agxPunchy(x * exp2(uTmAux)), hiGate);
-    if (uTmMode > 1.5) a = mix(a, NeutralToneMapping(x * exp2(uTmAux)), hiGate);
+    // TM01：白天窗外的受光云在 AgX 肩部保留对比（见 dayHighlightGain）；夜里、黄昏、舱内、云里 hiGate = 0，逐位不变
+    vec3 a = toneMapping(x * exp2(dayHighlightGain(x) * hiGate));
     // T48 色度保持：AgX 在对数域逐通道压缩，高光的通道比被压扁，夜里被曝光拉到中灰之上 4–7 档的钠灯 / 灯照的雾
     //    就成了奶白。对「夜里、窗外、高饱和、够亮」的像素，把 AgX 的结果往「同色相、同显示亮度（放不下时降亮度保色度）」
     //    的颜色拉一部分：钠灯读成橙黄、LED（饱和度低，不进这条）仍是白。中性色的目标就是 AgX 自己，不受影响
@@ -456,6 +425,10 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  *      C02：判据取 max(上式, uWhiteout)，uWhiteout = 飞机在云里的程度（C01 后云中的 h − o 升到约 0.1，统计判据不再可靠）。
  *   ⑨ C02 白天窗外的曝光下限（放在 ① 之前，舱内的约束都按锚定后的 eO 算）：eO = max(eO, log2(1000/1.2) − 15)·day，
  *      即不比 EV100 15（sunny-16）的相机更暗；只有比锚点亮的视野（满窗受光的云海）会被抬高，其余不变。
+ *      TM01：max 换成宽 0.5 档的 C1 软拐角（g = 锚点 − eO，抬高量 = max(g, 0) + max(0.5 − |g|, 0)² / 2），离锚点 0.5 档以外逐位同 C02。
+ *   TM01 白天窗外高光段（只在曝光合成里，AgX 之前）：亮度在中灰 +0.5 → +2.5 档之间对数斜率 ×1.4，
+ *      +2.5 以上按最大通道收回，到 +4.0 档时增益归零；作用程度 = day ×（1 − 均匀视野）× 窗外遮罩。
+ *      比较过 AgX Punchy（天空 / 海整体变深变艳）和 Khronos PBR Neutral（云偏奶黄、天空暗 20+），都不满足「海 / 天空色相不变」，见 handoff/TM01.md。
  *   窗外看不到（遮光板全放下）时 o 取绝对锚点：o = c − 2.2·(1 − smoothstep(1.0, 2.5, log10 c[cd/m²]))，
  *      白天等于舱内亮度，暗处比舱内低 2.2 档（关灯夜里实测窗外比舱内低约 2.7 档），按窗外可见权重连续混合。
  * T28「人眼式色适应」（用户定，选项 A）：
@@ -515,7 +488,7 @@ export const EXPOSURE_MODEL_UNIFORMS: Record<string, THREE.IUniform> = {
   uUniformRange: { value: new THREE.Vector2(0.05, 0.12) },
   uWhiteout: EXPOSURE_WHITEOUT,
   uDayEvAnchor: { value: new THREE.Vector2(15.0, 1.0) }, // C02：sunny-16（14.0 / 14.5 时满窗云海的云芯被 AgX 肩部压平，见 handoff/C01-02.md）
-  uDayEvSoft: { value: new THREE.Vector2(0.001, 0.0) }, // TM01（实验中）：x = 0.001、y = 0 ≈ C02 的硬 max
+  uDayEvSoft: { value: 1.0 }, // TM01：锚定的软拐角（±0.5 档，锚点处最多多抬 0.125 档）；0 = C02 的硬 max
   uPhotopicRange: { value: new THREE.Vector2(1.5, 3.0) },
   uDominanceRange: { value: new THREE.Vector2(-1.0, 2.0) },
   uCabinLitRange: { value: new THREE.Vector2(0.5, 1.2) },
@@ -559,14 +532,8 @@ export class Exposure {
       uWinChromaMax: { value: 0.6 },
       uMesopicKeep: { value: new THREE.Vector4(0.5, 0.85, -2.0, -0.8) },
       uNightChroma: { value: new THREE.Vector3(0.45, -1.5, 0.0) }, // 协调者合并时 0.6 → 0.45：雾芯留一点明暗层次
-      uDayHiLook: { value: new THREE.Vector4(1.25, 3.5, 1.4, 0.0) },
-      uTmMode: { value: 0 },
-      uTmAux: { value: 0 },
-      uTmPunchy: { value: new THREE.Vector2(1.35, 1.4) },
-      uTmRoll: { value: 0 },
-      uTmRollEnd: { value: 6.5 },
-      uTmRollMax: { value: 0 },
-      uTmSat: { value: new THREE.Vector3(0.2, 0.5, 0) },
+      // TM01：膝点中灰 +0.5 档（显示约 144）、顶点 +2.5（约 203）、收回到 +4.0（约 232），段内斜率 1.4；w = 1 即关（见 handoff/TM01.md 的方案对比）
+      uDayHiLook: { value: new THREE.Vector4(0.5, 2.5, 4.0, 1.4) },
     },
     true,
   );
