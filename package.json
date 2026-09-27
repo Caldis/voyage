@@ -13,6 +13,9 @@
     "shots": "node scripts/dev-browser.mjs shots",
     "cold": "node scripts/dev-browser.mjs cold",
     "bench": "node scripts/dev-browser.mjs bench",
+    "flicker": "node scripts/dev-browser.mjs flicker",
+    "probe": "node scripts/probe.mjs",
+    "passes": "node scripts/passes.mjs",
     "shader-budget": "node scripts/shader-budget.mjs"
   },
   "dependencies": {

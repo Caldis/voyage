@@ -60,6 +60,14 @@ export async function launchBrowser(chromium, { angle = "d3d11", extraArgs = [] 
   return chromium.launch({ executablePath, headless: true, args: [`--use-angle=${angle}`, ...extraArgs] });
 }
 
+/** DX-08：`--out` / `--baseline` 之类路径参数的统一解析——绝对路径原样使用，相对路径按「当前 git 仓库根」
+ * 解析（`repoRoot` 由各脚本按自己文件的位置向上算，worktree 里跑就是 worktree 根，不是写死主仓库）。
+ * 早前 `dev-browser.mjs` / `shader-budget.mjs` 的 `--out` 用 `path.join(repoRoot, args.out)`，
+ * 绝对路径传进去会被当成相对片段拼接出一条不存在的路径（`path.join` 不像 `path.resolve` 那样识别绝对路径）。 */
+export function resolveRepoPath(repoRoot, p) {
+  return path.isAbsolute(p) ? p : path.join(repoRoot, p);
+}
+
 /** browser.close() 在渲染进程已经崩溃（Target crashed）之后可能永远等不到 CDP 握手回来，
  * 用超时 race，超时就直接杀掉底层进程，避免脚本挂死（多个代理同时抢 GPU 时会撞上，见 README 坑点） */
 export async function closeBrowserSafely(browser, timeoutMs = 5000) {

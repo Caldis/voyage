@@ -86,7 +86,7 @@ export const SCENES = [
  * 到了浏览器那边都不存在，所以 defaults 通过参数传入，不是靠模块顶层的引用。
  */
 export async function applyScene(arg) {
-  const { sc, defaults } = arg;
+  const { sc, defaults, settle } = arg;
   const v = window.__voyage;
   document.getElementById("panel").classList.add("hidden");
   const set = (id, val) => {
@@ -124,10 +124,13 @@ export async function applyScene(arg) {
   if (sc.offset) v.cloudUniforms.uCloudOffset.value.set(sc.offset[0], sc.offset[1]);
   // 天气要在位移设好之后重新摆放
   if (sc.p.weather) set("weather", sc.p.weather);
-  if (sc.ground) {
+  // settle（DX-08，配合 __voyage.freeze 做逐像素对比）：等 ground.pending 真正归零，不是原来的「< 5 且已经等过 5 轮」
+  // ——瓦片还在陆续贴上来时冻结两帧、相减，差异会被当成回归。没传 settle 时行为和以前完全一样。
+  if (sc.ground || settle) {
     for (let i = 0; i < 40; i++) {
       await new Promise((r) => setTimeout(r, 1000));
-      if (v.ground.pending < 5 && i > 5) break;
+      const done = settle ? v.ground.pending === 0 : v.ground.pending < 5 && i > 5;
+      if (done) break;
     }
   }
   // 奇观（W01b）：每个场景都从「没有奇观」出发（要奇观的场景在 js 里召唤），免得上一个场景的奇观带到下一个
