@@ -256,10 +256,10 @@ export class GroundClipmap {
       const t = new THREE.DataArrayTexture(data, w, w, GROUND_LEVELS);
       t.format = format;
       t.type = type;
-      // G06：影像和水体带 mipmap + 各向异性（着色器用 textureGrad 按像素足迹取样）。每次上传一层后 three 会对整个数组
-      // 重新 generateMipmap（GPU 上做，见 handoff/G06.md 的计时）。
-      // 注意：两张纹理的 A 通道都是编码值（影像 A = 缺影像比例 / 道路照亮宽度，水体 A = 道路有向距离），mip 平均后没有意义，
-      // 着色器里凡是读 A 的地方都必须 textureLod(…, 0.0) 只读第 0 级（groundRoadTap）；各向异性取样只用 RGB（缺影像比例例外，见 groundSampleAniso）
+      // G06：影像和水体带 mipmap + 各向异性（着色器用 textureGrad 按像素足迹取样）。G07 起 mip 由 Worker 按层生成（mips.ts），
+      // attachGl(renderer) 接上后主线程按层按级直传；只有没接 GL 时才退回 three 按层上传、再对整个数组 generateMipmap（G06 的做法）。
+      // 注意：两张纹理的 A 通道都是编码值（影像 A = 缺影像比例 / 道路照亮宽度，水体 A = 道路有向距离），编码值在 mip 级没有宽度 / 距离的意义，
+      // 着色器里凡是读 A 编码的地方都必须 textureLod(…, 0.0) 只读第 0 级（groundRoadTap）；各向异性取样只用 RGB（缺影像比例例外，见 groundSampleAniso）
       t.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
       t.magFilter = THREE.LinearFilter;
       t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
@@ -373,7 +373,8 @@ export class GroundClipmap {
       res: RES,
       warm: this.warm,
       warmup: { ...this.warmMs },
-      worker: { ...workerStats },
+      worker: { ...workerStats, recent: workerStats.recent.slice() },
+      draw: { ...drawStats },
       hosts: imageryStats(),
     };
   }
@@ -550,6 +551,8 @@ export class GroundClipmap {
       }
       // G07：直传路径可用时让 Worker 顺带算这一层的 mip 链（没接 GL 时 three 按层上传、整组 generateMipmap，算了也用不上）
       vec.job.mips = this.gl !== null && !this.gpuMips;
+      vec.job.mipScratch = this.mipScratchReuse;
+      vec.job.waterCpu = this.waterCanvasCpu;
       const { water, albedo, detailCoverage, albedoMips, waterMips } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailDone ? detailPx.px : null);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
@@ -607,6 +610,13 @@ export class GroundClipmap {
   private readonly glTex = new Map<THREE.DataArrayTexture, WebGLTexture>();
   /** 调试开关：true = G06 的做法（只传第 0 级、整个数组 generateMipmap），同页 A/B 对照用（`__voyage.ground.gpuMips = true` 后 `rebuildAll()`） */
   gpuMips = false;
+  /** 调试开关（G07b）：false = G07 的 mip 浮点临时缓冲每级新分配（mips.ts），同页 A/B 用 */
+  mipScratchReuse = true;
+  /** 调试开关（G07b）：true（默认）= Worker 里水体画布走 CPU 栅格，getImageData 不经 GPU 进程读回；false = G07 及以前（同页 A/B 用） */
+  waterCanvasCpu = true;
+  /** 调试开关（G07b 调查，已否决）：true = 主线程拼影像 / 细节瓦片的画布走 CPU 栅格（Worker 读回位图不再经 GPU 进程，read 阶段 24 → 10 ms），
+   * 但代价搬到主线程：每次建级出现约 59 ms 的长任务（1× 巡航 33 次 / 分钟 > 16.7 ms 帧），所以默认 false。根治见 handoff/G07b.md（瓦片拼接挪进 Worker） */
+  imageryCanvasCpu = false;
   attachGl(renderer: THREE.WebGLRenderer) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
     this.gl = gl;
@@ -831,7 +841,7 @@ export class GroundClipmap {
     let cover = this.tileCover(size, cx, cz, zoom, RES);
     while (cover.tiles.length > IMAGERY_MAX_TILES && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
     const canvas = new OffscreenCanvas(RES, RES);
-    const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
+    const ctx = canvas.getContext("2d", this.imageryCanvasCpu ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
     ctx.imageSmoothingQuality = "high"; // 瓦片与纹素不是 1:1（缩放级按四舍五入选），缩小时不要走最近邻 / 低质量
     // 没有瓦片的地方（加载失败）：最粗一级涂成深海色；其他级别留透明，由着色器回退到粗一级。
     // 以前一律涂深海色：一张 z14 瓦片偶发取不到，低空时陆地上就出现一块直边的深藏青多边形（T02 复审发现）
@@ -847,7 +857,7 @@ export class GroundClipmap {
         if (!bmp) return;
         const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
         const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
+        drawTimed(ctx, bmp, ax, ay, bx - ax, by - ay);
       }),
     );
     return canvas.transferToImageBitmap();
@@ -863,7 +873,7 @@ export class GroundClipmap {
     const cover = { ...all, tiles: all.tiles.filter((t) => this.detailTileWanted(all.toPx, zoom, t.x, t.y, heightKm)) };
     // G06：和 buildImagery 一样画在 OffscreenCanvas 上、交 ImageBitmap 给 Worker 读回（2048² 时源与纹素 1:1，1024 时是 2:1 缩小）
     const canvas = new OffscreenCanvas(RES, RES);
-    const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
+    const ctx = canvas.getContext("2d", this.imageryCanvasCpu ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
     ctx.imageSmoothingQuality = "high";
     let got = 0;
     let settled = 0;
@@ -877,7 +887,7 @@ export class GroundClipmap {
         got++;
         const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
         const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
+        drawTimed(ctx, bmp, ax, ay, bx - ax, by - ay);
       }),
     );
     // 限时：到点还没齐就不等了（在途的请求照常完成、进缓存，给下一次重建用）
@@ -995,13 +1005,27 @@ export class GroundClipmap {
   }
 }
 
+/** G07b：主线程拼瓦片 drawImage 的耗时（imageryStats.draw），画布换 CPU 栅格时看主线程代价 */
+const drawStats = { count: 0, totalMs: 0, maxMs: 0 };
+function drawTimed(ctx: OffscreenCanvasRenderingContext2D, bmp: ImageBitmap, x: number, y: number, w: number, h: number) {
+  const t = performance.now();
+  ctx.drawImage(bmp, x, y, w, h);
+  const ms = performance.now() - t;
+  drawStats.count++;
+  drawStats.totalMs += ms;
+  drawStats.maxMs = Math.max(drawStats.maxMs, ms);
+}
+
 // ---- 地面栅格化的 Worker（T08 道路，PERF-9 并入水体/夜光）：一个常驻 Worker，按请求号对应回调；
 // 起不来时在主线程同步算（buildGroundLevel 用的是 OffscreenCanvas，主线程 / Worker 都能跑）----
 // 像素缓冲区是转移过去的（主线程这边随即失效），所以 Worker 中途出错时没法在这里补算：让这次构建失败，
 // build 的 finally 清掉 building 标志，下一帧 update 发现这一级还没建好会重建，那时已经改走主线程
 let roadWorker: Worker | null | undefined;
-/** Worker 每级合成耗时（G06 诊断：`__voyage.ground.imageryStats.worker`） */
-const workerStats = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
+/** Worker 每级合成耗时（G06 诊断：`__voyage.ground.imageryStats.worker`）。
+ * recent（G07b）：最近 WORKER_RECENT 次任务的起止时刻（主线程 performance.now() 时间轴）与分阶段耗时，归因帧尖峰用 */
+type WorkerTask = { start: number; end: number; ms: number; readMs: number; mipMs: number; marks: [string, number][] };
+const WORKER_RECENT = 64;
+const workerStats = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0, recent: [] as WorkerTask[] };
 let roadReq = 0;
 const roadPending = new Map<number, { resolve: (r: GroundLevelResult) => void; reject: (e: Error) => void }>();
 
@@ -1014,11 +1038,14 @@ function buildGroundLevelAsync(
   if (roadWorker === undefined) {
     try {
       roadWorker = new Worker(new URL("./road-raster.worker.ts", import.meta.url), { type: "module" });
-      roadWorker.onmessage = (e: MessageEvent<GroundLevelResult & { id: number; ms: number }>) => {
+      roadWorker.onmessage = (e: MessageEvent<GroundLevelResult & { id: number; ms: number; t0Abs: number }>) => {
         workerStats.count++;
         workerStats.totalMs += e.data.ms;
         workerStats.maxMs = Math.max(workerStats.maxMs, e.data.ms);
         workerStats.lastMs = e.data.ms;
+        const start = e.data.t0Abs - performance.timeOrigin;
+        workerStats.recent.push({ start, end: start + e.data.ms, ms: e.data.ms, readMs: e.data.phases?.readMs ?? 0, mipMs: e.data.phases?.mipMs ?? 0, marks: e.data.phases?.marks ?? [] });
+        if (workerStats.recent.length > WORKER_RECENT) workerStats.recent.shift();
         const req = roadPending.get(e.data.id);
         roadPending.delete(e.data.id);
         const d = e.data;
