@@ -11,11 +11,33 @@ import { buildGroundLevel, type GroundLevelResult, type RoadJob } from "./road-r
  * 飞机移动超过该级边长的 1/8 时重建这一级；重建期间这一级仍用旧数据，着色器按 valid 标志回退到粗一级。
  */
 
-// 最细一级 8 km / 1024 ≈ 7.8 m/像素，用 z14 影像（Sentinel-2 原生约 10 m）：低空时近处的影像清晰一倍
+// 最细一级 8 km / 2048 ≈ 3.9 m/像素（z14 影像是 Sentinel-2 原生约 10 m，最细一级只是放大；清晰度的收益在第 1–6 级）
 export const GROUND_LEVELS = 7;
 export const GROUND_BASE_KM = 8;
-const RES = 1024; // 影像和水体
+/**
+ * 影像和水体纹理的边长（G06：1024 → 2048）。研究结论（research/IMAGERY.md §1）：巡航时画面落在第 3–6 级，
+ * 1024² 时每个纹素比屏幕像素在地面上的横向宽度粗约 3 倍，这才是巡航地面发糊的瓶颈（影像源不是）。
+ * 级别的覆盖范围（按距离选级，groundLod）是硬约束——某个距离上只能用盖得住它的那一级，所以同一距离想要细一倍的纹素，
+ * 只能把每级的像素数翻倍。配套：mipmap + 各向异性过滤（ground.glsl.ts 的 groundSampleAniso），否则纹素变细后
+ * 沿视线方向（斜看时足迹是横向的 5–50 倍）欠采样更严重、飞机一动就闪。方案对比与数字见 handoff/G06.md
+ */
+export const GROUND_RES = 2048;
+const RES = GROUND_RES;
 const HRES = 256; // 地形高度
+/**
+ * 按多大的「每级像素数」选瓦片缩放级：影像在正常流速下按 RES 选（比 1024 时细一级），航程流速 > FINE_MAX_RATE 时按 1024 选
+ * （请求量回到 G06 之前的水平，画布上放大 2 倍，60× 下看不出差别；T19a 的限流教训）。
+ * 矢量（水体 / 道路）一律按 1024 选：OpenMapTiles 按缩放级取舍道路等级、简化几何，换缩放级会让夜间路网换一版（A 通道零回归），
+ * 矢量本身在 2048² 上栅格化，精度不受影响
+ */
+const TILE_RES_COARSE = 1024;
+const FINE_MAX_RATE = 2;
+/** 夜光（Black Marble，约 500 m/像素）的画布边长：数据比最细一级还粗几十倍，不必跟到 2048，Worker 里双线性放大（省主线程一次 16 MB 读回） */
+const NIGHT_RES = 1024;
+/** 一级影像最多取多少张瓦片：2048² 时一边约 8–12 张（缩放级按四舍五入选，瓦片像素 / 纹素在 0.7–1.4 之间） */
+const IMAGERY_MAX_TILES = 169;
+/** 分块直传时每块的行数：2048 × 512 × 4 B = 4 MB（和 1024² 一整层一样大，实测一次 0.5 ms 以内） */
+const UPLOAD_ROWS = 512;
 
 /**
  * 高清细节层（G03）：只进最细的这几级（第 0 级 8 km、第 1 级 16 km）。研究结论（research/IMAGERY.md §1、§4.1）：
@@ -62,6 +84,8 @@ interface Level {
   detail: boolean;
   /** 实际用上高清细节的像素比例（诊断） */
   detailCoverage: number;
+  /** 这一版影像是不是按 RES 选的缩放级（G06）；false = 加速航程时按 1024 选的粗一级，流速降下来后要重建 */
+  fine: boolean;
 }
 
 /** 每级的粗网格边长（格数）。高度图 256² → 每格 8×8 个高度像素；水体 1024² → 每格 32×32 个像素 */
@@ -104,6 +128,32 @@ interface UploadJob {
   layerSize: number;
 }
 
+/**
+ * 影像 / 水体纹理的 image.data（G06）：不在 CPU 上常驻整个数组（2048² × 4 × 7 层 = 117 MB 一张，两张 235 MB，JS 堆翻倍），
+ * 只在上传那一刻把这一层的像素交给 three。three r186 的 DataArrayTexture 按层上传（layerUpdates）时只调
+ * `image.data.subarray(层起点, 层终点)` 和 `BYTES_PER_ELEMENT`（WebGLTextures.js），这里让 subarray 直接返回待传的那一层。
+ * 前提：这两张纹理的每一次上传都走按层路径——构造时 source.dataReady = false（只分配、不传整块），之后只有 upload() 触发更新。
+ * 代价：WebGL 上下文丢失后 three 会整块重传，这里给的是空数组（GL 报一条 INVALID_OPERATION，纹理内容丢失、不会崩）；
+ * 本项目本来就不处理上下文恢复（着色器程序要重编几十秒）。CPU 端要读像素的只有 light-pollution（夜光），改走 nightSample
+ */
+class LayerStage extends Uint8Array {
+  /** 层号 → 待传的像素（几帧都没渲染到这张纹理时可能攒好几层，按 subarray 的起点认层） */
+  private pending = new Map<number, Uint8Array | Uint8ClampedArray>();
+  layerLength = 1;
+  stage(layer: number, layerData: Uint8Array | Uint8ClampedArray) {
+    this.pending.set(layer, layerData);
+  }
+  override subarray(begin?: number): Uint8Array<ArrayBuffer> {
+    const layer = Math.round((begin ?? 0) / this.layerLength);
+    const p = this.pending.get(layer);
+    this.pending.delete(layer);
+    return (p ?? new Uint8Array(0)) as Uint8Array<ArrayBuffer>;
+  }
+}
+
+/** light-pollution 用的夜光采样网格边长（每级 NIGHT_GRID² 个点，取水体纹理 B 通道在格心的值） */
+export const NIGHT_GRID = 64;
+
 function makeCanvas(w: number, h: number) {
   const c = document.createElement("canvas");
   c.width = w;
@@ -129,8 +179,11 @@ export class GroundClipmap {
     grid: null,
     detail: false,
     detailCoverage: 0,
+    fine: false,
   }));
   private frame: LocalFrame;
+  /** 航程流速（setDetailContext 传进来）：> FINE_MAX_RATE 时影像按粗一级取（G06） */
+  private rate = 1;
   /** 高清细节此刻开没开（G03，setDetailContext 按高度 / 视角 / 流速 / 太阳算，带回差） */
   private detailOn = false;
   /** 上一次 update 的飞机位置（km），setDetailContext 算离地高度用 */
@@ -157,20 +210,28 @@ export class GroundClipmap {
   constructor(lat0: number, lon0: number, floatHeight = true) {
     this.floatHeight = floatHeight;
     this.frame = new LocalFrame(lat0, lon0);
-    const tex = (data: Uint8Array | Float32Array, w: number, format: THREE.PixelFormat, type: THREE.TextureDataType) => {
+    const tex = (data: Uint8Array | Float32Array, w: number, format: THREE.PixelFormat, type: THREE.TextureDataType, mips = false) => {
       const t = new THREE.DataArrayTexture(data, w, w, GROUND_LEVELS);
       t.format = format;
       t.type = type;
-      t.minFilter = THREE.LinearFilter;
+      // G06：影像和水体带 mipmap + 各向异性（着色器用 textureGrad 按像素足迹取样）。每次上传一层后 three 会对整个数组
+      // 重新 generateMipmap（GPU 上做，见 handoff/G06.md 的计时）。
+      // 注意：两张纹理的 A 通道都是编码值（影像 A = 缺影像比例 / 道路照亮宽度，水体 A = 道路有向距离），mip 平均后没有意义，
+      // 着色器里凡是读 A 的地方都必须 textureLod(…, 0.0) 只读第 0 级（groundRoadTap）；各向异性取样只用 RGB（缺影像比例例外，见 groundSampleAniso）
+      t.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
       t.magFilter = THREE.LinearFilter;
       t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
-      t.generateMipmaps = false;
+      t.generateMipmaps = mips;
+      if (mips) t.anisotropy = 16; // three 按设备上限截断
+      // 一开始不上传（全是 0 的 2 × 117 MB）：第一次真正有数据时（upload）才置 true，之后按层上传
+      t.source.dataReady = !mips;
       t.needsUpdate = true;
       return t;
     };
-    this.albedo = tex(new Uint8Array(RES * RES * 4 * GROUND_LEVELS), RES, THREE.RGBAFormat, THREE.UnsignedByteType);
+    const stage = () => Object.assign(new LayerStage(0), { layerLength: RES * RES * 4 });
+    this.albedo = tex(stage(), RES, THREE.RGBAFormat, THREE.UnsignedByteType, true);
     this.albedo.colorSpace = THREE.SRGBColorSpace;
-    this.water = tex(new Uint8Array(RES * RES * 4 * GROUND_LEVELS), RES, THREE.RGBAFormat, THREE.UnsignedByteType);
+    this.water = tex(stage(), RES, THREE.RGBAFormat, THREE.UnsignedByteType, true);
     // 高度用 32 位浮点（TR03）：半精度在 0.5–1 km 海拔上只有约 0.5 m 一级（1–2 km 约 1 m），飞机上看不出来；
     // 火车眼高 2.5 m 掠射时，平原被量化成一级级半米高的台地，远处地平线成了阶梯状的锯齿。
     // R32F 的线性过滤要 OES_texture_float_linear——three 只在设备支持时才启用，不支持时 R32F 线性采样读出 0、地形全丢，
@@ -246,6 +307,7 @@ export class GroundClipmap {
     const low = agl < (on ? DETAIL_AGL_OFF : DETAIL_AGL_ON);
     const day = sunDirY > (on ? DETAIL_SUN_OFF : DETAIL_SUN_ON);
     this.detailOn = this.detailEnabled && allowed && (low || wingView) && rate <= DETAIL_MAX_RATE && day;
+    this.rate = rate;
   }
 
   /** 第 i 级以 (cx, cz) 为中心时要不要高清细节 */
@@ -261,6 +323,8 @@ export class GroundClipmap {
       source: EOX_S2.id,
       detailOn: this.detailOn,
       levels: this.levels.slice(0, DETAIL_LEVELS).map((l) => ({ detail: l.detail, coverage: +l.detailCoverage.toFixed(3) })),
+      fine: this.levels.map((l) => l.fine),
+      worker: { ...workerStats },
       hosts: imageryStats(),
     };
   }
@@ -272,6 +336,9 @@ export class GroundClipmap {
     // PERF-8：先把上一批排队的纹理上传推进一格（每帧最多一张），再决定要不要触发新的重建
     this.drainUploads();
     // 粗的级别先建，远景先出来
+    // G06：流速 ≤ 2× 时影像按 2048² 选缩放级（fine）；加速时按 1024 选、请求量不涨。已经是 fine 的一版在加速时照常用（不为变粗重建），
+    // 流速降回来以后还不是 fine 的级别重建一次
+    const fine = this.rate <= FINE_MAX_RATE;
     for (let i = GROUND_LEVELS - 1; i >= this.minLevel; i--) {
       const l = this.levels[i];
       if (l.building) continue;
@@ -279,8 +346,8 @@ export class GroundClipmap {
       const cx = Math.round(x / snap) * snap;
       const cz = Math.round(z / snap) * snap;
       const detail = this.wantDetail(i, cx, cz);
-      if (cx === l.cx && cz === l.cz && detail === l.detail) continue;
-      void this.build(i, cx, cz, detail);
+      if (cx === l.cx && cz === l.cz && detail === l.detail && (l.fine || !fine)) continue;
+      void this.build(i, cx, cz, detail, fine);
     }
   }
 
@@ -380,7 +447,7 @@ export class GroundClipmap {
     return null;
   }
 
-  private async build(i: number, cx: number, cz: number, detail: boolean) {
+  private async build(i: number, cx: number, cz: number, detail: boolean, fine: boolean) {
     const l = this.levels[i];
     const gen = this.generation;
     l.building = true;
@@ -390,20 +457,25 @@ export class GroundClipmap {
     try {
       const heightP = this.buildHeight(l.size, cx, cz);
       const [albedo0, vec, height, nightRaw, detailPx] = await Promise.all([
-        this.buildImagery(l.size, cx, cz, i === GROUND_LEVELS - 1),
+        this.buildImagery(l.size, cx, cz, i === GROUND_LEVELS - 1, fine),
         this.buildWater(l.size, cx, cz),
         heightP,
         this.buildNight(l.size, cx, cz),
         // 高清细节等地形先到：用 DEM 筛掉整张是海的瓦片（GSI 海上 404，见 tiles.ts 的 seaMissing）
         detail ? heightP.then((h) => this.buildDetail(l.size, cx, cz, h.data, DETAIL_ZOOMS[i], performance.now() + DETAIL_WAIT_MS)) : Promise.resolve(null),
       ]);
-      if (gen !== this.generation || i < this.minLevel) return;
       // 水体/河道栅格化、夜光的逐像素变换、道路灯带（T08）叠加：都在 Worker 里做（road-raster.ts 的
       // buildGroundLevel，PERF-9 把水体/夜光也从主线程挪了进来，见类头「PERF-8」注释旁边的说明），
       // 像素缓冲区转移过去再转移回来，主线程上不跑 getImageData / 逐顶点投影 / 1M 像素的循环
       // G03：高清细节（GSI）也交给 Worker，和 EOX 做「高频取 GSI、低频取 EOX」的合成（imagery-blend.ts）
       // 高清瓦片没在限时内取齐：这一版按纯 EOX 出，记成没有细节，下次重建补上（见 DETAIL_WAIT_MS）
       const detailDone = detail && detailPx !== null && detailPx.complete;
+      if (!detailDone) detailPx?.px?.close();
+      if (gen !== this.generation || i < this.minLevel) {
+        albedo0.close();
+        if (detailDone) detailPx.px?.close();
+        return;
+      }
       const { water, albedo, detailCoverage } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailDone ? detailPx.px : null);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
@@ -421,6 +493,7 @@ export class GroundClipmap {
           // 想要细节但这版没合上（没取齐）时记成 false，update 会再建一次；一张都取不到（全是「确定没有」）算完成，不反复重建
           l.detail = detail && (detailPx === null || detailPx.complete);
           l.detailCoverage = detailCoverage;
+          l.fine = fine;
           l.valid = true;
           l.maxHeight = height.max;
           l.grid = coarseGrid(cx, cz, l.size, height.data, height.sea, water);
@@ -432,6 +505,66 @@ export class GroundClipmap {
     }
   }
 
+  /** 每级夜光的粗采样（NIGHT_GRID² 个格心的水体 B 通道），light-pollution 用；和纹理同一时刻更新 */
+  private readonly nightGrid = Array.from({ length: GROUND_LEVELS }, () => new Uint8Array(NIGHT_GRID * NIGHT_GRID));
+  private sampleNight(layer: number, water: Uint8ClampedArray) {
+    const g = this.nightGrid[layer];
+    const stride = RES / NIGHT_GRID;
+    for (let j = 0; j < NIGHT_GRID; j++)
+      for (let i = 0; i < NIGHT_GRID; i++) g[j * NIGHT_GRID + i] = water[((j * stride + stride / 2) * RES + i * stride + stride / 2) * 4 + 2];
+  }
+  /** 第 layer 级、格 (i, j) 的夜光（0..255，格心取样；light-pollution 用，G06 起纹理像素不在 CPU 常驻） */
+  nightSample(layer: number, i: number, j: number) {
+    return this.nightGrid[layer][j * NIGHT_GRID + i];
+  }
+
+  /**
+   * 分块直传（G06）：2048² 一层 16 MB，交给 three 按层上传是一次 texSubImage3D，实测主线程上 8–15 ms
+   * （1024² 的 4 MB 只要 0.5 ms——Chrome 的命令缓冲传输区放不下 16 MB，要走一次同步的大块共享内存，推测），
+   * 巡航时每 7 s 左右就有一帧 30–47 ms。拆成每块 UPLOAD_ROWS 行（4 MB）直接调 GL，几块合计约 2 ms。
+   * 需要 WebGL 上下文（attachGl，main.ts 接入）和 three 分配好的纹理对象（three 第一次上传后的 onUpdate 里从绑定点取）；
+   * 两样都没有时退回 three 按层上传。为了不弄乱 three 的状态缓存：用完恢复当前纹理单元的绑定和 pixelStorei。
+   */
+  private gl: WebGL2RenderingContext | null = null;
+  private readonly glTex = new Map<THREE.DataArrayTexture, WebGLTexture>();
+  attachGl(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    for (const t of [this.albedo, this.water]) {
+      t.onUpdate = () => {
+        if (!this.glTex.has(t)) {
+          const h = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY) as WebGLTexture | null;
+          if (h) this.glTex.set(t, h);
+        }
+      };
+    }
+  }
+  private uploadDirect(tex: THREE.DataArrayTexture, layer: number, px: Uint8ClampedArray) {
+    const gl = this.gl;
+    const h = this.glTex.get(tex);
+    if (!gl || !h || gl.isContextLost()) return false;
+    const prev = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY) as WebGLTexture | null;
+    const flip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL) as boolean;
+    const prem = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL) as boolean;
+    const align = gl.getParameter(gl.UNPACK_ALIGNMENT) as number;
+    const rowLen = gl.getParameter(gl.UNPACK_ROW_LENGTH) as number;
+    if (flip) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, h);
+    const u8 = new Uint8Array(px.buffer, px.byteOffset, px.byteLength);
+    for (let y = 0; y < RES; y += UPLOAD_ROWS) {
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, y, layer, RES, UPLOAD_ROWS, 1, gl.RGBA, gl.UNSIGNED_BYTE, u8, y * RES * 4);
+    }
+    gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, prev);
+    if (flip) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, align);
+    if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, rowLen);
+    return true;
+  }
+
   private upload(tex: THREE.DataArrayTexture, layer: number, data: ArrayLike<number>, layerSize: number) {
     if (tex === this.height) {
       this.heightCpu.set(data, layer * layerSize);
@@ -441,8 +574,13 @@ export class GroundClipmap {
         for (let k = 0; k < layerSize; k++) half[o + k] = THREE.DataUtils.toHalfFloat(this.heightCpu[o + k]);
       }
     } else {
-      (tex.image.data as unknown as { set(a: ArrayLike<number>, o: number): void }).set(data, layer * layerSize);
+      const px = data as Uint8ClampedArray;
+      if (tex === this.water) this.sampleNight(layer, px);
+      if (this.uploadDirect(tex, layer, px)) return;
+      // G06：不拷进常驻数组，直接把这一层交给 three 上传（LayerStage），传完这份像素就没人引用了
+      (tex.image.data as unknown as LayerStage).stage(layer, px);
     }
+    tex.source.dataReady = true;
     tex.addLayerUpdate(layer);
     tex.needsUpdate = true;
   }
@@ -487,16 +625,22 @@ export class GroundClipmap {
     return { tiles, toPx, latC: this.frame.toGeo(cx, cz)[0] };
   }
 
-  /** coarsest：最粗一级。其他级别里没取到的瓦片留成透明（alpha = 0），着色器用粗一级补上；最粗一级没有更粗的，只能涂深海色 */
-  private async buildImagery(size: number, cx: number, cz: number, coarsest: boolean) {
+  /**
+   * coarsest：最粗一级。其他级别里没取到的瓦片留成透明（alpha = 0），着色器用粗一级补上；最粗一级没有更粗的，只能涂深海色。
+   * fine（G06）：按 RES（2048）选缩放级；false 时按 1024 选（加速航程，请求量不涨），画布上放大。
+   * 返回 ImageBitmap（G06）：瓦片画在 OffscreenCanvas 上、transferToImageBitmap 交给 Worker 读回像素——
+   * 2048² 的 getImageData 是 16 MB，放在主线程就是一个长任务（PERF-9 当时就把它列为残留的尖峰来源）
+   */
+  private async buildImagery(size: number, cx: number, cz: number, coarsest: boolean, fine: boolean) {
     const [latC] = this.frame.toGeo(cx, cz);
-    let zoom = zoomForResolution(size / RES, latC, EOX_S2.maxZoom);
+    let zoom = zoomForResolution(size / (fine ? RES : TILE_RES_COARSE), latC, EOX_S2.maxZoom);
     let cover = this.tileCover(size, cx, cz, zoom, RES);
-    while (cover.tiles.length > 49 && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
-    const ctx = makeCanvas(RES, RES);
+    while (cover.tiles.length > IMAGERY_MAX_TILES && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
+    const canvas = new OffscreenCanvas(RES, RES);
+    const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
+    ctx.imageSmoothingQuality = "high"; // 瓦片与纹素不是 1:1（缩放级按四舍五入选），缩小时不要走最近邻 / 低质量
     // 没有瓦片的地方（加载失败）：最粗一级涂成深海色；其他级别留透明，由着色器回退到粗一级。
     // 以前一律涂深海色：一张 z14 瓦片偶发取不到，低空时陆地上就出现一块直边的深藏青多边形（T02 复审发现）
-    ctx.clearRect(0, 0, RES, RES);
     if (coarsest) {
       ctx.fillStyle = "rgb(8, 22, 40)";
       ctx.fillRect(0, 0, RES, RES);
@@ -512,7 +656,7 @@ export class GroundClipmap {
         ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
       }),
     );
-    return ctx.getImageData(0, 0, RES, RES).data;
+    return canvas.transferToImageBitmap();
   }
 
   /**
@@ -523,9 +667,10 @@ export class GroundClipmap {
     const all = this.tileCover(size, cx, cz, zoom, RES);
     if (all.tiles.length > DETAIL_MAX_TILES) return null;
     const cover = { ...all, tiles: all.tiles.filter((t) => this.detailTileWanted(all.toPx, zoom, t.x, t.y, heightKm)) };
-    const ctx = makeCanvas(RES, RES);
-    ctx.clearRect(0, 0, RES, RES);
-    ctx.imageSmoothingQuality = "high"; // 2:1 缩小
+    // G06：和 buildImagery 一样画在 OffscreenCanvas 上、交 ImageBitmap 给 Worker 读回（2048² 时源与纹素 1:1，1024 时是 2:1 缩小）
+    const canvas = new OffscreenCanvas(RES, RES);
+    const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
+    ctx.imageSmoothingQuality = "high";
     let got = 0;
     let settled = 0;
     this.pending += cover.tiles.length;
@@ -548,7 +693,7 @@ export class GroundClipmap {
     clearTimeout(timer);
     const complete = settled === cover.tiles.length;
     if (got === 0) return complete ? null : { px: null, complete: false };
-    return { px: complete ? ctx.getImageData(0, 0, RES, RES).data : null, complete };
+    return { px: complete ? canvas.transferToImageBitmap() : null, complete };
   }
 
   /**
@@ -574,12 +719,12 @@ export class GroundClipmap {
    * 这一版没有把它挪进 Worker，见 handoff/PERF-9.md「还剩下什么」），返回原始 RGBA，不再在主线程跑一遍 1M 像素的变换循环。 */
   private async buildNight(size: number, cx: number, cz: number) {
     const [latC] = this.frame.toGeo(cx, cz);
-    let zoom = zoomForResolution(size / RES, latC, NIGHT_MAX_ZOOM);
-    let cover = this.tileCover(size, cx, cz, zoom, RES);
-    while (cover.tiles.length > 25 && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
-    const ctx = makeCanvas(RES, RES);
+    let zoom = zoomForResolution(size / NIGHT_RES, latC, NIGHT_MAX_ZOOM);
+    let cover = this.tileCover(size, cx, cz, zoom, NIGHT_RES);
+    while (cover.tiles.length > 25 && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, NIGHT_RES);
+    const ctx = makeCanvas(NIGHT_RES, NIGHT_RES);
     ctx.fillStyle = "black";
-    ctx.fillRect(0, 0, RES, RES);
+    ctx.fillRect(0, 0, NIGHT_RES, NIGHT_RES);
     this.pending += cover.tiles.length;
     await Promise.all(
       cover.tiles.map(async (t) => {
@@ -591,7 +736,7 @@ export class GroundClipmap {
         ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
       }),
     );
-    return ctx.getImageData(0, 0, RES, RES).data;
+    return ctx.getImageData(0, 0, NIGHT_RES, NIGHT_RES).data;
   }
 
   private async buildHeight(size: number, cx: number, cz: number) {
@@ -639,7 +784,8 @@ export class GroundClipmap {
    */
   private async buildWater(size: number, cx: number, cz: number) {
     const [latC] = this.frame.toGeo(cx, cz);
-    let zoom = zoomForResolution(size / RES, latC, VECTOR_MAX_ZOOM);
+    // 缩放级按 1024 选（G06）：换缩放级会让 OpenMapTiles 取舍的道路等级 / 简化程度变，夜间路网就换了一版；几何在 RES² 上栅格化
+    let zoom = zoomForResolution(size / TILE_RES_COARSE, latC, VECTOR_MAX_ZOOM);
     let cover = this.tileCover(size, cx, cz, zoom, RES);
     while (cover.tiles.length > 36 && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
     this.pending += cover.tiles.length;
@@ -650,7 +796,7 @@ export class GroundClipmap {
     const [lat0, lon0] = [this.frame.lat0, this.frame.lon0];
     const water = results.flatMap(({ t, w }) => (w ? [{ x: t.x, y: t.y, data: w.water }] : []));
     const tiles = results.flatMap(({ t, w }) => (w?.roads ? [{ x: t.x, y: t.y, data: w.roads }] : []));
-    const job: RoadJob = { res: RES, lat0, lon0, x0: cx - size / 2, z0: cz - size / 2, size, zoom, tiles, water, waterwayMaxM: this.waterwayMaxM };
+    const job: RoadJob = { res: RES, nightRes: NIGHT_RES, lat0, lon0, x0: cx - size / 2, z0: cz - size / 2, size, zoom, tiles, water, waterwayMaxM: this.waterwayMaxM };
     return { job };
   }
 }
@@ -660,19 +806,25 @@ export class GroundClipmap {
 // 像素缓冲区是转移过去的（主线程这边随即失效），所以 Worker 中途出错时没法在这里补算：让这次构建失败，
 // build 的 finally 清掉 building 标志，下一帧 update 发现这一级还没建好会重建，那时已经改走主线程
 let roadWorker: Worker | null | undefined;
+/** Worker 每级合成耗时（G06 诊断：`__voyage.ground.imageryStats.worker`） */
+const workerStats = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
 let roadReq = 0;
 const roadPending = new Map<number, { resolve: (r: GroundLevelResult) => void; reject: (e: Error) => void }>();
 
 function buildGroundLevelAsync(
   job: RoadJob,
-  albedo: Uint8ClampedArray,
+  albedo: ImageBitmap,
   nightRaw: Uint8ClampedArray,
-  detail: Uint8ClampedArray | null,
+  detail: ImageBitmap | null,
 ): Promise<GroundLevelResult> {
   if (roadWorker === undefined) {
     try {
       roadWorker = new Worker(new URL("./road-raster.worker.ts", import.meta.url), { type: "module" });
-      roadWorker.onmessage = (e: MessageEvent<GroundLevelResult & { id: number }>) => {
+      roadWorker.onmessage = (e: MessageEvent<GroundLevelResult & { id: number; ms: number }>) => {
+        workerStats.count++;
+        workerStats.totalMs += e.data.ms;
+        workerStats.maxMs = Math.max(workerStats.maxMs, e.data.ms);
+        workerStats.lastMs = e.data.ms;
         const req = roadPending.get(e.data.id);
         roadPending.delete(e.data.id);
         req?.resolve({ water: e.data.water, albedo: e.data.albedo, detailCoverage: e.data.detailCoverage });
@@ -695,8 +847,8 @@ function buildGroundLevelAsync(
   const worker = roadWorker;
   return new Promise((resolve, reject) => {
     roadPending.set(id, { resolve, reject });
-    // 瓦片水体/道路几何数据复制过去（还留在 LRU 缓存里给下次重建用），像素缓冲区转移（不复制）
-    const transfer = detail ? [albedo.buffer, nightRaw.buffer, detail.buffer] : [albedo.buffer, nightRaw.buffer];
+    // 瓦片水体/道路几何数据复制过去（还留在 LRU 缓存里给下次重建用），像素缓冲区与 ImageBitmap 转移（不复制）
+    const transfer: Transferable[] = detail ? [albedo, nightRaw.buffer, detail] : [albedo, nightRaw.buffer];
     worker.postMessage({ id, job, albedo, nightRaw, detail }, transfer);
   });
 }
@@ -720,10 +872,11 @@ function coarseGrid(cx: number, cz: number, size: number, height: Float32Array, 
           seaCount += sea[k];
         }
       }
-      // 水体遮罩的海洋通道（G）：隔一个像素取样就够了
+      // 水体遮罩的海洋通道（G）：每格取 16×16 个样本就够了（1024² 时隔一个像素，2048² 时隔三个，主线程上的开销不随 RES 涨）
       let ocean = 0, n = 0;
-      for (let b = 0; b < ws; b += 2) {
-        for (let a = 0; a < ws; a += 2) {
+      const wStep = Math.max(1, ws >> 4);
+      for (let b = 0; b < ws; b += wStep) {
+        for (let a = 0; a < ws; a += wStep) {
           const k = ((j * ws + b) * RES + i * ws + a) * 4;
           ocean += water[k + 1] > 127 ? 1 : 0;
           n++;

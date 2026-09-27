@@ -31,8 +31,8 @@ const G_MAX = 2.5;
 const D_MIN = 0.3;
 const D_MAX = 3.0;
 const EPS = 0.004; // 线性亮度，防止暗处比值炸开（约 sRGB 12）
-const BLUR_R = 4; // 盒滤波半径（纹素），两遍
-const FEATHER_R = 2;
+const BLUR_R = 4; // 盒滤波半径（1024² 时的纹素数，两遍）；G06 起按 res / 1024 放大，保持米数不变（第 0 级约 30 m）
+const FEATHER_R = 2; // 同上，1024² 时的纹素数
 
 const SRGB_LIN = new Float32Array(256).map((_, v) => {
   const c = v / 255;
@@ -138,7 +138,17 @@ export interface DetailBlendResult {
  * albedo / detail：RES² × RGBA（canvas 的 getImageData 结果，A = 覆盖率）；water：同一级的水体遮罩（R = 水面）
  */
 export function blendDetail(albedo: Uint8ClampedArray, detail: Uint8ClampedArray, water: Uint8ClampedArray, res: number): DetailBlendResult {
+  try {
+    return blendDetailImpl(albedo, detail, water, res);
+  } finally {
+    // G06：2048² 时这几块浮点缓冲合计约 240 MB，只在低空日本的最细两级重建时用到，用完就还给 GC，不常驻在 Worker 里
+    if (res > 1024) bufE = bufH = bufM = bufV = line = tmpFull = null;
+  }
+}
+
+function blendDetailImpl(albedo: Uint8ClampedArray, detail: Uint8ClampedArray, water: Uint8ClampedArray, res: number): DetailBlendResult {
   const N = res * res;
+  const rs = Math.max(1, Math.round(res / 1024));
   if (!bufE || bufE.length !== N * 4) {
     bufE = new Float32Array(N * 4);
     bufH = new Float32Array(N * 4);
@@ -163,8 +173,8 @@ export function blendDetail(albedo: Uint8ClampedArray, detail: Uint8ClampedArray
   }
   if (any === 0) return { coverage: 0, ratio: 0 };
   for (let p = 0; p < 2; p++) {
-    boxBlur(E, res, 4, BLUR_R);
-    boxBlur(H, res, 4, BLUR_R);
+    boxBlur(E, res, 4, BLUR_R * rs);
+    boxBlur(H, res, 4, BLUR_R * rs);
   }
   // 本级亮度比的中位数（对数直方图，[-3, 3]，256 格）：异常按「相对中位数」判，GSI 整体比 EOX 亮多少由它吸收
   const hist = new Uint32Array(256);
@@ -206,7 +216,7 @@ export function blendDetail(albedo: Uint8ClampedArray, detail: Uint8ClampedArray
     m *= smooth(-LD, -LD1, q); // 偏暗：云影、黑边
     M[i] = m;
   }
-  boxBlur(M, res, 1, FEATHER_R);
+  boxBlur(M, res, 1, FEATHER_R * rs);
   // 局部细节能量（亮度的相对高频的平方，和低通同一个窗口）：EOX 一份、GSI 一份
   for (let i = 0; i < N; i++) {
     const i4 = i * 4;
@@ -223,7 +233,7 @@ export function blendDetail(albedo: Uint8ClampedArray, detail: Uint8ClampedArray
     V[2 * i] = re * re;
     V[2 * i + 1] = rh * rh;
   }
-  boxBlur(V, res, 2, 6); // 能量只要个量级：一遍半径 6 的盒子（σ 与两遍半径 4 相当），省一半时间
+  boxBlur(V, res, 2, 6 * rs); // 能量只要个量级：一遍半径 6 的盒子（σ 与两遍半径 4 相当），省一半时间
   // 合成
   let used = 0;
   for (let i = 0; i < N; i++) {

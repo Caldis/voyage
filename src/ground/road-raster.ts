@@ -105,6 +105,8 @@ export class WaterTileBuilder {
 /** 一级 clipmap 的栅格化任务 */
 export interface RoadJob {
   res: number;
+  /** 夜光原图（nightRaw）的边长（G06：夜光按 1024 取、在这里放大到 res） */
+  nightRes: number;
   lat0: number;
   lon0: number;
   /** 这一级左上角的本地坐标（km）与边长（km） */
@@ -125,7 +127,7 @@ export interface LevelPixels {
   water: Uint8ClampedArray;
   /** 影像：A 通道兼存道路照亮宽度（见 packRoads） */
   albedo: Uint8ClampedArray;
-  /** 夜光（buildNight 的结果，R 通道） */
+  /** 夜光（buildNight 的结果减蓝底、放大到 RES²，单通道，G06 起不再是 RGBA 交错） */
   night: Uint8ClampedArray;
   /**
    * 判建成区（聚落地毯）用的影像：混高清细节之前的纯 EOX（G03 审查 R1）。不给就用 albedo。
@@ -303,7 +305,7 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
       const i4 = (qy * RES + qx) * 4;
       if (albedo[i4 + 3] < 128) continue; // 缺影像
       const c = cy * GN + Math.min(Math.floor(qx / cellPx), GN - 1);
-      const nn = night[i4] / 255;
+      const nn = night[qy * RES + qx] / 255;
       cellCount[c]++;
       if (nn < 0.02) continue;
       carpetCells[c] += nn * nn * urbanOf(ua[i4], ua[i4 + 1], ua[i4 + 2]);
@@ -327,7 +329,7 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
   const ks = 255 / (2 * R), kw = 127 / ROAD_W_MAX; // lit 是 0..1
   for (let i = 0; i < RES * RES; i++) {
     const i4 = i * 4;
-    const n = night[i4];
+    const n = night[i];
     water[i4 + 2] = n;
     water[i4 + 3] = 127.5 + sd[i] * ks; // Uint8ClampedArray：写入时自动四舍五入并截到 0..255
     const a = albedo[i4 + 3];
@@ -367,11 +369,14 @@ export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo"> & {
  */
 export function buildGroundLevel(
   job: RoadJob,
-  albedo: Uint8ClampedArray,
+  albedoBmp: ImageBitmap,
   nightRaw: Uint8ClampedArray,
-  detail: Uint8ClampedArray | null = null,
+  detailBmp: ImageBitmap | null = null,
 ): GroundLevelResult {
   const RES = job.res;
+  // 影像 / 高清细节（G06）：主线程把瓦片画好后交来 ImageBitmap，这里读回像素（2048² 一张 16 MB，放在主线程是长任务）
+  const albedo = readBitmap(albedoBmp, RES);
+  const detail = detailBmp ? readBitmap(detailBmp, RES) : null;
   const canvas = new OffscreenCanvas(RES, RES);
   const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
   ctx.fillStyle = "black";
@@ -424,19 +429,48 @@ export function buildGroundLevel(
   // packRoads 读影像 alpha 判缺影像、再把 A 改写成道路照亮宽度编码
   const urbanAlbedo = detail ? albedo.slice() : undefined;
   const detailCoverage = detail ? blendDetail(albedo, detail, water, RES).coverage : 0;
-  const night = darkenNight(nightRaw);
+  const night = upsample(darkenNight(nightRaw), job.nightRes, RES);
   const px: LevelPixels = { water, albedo, night, urbanAlbedo };
   packRoads(job, px);
   return { water: px.water, albedo: px.albedo, detailCoverage };
 }
 
+/** ImageBitmap → RES² RGBA 像素（非预乘：getImageData 的约定，和原来主线程 canvas 读回的一样），读完关掉位图 */
+function readBitmap(bmp: ImageBitmap, res: number): Uint8ClampedArray {
+  const c = new OffscreenCanvas(res, res);
+  const ctx = c.getContext("2d", { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
+  ctx.drawImage(bmp, 0, 0);
+  bmp.close();
+  return ctx.getImageData(0, 0, res, res).data;
+}
+
 /** Black Marble 的底图把陆地画成暗蓝色：取「亮度减去蓝色底」，只留下灯光（原来在主线程的 clipmap.ts
- * `buildNight` 里逐像素做，PERF-9 挪进这里和水体/道路一起在 Worker 里算） */
+ * `buildNight` 里逐像素做，PERF-9 挪进这里和水体/道路一起在 Worker 里算）。输出单通道 */
 function darkenNight(pxRaw: Uint8ClampedArray): Uint8ClampedArray {
-  const out = new Uint8ClampedArray(pxRaw.length);
-  for (let k = 0; k < pxRaw.length; k += 4) {
+  const out = new Uint8ClampedArray(pxRaw.length >> 2);
+  for (let k = 0, i = 0; k < pxRaw.length; k += 4, i++) {
     const r = pxRaw[k], g = pxRaw[k + 1], b = pxRaw[k + 2];
-    out[k] = Math.max(0, Math.min(255, (r * 0.6 + g * 0.4 - b * 0.35) * 1.3));
+    out[i] = Math.max(0, Math.min(255, (r * 0.6 + g * 0.4 - b * 0.35) * 1.3));
+  }
+  return out;
+}
+
+/** 单通道 n² → m² 双线性放大（像素中心对齐，和 canvas 按比例画上去一致；n === m 时原样返回） */
+function upsample(src: Uint8ClampedArray, n: number, m: number): Uint8ClampedArray {
+  if (n === m) return src;
+  const out = new Uint8ClampedArray(m * m);
+  const s = n / m;
+  for (let y = 0; y < m; y++) {
+    const fy = Math.min(Math.max((y + 0.5) * s - 0.5, 0), n - 1);
+    const y0 = Math.floor(fy), y1 = Math.min(y0 + 1, n - 1), ty = fy - y0;
+    const r0 = y0 * n, r1 = y1 * n;
+    for (let x = 0; x < m; x++) {
+      const fx = Math.min(Math.max((x + 0.5) * s - 0.5, 0), n - 1);
+      const x0 = Math.floor(fx), x1 = Math.min(x0 + 1, n - 1), tx = fx - x0;
+      const a = src[r0 + x0] + (src[r0 + x1] - src[r0 + x0]) * tx;
+      const b = src[r1 + x0] + (src[r1 + x1] - src[r1 + x0]) * tx;
+      out[y * m + x] = a + (b - a) * ty;
+    }
   }
   return out;
 }

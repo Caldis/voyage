@@ -28,9 +28,9 @@ struct GroundHit {
   vec3 wat;     // 水体遮罩：r 水面、g 海洋通道、b 夜光
   vec3 apL;     // 相机到地面的空气透视：内散射
   vec3 apT;     //                        透射率
+  vec3 nT;      // 地形法线（求交时算好，groundLand 直接用；G06 起飞机也在 groundHit 里算——各向异性取样的足迹要用它）
 #ifdef RAIL
-  vec3 nT;      // 火车远景（TR03）：地形法线（求交时已算好，groundLand 直接用）
-  float fpLong; //                   像素足迹沿视线方向的长轴（米），细节按它淡出
+  float fpLong; // 火车远景（TR03）：像素足迹沿视线方向的长轴（米），细节按它淡出
   float alt;    //                   命中点海拔（km，相对相机算的精确值，阴影用）
   float cov;    //                   这个像素被地形盖住的比例（轮廓抗锯齿：擦着山脊 / 远处地平线过去的视线 < 1）
   float occ;    //                   途中擦过的更近一道山脊盖住这个像素的比例，tOcc 是它的距离（km）（层叠山脊之间的抗锯齿）
@@ -59,13 +59,25 @@ bool groundHit(vec3 ro, vec3 rd, out GroundHit gh) {
   float cosI = max(abs(dot(rd, up)), 0.12);
   float fpM = max(tT * pixelAngle * 1000.0 * inversesqrt(cosI), 0.05);
   float texelM = GROUND_BASE * exp2(floor(lod)) * 1000.0 / GROUND_RES;
+  // 地形法线（原来在 groundLand 里算，挪到这里：下面的足迹要用它）。附近没有高出海面的地形时就是天顶，省掉 4 次取高度
+  vec3 nT = uTerrainMax > 0.0 ? terrainNormal(g, up, lod) : up;
+  // 像素足迹的两条轴（G06，光线微分）：相邻像素的视线偏开 pixelAngle，打在过命中点、法线为 nT 的切平面上，
+  // 偏移量投到水平面（g 坐标）就是足迹。u1 取水平的横向、u2 取竖直面内的那一向（屏幕怎么转都是同一个椭圆）。
+  // 斜看时 u2 那条轴被拉长 1/|rd·n| 倍（贴近地平线几十倍），textureGrad 按它做各向异性过滤；|rd·n| 下限 0.02（最多拉长 50 倍，硬件本来也只到 16×）
+  vec3 u1 = cross(rd, up);
+  u1 = dot(u1, u1) > 1e-8 ? normalize(u1) : vec3(1.0, 0.0, 0.0);
+  vec3 u2 = cross(u1, rd);
+  float rn = min(dot(rd, nT), -0.02);
+  float pxKm = tT * pixelAngle;
+  vec2 fpA = (pxKm * (u1 - rd * (dot(u1, nT) / rn))).xz;
+  vec2 fpB = (pxKm * (u2 - rd * (dot(u2, nT) / rn))).xz;
 #ifdef GROUND_DETAIL
-  vec4 alb = sampleGroundAlbedo(g + albedoJitterKm(g, fpM, texelM), lod);
+  vec4 alb = groundSampleAniso(uGroundAlbedo, g + albedoJitterKm(g, fpM, texelM), lod, fpA, fpB, true);
 #else
-  vec4 alb = sampleGroundAlbedo(g, lod);
+  vec4 alb = groundSampleAniso(uGroundAlbedo, g, lod, fpA, fpB, true);
 #endif
   if (alb.w <= 0.0) return false;
-  vec3 wat = sampleGround(uGroundWater, g, lod).rgb;
+  vec3 wat = groundSampleAniso(uGroundWater, g, lod, fpA, fpB, false).rgb;
   // 水陆边界：水体遮罩是一个影像像素（近处约 8 m）宽的双线性渐变，低空时是一条模糊的带子。
   // 按足迹把它收紧成清晰的岸线，再用几米尺度的噪声让岸线不那么光滑；远处（足迹 ≥ 影像像素）保持原样
   // 阈值取 0.3 而不是 0.5：比影像像素还窄的小河、水渠在遮罩里只有 0.3–0.7 的峰值，阈值 0.5 会把它们整条抹掉
@@ -88,6 +100,7 @@ bool groundHit(vec3 ro, vec3 rd, out GroundHit gh) {
   gh.texelM = texelM;
   gh.alb = alb;
   gh.wat = wat;
+  gh.nT = nT;
   gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
   gh.apT = texture(uAerialTransmittanceS, uvw).rgb;
   return true;
@@ -103,11 +116,7 @@ vec4 groundLand(GroundHit gh, float cs, vec3 eFlash) {
   float lod = gh.lod;
   vec4 alb = gh.alb;
   float h = length(P) - BOTTOM;
-#ifdef RAIL
   vec3 n = gh.nT;
-#else
-  vec3 n = terrainNormal(g, up, lod);
-#endif
   float ndl = dot(n, uKeyDir);
   vec3 eKey = keyLight(BOTTOM + h, up) * cs;
 #ifdef RAIL

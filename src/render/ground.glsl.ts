@@ -1,4 +1,4 @@
-import { GROUND_BASE_KM, GROUND_LEVELS } from "../ground/clipmap";
+import { GROUND_BASE_KM, GROUND_LEVELS, GROUND_RES } from "../ground/clipmap";
 
 /**
  * 真实地面（GLSL）：clipmap 采样 + 高度场求交。依赖 ATMOSPHERE_COMMON / CLOUD_COMMON（uCloudOffset = 飞机的本地坐标）/
@@ -17,7 +17,7 @@ uniform int uGroundLevelCount;                 // = GROUND_LEVELS（uniform 是�
 uniform int uTerrainSteps;                     // 地形求交的最多步数（uniform 而不是常量，免得 FXC 展开循环）
 
 const float GROUND_BASE = ${GROUND_BASE_KM.toFixed(1)};
-const float GROUND_RES = 1024.0;
+const float GROUND_RES = ${GROUND_RES.toFixed(1)};   // 影像 / 水体纹理边长（G06 起 2048）
 
 // 连续的级别：distKm = 离飞机的水平距离，footprintKm = 像素覆盖范围
 float groundLod(float distKm, float footprintKm) {
@@ -62,6 +62,25 @@ vec4 groundSampleImpl(sampler2DArray tex, vec2 g, float lod, bool holes) {
   vec4 a = textureLod(tex, levelUv(L0, g), 0.0);
   if (L1 < 0) return vec4(a.rgb, 1.0);
   vec4 b = textureLod(tex, levelUv(L1, g), 0.0);
+  if (holes) a.rgb = mix(b.rgb, a.rgb, min(a.a * 2.0, 1.0));
+  return vec4(mix(a.rgb, b.rgb, f), 1.0);
+}
+// 按像素足迹取样（G06）：ax / ay 是一个屏幕像素在地面上的足迹的两条轴（km，g 坐标；groundHit 用光线微分算），
+// textureGrad 让硬件按足迹选 mip、沿长轴做各向异性过滤（纹理带 mipmap，最多 16×）。
+// 为什么要：G06 把纹素调细到约屏幕像素的 1.5 倍，斜看时足迹沿视线方向是横向的 5–50 倍，只取一个双线性样本（textureLod 0）
+// 飞机一动就闪；硬件各向异性超过 16× 以后按 mip 变糊（远处本来就在雾里，宁可糊不要闪）。
+// A 通道：mip 是平均出来的。只用它判缺影像（min(A·2, 1)，平均后正好是「有影像的比例」，有路的纹素 A > 0.5 会让边上略偏大，只影响瓦片没取到时的过渡）；
+// 道路照亮宽度必须按第 0 级读（groundRoadTap 用 textureLod），不能用这里的 A
+vec4 groundSampleAniso(sampler2DArray tex, vec2 g, float lod, vec2 ax, vec2 ay, bool holes) {
+  int L0 = usableLevel(int(floor(lod)), g);
+  if (L0 < 0) return vec4(0.0);
+  int L1 = usableLevel(L0 + 1, g);
+  float f = L0 == int(floor(lod)) ? fract(lod) : 0.0;
+  float k0 = 1.0 / uGroundLevel[L0].z;
+  vec4 a = textureGrad(tex, levelUv(L0, g), ax * k0, ay * k0);
+  if (L1 < 0) return vec4(a.rgb, 1.0);
+  float k1 = 1.0 / uGroundLevel[L1].z;
+  vec4 b = textureGrad(tex, levelUv(L1, g), ax * k1, ay * k1);
   if (holes) a.rgb = mix(b.rgb, a.rgb, min(a.a * 2.0, 1.0));
   return vec4(mix(a.rgb, b.rgb, f), 1.0);
 }
