@@ -96,59 +96,45 @@ WingCoord wingCoord(vec3 P) {
   return w;
 }
 
-// 主翼截面的距离（不含展向边界）：flap = 按襟翼放下时的整流罩形状，slat = 按缝翼伸出时的「D 形前缘」
-float wingMainSection(vec3 P, WingCoord w, bool flap, bool slat) {
+float sdWingMain(vec3 P) {
+  WingCoord w = wingCoord(P);
   float yU = w.yMid + w.halfT;
   float yL = w.yMid - w.halfT;
   float xiA = 0.0;
   float xiB = 1.0;
-  // 襟翼放下：主翼在襟翼段只到整流罩末端，下表面向上收成一片薄的整流罩（襟翼收起时就藏在它下面）
-  if (flap) {
-    xiB = WING_SHROUD_TE;
-    yL = mix(yL, yU - 0.04, smoothstep(0.52, WING_SHROUD_TE, w.xi));
-  }
-  // 缝翼伸出：主翼前缘退到缝翼后面，切口收圆（「D 形前缘」）
-  if (slat) {
-    xiA = WING_SLAT_XI - 0.03;
-    float k = sqrt(clamp((w.xi - xiA) / 0.05, 0.0, 1.0));
-    float m = 0.5 * (yU + yL);
-    float hh = 0.5 * (yU - yL) * k;
-    yU = m + hh;
-    yL = m - hh;
-  }
-  float dy = abs(P.y - 0.5 * (yU + yL)) - 0.5 * (yU - yL);
-  float dx = max(xiA - w.xi, w.xi - xiB) * w.chord * cos(SWEEP);
-  return max(dy, dx);
-}
-
-// 展向分段拼接：展向坐标在 slab（有向距离，< 0 在段内）以内用 aIn 的形状，以外用 bOut 的形状
-float wingSpanSplice(float aIn, float bOut, float slab) {
-  return min(max(aIn, slab), max(bOut, -slab));
-}
-
-float sdWingMain(vec3 P) {
-  WingCoord w = wingCoord(P);
-  float dz = max(ROOT_Z - P.z, P.z - (WING_MAIN_END_Z + 0.04));
-  bool fOn = uFlap > 1e-3;
-  bool sOn = uSlat > 1e-3;
-  if (!fOn && !sOn) return max(wingMainSection(P, w, false, false), dz);
   // W-STAIR：襟翼段 / 缝翼段的截面和段外不同，段的两端是一道「台阶面」（例如副翼内端 s = 0.72：内侧只到整流罩末端，
   // 外侧是完整的翼型）。旧写法按「P 在哪一段」只算那一段的截面，段外一两毫米处的点看不到隔壁更长的翼型，距离报大了——
   // 球体追踪一步跨过副翼的内端面、落进翼型里面几个像素深，法线取的是翼内的梯度（常常朝下），
-  // 副翼内端、整流罩后面一片逐像素乱跳的点阵阴影（穿云、sunset-wing 襟翼放下时最明显）。
-  // 现在两边的截面都算，按展向的有向距离拼接（min / max 组合，仍是真实距离的下界）
-  float slabF = max(ROOT_Z + WING_FLAP_S0 * WING_SPAN - P.z, P.z - (ROOT_Z + WING_FLAP_S1 * WING_SPAN));
-  float slabS = max(ROOT_Z + WING_SLAT_S0 * WING_SPAN - P.z, P.z - (ROOT_Z + WING_SLAT_S1 * WING_SPAN));
-  float dCC = wingMainSection(P, w, false, false);
-  float d;
-  if (fOn && !sOn) d = wingSpanSplice(wingMainSection(P, w, true, false), dCC, slabF);
-  else if (!fOn) d = wingSpanSplice(wingMainSection(P, w, false, true), dCC, slabS);
-  else {
-    float dF = wingSpanSplice(wingMainSection(P, w, true, true), wingMainSection(P, w, true, false), slabS);
-    float dC = wingSpanSplice(wingMainSection(P, w, false, true), dCC, slabS);
-    d = wingSpanSplice(dF, dC, slabF);
+  // 副翼内端、整流罩后面一片逐像素乱跳的点阵阴影（穿云、襟翼放下时最明显）。
+  // 现在按「隔壁可能更近」取下界：各段的截面（整流罩、D 形前缘）都是完整翼型的子集，离开自己这一段至少要走 m
+  // （到段边界的距离），段外的形状又都在完整翼型里面，所以 真实距离 ≥ min(本段截面的距离, max(完整翼型的距离, m))。
+  // 完整翼型的距离只取竖直方向（|y − 中弧线| − 半厚度，仍是下界），用 wingCoord 已经算好的量，几次加减。
+  // lb 只在两个段内分支里赋值：襟翼、缝翼都收起时 lb = 1e3，min 之后与旧版逐位相同，巡航时每步只多一次 min
+  // （这里在球体追踪最内层，每条射线每步都走，多一点算术都看得出来）
+  float lb = 1e3;
+  // 襟翼放下：主翼在襟翼段只到整流罩末端，下表面向上收成一片薄的整流罩（襟翼收起时就藏在它下面）
+  float m = 1e3;
+  if (uFlap > 1e-3 && w.s > WING_FLAP_S0 && w.s < WING_FLAP_S1) {
+    xiB = WING_SHROUD_TE;
+    yL = mix(yL, yU - 0.04, smoothstep(0.52, WING_SHROUD_TE, w.xi));
+    m = min(P.z - (ROOT_Z + WING_FLAP_S0 * WING_SPAN), ROOT_Z + WING_FLAP_S1 * WING_SPAN - P.z);
+    lb = max(abs(P.y - w.yMid) - w.halfT, m);
   }
-  return max(d, dz);
+  // 缝翼伸出：主翼前缘退到缝翼后面，切口收圆（「D 形前缘」）
+  if (uSlat > 1e-3 && w.s > WING_SLAT_S0 && w.s < WING_SLAT_S1) {
+    xiA = WING_SLAT_XI - 0.03;
+    float k = sqrt(clamp((w.xi - xiA) / 0.05, 0.0, 1.0));
+    float mid = 0.5 * (yU + yL);
+    float hh = 0.5 * (yU - yL) * k;
+    yU = mid + hh;
+    yL = mid - hh;
+    m = min(m, min(P.z - (ROOT_Z + WING_SLAT_S0 * WING_SPAN), ROOT_Z + WING_SLAT_S1 * WING_SPAN - P.z));
+    lb = max(abs(P.y - w.yMid) - w.halfT, m);
+  }
+  float dy = abs(P.y - 0.5 * (yU + yL)) - 0.5 * (yU - yL);
+  float dx = max(xiA - w.xi, w.xi - xiB) * w.chord * cos(SWEEP);
+  float dz = max(ROOT_Z - P.z, P.z - (WING_MAIN_END_Z + 0.04));
+  return max(min(max(dy, dx), lb), dz);
 }
 
 // ---- 翼尖弯折 + 鲨鳍小翼 ----
@@ -449,6 +435,9 @@ struct WingTraceResult {
   float bumpVar; // 按像素足迹滤掉的油罐鼓包斜率方差（并入粗糙度）
   bool edge;     // 打中之前先擦过另一处轮廓（襟翼压在主翼上、小翼压在翼面上这类「内轮廓」），或者打中的是几乎侧对视线的薄边
 };
+// bumpVar < 0 表示「饿死」的子射线（W-STAIR）：共用的步数用完时还在包围盒里，按「打中」算，但不着色（沿用中心射线的颜色，见 wingView）。
+// 借 bumpVar 做标记而不是另加一个 bool 字段：结构体每多一个字段，五条射线的结果都要多占寄存器
+bool wingStarved(WingTraceResult w) { return w.bumpVar < 0.0; }
 
 vec3 wingTetraDir(int i) {
   return vec3(float(((i + 3) >> 1) & 1), float((i >> 1) & 1), float(i & 1)) * 2.0 - 1.0;
@@ -523,7 +512,9 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
       } else {
         float r = d / fp;
         if (r < best) { best = r; tBest = t; partBest = gWingPart; }
-        if (rPrev < 1.0 && r > rPrev) {
+        // 擦边判定取 2 个像素（W-STAIR）：旧版取 1 个像素，球体追踪的采样点常常跨过最近点附近（步长 ≈ 0.6·d），
+        // 同一条内轮廓（整流罩后缘压在襟翼上）上的像素一个判成边缘、一个没判上，超采样隔一个做一个，边上一串虚线似的台阶
+        if (rPrev < 2.0 && r > rPrev) {
           if (!grazed) w.tGraze = tPrev;
           grazed = true;
         }
@@ -560,13 +551,26 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
           // 法线取的是后缘端面，夕阳下后缘成了一串白点（审查返工第 1 项的根因）
           // 已经过了最近点、正在远离表面的射线是擦边而过，不提升（T22）
           if (nearGraze) w.cov = 1.0;
+          // W-STAIR：子射线常在还没走到后面那块表面时就把共用的步数用完——擦过薄后缘以后要一路走到下面的短舱，
+          // 或者在内轮廓的缝里（整流罩后缘和襟翼之间）贴着表面挪。以前这算「没打中」，背后的天空 / 云从这条子样本漏进来，
+          // 后缘、内轮廓上隔一个像素一个亮点（夕阳下一串亮珠、云里一串白点；调试位 1024 给足步数就消失）。
+          // 现在「还在包围盒里就把步数用完」一律算打中，但不在这里着色（着色点在空中、法线不可信，T22 的一串白点），
+          // 沿用中心射线的颜色（中心射线打中了才会有子射线）。只限子射线：中心射线走上面 nearGraze 的规则。
+          // 代价是外轮廓上真没打中、只是没走完的子样本被算成机翼，轮廓外扩不到半个像素（对照给足步数的参考图，
+          // sunset-wing 后缘只差一条 1 像素的淡线）。调试位 8192：关掉（旧做法，对照用）
+          else if (marchSteps != uWingSteps && t <= tExit && i >= limit - 1 && (uWingDebug & 8192) == 0) { w.cov = 1.0; w.bumpVar = -1.0; }
           if (w.cov <= 0.0) { w.steps = i + 1; return w; }
           w.t = tBest;
           w.part = partBest;
           done = true;
         }
       }
-      if (done) { P = oA + dA * w.t; phase = 1; w.steps = i + 1; }
+      if (done) {
+        P = oA + dA * w.t;
+        phase = 1;
+        w.steps = i + 1;
+        if (w.bumpVar < 0.0) break;   // 饿死的子射线：不着色，法线也不用算
+      }
     } else if (phase == 1) {
       n += wingTetraDir(j) * d;
       sumD += d;

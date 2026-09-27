@@ -1,0 +1,17 @@
+[
+  { "name": "sunset-wing", "scene": "sunset-wing", "bench": true,
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "new-g1", "js": "__wsPatch([['if (rPrev < 2.0 && r > rPrev) {', 'if (rPrev < 1.0 && r > rPrev) {']]);" },
+      { "name": "old-g2", "js": "__wsPatch([['if (rPrev < 1.0 && r > rPrev) {', 'if (rPrev < 2.0 && r > rPrev) {']], __wsBase);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "new-g1", "js": "__wsPatch([['if (rPrev < 2.0 && r > rPrev) {', 'if (rPrev < 1.0 && r > rPrev) {']]);" },
+      { "name": "old-g2", "js": "__wsPatch([['if (rPrev < 1.0 && r > rPrev) {', 'if (rPrev < 2.0 && r > rPrev) {']], __wsBase);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "new-g1", "js": "__wsPatch([['if (rPrev < 2.0 && r > rPrev) {', 'if (rPrev < 1.0 && r > rPrev) {']]);" },
+      { "name": "old-g2", "js": "__wsPatch([['if (rPrev < 1.0 && r > rPrev) {', 'if (rPrev < 2.0 && r > rPrev) {']], __wsBase);" }
+    ] }
+]

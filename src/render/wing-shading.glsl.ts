@@ -224,7 +224,8 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     // 子样本和中心射线打在同一块表面上（同一部件、法线差 < 18°）就沿用中心的颜色，
     // 否则（换了部件、跨过薄后缘的上下表面、圆前缘上法线转得快）自己着色。
     // 丢掉的只是像素内的纹理 / 高光变化。调试位 256：每条子样本都自己着色（旧做法，对照用）
-    bool useC = k > 0 && (uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95;
+    // 步数用完的子样本（wingStarved，见 wingTrace）一律沿用中心的颜色
+    bool useC = k > 0 && (wingStarved(w) || ((uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95));
     vec3 col = colC;
     if (!useC) {
       if (k > 0) w.shadow = shC;

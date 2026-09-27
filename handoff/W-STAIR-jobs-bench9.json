@@ -1,0 +1,17 @@
+[
+  { "name": "sunset-wing", "scene": "sunset-wing", "bench": true,
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "new-nolb", "js": "__wsPatch([['if (d > m && (uWingDebug & 16384) == 0) {', 'if (false) {']]);" },
+      { "name": "new-nostarve", "js": "__wsPatch([['else if (approaching && i >= limit - 1 && (uWingDebug & 8192) == 0) { w.cov = 1.0; w.starved = true; }', '']]);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "new-nolb", "js": "__wsPatch([['if (d > m && (uWingDebug & 16384) == 0) {', 'if (false) {']]);" },
+      { "name": "new-nostarve", "js": "__wsPatch([['else if (approaching && i >= limit - 1 && (uWingDebug & 8192) == 0) { w.cov = 1.0; w.starved = true; }', '']]);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "new-nolb", "js": "__wsPatch([['if (d > m && (uWingDebug & 16384) == 0) {', 'if (false) {']]);" },
+      { "name": "new-nostarve", "js": "__wsPatch([['else if (approaching && i >= limit - 1 && (uWingDebug & 8192) == 0) { w.cov = 1.0; w.starved = true; }', '']]);" }
+    ] }
+]

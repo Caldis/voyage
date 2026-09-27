@@ -1,0 +1,9 @@
+[
+  {
+    "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "zoom": [],
+    "variants": [
+      { "name": "subdbg", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['for (int k = min(uWingSteps, 0); k < 5; k++) {', 'float dbgS = 0.0, dbgE = 0.0, dbgM = 0.0;\\n  for (int k = min(uWingSteps, 0); k < 5; k++) {'], ['if (k > 0) pool -= w.steps;', 'if (k > 0) pool -= w.steps;\\n    if (k > 0) { if (w.starved) dbgS += 1.0; else if (w.cov < 1.0 && w.steps >= lim) dbgE += 1.0; else if (w.cov < 1.0) dbgM += 1.0; }'], ['if (covSum <= 0.0) return vec4(0.0);', ''], ['return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.25);', 'return vec4(vec3(dbgE, dbgS, dbgM) * 0.25 * 1e-3 * dot(eSky, vec3(0.3333)) * 50.0 + 1e-6, 1.0);']]);" }
+    ]
+  }
+]

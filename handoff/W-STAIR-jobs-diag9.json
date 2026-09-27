@@ -1,0 +1,13 @@
+[
+  {
+    "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "zoom": [],
+    "variants": [
+      { "name": "base", "js": "" },
+      { "name": "nofog", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {']]);" },
+      { "name": "aa0", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {']]); v.sceneMat.uniforms.uWingEdgeAA.value = 0;" },
+      { "name": "aa2", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {']]); v.sceneMat.uniforms.uWingEdgeAA.value = 2;" },
+      { "name": "cov", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.25);', 'return vec4(vec3(single > 0.5 ? covSum : covSum * 0.25, single, 0.0) * 1e-3 * dot(eSky, vec3(0.3333)) * 50.0, 1.0);']]);" }
+    ]
+  }
+]

@@ -1,0 +1,28 @@
+[
+  { "name": "sunset-wing", "scene": "sunset-wing", "bench": true,
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "g1", "js": "__wsPatch([['if (rPrev < 2.0 && r > rPrev) {', 'if (rPrev < 1.0 && r > rPrev) {']]);" },
+      { "name": "pool128", "js": "__wsPatch([['int pool = uWingSteps / 2;', 'int pool = uWingSteps;']]);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "g1", "js": "__wsPatch([['if (rPrev < 2.0 && r > rPrev) {', 'if (rPrev < 1.0 && r > rPrev) {']]);" },
+      { "name": "pool128", "js": "__wsPatch([['int pool = uWingSteps / 2;', 'int pool = uWingSteps;']]);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" }
+    ] },
+  { "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5], "bench": true,
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "g1", "js": "__wsPatch([['if (rPrev < 2.0 && r > rPrev) {', 'if (rPrev < 1.0 && r > rPrev) {']]);" },
+      { "name": "pool128", "js": "__wsPatch([['int pool = uWingSteps / 2;', 'int pool = uWingSteps;']]);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "g1", "js": "__wsPatch([['if (rPrev < 2.0 && r > rPrev) {', 'if (rPrev < 1.0 && r > rPrev) {']]);" },
+      { "name": "pool128", "js": "__wsPatch([['int pool = uWingSteps / 2;', 'int pool = uWingSteps;']]);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" }
+    ] }
+]

@@ -1,0 +1,15 @@
+[
+  { "name": "sunset-wing", "scene": "sunset-wing", "bench": true,
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "old+g2", "js": "__wsPatch([['if (rPrev < 1.0 && r > rPrev) {', 'if (rPrev < 2.0 && r > rPrev) {']], __wsBase);" },
+      { "name": "old+starve", "js": "__wsPatch([['int part;      // 部件编号（见 gWingPart）', 'int part; bool starved;'], ['w.edge = false;', 'w.edge = false; w.starved = false;'], ['if (nearGraze) w.cov = 1.0;', 'if (nearGraze) w.cov = 1.0; else if (approaching && i >= limit - 1) { w.cov = 1.0; w.starved = true; }'], ['if (done) { P = oA + dA * w.t; phase = 1; w.steps = i + 1; }', 'if (done) { P = oA + dA * w.t; phase = 1; w.steps = i + 1; if (w.starved) break; }'], ['bool useC = k > 0 && (uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95;', 'bool useC = k > 0 && (w.starved || ((uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95));']], __wsBase);" },
+      { "name": "new-oldmain", "js": "__wsPatch([['if (d > m) {', 'if (false) {']]);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "old+g2", "js": "__wsPatch([['if (rPrev < 1.0 && r > rPrev) {', 'if (rPrev < 2.0 && r > rPrev) {']], __wsBase);" },
+      { "name": "old+starve", "js": "__wsPatch([['int part;      // 部件编号（见 gWingPart）', 'int part; bool starved;'], ['w.edge = false;', 'w.edge = false; w.starved = false;'], ['if (nearGraze) w.cov = 1.0;', 'if (nearGraze) w.cov = 1.0; else if (approaching && i >= limit - 1) { w.cov = 1.0; w.starved = true; }'], ['if (done) { P = oA + dA * w.t; phase = 1; w.steps = i + 1; }', 'if (done) { P = oA + dA * w.t; phase = 1; w.steps = i + 1; if (w.starved) break; }'], ['bool useC = k > 0 && (uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95;', 'bool useC = k > 0 && (w.starved || ((uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95));']], __wsBase);" },
+      { "name": "new-oldmain", "js": "__wsPatch([['if (d > m) {', 'if (false) {']]);" }
+    ] }
+]

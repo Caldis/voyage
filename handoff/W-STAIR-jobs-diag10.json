@@ -1,0 +1,12 @@
+[
+  {
+    "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "zoom": [],
+    "variants": [
+      { "name": "nofog", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {']]);" },
+      { "name": "g2", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['if (rPrev < 1.0 && r > rPrev) {', 'if (rPrev < 2.0 && r > rPrev) {']]);" },
+      { "name": "g2-aa2", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['if (rPrev < 1.0 && r > rPrev) {', 'if (rPrev < 2.0 && r > rPrev) {']]); v.sceneMat.uniforms.uWingEdgeAA.value = 2;" },
+      { "name": "g2-sil3", "js": "__wsPatch([['if (uCameraFog > 0.0) {', 'if (false) {'], ['if (rPrev < 1.0 && r > rPrev) {', 'if (rPrev < 2.0 && r > rPrev) {'], ['if (silPx < 1.5) w.edge = true;', 'if (silPx < 3.0) w.edge = true;']]);" }
+    ]
+  }
+]
