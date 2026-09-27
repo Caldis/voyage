@@ -1,0 +1,10 @@
+[
+  { "name": "night-wing-on", "scene": { "name": "night-wing-on", "p": { "preset": "wpac", "date": "2026-01-16", "time": 1320, "coverage": 0.15, "cabin-light": true, "wing-pos": "8" } },
+    "variants": [
+      { "name": "new-strobe", "js": "v.wingDebug.strobe = 1;" },
+      { "name": "thr15", "js": "v.wingDebug.strobe = 1; __wsPatch([['if (d < 0.4 * fp) {', 'if (d < (marchSteps == uWingSteps ? 0.4 : 0.15) * fp) {']]);" },
+      { "name": "cap", "js": "v.wingDebug.strobe = 1; __wsPatch([['float lCap = max(2.0 * lMin, 0.7 * refL);', 'float lCap = max(1.25 * lMin, 0.7 * refL);']]);" },
+      { "name": "withC", "js": "v.wingDebug.strobe = 1; __wsPatch([['if (covSum <= 0.0) return vec4(0.0);', 'if (single < 0.5) { acc += colC; covSum += 1.0; }\\n  if (covSum <= 0.0) return vec4(0.0);'], ['return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.25);', 'return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.2);']]);" },
+      { "name": "old-strobe", "js": "v.wingDebug.strobe = 1; __wsPatch([], __wsBase);" }
+    ] }
+]
