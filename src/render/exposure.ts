@@ -241,6 +241,8 @@ uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 
 uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
 uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透明度 x→y 之间由 0 过渡到 1，z = 1 开 / 0 不看云（整窗都给）
 uniform float uDayHiSatRoll;  // TM01 返工：收回段按饱和度前移的倍数（见 dayHighlightGain）
+uniform vec4 uDayHiLocal;     // TM02 局部色调映射：x = 细节在中间段的斜率 sd、y = 肩部补偿 κ、z = 值域回落 σr（档）、w = 1 开 / 0 关（见 dayHighlightGain）
+uniform float uDayHiLocalTop; // TM02 局部项在收回终点前多少档（按最大通道）内淡出到 0
 uniform sampler2D uClouds;    // 云缓冲（clouds.ts 的 history，两倍宽；main.ts 每帧 finalMat.uniforms.uClouds.value = clouds.texture）
 #include <common>
 #include <dithering_pars_fragment>
@@ -276,19 +278,43 @@ float planckDev(vec2 w) {
 //   这里在膝点 k 与顶点 T 之间（按亮度）把对数斜率抬到 s，局部对比 ×s；T 以上按最大通道收回，到 R 时增益回到 0，
 //   白点附近不再被往上推（夕照云边这类高饱和的亮橙色，最大通道先到顶，按亮度收回会被推过 250，sunset-wing 1.1% → 4.3%）。
 //   亮度在 k − 0.5 档以下的像素（海、天空、地面、舱内一侧）逐位不变；只乘标量，不改色度。
-float dayHighlightGain(vec3 x) {
+//
+// TM02 局部色调映射（Durand 2002 的 base / detail 分解的廉价版）：全局曲线 l → l + G(l) 在中灰 +2.5 档以上必须收回（白点不能动），
+//   收回段把最亮一段（受光云顶、逆光银边）的细节一起压扁——同一条全局曲线下「云体对比拉开」与「最亮段细节不压」不可兼得（TM01 的 480 组扫描）。
+//   所以曲线只按低通亮度 b（眩光 mip 链的结果，uBloom，本来就要读，不多用 sampler）去取，细节 l − b 按另一条斜率 S(b) 加回：
+//     增益 = G(b) + (S(b) − 1)·(l − b)
+//   · 中间段（G' > 0）：S − 1 = (sd − 1)/(s − 1)·G'(b)，sd = s 时一阶泰勒 G(b) + G'(b)(l − b) ≈ G(l)，与全局曲线相同，不会出光晕；
+//   · 收回段（G' < 0）：细节不跟着收回（G' 截到 0），大尺度照样收回（白点不动），最亮一段的细节保住；
+//   · 再加 κ·G(b)：增益把像素推到 AgX 更平的肩部，局部斜率变小，按增益的大小补回（离线复刻 AgX，κ = 0.4 时 215–230 段 ×0.99）。
+//   光晕控制（局部色调映射的经典伪影：亮边外一圈暗晕 / 暗边内一圈亮晕）：
+//   · 低通按「值域」回落（双边 / 引导滤波的廉价近似）：d = b − l，只取 d' = d / (1 + (d / σr)²)——|d| ≤ σr 的纹理照常当细节，
+//     跨云边、跨太阳光晕的大落差（|d| ≫ σr）d' → 0，退回全局曲线，局部项最多偏 (S − 1)·σr / 2；
+//   · 中间段按上面的泰勒关系与全局曲线一致，局部项只在收回段起作用；
+//   · 结果仍截到 ≥ 0：不比 AgX 原样更暗，云边暗侧不会被压出暗晕。
+//   uDayHiLocal = (sd, κ, σr, 开关)；w = 0 时 d' = 0、S = 1，逐位回到 TM01 的全局曲线。
+float dayHighlightGain(vec3 x, vec3 xb) {
   vec4 p = uDayHiLook;
+  vec4 loc = uDayHiLocal;
   float l = log2(max(dot(x, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18);
   float m = log2(max(max(max(x.r, x.g), x.b), 1e-9) / 0.18);
   // 返工：收回段的位置再按饱和度前移 uDayHiSatRoll ×（最大通道 − 亮度）档：白云（两者几乎相等）不受影响，
   //   夕照的橙色云边（差约 0.7 档）提前收回——它们的 R 通道在 AgX 里已经停在 249，再推 1 级就进了「≥250」
   m += uDayHiSatRoll * (m - l);
-  // 四个软铰链一次算：u ≤ −0.5 时恰为 0、u ≥ 0.5 时恰为 u，中间二次过渡（C1 连续）
-  vec4 u = vec4(l, l, m, m) - p.xyyz;
+  // TM02：低通亮度（按值域回落），曲线在 (l + d', m + d') 处取——饱和度偏移按像素自己的
+  float d = log2(max(dot(xb, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18) - l;
+  float dr = d / loc.z;
+  //   像素自己的最大通道（含饱和度前移）离收回终点不到 uDayHiLocalTop 档时，局部项淡出、退回全局曲线：
+  //   夕照的橙色云边最大通道已贴着 249，比周围亮的那侧按低通取曲线会拿到比全局更大的增益，推进 ≥250
+  d = d / (1.0 + dr * dr) * loc.w * clamp((p.z - m) / uDayHiLocalTop, 0.0, 1.0);
+  // 四个软铰链一次算：u ≤ −0.5 时恰为 0、u ≥ 0.5 时恰为 u，中间二次过渡（C1 连续）；q 就是各铰链的斜率
+  vec4 u = vec4(l, l, m, m) + d - p.xyyz;
   vec4 q = clamp(u + 0.5, 0.0, 1.0);
   vec4 h = 0.5 * q * q + max(u - 0.5, 0.0);
   float r = (p.y - p.x) / (p.z - p.y);
-  return max((p.w - 1.0) * dot(h, vec4(1.0, -1.0, -r, r)), 0.0); // 高饱和像素的两段错开时可能略负，不许比 AgX 原样还暗
+  vec4 w = vec4(1.0, -1.0, -r, r);
+  float gb = (p.w - 1.0) * dot(h, w);                                       // G(b)
+  float s1 = ((loc.x - 1.0) * max(dot(q, w), 0.0) + loc.y * gb) * loc.w;    // S(b) − 1
+  return max(gb - s1 * d, 0.0); // 高饱和像素的两段错开时可能略负，不许比 AgX 原样还暗；局部项同理（暗侧不压出暗晕）
 }
 
 vec3 vonKries(vec3 w, float D) {
@@ -379,7 +405,8 @@ void main() {
   {
     vec3 x = gl_FragColor.rgb;
     // TM01：白天窗外的受光云在 AgX 肩部保留对比（见 dayHighlightGain）；夜里、黄昏、舱内、云里 hiGate = 0，逐位不变
-    vec3 a = toneMapping(x * exp2(dayHighlightGain(x) * hiGate));
+    //    TM02：低通取眩光（uBloom 的 mip 链，各级加权平均，已经读过），按同一个曝光换算
+    vec3 a = toneMapping(x * exp2(dayHighlightGain(x, glare * exposure) * hiGate));
     // T48 色度保持：AgX 在对数域逐通道压缩，高光的通道比被压扁，夜里被曝光拉到中灰之上 4–7 档的钠灯 / 灯照的雾
     //    就成了奶白。对「夜里、窗外、高饱和、够亮」的像素，把 AgX 的结果往「同色相、同显示亮度（放不下时降亮度保色度）」
     //    的颜色拉一部分：钠灯读成橙黄、LED（饱和度低，不进这条）仍是白。中性色的目标就是 AgX 自己，不受影响
@@ -547,6 +574,10 @@ export class Exposure {
       // TM01：膝点中灰 +0.5 档（显示约 144）、顶点 +2.5（约 203）、收回到 +5.0，段内斜率 1.4；w = 1 即关（见 handoff/TM01.md 的方案对比）
       // 返工：收回终点 4.0 → 5.0（+2.5→+4 档的局部对比从 0.39 回到 0.54；最亮的云边 / 砧顶细节要留住）
       uDayHiLook: { value: new THREE.Vector4(0.5, 2.5, 5.0, 1.3) }, // 协调者合并时斜率 1.4 → 1.3：云芯对比 ×1.59–1.71，最亮段（边缘高光所在）细节保到 0.94–0.95（TM01 返工取舍表）
+      // TM02：局部色调映射（细节斜率 sd、肩部补偿 κ、值域回落 σr、开关），w = 0 回到 TM01 的全局曲线
+      //   sd 1.4：云芯对比到 TM01 全局斜率 1.4 的水平，大尺度仍按 1.3（银边 / 云体亮度不再变亮）；σr 0.5：光晕 ≤ 约 1.3 级、≤ 8 px（handoff/TM02.md）
+      uDayHiLocal: { value: new THREE.Vector4(1.4, 0.4, 0.5, 1.0) },
+      uDayHiLocalTop: { value: 1.0 },
       uDayHiCloud: { value: new THREE.Vector3(0.05, 0.35, 1.0) },
       uDayHiSatRoll: { value: 0.3 }, // 返工：sunset-wing ≥250 +0.21% → +0.045%（0.5 以上把夕照 / 逆光场景的效果一起关掉，见 handoff/TM01.md）
       uClouds: { value: null },
