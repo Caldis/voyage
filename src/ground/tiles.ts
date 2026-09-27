@@ -1,6 +1,6 @@
 import { VectorTile } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
-import { RoadTileBuilder, type RoadTileData } from "./road-raster";
+import { RoadTileBuilder, WaterTileBuilder, type RoadTileData, type WaterTileData } from "./road-raster";
 
 /**
  * 瓦片数据源（全部免费，浏览器直连，均允许跨域；请求头不带任何个人信息）：
@@ -78,10 +78,9 @@ export function loadBitmap(url: string): Promise<ImageBitmap | null> {
 
 export interface WaterFeatures {
   extent: number;
-  /** 水域多边形（每个是若干环，瓦片内坐标）；ocean = 是否海洋 */
-  polygons: { rings: { x: number; y: number }[][]; ocean: boolean }[];
-  /** 河道折线；width = 估计河宽（米） */
-  lines: { points: { x: number; y: number }[]; width: number }[];
+  /** 水体 / 河道（PERF-9）：攒成扁平数组（见 road-raster.ts 的 WaterTileData），直接交给栅格化 Worker，
+   * 不再在主线程用 Path2D 画 + getImageData 读回（CDP CPU 剖析显示这是尖峰帧里最大的一块，见 handoff/PERF-9.md） */
+  water: WaterTileData;
   /** 道路（T08）：攒成扁平数组，直接交给栅格化 Worker（见 road-raster.ts）；坐标是 transportation 图层自己的瓦片内坐标 */
   roads: RoadTileData | null;
 }
@@ -138,14 +137,15 @@ export function loadWater(z: number, x: number, y: number): Promise<WaterFeature
       .then((buf) => {
         if (!buf) return null;
         const tile = new VectorTile(new PbfReader(buf));
-        const out: WaterFeatures = { extent: 4096, polygons: [], lines: [], roads: null };
+        let extent = 4096;
+        const wtb = new WaterTileBuilder();
         const water = tile.layers.water;
         if (water) {
-          out.extent = water.extent;
+          extent = water.extent;
           for (let i = 0; i < water.length; i++) {
             const f = water.feature(i);
             if (f.type !== 3) continue;
-            out.polygons.push({ rings: f.loadGeometry(), ocean: f.properties.class === "ocean" });
+            wtb.addPolygon(f.loadGeometry(), f.properties.class === "ocean");
           }
         }
         const ways = tile.layers.waterway;
@@ -155,9 +155,10 @@ export function loadWater(z: number, x: number, y: number): Promise<WaterFeature
             if (f.type !== 2) continue;
             const width = WATERWAY_WIDTH[String(f.properties.class)] ?? 3;
             // 同样去掉贴着缓冲区边走的段（见 insideTile，T08 顺手修）
-            for (const line of f.loadGeometry()) for (const part of insideTile(line, ways.extent)) out.lines.push({ points: part, width });
+            for (const line of f.loadGeometry()) for (const part of insideTile(line, ways.extent)) wtb.addLine(part, width);
           }
         }
+        const out: WaterFeatures = { extent, water: wtb.build(extent), roads: null };
         // 道路（T08）
         const tr = tile.layers.transportation;
         if (tr) {
