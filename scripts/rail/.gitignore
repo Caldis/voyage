@@ -1,0 +1,4 @@
+# 烘焙脚本的 Python 虚拟环境与缓存（Geofabrik 原始包约 500 MB、DEM 瓦片、中间 JSON），不入库
+.venv/
+cache/
+__pycache__/

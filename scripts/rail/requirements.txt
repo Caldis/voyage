@@ -1,0 +1,7 @@
+# 火车线路烘焙（TR01）的 Python 依赖；Python 3.12（3.14 没有 shapely / osmium 的 wheel）
+# uv venv --python 3.12 apps/voyage/scripts/rail/.venv
+# uv pip install --python apps/voyage/scripts/rail/.venv/Scripts/python.exe -r apps/voyage/scripts/rail/requirements.txt
+osmium>=4.0
+shapely>=2.0
+numpy>=1.26
+pillow>=10
