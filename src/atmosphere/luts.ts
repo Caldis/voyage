@@ -254,7 +254,25 @@ export class Atmosphere {
     uOutputTransmittance: { value: false },
   });
 
+  /** LUT 是否存成 32 位浮点（T36）：能线性过滤 32 位浮点纹理时为 true，否则退回半精度（深暮光会有块状阶梯） */
+  readonly float32: boolean;
+
   constructor(private readonly pass: FullscreenPass) {
+    // T36：所有 LUT 以「光源照度 = 1」为单位存辐亮度，深暮光时数值极小——天空视图 LUT 在太阳 −10° 时中位数约 4e-8，
+    // −15° 约 6e-10，−18° 约 6e-11，全都低于半精度的最小次正规数 5.96e-8，每个 texel 只剩 0 / 1 / 2 个最低位，
+    // 双线性插值后被曝光放大成一格一格的阶梯。32 位浮点的最小正规数是 1.2e-38，到 −18° 仍有 23 位尾数。
+    // 目标还没分配显存（three 在第一次 setRenderTarget 时才分配），所以在首次渲染前改 type 即可
+    // 调试：URL 带 ?lut16 时强制半精度，复现改前的阶梯 / 模拟不支持 32 位浮点线性过滤的设备。
+    // check:glsl（scripts/lint-shaders.mjs）在 Node 里用不带 renderer 的假 pass 构造本类，也没有 location，两处都要容忍
+    const ext = (pass as Partial<FullscreenPass>).renderer?.extensions;
+    const forceHalf = typeof location !== "undefined" && new URLSearchParams(location.search).has("lut16");
+    this.float32 = !!ext && !forceHalf && ext.has("OES_texture_float_linear") && ext.has("EXT_color_buffer_float");
+    if (this.float32) {
+      for (const rt of [
+        this.transmittance, this.multiScattering, this.irradiance, this.skyView, this.skyViewMoon,
+        this.aerialInscatter, this.aerialTransmittance,
+      ]) rt.texture.type = THREE.FloatType;
+    }
     // 透射率 → 多次散射 → 辐照度：只依赖大气参数，启动时算一次；霾参数变化够大时再重算（见 setHaze）
     this.renderStatic();
   }

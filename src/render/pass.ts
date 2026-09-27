@@ -6,7 +6,7 @@ export class FullscreenPass {
   private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private readonly mesh: THREE.Mesh;
 
-  constructor(private readonly renderer: THREE.WebGLRenderer) {
+  constructor(readonly renderer: THREE.WebGLRenderer) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
     geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
