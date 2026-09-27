@@ -50,8 +50,11 @@ int usableLevel(int L, vec2 g) {
   return -1;
 }
 
-// 在 lod 附近两级之间混合采样。返回 w = 0 表示这里没有数据
-vec4 sampleGround(sampler2DArray tex, vec2 g, float lod) {
+// 在 lod 附近两级之间混合采样。返回 w = 0 表示这里没有数据。
+// holes：影像瓦片没取到的地方用粗一级补上——只对影像有意义。影像纹理的 A 通道（T08 起）：< 0.5 时是「有影像的比例 / 2」，
+// ≥ 0.5 表示有影像、其余位存道路照亮宽度（clipmap.ts 的 roadAlbedoAlpha），所以有影像的比例 = min(A·2, 1)。
+// 水体纹理的 A 通道存的是道路有向距离，不能当成「缺数据」，所以分成 sampleGround / sampleGroundAlbedo 两个入口
+vec4 groundSampleImpl(sampler2DArray tex, vec2 g, float lod, bool holes) {
   int L0 = usableLevel(int(floor(lod)), g);
   if (L0 < 0) return vec4(0.0);
   int L1 = usableLevel(L0 + 1, g);
@@ -59,13 +62,85 @@ vec4 sampleGround(sampler2DArray tex, vec2 g, float lod) {
   vec4 a = textureLod(tex, levelUv(L0, g), 0.0);
   if (L1 < 0) return vec4(a.rgb, 1.0);
   vec4 b = textureLod(tex, levelUv(L1, g), 0.0);
-  // 影像瓦片没取到的地方 alpha = 0（见 clipmap.buildImagery）：用粗一级补上。水体、高度纹理的 alpha 恒为 1，不受影响
-  a.rgb = mix(b.rgb, a.rgb, a.a);
+  if (holes) a.rgb = mix(b.rgb, a.rgb, min(a.a * 2.0, 1.0));
   return vec4(mix(a.rgb, b.rgb, f), 1.0);
+}
+// 水体、高度纹理
+vec4 sampleGround(sampler2DArray tex, vec2 g, float lod) {
+  return groundSampleImpl(tex, g, lod, false);
+}
+// 影像（缺瓦片处回退到粗一级）
+vec4 sampleGroundAlbedo(vec2 g, float lod) {
+  return groundSampleImpl(uGroundAlbedo, g, lod, true);
+}
+
+// ---- 道路灯带（T08）----
+// 水体纹理 A = 0.5 + 有向距离 / (2·ROAD_SD_RANGE)（到最近道路中心线，单位纹素）；影像纹理 A 的高半段 = 照亮宽度 / ROAD_W_MAX。
+// 两个常数和 clipmap.ts 一致。为什么是有向距离、怎么挡假线，见 clipmap.ts 的 RoadRaster
+const float ROAD_SD_RANGE = 4.0;
+const float ROAD_W_MAX = 40.0;
+
+// 一个取样点：这个子足迹（横跨道路方向宽 F 米）里被照亮路面占的比例。
+// 线按真实宽度 W 的带子、足迹按宽 F 的盒子求重叠（解析抗锯齿）：路比像素窄时是一条 1 像素、亮度 W/F 的细线，能量和真实宽度一致
+float groundRoadTap(int L, vec2 q, float texM, float F) {
+  vec3 uv = levelUv(L, q);
+  float dc = abs(textureLod(uGroundWater, uv, 0.0).a - 0.5) * (2.0 * ROAD_SD_RANGE) * texM;
+  if (dc > 0.5 * (F + ROAD_W_MAX)) return 0.0;
+  float W = clamp(textureLod(uGroundAlbedo, uv, 0.0).a * 2.0 - 1.0, 0.0, 1.0) * ROAD_W_MAX;
+  float ov = max(0.0, min(dc + 0.5 * W, 0.5 * F) - max(dc - 0.5 * W, -0.5 * F));
+  return ov / F;
+}
+
+// 这个像素里被照亮路面占的比例（已含每条路的照明强度与「亮不亮」）。
+// shortM / longM：像素在地面上的足迹（米，横向 / 沿视线方向），dirH：视线的水平方向。
+// 级别只按横向足迹选（纹素 ≈ 横向足迹，有向距离能在纹素以内还原线位，不必像影像那样按距离再粗一级），往粗走到第一个覆盖得到的级别，
+// 在这一级的边缘附近渐变到粗一级，免得线的锐度在级别边界上突变。
+// 斜看时足迹沿视线方向拉得很长（贴近地平线时是横向的几十倍）：沿长轴等距取 n 个点，每个点只负责长轴的 1/n（各向异性过滤），
+// 否则和视线垂直的路（屏幕上横着的路）会漏采、飞机一动就闪。
+float groundRoadCoverage(vec2 g, float shortM, float longM, vec2 dirH) {
+  float base = GROUND_BASE * 1000.0 / GROUND_RES;
+  float lodR = clamp(log2(max(shortM / base, 1.0)), 0.0, ${(GROUND_LEVELS - 1).toFixed(1)});
+  int Lf = int(floor(lodR));
+  int L0 = usableLevel(Lf, g);
+  if (L0 < 0) return 0.0;
+  int L1 = usableLevel(L0 + 1, g);
+  vec4 lv = uGroundLevel[L0];
+  vec2 e = abs(g - lv.xy) / lv.z;
+  float f = max(L0 == Lf ? fract(lodR) : 0.0, smoothstep(0.42, 0.48, max(e.x, e.y)));
+  if (L1 < 0) { L1 = L0; f = 0.0; }
+  float tex0 = base * exp2(float(L0));
+  float tex1 = base * exp2(float(L1));
+  // 路的法线：中心处有向距离的梯度（真线上 |梯度| ≈ 1 纹素 / 纹素）。
+  // 两条路之间、或路的负侧与「无路」之间，有向距离会跳变，插值出一个假零点（假线），那里 |梯度| 明显大于 1，据此挡掉
+  float hK = 0.5 * tex0 * 0.001;
+  float s0 = textureLod(uGroundWater, levelUv(L0, g), 0.0).a;
+  float sx = textureLod(uGroundWater, levelUv(L0, g + vec2(hK, 0.0)), 0.0).a;
+  float sz = textureLod(uGroundWater, levelUv(L0, g + vec2(0.0, hK)), 0.0).a;
+  vec2 grad = vec2(sx - s0, sz - s0) * (4.0 * ROAD_SD_RANGE);
+  float gl = length(grad);
+  float real = 1.0 - smoothstep(1.35, 1.9, gl);
+  vec2 perpH = vec2(-dirH.y, dirH.x);
+  vec2 nrm = gl > 1e-3 ? grad / gl : perpH;
+  int n = int(clamp(ceil(longM / (1.5 * tex0)), 1.0, 6.0));
+  float spacing = longM / float(n);
+  // 子足迹在路的法线方向上的宽度（足迹是 spacing × shortM 的矩形，投影到法线上）
+  float F = abs(dot(nrm, dirH)) * spacing + abs(dot(nrm, perpH)) * shortM;
+  float F0 = max(F, 0.25 * tex0);
+  float F1 = max(F, 0.25 * tex1);
+  float c0 = 0.0, c1 = 0.0;
+  vec2 stepKm = dirH * (spacing * 0.001);
+  // 上限写成「6 + uLoopGuard」：常量上限会被 FXC 展开
+  for (int i = 0; i < 6 + uLoopGuard; i++) {
+    if (i >= n) break;
+    vec2 q = g + stepKm * (float(i) + 0.5 - 0.5 * float(n));
+    c0 += groundRoadTap(L0, q, tex0, F0);
+    if (f > 0.0) c1 += groundRoadTap(L1, q, tex1, F1);
+  }
+  return mix(c0, c1, f) / float(n) * real;
 }
 
 float groundHeightAt(vec2 g, float lod) {
-  vec4 h = sampleGround(uGroundHeight, g, lod);
+  vec4 h = sampleGround(uGroundHeight, g, lod);  // 高度纹理 RedFormat，alpha 恒为 1
   return h.w > 0.0 ? h.r : 0.0;
 }
 

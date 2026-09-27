@@ -1,11 +1,13 @@
 import { VectorTile } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
+import { RoadTileBuilder, type RoadTileData } from "./road-raster";
 
 /**
  * 瓦片数据源（全部免费，浏览器直连，均允许跨域；请求头不带任何个人信息）：
  * - 影像：EOX Sentinel-2 cloudless 2020（CC BY-NC-SA 4.0，需署名；个人非商业使用）
  * - 地形：AWS Terrain Tiles（Mapzen Terrarium 编码，开放数据）
- * - 水体：OpenFreeMap 矢量瓦片（OpenMapTiles schema，© OpenStreetMap contributors，ODbL）
+ * - 水体、道路：OpenFreeMap 矢量瓦片（OpenMapTiles schema，© OpenStreetMap contributors，ODbL）；
+ *   道路（T08 夜间灯带）取 transportation 图层，和水体同一张瓦片、同一次请求
  * - 夜光：NASA Black Marble（VIIRS 2016，GIBS，公有领域），最高 z8（约 500 m/像素）
  */
 
@@ -80,6 +82,45 @@ export interface WaterFeatures {
   polygons: { rings: { x: number; y: number }[][]; ocean: boolean }[];
   /** 河道折线；width = 估计河宽（米） */
   lines: { points: { x: number; y: number }[]; width: number }[];
+  /** 道路（T08）：攒成扁平数组，直接交给栅格化 Worker（见 road-raster.ts）；坐标是 transportation 图层自己的瓦片内坐标 */
+  roads: RoadTileData | null;
+}
+
+/**
+ * 道路等级 → 夜里被路灯照亮的宽度（米，一条 OSM 线；双向分离的高速在数据里是两条线）与相对照明强度。
+ * 经验取值（不是实测）：高速 / 快速路灯杆高、照度高，城市主干道次之，支路最暗。
+ * 只收这些等级：隧道（brunnel = tunnel）看不见；施工中（*_construction）、轮渡、铁路、步道、田间路、小区内部路不收。
+ */
+const ROAD_CLASS: Record<string, { highway: boolean; width: number; weight: number }> = {
+  motorway: { highway: true, width: 18, weight: 1.0 },
+  trunk: { highway: true, width: 16, weight: 0.9 },
+  primary: { highway: false, width: 14, weight: 0.7 },
+  secondary: { highway: false, width: 12, weight: 0.45 },
+  tertiary: { highway: false, width: 10, weight: 0.2 },
+  minor: { highway: false, width: 8, weight: 0.08 },
+};
+
+/**
+ * 去掉整段落在瓦片以外（缓冲区里）的线段，把折线在那里断开（T08 发现，道路见 road-raster.ts 的 RoadTileBuilder，河道用这里）。
+ * 矢量瓦片的线在瓦片外留了 64 单位的缓冲，裁剪时有些线会贴着缓冲区的边走一段（实测每张 z9–z12 瓦片 2–19 段），
+ * 画出来就是沿经线 / 纬线笔直延伸几十公里的假线。相邻瓦片会画自己那部分，删掉不缺
+ */
+function insideTile(line: { x: number; y: number }[], extent: number) {
+  const parts: { x: number; y: number }[][] = [];
+  let cur: { x: number; y: number }[] = [];
+  for (let i = 0; i + 1 < line.length; i++) {
+    const a = line[i], b = line[i + 1];
+    const out = (a.x < 0 && b.x < 0) || (a.x > extent && b.x > extent) || (a.y < 0 && b.y < 0) || (a.y > extent && b.y > extent);
+    if (out) {
+      if (cur.length > 1) parts.push(cur);
+      cur = [];
+      continue;
+    }
+    if (cur.length === 0) cur.push(a);
+    cur.push(b);
+  }
+  if (cur.length > 1) parts.push(cur);
+  return parts;
 }
 
 const vectors = new Lru<Promise<WaterFeatures | null>>(800);
@@ -97,7 +138,7 @@ export function loadWater(z: number, x: number, y: number): Promise<WaterFeature
       .then((buf) => {
         if (!buf) return null;
         const tile = new VectorTile(new PbfReader(buf));
-        const out: WaterFeatures = { extent: 4096, polygons: [], lines: [] };
+        const out: WaterFeatures = { extent: 4096, polygons: [], lines: [], roads: null };
         const water = tile.layers.water;
         if (water) {
           out.extent = water.extent;
@@ -113,8 +154,22 @@ export function loadWater(z: number, x: number, y: number): Promise<WaterFeature
             const f = ways.feature(i);
             if (f.type !== 2) continue;
             const width = WATERWAY_WIDTH[String(f.properties.class)] ?? 3;
-            for (const line of f.loadGeometry()) out.lines.push({ points: line, width });
+            // 同样去掉贴着缓冲区边走的段（见 insideTile，T08 顺手修）
+            for (const line of f.loadGeometry()) for (const part of insideTile(line, ways.extent)) out.lines.push({ points: part, width });
           }
+        }
+        // 道路（T08）
+        const tr = tile.layers.transportation;
+        if (tr) {
+          const rb = new RoadTileBuilder(tr.extent);
+          for (let i = 0; i < tr.length; i++) {
+            const f = tr.feature(i);
+            if (f.type !== 2) continue;
+            const c = ROAD_CLASS[String(f.properties.class)];
+            if (!c || f.properties.brunnel === "tunnel") continue;
+            for (const line of f.loadGeometry()) rb.add(line, c.width, c.weight, c.highway);
+          }
+          out.roads = rb.build();
         }
         return out;
       })

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { LocalFrame, latToTileY, lonToTileX, tileXToLon, tileYToLat, zoomForResolution } from "./geo";
 import { DEM_MAX_ZOOM, DEM_URL, IMAGERY_MAX_ZOOM, IMAGERY_URL, NIGHT_MAX_ZOOM, NIGHT_URL, VECTOR_MAX_ZOOM, loadBitmap, loadWater } from "./tiles";
+import { packRoads, type LevelPixels, type RoadJob } from "./road-raster";
 
 /**
  * 地面的 clipmap：以飞机正下方为中心的 7 级方形区域，边长 8、16 … 512 km，
@@ -263,15 +264,17 @@ export class GroundClipmap {
     const gen = this.generation;
     l.building = true;
     try {
-      const [albedo, water, height, night] = await Promise.all([
+      const [albedo0, vec, height, night] = await Promise.all([
         this.buildImagery(l.size, cx, cz, i === GROUND_LEVELS - 1),
         this.buildWater(l.size, cx, cz),
         this.buildHeight(l.size, cx, cz),
         this.buildNight(l.size, cx, cz),
       ]);
       if (gen !== this.generation || i < this.minLevel) return;
-      // 夜光亮度放进水体纹理的 B 通道
-      for (let k = 0; k < RES * RES; k++) water[k * 4 + 2] = night[k * 4];
+      // 夜光放进水体纹理的 B 通道，道路灯带（T08）写进水体纹理和影像纹理的 A 通道：都在 Worker 里做（road-raster.ts 的 packRoads），
+      // 像素缓冲区转移过去再转移回来，主线程上不跑 1M 像素的循环
+      const { water, albedo } = await packRoadsAsync(vec.job, { water: vec.water, albedo: albedo0, night });
+      if (gen !== this.generation || i < this.minLevel) return;
       this.upload(this.albedo, i, albedo, RES * RES * 4);
       this.upload(this.water, i, water, RES * RES * 4);
       this.upload(this.height, i, height.data, HRES * HRES);
@@ -458,8 +461,52 @@ export class GroundClipmap {
         ctx.globalAlpha = 1;
       }
     }
-    return ctx.getImageData(0, 0, RES, RES).data;
+    // 道路（T08）：栅格化任务（投影、抽稀、求距离全在 Worker 里，见 road-raster.ts），等影像和夜光都齐了由 build 交出去
+    const [lat0, lon0] = [this.frame.lat0, this.frame.lon0];
+    const tiles = results.flatMap(({ t, w }) => (w?.roads ? [{ x: t.x, y: t.y, data: w.roads }] : []));
+    const job: RoadJob = { res: RES, lat0, lon0, x0: cx - size / 2, z0: cz - size / 2, size, zoom, tiles };
+    return { water: ctx.getImageData(0, 0, RES, RES).data, job };
   }
+}
+
+// ---- 道路栅格化的 Worker（T08）：一个常驻 Worker，按请求号对应回调；起不来时在主线程同步算 ----
+// 像素缓冲区是转移过去的（主线程这边随即失效），所以 Worker 中途出错时没法在这里补算：让这次构建失败，
+// build 的 finally 清掉 building 标志，下一帧 update 发现这一级还没建好会重建，那时已经改走主线程
+let roadWorker: Worker | null | undefined;
+let roadReq = 0;
+const roadPending = new Map<number, { resolve: (px: LevelPixels) => void; reject: (e: Error) => void }>();
+
+function packRoadsAsync(job: RoadJob, px: LevelPixels): Promise<LevelPixels> {
+  if (roadWorker === undefined) {
+    try {
+      roadWorker = new Worker(new URL("./road-raster.worker.ts", import.meta.url), { type: "module" });
+      roadWorker.onmessage = (e: MessageEvent<{ id: number; px: LevelPixels }>) => {
+        const req = roadPending.get(e.data.id);
+        roadPending.delete(e.data.id);
+        req?.resolve(e.data.px);
+      };
+      roadWorker.onerror = (e) => {
+        console.warn("道路栅格化 Worker 出错，改在主线程计算", e.message);
+        roadWorker?.terminate();
+        roadWorker = null;
+        for (const req of roadPending.values()) req.reject(new Error("道路栅格化 Worker 出错"));
+        roadPending.clear();
+      };
+    } catch {
+      roadWorker = null;
+    }
+  }
+  if (!roadWorker) {
+    packRoads(job, px);
+    return Promise.resolve(px);
+  }
+  const id = ++roadReq;
+  const worker = roadWorker;
+  return new Promise((resolve, reject) => {
+    roadPending.set(id, { resolve, reject });
+    // 瓦片道路数据复制过去（还留在 LRU 缓存里给下次重建用），像素缓冲区转移（不复制）
+    worker.postMessage({ id, job, px }, [px.water.buffer, px.albedo.buffer, px.night.buffer]);
+  });
 }
 
 /** 把一级的高度图 / 水体遮罩压成 GRID² 的粗网格（最高点、平均高度、陆地比例），CPU 侧查询用（T18） */

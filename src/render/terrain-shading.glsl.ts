@@ -45,9 +45,9 @@ bool groundHit(vec3 ro, vec3 rd, out GroundHit gh) {
   float fpM = max(tT * pixelAngle * 1000.0 * inversesqrt(cosI), 0.05);
   float texelM = GROUND_BASE * exp2(floor(lod)) * 1000.0 / GROUND_RES;
 #ifdef GROUND_DETAIL
-  vec4 alb = sampleGround(uGroundAlbedo, g + albedoJitterKm(g, fpM, texelM), lod);
+  vec4 alb = sampleGroundAlbedo(g + albedoJitterKm(g, fpM, texelM), lod);
 #else
-  vec4 alb = sampleGround(uGroundAlbedo, g, lod);
+  vec4 alb = sampleGroundAlbedo(g, lod);
 #endif
   if (alb.w <= 0.0) return false;
   vec3 wat = sampleGround(uGroundWater, g, lod).rgb;
@@ -106,7 +106,7 @@ vec4 groundLand(GroundHit gh, float cs, vec3 eFlash) {
   if (dayDetail && fpM < 20.0 && uKeyDir.y > 0.02 && forestHere < 0.9) {
     float sunH = max(length(uKeyDir.xz), 1e-3);
     float len = min(14.0 * sunH / uKeyDir.y, 60.0);
-    vec3 albSun = sampleGround(uGroundAlbedo, g + uKeyDir.xz / sunH * len * 0.001, lod).rgb;
+    vec3 albSun = sampleGroundAlbedo(g + uKeyDir.xz / sunH * len * 0.001, lod).rgb;
     float edge = landClasses(albSun).x * (1.0 - forestHere);
     gd.shadow *= 1.0 - 0.8 * edge * (1.0 - smoothstep(10.0, 20.0, fpM));
   }
@@ -147,11 +147,65 @@ vec4 groundLand(GroundHit gh, float cs, vec3 eFlash) {
   return vec4(land, 0.0);
 }
 
+// 道路灯带（T08）：夜里的主干道与高速公路。只在 groundFinish 里调用一次（它内含取样循环，FXC 会在每个调用点整份内联）。
+// 线来自 OSM 道路的有向距离栅格（clipmap.ts 的 RoadRaster，照亮宽度已按夜光决定亮不亮），像素覆盖率由 groundRoadCoverage
+// 解析算出（含沿视线方向的各向异性过滤）。这里只做：近处一盏盏路灯的光斑、沿线的明暗起伏与钠灯 / LED 的色温混合、黄昏时各片区先后亮灯。
+// 返回地面处的辐亮度（kcd/m²），调用处乘空气透视的透射率
+const float ROAD_LUMINANCE = 1.6e-3;           // 满覆盖、强度 1 的路面亮度（1.6 cd/m²，道路照明标准里高速路面 1.5–2 cd/m²，照亮宽度里已含路侧溢光所以取低一点；
+                                               // 再亮线会在夜间曝光下过曝成一片平色，抗锯齿的灰阶被截掉、成了台阶，经验值）
+const vec3 ROAD_SODIUM = vec3(1.0, 0.45, 0.12); // 高压钠灯：橙
+const vec3 ROAD_LED = vec3(1.0, 0.80, 0.62);    // 约 4500 K 的 LED：偏白
+vec3 groundRoadLights(GroundHit gh) {
+  // 太阳高于约 3.4° 时路灯都没开（按片区在 0°–3° 之间先后开灯，见下面 on）
+  if (uSunDir.y > 0.06) return vec3(0.0);
+  vec3 ro = vec3(0.0, uCamR, 0.0);
+  vec3 rd = (gh.P - ro) / gh.t;
+  float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
+  float shortM = max(gh.t * pixelAngle * 1000.0, 0.05);
+  float cosI = max(abs(dot(rd, gh.up)), 0.02);
+  float longM = shortM / cosI;
+  vec2 dirH = rd.xz / max(length(rd.xz), 1e-6);
+  float cov = groundRoadCoverage(gh.g, shortM, longM, dirH);
+  if (cov <= 1e-4) return vec3(0.0);
+  vec2 gm = gh.g * 1000.0; // 米
+  // 沿线的明暗起伏：一两百米尺度（一段段街道的灯多灯少、有没有店面）× 几百米（换了灯型 / 灯距、车流）×
+  // 几公里（不同路段、不同管理单位）。足迹比起伏的尺度还大时淡出到均值，免得噪声本身在远处闪
+  float v0 = mix(vnoise(gm / 170.0 + 5.9), 0.5, smoothstep(60.0, 170.0, longM));
+  float v1 = mix(vnoise(gm / 650.0), 0.5, smoothstep(200.0, 700.0, longM));
+  float v2 = vnoise(gm / 2900.0 + 7.3);
+  float vary = (0.3 + 1.4 * v0) * (0.45 + 1.1 * v1) * (0.65 + 0.7 * v2);
+  // 色温：按片区混合钠灯和 LED（很多城市正在把钠灯换成 LED，所以是成片的，不是逐盏随机）
+  float sodium = smoothstep(0.35, 0.65, vnoise(gm / 4300.0 + 19.1));
+  vec3 col = mix(ROAD_LED / dot(ROAD_LED, vec3(0.2126, 0.7152, 0.0722)),
+                 ROAD_SODIUM / dot(ROAD_SODIUM, vec3(0.2126, 0.7152, 0.0722)), sodium);
+  // 近处能分出一盏盏路灯：每 32 m 格子里一个光斑（半径约 9 m），按能量归一（平均值 1），足迹变大时淡出成连续的线。
+  // 光斑按像素足迹的椭圆展宽（沿视线方向用长轴、横向用短轴）：只按短轴展宽时，斜看的长轴方向上光斑比像素还密，
+  // 成了一串闪动的单像素亮点。展宽超过约半个格子后只算本格一盏灯会丢能量，所以在那之前（sA 12→20 m）淡出
+  float beads = 1.0;
+  float sA = max(9.0, longM * 0.7), sB = max(9.0, shortM * 0.7);
+  if (sA < 15.0) {
+    vec2 cm = gm / 32.0;
+    vec2 cell = floor(cm);
+    vec2 jit = hash22(cell * 1.3 + 5.7);
+    vec2 off = (cm - cell - (0.2 + 0.6 * jit)) * 32.0;
+    float qa = dot(off, dirH) / sA, qb = dot(off, vec2(-dirH.y, dirH.x)) / sB;
+    float pool = exp(-(qa * qa + qb * qb)) * (32.0 * 32.0) / (M_PI * sA * sB);
+    beads = mix(pool * (0.7 + 0.6 * jit.y), 1.0, smoothstep(10.0, 15.0, sA));
+  }
+  // 黄昏按片区先后开灯（太阳高度约 0°–3°），片区边界是平滑的噪声，不是方块
+  float th = 0.05 * vnoise(gm / 5000.0 + 3.1);
+  float on = 1.0 - smoothstep(th - 0.012, th, uSunDir.y);
+  return col * (ROAD_LUMINANCE * cov * vary * beads * on);
+}
+
 // 第三步：合成。land 是 groundLand 的结果（没有陆地时为 0）；water / fView 是水面着色的结果
 // （海洋走调用处唯一的 oceanRadiance，湖泊河流走 inlandWaterRadiance）；skyCam 是反射方向上从相机看到的天空。
 // eSunW / eSkyW：水面处主光源（含云影）与天空光的照度，碎浪用
 vec3 groundFinish(GroundHit gh, vec3 land, vec3 water, float fView, vec3 skyCam, vec3 eSunW, vec3 eSkyW, vec3 eFlash) {
-  vec3 L = (1.0 - gh.wat.r) * land;
+  // 道路灯带（T08）不乘水体遮罩：跨河、跨海湾的桥上也亮（隧道在 CPU 侧已剔除）
+  vec3 road = groundRoadLights(gh);
+  if (uDebug == 24) return road; // 调试 24：只画道路灯带（地面处的辐亮度，不含空气透视、城市灯点和地表）
+  vec3 L = (1.0 - gh.wat.r) * land + road;
   if (gh.wat.r <= 0.001) return L * gh.apT + gh.apL;
   vec3 alb = gh.alb.rgb;
   water += alb * 0.7 / M_PI * eFlash;
