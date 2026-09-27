@@ -6,7 +6,9 @@
  * 命名约定（研究文档 §2.1）：面板名写成「名字（致敬《作品》）」或注明典籍出处；id 用描述性英文。
  */
 
-/** 奇观所在的层：sky = 天幕层（在所有云之外，云的遮挡是现成的）；cloud = 云间层（要插进云的步进，W00 之后才有） */
+import { W00_PROBE_KIND, WONDER_CLOUD_KINDS } from "./wonder-cloud.glsl";
+
+/** 奇观所在的层：sky = 天幕层（在所有云之外，云的遮挡是现成的）；cloud = 云间层（插进云的步进，W00，见 wonder-cloud.glsl.ts） */
 export type WonderLayer = "sky" | "cloud";
 
 /** 挑选奇观时看的外部条件（WonderSystem.update 每帧由 main.ts 给出） */
@@ -46,8 +48,10 @@ export interface WonderDef {
   riseS: number;
   holdSimS: [number, number];
   fadeS: number;
-  /** 天幕层细线类奇观的外观（天梯 / 建木共用一段着色器） */
-  look: {
+  /** 云间层奇观（layer = "cloud"）的体：插进云步进的种类与包围盒（W00，见 wonder-cloud.glsl.ts、handoff/W00.md） */
+  volume?: WonderVolume;
+  /** 天幕层细线类奇观的外观（天梯 / 建木共用一段着色器）；云间层奇观不用 */
+  look?: {
     /** 底部半径（km） */
     radiusKm: number;
     /** 表面反照率 */
@@ -57,6 +61,28 @@ export interface WonderDef {
     /** 夜里高处的航标灯与上升的轿厢 */
     beacons: boolean;
   };
+}
+
+/**
+ * 云间层奇观的体（W00）。坐标都是奇观局部坐标（km）：原点在锚点（地面经纬度）正下方的海平面再抬高 baseKm，
+ * x 东、y 天顶、z 南。表面、介质都必须在包围盒 box 以内（盒外的部分不画）。
+ */
+export interface WonderVolume {
+  /** 着色器种类编号：wonder-cloud.glsl.ts 的 WONDER_CLOUD_KINDS 里的 id */
+  kind: number;
+  /** 局部坐标原点离海平面的高度（km），通常 0 */
+  baseKm: number;
+  /** 局部坐标的包围盒 [最小角, 最大角]（km）；越紧越省（盒外的视线一步都不多走） */
+  box: [[number, number, number], [number, number, number]];
+  /** 有没有解析表面（sdf + shade）、有没有介质（medium） */
+  surface: boolean;
+  medium: boolean;
+  /** 介质里的最大步长（km）；包围盒另外保证至少分 48 步 */
+  stepKm: number;
+  /** 投影椭球（挡住云受到的直射光）：中心、三个半轴（km，局部坐标） */
+  caster?: { center: [number, number, number]; radii: [number, number, number] };
+  /** 给着色器的自定义参数（uWonderParams.zw） */
+  params?: [number, number];
 }
 
 /** 暮色（太阳在 −12°..+6°）是这类「上段仍被阳光照亮」的奇观最美的时候 */
@@ -103,6 +129,39 @@ export const WONDERS: WonderDef[] = [
   },
 ];
 
+/**
+ * 调试用的奇观：不参与随机挑选、不进面板下拉，只能用 __voyage.wonders.trigger(id) 召唤。
+ * W00 测试体只在 URL 带 ?w00probe 时编进奇观 pass（见 wonder-cloud.glsl.ts），没编进去时召唤了也看不见。
+ */
+export const DEBUG_WONDERS: WonderDef[] = [
+  {
+    id: "w00-probe",
+    name: "W00 测试体（倒锥浮岩 + 雾环，接口验证用，示例）",
+    layer: "cloud",
+    distanceKm: [60, 120],
+    forwardOffsetDeg: [0, 0],
+    minAltitudeKm: 0,
+    sunWeight: () => 0,
+    riseS: 10,
+    holdSimS: [3600, 3600],
+    fadeS: 10,
+    volume: {
+      kind: W00_PROBE_KIND,
+      baseKm: 0,
+      box: [[-4.2, 2.3, -4.2], [4.2, 6.95, 4.2]],
+      surface: true,
+      medium: true,
+      stepKm: 0.2,
+      caster: { center: [0, 4.6, 0], radii: [2.8, 1.9, 2.8] },
+    },
+  },
+];
+
 export function wonderById(id: string): WonderDef | undefined {
-  return WONDERS.find((w) => w.id === id);
+  return WONDERS.find((w) => w.id === id) ?? DEBUG_WONDERS.find((w) => w.id === id);
+}
+
+/** 云间层奇观的种类有没有编进奇观 pass（没编进去的不能出现） */
+export function wonderVolumeCompiled(def: WonderDef) {
+  return def.layer !== "cloud" || (!!def.volume && WONDER_CLOUD_KINDS.some((k) => k.id === def.volume!.kind));
 }

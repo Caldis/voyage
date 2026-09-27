@@ -67,6 +67,8 @@ Object.assign(sceneMat.uniforms, haze.sceneUniforms);
 // 奇观（W01，wonders/system.ts）：天幕层奇观的 uniform 进场景 / 窗外共用的 uniforms（只有窗外程序用到）
 const wonders = new WonderSystem();
 Object.assign(sceneMat.uniforms, wonders.uniforms);
+// 手动召唤按相机视线方位放置（W00）
+wonders.attachView(sceneMat.uniforms);
 // 城市天光（T09）：只用来压银河的可见度，不画进天空
 const lightPollution = new LightPollution();
 Object.assign(sceneMat.uniforms, lightPollution.uniforms);
@@ -389,6 +391,8 @@ function renderFrame(now: number) {
     coverage: cloudUniforms.uCoverage.value,
     flightKey: `${state.preset.id}|${localParts(state.simTime, state.preset.tz).date}`,
   });
+  // 奇观模式打开时提前在后台编云间层变体（W00）
+  clouds.wonderPrewarm = wonders.enabled;
   updateHighLift(state, simDt);
   traffic.update(simDt, flightResult.ownDir, flightResult.speedKms, flightResult.outwardW);
   weather.update(dt);

@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { WONDERS, wonderById, type WonderContext, type WonderDef } from "./catalog";
+import { WONDERS, wonderById, wonderVolumeCompiled, type WonderContext, type WonderDef } from "./catalog";
+import { createWonderCloudUniforms } from "./wonder-cloud.glsl";
 
 /**
  * 奇观系统（W01）：触发、放置、编排，驱动着色器的 uniform。设计见 research/WONDERS.md §5。
@@ -47,6 +48,8 @@ export interface ActiveWonder {
   holdSimS: number;
   riseS: number;
   reveal: number;
+  /** 云间层奇观：局部坐标原点离海平面的高度（km），默认取 volume.baseKm */
+  baseKm: number;
   /** 是怎么来的：auto 随机触发、summon 面板 / 调试召唤、cover 借遮挡（奇观之门） */
   via: "auto" | "summon" | "cover";
 }
@@ -62,6 +65,8 @@ export interface TriggerOptions {
   /** 浮现时长（真实秒），省略用奇观自己的 */
   riseS?: number;
   via?: ActiveWonder["via"];
+  /** 云间层奇观：局部坐标原点离海平面的高度（km），省略用 volume.baseKm（测试时用来把同一个体摆到不同高度） */
+  baseKm?: number;
 }
 
 // ---------- 小工具 ----------
@@ -117,6 +122,13 @@ function angleDiff(a: number, b: number) {
 }
 
 const ease = (x: number) => x * x * (3 - 2 * x);
+/** 渲染用的地球半径（km），与着色器的 BOTTOM 一致 */
+const RENDER_R_KM = 6360;
+const _v0 = new THREE.Vector3();
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _v4 = new THREE.Vector3();
 
 export class WonderSystem {
   /** 面板「奇观模式」开关 */
@@ -131,7 +143,32 @@ export class WonderSystem {
     uWonderAxis: { value: new THREE.Vector3(0, 1, 0) },
     uWonderShape: { value: new THREE.Vector4(0.35, FRONT_MIN_KM, 0, 0) },
     uWonderAlbedo: { value: new THREE.Vector3(0.3, 0.3, 0.3) },
+    // 云间层（W00）：云步进程序读这一组（经 main.ts 合进场景 uniforms，Clouds 构造时共用同一批对象）
+    ...createWonderCloudUniforms(),
   };
+  /** 给云间层着色器的时间（真实秒，循环） */
+  private clock = 0;
+  /** 手动召唤的次数（给方位随机偏移换种子） */
+  private summonCount = 0;
+  /** 相机的 uniform（uCamBasis、uCabinToWorld），attachView 之后才有：手动召唤按相机视线的方位放 */
+  private view: { uCamBasis?: { value: THREE.Matrix3 }; uCabinToWorld?: { value: THREE.Matrix3 } } | null = null;
+
+  /** main.ts 接入：把场景共用的 uniforms 给进来（只读其中的 uCamBasis、uCabinToWorld） */
+  attachView(uniforms: Record<string, { value: unknown }>) {
+    this.view = uniforms as typeof this.view;
+  }
+
+  /** 相机视线（屏幕中心）的水平方位角（度，从正北顺时针）；没接入或视线接近竖直时返回 null */
+  viewBearing(): number | null {
+    const cb = this.view?.uCamBasis?.value;
+    const c2w = this.view?.uCabinToWorld?.value;
+    if (!cb || !c2w) return null;
+    // 屏幕中心的视线在座舱系里是 uCamBasis 的 −z 列（列：右、上、后），再转到窗外坐标（x 东、y 天顶、−z 北）
+    const e = cb.elements;
+    const d = _v4.set(-e[6], -e[7], -e[8]).applyMatrix3(c2w);
+    if (d.x * d.x + d.z * d.z < 1e-6) return null;
+    return (deg(Math.atan2(d.x, -d.z)) + 360) % 360;
+  }
 
   private ctx: WonderContext | null = null;
   private rollClock = 0;
@@ -167,7 +204,7 @@ export class WonderSystem {
     const outward = outwardBearing(ctx);
     const out: { def: WonderDef; weight: number }[] = [];
     for (const def of WONDERS) {
-      if (def.layer !== "sky") continue; // 云间层要等 W00 的插层接入点
+      if (!wonderVolumeCompiled(def)) continue; // 云间层：种类没编进奇观 pass 就不出现
       if (seen?.has(def.id)) continue;
       if (ctx.altitudeKm < def.minAltitudeKm) continue;
       const w = def.sunWeight(ctx.sunAltDeg) * (def.facingWeight?.(outward) ?? 1);
@@ -213,7 +250,14 @@ export class WonderSystem {
     // 往机头偏：右座机头在方位减小的方向，左座相反
     const side = ctx.seat === "right" ? 1 : -1;
     const fwd = opts.forwardOffsetDeg ?? THREE.MathUtils.lerp(def.forwardOffsetDeg[0], def.forwardOffsetDeg[1], rand01(seed));
-    const bearing = opts.bearingDeg ?? outward - side * fwd;
+    let bearing = opts.bearingDeg ?? outward - side * fwd;
+    // 手动召唤（面板「立即召唤」：没给方位、也没给距离）：放在相机此刻视线的水平方位上，±10° 以内随机偏一点（偏向中间），
+    // 保证舷窗里一眼能看到。面板传的 forwardOffsetDeg 在这里不用。自动出场（auto / 借遮挡）、调试脚本（给了距离或方位）照旧
+    const view = this.viewBearing();
+    if ((opts.via ?? "summon") === "summon" && opts.bearingDeg === undefined && opts.distKm === undefined && view !== null) {
+      const u = rand01(seed + 17 + ++this.summonCount) + rand01(seed + 29 + this.summonCount) - 1; // 三角分布，−1..1
+      bearing = view + 10 * u;
+    }
     const dist = opts.distKm ?? THREE.MathUtils.lerp(def.distanceKm[0], def.distanceKm[1], rand01(seed + 1));
     const [lat, lon] = geoDestination(ctx.lat, ctx.lon, bearing, dist);
     const reveal = THREE.MathUtils.clamp(opts.reveal ?? 0, 0, 1);
@@ -226,6 +270,7 @@ export class WonderSystem {
       holdSimS: THREE.MathUtils.lerp(def.holdSimS[0], def.holdSimS[1], rand01(seed + 2)),
       riseS: opts.riseS ?? def.riseS,
       reveal,
+      baseKm: opts.baseKm ?? def.volume?.baseKm ?? 0,
       via: opts.via ?? "summon",
     };
     this.markSeen(ctx.flightKey, def.id);
@@ -252,9 +297,11 @@ export class WonderSystem {
   /** dt：真实秒；simDt：模拟秒（加速播放时更大） */
   update(dt: number, simDt: number, ctx: WonderContext) {
     this.ctx = ctx;
+    this.clock = (this.clock + dt) % 3600;
     if (!this.enabled) {
       if (this.active || this.pendingGate) this.clear();
       this.uniforms.uWonderOn.value = 0;
+      this.uniforms.uWonderVol.value = 0;
       return;
     }
     if (this.cooldown > 0) this.cooldown -= dt;
@@ -356,15 +403,19 @@ export class WonderSystem {
   private syncUniforms(ctx: WonderContext | null) {
     const u = this.uniforms;
     const a = this.active;
-    if (!ctx || !a || a.def.layer !== "sky" || a.reveal <= 0) {
-      u.uWonderOn.value = 0;
-      return;
-    }
+    u.uWonderOn.value = 0;
+    u.uWonderVol.value = 0;
+    if (!ctx || !a || a.reveal <= 0) return;
     // 基座相对飞机的方位与地面距离 → 窗外坐标里「地心 → 基座」的单位向量（x 东、y 天顶、−z 北）
     const { bearingDeg, distKm } = geoBearingDistance(ctx.lat, ctx.lon, a.lat, a.lon);
     const th = distKm / EARTH_R_KM;
     const b = rad(bearingDeg);
     u.uWonderAxis.value.set(Math.sin(b) * Math.sin(th), Math.cos(th), -Math.cos(b) * Math.sin(th)).normalize();
+    if (a.def.layer === "cloud") {
+      this.syncVolume(a, ctx, u.uWonderAxis.value);
+      return;
+    }
+    if (!a.def.look) return;
     const r = a.reveal;
     const front =
       r < 0.9 ? FRONT_MIN_KM * Math.pow(FRONT_MID_KM / FRONT_MIN_KM, ease(r / 0.9)) : FRONT_MID_KM * Math.pow(FRONT_MAX_KM / FRONT_MID_KM, (r - 0.9) / 0.1);
@@ -372,6 +423,39 @@ export class WonderSystem {
     u.uWonderShape.value.set(look.radiusKm, front, look.skin, look.beacons ? 1 : 0);
     u.uWonderAlbedo.value.set(...look.albedo);
     u.uWonderOn.value = 1;
+  }
+
+  /**
+   * 云间层奇观（W00）：局部坐标系（锚点处的东、天顶、南）、相机在局部坐标里的位置、包围盒、投影椭球。
+   * 渲染用的地球半径是 RENDER_R_KM（与着色器的 BOTTOM 一致）；方位 / 距离按大圆（6371 km）算的只是方向，差别可以忽略。
+   * 全部在 CPU 上用双精度做减法：着色器里只拿到「相机 − 锚点」这个小量，不会有 6000 km 大数相减的精度问题
+   */
+  private syncVolume(a: ActiveWonder, ctx: WonderContext, axis: THREE.Vector3) {
+    const u = this.uniforms;
+    const v = a.def.volume;
+    if (!v) return;
+    // 地轴（北极方向）在窗外坐标里：飞机处的天顶是 y、北是 −z
+    const phi = rad(ctx.lat);
+    const pole = _v0.set(0, Math.sin(phi), -Math.cos(phi));
+    const east = _v1.crossVectors(pole, axis);
+    // 锚点正好在极点上时东向无定义：随便取一个水平方向
+    if (east.lengthSq() < 1e-12) east.set(1, 0, 0);
+    east.normalize();
+    const south = _v2.crossVectors(east, axis).normalize();
+    u.uWonderToLocal.value.set(east.x, east.y, east.z, axis.x, axis.y, axis.z, south.x, south.y, south.z);
+    // 相机（窗外坐标原点在地心，相机在 (0, R + 高度, 0)）− 局部原点（锚点方向 × (R + baseKm)）
+    const rel = _v3.set(0, RENDER_R_KM + ctx.altitudeKm, 0).addScaledVector(axis, -(RENDER_R_KM + a.baseKm));
+    u.uWonderCam.value.set(rel.dot(east), rel.dot(axis), rel.dot(south));
+    u.uWonderBoxMin.value.set(...v.box[0]);
+    u.uWonderBoxMax.value.set(...v.box[1]);
+    u.uWonderUse.value.set(v.surface ? 1 : 0, v.medium ? 1 : 0);
+    u.uWonderStep.value = v.stepKm;
+    u.uWonderParams.value.set(a.reveal, this.clock, v.params?.[0] ?? 0, v.params?.[1] ?? 0);
+    if (v.caster) {
+      u.uWonderCaster.value.set(...v.caster.center, 1);
+      u.uWonderCasterR.value.set(...v.caster.radii);
+    } else u.uWonderCaster.value.w = 0;
+    u.uWonderVol.value = v.kind;
   }
 
   /** 面板 / 信息栏用的一行状态 */

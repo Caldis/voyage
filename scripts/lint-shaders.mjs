@@ -122,6 +122,9 @@ export async function collectPrograms(server) {
     add("cloud-occupancy", clouds.occMat);
     add("cloud-shadow-map", clouds.shadowMat);
     add("cloud-probe", clouds.probeMat);
+    // 奇观云间层（W00）：步进变体 + 奇观表面 pass；W00_PROBE=1 时连测试体一起校验
+    programs.push({ id: "cloud-march-wonder", fragmentShader: "#define WONDER_LAYER 1\n" + clouds.marchWonderMat.fragmentShader, vertexShader: clouds.marchWonderMat.vertexShader });
+    add("wonder-layer", clouds.wonderSurfMat);
     add("cloud-resolve", clouds.resolveMat);
   }
 
