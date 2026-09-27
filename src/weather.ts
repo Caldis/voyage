@@ -623,20 +623,28 @@ export class WeatherField {
   typhoonNear(lat: number, lon: number, t: number, radiusKm: number): TyphoonSample | null {
     let best: TyphoonSample | null = null;
     let bestD = radiusKm;
+    for (const ty of this.activeTyphoons(t)) {
+      const d = haversine(lat, lon, ty.lat, ty.lon);
+      if (d < bestD) {
+        bestD = d;
+        best = ty;
+      }
+    }
+    return best;
+  }
+
+  /** 此刻全海域活跃的台风（统计脚本 scripts/weather-stats.mts 也用它） */
+  activeTyphoons(t: number): TyphoonSample[] {
+    const out: TyphoonSample[] = [];
     const kMax = Math.floor(t / (TY_WINDOW_H * H));
     const kMin = Math.floor((t - TY_LIFE_H * H) / (TY_WINDOW_H * H));
     for (let i = Math.floor(125 / TY_CELL_DEG); i <= Math.floor(155 / TY_CELL_DEG); i++)
       for (let j = 0; j <= 1; j++)
         for (let k = kMin; k <= kMax; k++) {
           const ty = this.typhoonAt(i, j, k, t);
-          if (!ty) continue;
-          const d = haversine(lat, lon, ty.lat, ty.lon);
-          if (d < bestD) {
-            bestD = d;
-            best = ty;
-          }
+          if (ty) out.push(ty);
         }
-    return best;
+    return out;
   }
 }
 
