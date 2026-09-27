@@ -388,8 +388,11 @@ void main() {
       float h01 = stormW > 0.5 ? clamp((r - BOTTOM - uShellBottom) / (uShellTop - uShellBottom), 0.0, 1.0)
                                : clamp((r - BOTTOM - uCloudBottom) / max(uCloudTop - uCloudBottom, 1e-3), 0.0, 1.0);
       vec3 eSky = skyIrradiance(r, up);
+      float ambFloor = 0.12;
+#ifdef CLOUD_CIRRUS
       // 卷云（T12）：薄冰晶云光学厚度只有零点几到几，底下照样看得到大半个天，不按厚云的「云底只剩 12%」压暗
-      float ambFloor = stormW > 0.5 ? 0.12 : mix(0.12, 0.6, 1.0 - smoothstep(0.0, 0.2, uCloudType));
+      if (stormW < 0.5) ambFloor = mix(0.12, 0.6, 1.0 - smoothstep(0.0, 0.2, uCloudType));
+#endif
       vec3 ambient = eSky / (2.0 * M_PI) * mix(ambFloor, 1.0, pow(h01, 0.7));
       // 夜天光（T46）：skyIrradiance 只有太阳、月亮两路 LUT，没有气辉和星光；海面却经 skyRadiance 反射了它，
       // 无月夜云（≈ 0）成了比海还暗的纯黑剪影（美术总监 wave6 第 5 条：云 Y 9–12、海约 33）。
@@ -584,6 +587,7 @@ void main() {
 //     （和画出来的云一样瘦；只是一个像素，不在乎开销）。两段样本放进同一个循环：cloudDensityLite 只内联一处
 const PROBE_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
+#define CLOUD_CIRRUS 1
 ${CLOUD_COMMON}
 uniform float uCamR;
 uniform vec3 uProbeDir;   // 航向（窗外坐标）
@@ -645,6 +649,8 @@ void main() {
 // 旧版逐像素只取 5 个点、台风只用解析大形（完整密度进窗外程序太慢），现在这些都在这个单独的小程序里，窗外程序只查图
 const SHADOW_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
+// 卷云的丝缕（T12）也投影；这个程序每帧只算一小片，卷云代码的开销无所谓
+#define CLOUD_CIRRUS 1
 ${CLOUD_COMMON}
 uniform vec2 uBuildCenter;   // 这张图的中心（世界坐标 km）
 uniform vec3 uBuildSun;      // 这张图的主光源方向
@@ -832,6 +838,13 @@ export class Clouds {
    * 第一次需要时在后台编译（d3d11 约 10–15 s，有磁盘缓存后不到 1 s），编好之前奇观不画（云照常）
    */
   private readonly marchWonderMat: THREE.ShaderMaterial;
+  /**
+   * 卷云变体（T12）：加 #define CLOUD_CIRRUS，只在云型 < 0.2（卷云）时用它画。卷云的丝缕代码就算按 uniform 分支、平时不走，
+   * 也让积云场景的云步进慢一档（noon-cumulus +25%、typhoon-bands +20%），所以和奇观一样做成变体。
+   * 启动后第一次 probe 就在后台编译（不在启动的编译批次里，不拖冷启动），编好之前卷云按普通层状云画
+   */
+  private readonly marchCirrusMat: THREE.ShaderMaterial;
+  private cirrusState: "idle" | "compiling" | "ready" | "failed" = "idle";
   private readonly wonderSurfMat: THREE.ShaderMaterial;
   private wonderState: "idle" | "compiling" | "ready" | "failed" = "idle";
   /** 预热：设成 true 后，下一次 probe() 就在后台编译奇观变体（奇观模式打开时由 main.ts 设，召唤时不用再等） */
@@ -925,7 +938,17 @@ export class Clouds {
       depthWrite: true,
       depthFunc: THREE.AlwaysDepth,
       fragmentShader: MARCH_FRAG,
-      defines: { WONDER_LAYER: 1 },
+      // 奇观变体本来就慢一档，卷云代码一起带上（不再多一个「奇观 × 卷云」的组合）
+      defines: { WONDER_LAYER: 1, CLOUD_CIRRUS: 1 },
+      uniforms: this.marchMat.uniforms,
+    });
+    this.marchCirrusMat = new THREE.ShaderMaterial({
+      ...common,
+      depthTest: true,
+      depthWrite: true,
+      depthFunc: THREE.AlwaysDepth,
+      fragmentShader: MARCH_FRAG,
+      defines: { CLOUD_CIRRUS: 1 },
       uniforms: this.marchMat.uniforms,
     });
     this.marchMat.uniforms.uWonderSurf = { value: this.wonderSurf.texture };
@@ -1037,6 +1060,27 @@ export class Clouds {
     };
     this.compileInBackground(renderer, this.marchWonderMat, this.raw, done(this.marchWonderMat));
     this.compileInBackground(renderer, this.wonderSurfMat, this.wonderSurf, done(this.wonderSurfMat));
+  }
+
+  /**
+   * 卷云变体的后台编译（T12）：要画卷云时立刻开始；否则启动后约 300 次 probe（十几秒，启动的编译批次早已结束）再预热，
+   * 以后导演换到卷云时不用等。编好之前卷云按普通层状云画
+   */
+  private cirrusProbeCount = 0;
+  private ensureCirrusCompiled(renderer: THREE.WebGLRenderer) {
+    if (this.cirrusState !== "idle") return;
+    if (this.uniforms.uCloudType.value >= 0.2 && ++this.cirrusProbeCount < 300) return;
+    this.cirrusState = "compiling";
+    this.compileInBackground(renderer, this.marchCirrusMat, this.raw, () => {
+      const program = (renderer.properties.get(this.marchCirrusMat) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
+      program?.getUniforms();
+      this.cirrusState = !program || program.diagnostics?.runnable === false ? "failed" : "ready";
+    });
+  }
+
+  /** 卷云变体的状态（调试 / 回归场景等它编好用）：idle / compiling / ready / failed */
+  get cirrusLayerState() {
+    return this.cirrusState;
   }
 
   /** 云间层奇观变体的状态（调试 / 面板用）：idle 没编过、compiling 后台编译中、ready 可用、failed 编译失败 */
@@ -1154,6 +1198,7 @@ export class Clouds {
   probe(renderer: THREE.WebGLRenderer, heading: THREE.Vector3) {
     this.ensureAuxCompiled(renderer);
     this.ensureWonderCompiled(renderer);
+    this.ensureCirrusCompiled(renderer);
     if (this.probeBusy) return;
     this.probeMat.uniforms.uProbeDir.value.copy(heading);
     this.pass.render(this.probeMat, this.probeTarget);
@@ -1254,7 +1299,9 @@ export class Clouds {
     // 有云间层奇观在场、且奇观变体已编好时用变体画（W00）；否则照旧（编好之前奇观不画）
     const wonder = this.wonderState === "ready" && this.marchMat.uniforms.uWonderVol.value > 0.5;
     if (wonder) this.pass.render(this.wonderSurfMat, this.wonderSurf);
-    this.pass.render(wonder ? this.marchWonderMat : this.marchMat, this.raw);
+    // 卷云（云型 < 0.2）用卷云变体画（T12），没编好之前照旧
+    const cirrus = this.cirrusState === "ready" && this.uniforms.uCloudType.value < 0.2;
+    this.pass.render(wonder ? this.marchWonderMat : cirrus ? this.marchCirrusMat : this.marchMat, this.raw);
 
     const [prev, next] = this.history;
     const r = this.resolveMat.uniforms;

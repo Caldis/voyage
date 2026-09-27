@@ -548,26 +548,36 @@ float layerDensity(vec3 p, float lod, bool detail) {
   float hLayer = (alt - uCloudBottom) / thick;
   if (hLayer <= 0.0 || hLayer >= 1.0) return 0.0;
   vec2 xz = p.xz + uCloudOffset;
-  // 卷云的权重（云型接近 0）。uniform 算出来的数，不分支：卷云和其他云型走同一串取样，只是坐标和阈值不同（冷编译）
-  float cir = 1.0 - smoothstep(0.0, 0.2, uCloudType);
+  // 卷云的权重（云型接近 0）。卷云专用的代码只编进定义了 CLOUD_CIRRUS 的程序（云步进的卷云变体、云影、探针）：
+  // 写成不分支的算术、或按 uniform 分支（平时一次都不走），积云场景的云步进都会落到慢一档
+  // （noon-cumulus 0.40 → 0.50 ms，typhoon-bands +20%，T12 按 pass 计时；和 W00 奇观代码同一类坑）
+  float cir = 0.0;
   const vec2 HIGH_WIND = vec2(0.8, 0.6);
-  float along0 = dot(xz, HIGH_WIND);
-  // 卷云的成片范围也顺风拉长（天气图沿风向压缩 3 倍）：一条条顺风的卷云带，而不是一块块圆斑
-  Weather wx = sampleWeather(xz - HIGH_WIND * (along0 * 0.67 * cir));
+  vec2 xzW = xz;
+#ifdef CLOUD_CIRRUS
+  if (uCloudType < 0.2) {
+    cir = 1.0 - smoothstep(0.0, 0.2, uCloudType);
+    // 卷云的成片范围也顺风拉长（天气图沿风向压缩 3 倍）：一条条顺风的卷云带，而不是一块块圆斑
+    xzW -= HIGH_WIND * (dot(xz, HIGH_WIND) * 0.67 * cir);
+  }
+#endif
+  Weather wx = sampleWeather(xzW);
   if (wx.coverage < 0.01) return 0.0;
   // 这一带的云顶：高度剖面按局部云顶重新归一
   float h = hLayer / wx.top;
   if (h >= 1.0) return 0.0;
-  // 卷云（T12）：冰晶被高空风拉成纤维状的丝缕。沿风向拉长 14 倍、横向压窄 1.8 倍（丝缕只有几十到两百米宽）；
-  // 丝缕在几十公里上缓慢蜿蜒；冰晶下落拖出的「马尾」随高度被风切变甩向一侧：越往下横向偏得越多，
-  // 从下面斜着看是一条条向一侧弯下去的钩（钩卷云）。旧版只拉长 5 倍、阈值和积云一样，是一团团灰色的棉絮
-  float stretch = mix(5.0, 1.0, smoothstep(0.0, 0.2, uCloudType)) + 9.0 * cir;
   vec2 xw = xz + wx.warp;
-  float along = dot(xw, HIGH_WIND);
-  float across = dot(xw, vec2(-HIGH_WIND.y, HIGH_WIND.x));
-  float fall = 1.0 - h;
-  across += cir * (1.3 * sin(along * 0.13 + 5.0 * wx.warp.x) + 1.6 * fall * fall * (0.6 + wx.warp.y));
-  vec2 xzn = vec2(along / stretch, across * (1.0 + 0.8 * cir));
+  vec2 xzn = vec2(dot(xw, HIGH_WIND), dot(xw, vec2(-HIGH_WIND.y, HIGH_WIND.x)));
+#ifdef CLOUD_CIRRUS
+  if (cir > 0.0) {
+    // 卷云（T12）：冰晶被高空风拉成纤维状的丝缕。沿风向拉长 14 倍、横向压窄 1.8 倍（丝缕只有几十到两百米宽）；
+    // 丝缕在几十公里上缓慢蜿蜒；冰晶下落拖出的「马尾」随高度被风切变甩向一侧：越往下横向偏得越多，
+    // 从下面斜着看是一条条向一侧弯下去的钩（钩卷云）。旧版只拉长 5 倍、阈值和积云一样，是一团团灰色的棉絮
+    float fall = 1.0 - h;
+    float across = xzn.y + cir * (1.3 * sin(xzn.x * 0.13 + 5.0 * wx.warp.x) + 1.6 * fall * fall * (0.6 + wx.warp.y));
+    xzn = vec2(xzn.x / (1.0 + 13.0 * cir), across * (1.0 + 0.8 * cir));
+  }
+#endif
   // 两个尺度的形状噪声，相互旋转 37°，按区域混合：有的地方是小碎云，有的地方是大云团
   vec4 nA = textureLod(uShapeNoise, vec3(xzn.x, alt * 1.3, xzn.y) / SHAPE_TILE, lod);
   vec2 xzB = rot2(xzn, 0.65);
@@ -585,7 +595,9 @@ float layerDensity(vec3 p, float lod, bool detail) {
   float coverage = wx.coverage;
   float d = remapc(base, 1.0 - coverage, 1.0, 0.0, 1.0) * coverage;
   // 卷云的丝缕要细：覆盖阈值再往上抬，只留噪声的脊
-  d = remapc(d, 0.25 * cir, 1.0, 0.0, 1.0);
+#ifdef CLOUD_CIRRUS
+  if (cir > 0.0) d = remapc(d, 0.25 * cir, 1.0, 0.0, 1.0);
+#endif
   if (detail && d > 0.0) {
     float dfbm = detailFbm(vec3(xzn.x, alt, xzn.y), lod);
     // 云底是被抽丝的絮状，云顶是翻卷的菜花状；卷云整层都是抽丝的
