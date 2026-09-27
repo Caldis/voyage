@@ -330,6 +330,21 @@ void main() {
   // 被阳光照亮的那层表面被跳过，受光面发灰、菜花状的隆起也看不出来
   // 台风的眼壁同理（远处的眼壁表面同样会被大步长跳过）
   bool wasEmpty = true;
+#ifndef CLOUD_WEATHER
+  // 进云二分定位（C10，只在非天气程序里；雷暴 / 台风另有下面的表面细化）：空白 → 有云时，先在「上一个空白采样点」和
+  // 「这个有云的采样点」之间二分 BIS_N 次（只求密度、不受光、不累积），再从定位到的表面起按半步走第一个有云的样本，之后照常。
+  // 原来进云那一步是 2dt 长的空白区间：命中后按整个 2dt 算消光，受光样本的深度在表皮下 [0, 2dt] 里随抖动乱跳
+  // （表皮 σ 60 /km 时 100 m 深处的受光 od 已有 5 左右），受光面满是颗粒、云边被多算一截。
+  // 现在进云样本的深度收到 [0, dt/2]，而且之后的步进网格锚在表面上（与抖动无关，不会像 C03 的「按表面距离改步长」那样长出条纹）。
+  // 二分只用同一个 cloudDensity 调用点（循环多走 BIS_N 次，不新增重函数调用点、不新增循环）；只在 60 km 以内（再远一步几百米，
+  // 一个像素就有几十米，收益小，且省下步数给远处）。实测（handoff/C10.md）：云边 10→90% 宽度 −6~−16%，时间波动 −20%。
+  int bis = 0;              // 还要二分几次（> 0 时这一步只是二分探测）
+  float bLo = seg.x;        // 二分区间：bLo 处无云、bHi 处有云
+  float bHi = seg.x;
+  float tPrevS = seg.x;     // 上一个空白采样点的位置
+  float tNoBis = -1.0;      // 刚二分过：这个位置之前不再二分（防止表面恰好落在探测误差里时反复二分）
+  float firstK = 1.0;       // 这一步的步长倍率（二分后第一步 0.5）
+#endif
 #ifdef CLOUD_WEATHER
   bool refineOn = nearW.x;
   int fine = 0;
@@ -383,11 +398,13 @@ void main() {
 #ifdef CLOUD_WEATHER
     float dt = fine > 0 ? fineDt : dtBase;
     float stepLen = (fine > 0 || (!wasEmpty && !wasThin)) ? dt : 2.0 * dt;
+    float tS = t + stepLen * jitter;
 #else
     float dt = dtBase;
-    float stepLen = wasEmpty ? 2.0 * dt : dt;
+    float stepLen = (wasEmpty ? 2.0 * dt : dt) * firstK;
+    float tS = bis > 0 ? 0.5 * (bLo + bHi) : t + stepLen * jitter;
 #endif
-    vec3 p = ro + rd * (t + stepLen * jitter);
+    vec3 p = ro + rd * tS;
     float lod = clamp(log2(dtBase / 0.055), 0.0, 5.0);
     // 细节噪声随机平铺给受光步进挑格点用（T32），每步、每帧都换。
     // 不能再由 jitter 派生（C03）：旧版 fract(jitter + i·φ) 和采样点在区间里的位置（t + stepLen·jitter）是同一个随机数，
@@ -401,6 +418,17 @@ void main() {
     //    64 帧只走 0.09 圈），单独当一维序列时分层也与 φ 相当（0.7549 在 TAA 的约 8 帧窗口里只落在约 4 个值上，闪烁偏低频）
     gDetailRnd = fract(bn.y + uFrame * 0.41421356 + float(i) * 0.6180339);
     float dens = cloudDensity(p, lod, t < 150.0);
+#ifndef CLOUD_WEATHER
+    // 进云二分定位（C10，见循环前）
+    if (bis > 0) {
+      if (dens > 0.002) bHi = tS; else bLo = tS;
+      bis--;
+      if (bis == 0) { t = bHi; wasEmpty = false; firstK = 0.5; tNoBis = t + 3.0 * dt; }
+      continue;
+    }
+    firstK = 1.0;
+    if (dens > 0.002 && wasEmpty && t > tNoBis && t < 60.0) { bLo = tPrevS; bHi = tS; bis = 4; continue; }
+#endif
 #ifdef CLOUD_WEATHER
     float stormW = gStormW;
     float stormAO = gStormAO;
@@ -637,6 +665,9 @@ void main() {
     } else {
       // 空白区域大步走（细化时仍用小步）
       wasEmpty = true;
+#ifndef CLOUD_WEATHER
+      tPrevS = tS;
+#endif
 #ifdef CLOUD_WEATHER
       wasThin = false;
       lastEmpty = t + stepLen * jitter;

@@ -64,5 +64,9 @@ export const VARIANTS = {
   // 消光整体翻倍
   bis3: bis(3, 1.0), bis3h: bis(3, 0.5), bis3q: bis(3, 0.25),
   k7bis3h: [...K(7), ...bis(3, 0.5)], k12bis3h: [...K(12), ...bis(3, 0.5)],
+  bis4h: bis(4, 0.5), bis3t: bis(3, 0.35), bis2h: bis(2, 0.5),
+  k4bis4h: [...K(4), ...bis(4, 0.5)], k6bis4h: [...K(6), ...bis(4, 0.5)],
+  bis4hcap: [...bis(4, 0.5), ["i >= 192) break;", "i >= 384) break;"]], basecap: [["i >= 192) break;", "i >= 384) break;"]],
+  k5bis3h: [...K(5), ...bis(3, 0.5)], k5bis4h: [...K(5), ...bis(4, 0.5)], k5: K(5),
   ext2: [["const float CLOUD_EXTINCTION = 60.0;", "const float CLOUD_EXTINCTION = 120.0;"]],
 };

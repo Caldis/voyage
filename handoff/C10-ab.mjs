@@ -28,7 +28,8 @@ const jobs = JSON.parse(fs.readFileSync(arg("jobs"), "utf-8"));
 const extra = arg("scenes") ? JSON.parse(fs.readFileSync(arg("scenes"), "utf-8")) : [];
 const VN = arg("variants", "base").split(",");
 const WARM = Number(arg("warm", "96")), NS = Number(arg("frames", "64"));
-const BIN = has("bin"), NOSHOT = has("noshot");
+const BIN = has("bin"), NOSHOT = has("noshot"), MOTION = has("motion");
+const SPEED = Number(arg("speed", "0.004")), MFR = Number(arg("mframes", "160")), CHECKS = arg("checks", "100,130,160").split(",").map(Number);
 fs.mkdirSync(OUT, { recursive: true });
 const log = (...a) => console.log("[c10]", ...a);
 
@@ -78,7 +79,7 @@ try {
       const src = srcOf(orig, vn);
       const diag = vn.startsWith("diag");
       const e0 = errors.length;
-      const res = await page.evaluate(async ({ src, crop, WARM, NS, motion, diag, BIN }) => {
+      const res = await page.evaluate(async ({ src, crop, WARM, NS, motion, diag, BIN, MOTION, SPEED, MFR, CHECKS }) => {
         const v = window.__voyage;
         const m = v.clouds.marchVariants.get(v.clouds.marchShown).mat;
         if (m.fragmentShader !== src) { m.fragmentShader = src; m.needsUpdate = true; }
@@ -140,11 +141,42 @@ try {
           }
           out.W = CW; out.H = CH; out.data = b64(acc);
         }
+        if (MOTION) {
+          // 确定性巡航（同 C12b-ab 的 motion）：每帧 uCloudOffset += 航向 × SPEED，motion 同步，手动 render；
+          // 检查点读裁剪区 (α, Y)；然后在各检查点姿态上零运动收敛（预热 WARM + 平均 32 帧）当真值
+          const cu = v.cloudUniforms;
+          const pose0 = { off: cu.uCloudOffset.value.clone(), c2w: u.uCabinToWorld.value.clone() };
+          const rd2 = () => { const b = new Float32Array(N * 4); r.readRenderTargetPixels(t, x, y, w, h, b); const o = new Float32Array(N * 2); for (let k = 0; k < N; k++) { o[2 * k] = 1 - b[4 * k + 3]; o[2 * k + 1] = 0.2126 * b[4 * k] + 0.7152 * b[4 * k + 1] + 0.0722 * b[4 * k + 2]; } return o; };
+          const hd = v.state.heading * Math.PI / 180;
+          const mv = zero.clone();
+          v.clouds.snap();
+          v.clouds.render(zero, u.uCamBasis.value, u.uCabinToWorld.value);
+          const cks = {}, offs = {};
+          for (let k = 1; k <= MFR; k++) {
+            const dx = Math.sin(hd) * SPEED, dz = -Math.cos(hd) * SPEED;
+            cu.uCloudOffset.value.x += dx; cu.uCloudOffset.value.y += dz;
+            v.clouds.render(mv.set(dx, 0, dz), u.uCamBasis.value, u.uCabinToWorld.value);
+            if (CHECKS.includes(k)) { cks[k] = rd2(); offs[k] = cu.uCloudOffset.value.clone(); }
+          }
+          out.motion = {};
+          for (const k of CHECKS) {
+            cu.uCloudOffset.value.copy(offs[k]);
+            v.clouds.snap();
+            for (let i = 0; i < WARM; i++) v.clouds.render(zero, u.uCamBasis.value, u.uCabinToWorld.value);
+            const acc = new Float32Array(N * 2);
+            for (let f = 0; f < 32; f++) { v.clouds.render(zero, u.uCamBasis.value, u.uCabinToWorld.value); const o = rd2(); for (let q = 0; q < N * 2; q++) acc[q] += o[q] / 32; }
+            out.motion[k] = { m: b64(cks[k]), t: b64(acc) };
+          }
+          out.mw = w; out.mh = h;
+          cu.uCloudOffset.value.copy(pose0.off);
+          v.clouds.snap();
+          for (let i = 0; i < 48; i++) v.clouds.render(zero, u.uCamBasis.value, u.uCabinToWorld.value);
+        }
         u.uClouds.value = v.clouds.texture;
         if (motion) { v.freeze(false); v.state.playRate = 1; }
         for (let i = 0; i < (motion ? 120 : 48); i++) await raf();
         return out;
-      }, { src, crop: j.crop, WARM, NS, motion: vn.includes("@m"), diag, BIN });
+      }, { src, crop: j.crop, WARM, NS, motion: vn.includes("@m"), diag, BIN, MOTION, SPEED, MFR, CHECKS });
       res.errors = errors.length - e0;
       if (res.shaderError) log("!! 变体编译失败", vn);
       const dir = path.join(OUT, j.name, vn);
@@ -153,6 +185,16 @@ try {
         fs.writeFileSync(path.join(OUT, j.name, vn + (diag ? ".diag.bin" : ".bin")), Buffer.from(res.data, "base64"));
         fs.writeFileSync(path.join(OUT, j.name, vn + ".dims.json"), JSON.stringify({ W: res.W, H: res.H, ch: diag ? 4 : 2 }));
         delete res.data;
+      }
+      if (res.motion) {
+        const md = path.join(OUT, j.name, vn + ".motion");
+        fs.mkdirSync(md, { recursive: true });
+        for (const [k, o] of Object.entries(res.motion)) {
+          fs.writeFileSync(path.join(md, `m${k}.bin`), Buffer.from(o.m, "base64"));
+          fs.writeFileSync(path.join(md, `t${k}.bin`), Buffer.from(o.t, "base64"));
+        }
+        fs.writeFileSync(path.join(md, "dims.json"), JSON.stringify({ W: res.mw, H: res.mh, ch: 2, checks: Object.keys(res.motion) }));
+        delete res.motion;
       }
       if (!diag && !NOSHOT) {
         for (let f = 0; f < 16; f++) {
