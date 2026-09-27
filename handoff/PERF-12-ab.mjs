@@ -29,7 +29,8 @@ for (let i = 0; i < argv.length; i++) {
 const port = args.port;
 const outDir = resolveRepoPath(REPO_ROOT, args.out || "tmp/screenshot/PERF-12/ab");
 fs.mkdirSync(outDir, { recursive: true });
-const scenes = [...(args.only ? pickScenes(String(args.only).split(",")) : []), ...args.scene];
+const fromFile = args["scenes-file"] ? JSON.parse(fs.readFileSync(path.resolve(String(args["scenes-file"])), "utf8")) : [];
+const scenes = [...(args.only ? pickScenes(String(args.only).split(",")) : []), ...args.scene, ...fromFile];
 
 async function open(browser, p) {
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 1200 }, deviceScaleFactor: 1 });
