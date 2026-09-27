@@ -72,7 +72,11 @@ float hurricaneCasterDensity(vec2 xz, float alt) {
   float top = HUR_TOP - 0.5 + 1.2 * HSIN(cs, 0.4) + 0.45 * HSIN(cs3, 1.7) + 0.5;   // = hurricaneRimTop(θ) + 0.5
   #undef HSIN
   float wall = smoothstep(rIn, rIn + 2.0, r) * (1.0 - smoothstep(top - 0.6, top, alt));
-  float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * smoothstep(12.0, 12.8, alt) * (1.0 - smoothstep(HUR_TOP - 1.0, HUR_TOP, alt));
+  // 卷云盖的遮挡按完整版的变薄走（T44）：眼壁附近（3.5 倍眼半径以内）是厚的中心密蔽云区，往外很快变成光学厚度几的冰云，
+  // 挡不住多少光（总透射约 0.8）。旧版一直到 9 倍眼半径都按实心算、到那里再一刀切掉：台风外围（typhoon-outer / bands）
+  // 视线上的空气全被当成在影子里，空气透视的蓝色内散射被砍到 12%，只剩透射率的偏黄——远处的雨带云被染成沙土色
+  float canopy = smoothstep(Re * 2.5, Re * 3.0, r) * smoothstep(12.0, 12.8, alt) * (1.0 - smoothstep(HUR_TOP - 1.0, HUR_TOP, alt))
+               * mix(1.0, 0.06, smoothstep(Re * 3.5, Re * 7.0, r));
   return max(wall, canopy);
 }
 
@@ -103,9 +107,13 @@ vec3 hurricaneShadowedInscatter(vec3 ro, vec3 rd, float depth, vec3 full) {
   for (int k = 1; k < 7 + min(uStormCount, 0); k++) {
     float fk = float(k);
     vec3 Lk = fk >= N ? full : textureLod(uAerialInscatter, aerialPerspectiveUvw(rd, uSunDir, depth * fk / N), 0.0).rgb;
-    float vis = hurricaneSunVis(ro + rd * (depth * (fk - 0.5) / N), uSunDir, 0.0);
-    // 影子里的空气仍被天空光照着（多次散射）；眼里低处四周是眼壁，看得到的天空只有头顶一块，取约 12%
-    acc += max(Lk - prev, vec3(0.0)) * mix(0.12, 1.0, vis);
+    vec3 pk = ro + rd * (depth * (fk - 0.5) / N);
+    float vis = hurricaneSunVis(pk, uSunDir, 0.0);
+    // 影子里的空气仍被天空光照着（多次散射）；眼里低处四周是眼壁，看得到的天空只有头顶一块，取约 12%。
+    // 眼外（T44）：卷云盖下面四周是开阔的天和被照亮的雨带、海面，影子里的空气仍有约一半的内散射。
+    // 旧版处处 12%：远处的雨带云只剩透射率的偏黄、没了蓝色的空气透视，被染成沙土色
+    float eyeK = smoothstep(uHurricane.z * 2.5, uHurricane.z * 4.0, length(pk.xz + uCloudOffset - uHurricane.xy));
+    acc += max(Lk - prev, vec3(0.0)) * mix(mix(0.12, 0.5, eyeK), 1.0, vis);
     prev = Lk;
   }
   return acc;
@@ -320,7 +328,11 @@ void main() {
       int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;
       // 受光步进的细节噪声只沿用上面那一点随机挑中的一个随机平铺格点（见 clouds.glsl.ts 的 gDetailLight，T32）
       gDetailLight = true;
-      if (lightSteps == 6) {
+      if (gStormSoft > 1.5) {
+        // 台风卷云盖（T44）：外围变薄以后视线要在它里面走很长一段，每个采样点都走 8 步受光步进太贵（typhoon-bands 云步进 +2 ms）。
+        // 它上面只有天，朝太阳的光学厚度 ≈ 本点消光 × 到卷云盖顶（约 15 km）的斜程的一半（密度往上变淡）
+        od = dens * 0.5 * clamp(15.0 - (r - BOTTOM), 0.2, 3.0) / max(uKeyDir.y, 0.1);
+      } else if (lightSteps == 6) {
         // 普通云（没有雷暴、台风）：只有层状云，常量上界，编译器展开后最快（和改动前一致）。
         // 这里只能调用层状云密度：展开的每一份都带上雷暴密度的话，冷编译会从 55 s 涨到 90 s
         for (int j = 0; j < 6; j++) {
@@ -373,11 +385,22 @@ void main() {
                                : clamp((r - BOTTOM - uCloudBottom) / max(uCloudTop - uCloudBottom, 1e-3), 0.0, 1.0);
       vec3 eSky = skyIrradiance(r, up);
       vec3 ambient = eSky / (2.0 * M_PI) * mix(0.12, 1.0, pow(h01, 0.7));
+      // 夜天光（T46）：skyIrradiance 只有太阳、月亮两路 LUT，没有气辉和星光；海面却经 skyRadiance 反射了它，
+      // 无月夜云（≈ 0）成了比海还暗的纯黑剪影（美术总监 wave6 第 5 条：云 Y 9–12、海约 33）。
+      // 量级：nightglow（lights.glsl.ts）按半球积分的水平照度 E = 2π·1.6e-7·0.743（van Rhijn 增亮）≈ 7.5e-7 klux，再加积分星光（约 30–50%）和黄道光（约 20–30%），合计约 1.7 倍 ≈ 1.3e-6；
+      // 厚云顶当反照率 0.8 的朗伯面：L = 0.8·E/π ≈ 3.3e-7 kcd/m²，与远处掠射海面（菲涅尔 × 地平线气辉，2–4e-7）同一量级。
+      // 不能照搬上一行的 E/(2π) 和云底 0.12：那是白天的经验取值（按厚云反照率算少了 1.6 倍，云底再压到 0.12），
+      // T41 实验只补物理量级的 E、套用这套系数时云几乎不变（仍比海暗约 5 倍）。白天这一项比天空光小 7–8 个数量级，不影响
+      ambient += vec3(0.8, 1.0, 0.85) * (1.3e-6 * 0.8 / M_PI) * mix(0.35, 1.0, pow(h01, 0.7));
       if (stormW > 0.5) {
         // 雷暴：隆起之间的凹处、砧底、雨幡里看到的天空少（菜花状的明暗）；
         // 塔身下半截还被下方的海面 / 低云反射的光照着（中性的灰白，冲淡天空光的蓝）
         ambient *= mix(0.3, 1.0, stormAO);
-        vec3 eBelow = albedoBelow * keyLight(BOTTOM + 1.0, up) * max(dot(up, uKeyDir), 0.0);
+        // 台风眼外（T44）：脚下是海面和雨带的裙边低云，不是眼底的云（albedoBelow 按眼底受光算，太阳低时会很小）。
+        // 取 0.25（海面 0.06 + 雨带裙边约三成覆盖）。试过取 0.17：塔身下半截失去下方反射光，读成一个深色的拱洞
+        float albB = albedoBelow;
+        if (nearHur) albB = mix(albedoBelow, 0.25, smoothstep(uHurricane.z * 2.5, uHurricane.z * 4.0, length(p.xz + uCloudOffset - uHurricane.xy)));
+        vec3 eBelow = albB * keyLight(BOTTOM + 1.0, up) * max(dot(up, uKeyDir), 0.0);
         // 台风眼里，背光的眼壁对面就是被太阳直射的眼壁和眼底：反射光在各个高度都很强，不只是下半截
         float hBelow = uHurricane.w > 0.5 ? 1.0 - 0.4 * h01 : 1.0 - h01;
         ambient += eBelow / (2.0 * M_PI) * 0.5 * hBelow * stormAO;
@@ -455,6 +478,16 @@ void main() {
     apL *= 1.0 - HUR_BACKLIT_AP_CUT * inEye * toward * toward * (1.0 - smoothstep(0.35, 0.8, uSunDir.y));
   }
   apL *= uSunIlluminance;
+  // 夜天光的空气透视（T46）：LUT 只有太阳一路，夜里远处的云只剩「自身 × 透射率」（掠射几百公里、透射率偏红），
+  // 读成比海面、地平线天空都暗的红褐色斑。远处的云应当和白天一样淡进地平线的天光：按同方向的夜天光补上 (1 − 透射率) 那部分。
+  // 海面反射、天空用的都是同一个 nightglow（lights.glsl.ts），三者一致。白天比太阳那一路小 8 个数量级
+  // 取透射率的亮度（不按通道）：按通道补是 (1 − 偏红的透射率) = 偏蓝，远处的云发蓝；系数 0.6：
+  // 1.0 时远处的云约为同一行海面的 2 倍，0.6 约 1.3 倍（「略亮于海面」，night-sea-milkyway 读回窗外 HDR 实测）
+  apL += nightglow(rd) * (0.6 * (1.0 - dot(apT, vec3(0.2126, 0.7152, 0.0722))));
+  // 透射率 < 0.005 时步进提前停了（上面的 break），剩下的 T 只是「停在哪一步」的截断残差，不是真实透射率：
+  // 真实的积雨云光学厚度几百，T ≈ e^−几百。窗外 pass 按背景 × T 合成，太阳圆盘比云亮 10^5 倍，
+  // 残差 4e-5 也足以让日盘从积雨云里透出来（T45 实测日盘处 T = 4.2e-5）。按阈值连续地减掉这段残差（T = 1 不变）
+  T = max(T - 0.005, 0.0) / 0.995;
   L = L * apT + apL * (1.0 - T);
   gl_FragColor = vec4(min(L, vec3(60000.0)), T);
   gl_FragDepth = clamp(depth / AERIAL_MAX_DISTANCE, 0.0, 1.0);
@@ -690,9 +723,9 @@ export function createCloudUniforms(noise: CloudNoise) {
 }
 export type CloudUniforms = ReturnType<typeof createCloudUniforms>;
 
-function target(w: number, h: number) {
+function target(w: number, h: number, type: THREE.TextureDataType = THREE.HalfFloatType) {
   return new THREE.WebGLRenderTarget(w, h, {
-    type: THREE.HalfFloatType,
+    type,
     format: THREE.RGBAFormat,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
@@ -701,11 +734,11 @@ function target(w: number, h: number) {
 }
 
 /** 步进的输出：颜色（RGB 辐亮度 + A 透射率）+ 深度附件（云的深度，gl_FragDepth） */
-function rawTarget(w: number, h: number) {
+function rawTarget(w: number, h: number, type: THREE.TextureDataType = THREE.HalfFloatType) {
   const depthTexture = new THREE.DepthTexture(w, h, THREE.FloatType);
   depthTexture.format = THREE.DepthFormat;
   return new THREE.WebGLRenderTarget(w, h, {
-    type: THREE.HalfFloatType,
+    type,
     format: THREE.RGBAFormat,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
@@ -844,6 +877,17 @@ export class Clouds {
     /** 场景着色器的 uniform（视角、太阳等），直接共享同一批对象 */
     viewUniforms: Record<string, THREE.IUniform>,
   ) {
+    // 云的步进结果和时间累积用 32 位浮点（T46）：半精度最小的次正规数是 6e-8，无月夜的云只有 1e-7 量级（kcd/m²），
+    // 存进半精度只剩 0 / 1 / 2 个最低位——云成了纯黑、边缘是量化出来的马赛克（T41 把云的环境光放大 100 倍才「修好」就是这个原因）。
+    // 和 T36 大气 LUT 的半精度下溢同一类坑。窗外 pass 按双线性读它，要浮点线性过滤；没有时退回半精度
+    // （离线 GLSL 检查 lint-shaders.mjs 传进来的 pass 是桩，没有 renderer）
+    const ext = pass.renderer?.extensions;
+    if (ext?.has("OES_texture_float_linear") && ext.has("EXT_color_buffer_float")) {
+      this.raw.dispose();
+      for (const t of this.history) t.dispose();
+      this.raw = rawTarget(1, 1, THREE.FloatType);
+      this.history = [target(1, 1, THREE.FloatType), target(1, 1, THREE.FloatType)];
+    }
     const common = { depthTest: false, depthWrite: false, toneMapped: false, vertexShader: FULLSCREEN_VERT };
     this.marchMat = new THREE.ShaderMaterial({
       ...common,

@@ -60,6 +60,14 @@ export interface RegionStats {
   known: boolean;
 }
 
+/** PERF-8：一次纹理上传任务（一张纹理的一层），排队分帧上传用 */
+interface UploadJob {
+  tex: THREE.DataArrayTexture;
+  layer: number;
+  data: ArrayLike<number>;
+  layerSize: number;
+}
+
 function makeCanvas(w: number, h: number) {
   const c = document.createElement("canvas");
   c.width = w;
@@ -88,6 +96,15 @@ export class GroundClipmap {
   private generation = 0;
   /** 瓦片统计，面板上显示加载状态 */
   pending = 0;
+  /**
+   * PERF-8：一次重建有 3 张纹理（各一层）要真正上传到 GPU（texSubImage3D）。加速航程时常有几级
+   * 几乎同时建完，3 次上传（8.5 MB）挤在同一个真实动画帧里，实测帧间隔尖峰到 20–60 ms（个别情形下
+   * 多级叠加到 69 MB / 5 次调用、帧间隔破百毫秒），见 handoff/PERF-6-8.md 的测量。
+   * 改成排队，`update()` 每帧最多真正上传其中一张（见 `drainUploads`），一个批次（同一级的 3 张）
+   * 全部上传完才把这一级标记为 valid（`l.building` 也要撑到那时候才清，见 `build()`），
+   * 避免着色器读到「影像已经是新的、地形还是旧的」这种半新半旧的一级。
+   */
+  private uploadQueue: { jobs: UploadJob[]; after: () => void }[] = [];
 
   constructor(lat0: number, lon0: number) {
     this.frame = new LocalFrame(lat0, lon0);
@@ -123,6 +140,8 @@ export class GroundClipmap {
       l.grid = null;
     }
     this.levelUniform.forEach((v) => (v.w = 0));
+    // 排队里还没上传的批次都属于旧生成：马上要被新一轮重建覆盖，丢掉即可（PERF-8）
+    this.uploadQueue = [];
   }
 
   /** 附近地形的最高点（km），给着色器的高度场求交定上界 */
@@ -151,6 +170,8 @@ export class GroundClipmap {
 
   /** 每帧调用：飞机当前的本地坐标（km） */
   update(x: number, z: number) {
+    // PERF-8：先把上一批排队的纹理上传推进一格（每帧最多一张），再决定要不要触发新的重建
+    this.drainUploads();
     // 粗的级别先建，远景先出来
     for (let i = GROUND_LEVELS - 1; i >= this.minLevel; i--) {
       const l = this.levels[i];
@@ -263,6 +284,9 @@ export class GroundClipmap {
     const l = this.levels[i];
     const gen = this.generation;
     l.building = true;
+    // 数据齐了但还没排进上传队列（早退 / 网络失败）时，这里负责清 building；一旦排队成功，
+    // 交给下面的 after 回调清（要等 3 张纹理都真正传完，见类头「PERF-8」注释）
+    let queued = false;
     try {
       const [albedo0, vec, height, night] = await Promise.all([
         this.buildImagery(l.size, cx, cz, i === GROUND_LEVELS - 1),
@@ -275,17 +299,26 @@ export class GroundClipmap {
       // 像素缓冲区转移过去再转移回来，主线程上不跑 1M 像素的循环
       const { water, albedo } = await packRoadsAsync(vec.job, { water: vec.water, albedo: albedo0, night });
       if (gen !== this.generation || i < this.minLevel) return;
-      this.upload(this.albedo, i, albedo, RES * RES * 4);
-      this.upload(this.water, i, water, RES * RES * 4);
-      this.upload(this.height, i, height.data, HRES * HRES);
-      l.cx = cx;
-      l.cz = cz;
-      l.valid = true;
-      l.maxHeight = height.max;
-      l.grid = coarseGrid(cx, cz, l.size, height.data, height.sea, water);
-      this.levelUniform[i].set(cx, cz, l.size, 1);
+      queued = true;
+      this.queueUpload(
+        [
+          { tex: this.albedo, layer: i, data: albedo, layerSize: RES * RES * 4 },
+          { tex: this.water, layer: i, data: water, layerSize: RES * RES * 4 },
+          { tex: this.height, layer: i, data: height.data, layerSize: HRES * HRES },
+        ],
+        () => {
+          if (gen === this.generation) l.building = false;
+          if (gen !== this.generation || i < this.minLevel) return;
+          l.cx = cx;
+          l.cz = cz;
+          l.valid = true;
+          l.maxHeight = height.max;
+          l.grid = coarseGrid(cx, cz, l.size, height.data, height.sea, water);
+          this.levelUniform[i].set(cx, cz, l.size, 1);
+        },
+      );
     } finally {
-      if (gen === this.generation) l.building = false;
+      if (!queued && gen === this.generation) l.building = false;
     }
   }
 
@@ -293,6 +326,23 @@ export class GroundClipmap {
     (tex.image.data as unknown as { set(a: ArrayLike<number>, o: number): void }).set(data, layer * layerSize);
     tex.addLayerUpdate(layer);
     tex.needsUpdate = true;
+  }
+
+  private queueUpload(jobs: UploadJob[], after: () => void) {
+    this.uploadQueue.push({ jobs, after });
+  }
+
+  /** PERF-8：每帧最多真正上传一张纹理（一层），把一次重建的 3 次 texSubImage3D 摊到几帧；
+   * 队首批次的 3 张都传完才触发它的 after（把这一级标记为 valid），见类头注释 */
+  private drainUploads() {
+    const batch = this.uploadQueue[0];
+    if (!batch) return;
+    const job = batch.jobs.shift();
+    if (job) this.upload(job.tex, job.layer, job.data, job.layerSize);
+    if (batch.jobs.length === 0) {
+      this.uploadQueue.shift();
+      batch.after();
+    }
   }
 
   /** 这一级覆盖的瓦片范围，以及把瓦片画进 canvas 的变换 */

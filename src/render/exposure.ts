@@ -369,7 +369,7 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  *   ⑦ 只约束「倒影的曝光 ≤ 舱内曝光 + 余量」，等于说「倒影不比它的来源亮」；可睡眠档倒影的来源是对面紧挨氛围灯的
  *      那段侧壁（约 20 cd/m²，是可见舱壁均值的 30 倍），⑦ 之后在屏幕上仍是舱壁的 2.8 倍（Y 83 对 30）。
  *   ⑧ 所以再加一条按显示亮度的硬上限：面状倒影 · 2^eO ≤ k · 2^(c + eC)（舱内均值的显示亮度），
- *      reflCapLog = log2 k + c + eC − eO，k = uReflCapK（暗处 0.2、开灯 0.35，按 lit 混合；AgX 下线性 0.2 ≈ 显示 Y 的 0.4–0.5）。
+ *      reflCapLog = log2 k + c + eC − eO，k = uReflCapK（暗处 0.2、开灯 0.25（T42，原 0.35），按 lit 混合；AgX 下线性 0.2 ≈ 显示 Y 的 0.4–0.5）。
  *      舱内合成（scene.ts）用 4 次范数软限幅，并在窗外够亮（黄昏）时再收紧到窗外的 15%；阅读灯光点不进上限。
  *      scene.ts 直接内联 EXPOSURE_MODEL、共用 EXPOSURE_MODEL_UNIFORMS，按上一帧的适应结果算。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
@@ -400,7 +400,7 @@ export const EXPOSURE_MODEL_UNIFORMS: Record<string, THREE.IUniform> = {
   uCabinLitWhiteEv: { value: 0.35 },
   uWinGapLitEv: { value: 6.5 },
   uReflGapEv: { value: new THREE.Vector2(2.5, 2.0) },
-  uReflCapK: { value: new THREE.Vector2(0.2, 0.35) },
+  uReflCapK: { value: new THREE.Vector2(0.2, 0.25) }, // T42：开灯档 0.35 → 0.25（美术总监第 6 波第 1 条）
 };
 
 export class Exposure {

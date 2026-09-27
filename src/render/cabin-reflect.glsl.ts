@@ -13,7 +13,8 @@
  * 虚化的物理依据：眼睛对焦在无穷远时，物方的弥散圆直径就等于瞳孔直径（与物距无关）——夜里瞳孔约 6–7 mm；
  * 再加上内层防刮板 / 亚克力的微小起伏造成的角度弥散（随虚像距离放大）。T34 起按层分开：大面 0.7°、边和亮线 0.35°、
  * 光点只剩 0.1° 和像素下限（原来一律 1.7°，倒影被抹成「天边的糊带」，认不出来）。
- * 双层窗板的第二次反射（内层窗板和主窗板不严格平行，错开约 0.8°）只对光点做（成对的淡重影），面状部分不做。
+ * 双层窗板的第二次反射（内层窗板和主窗板不严格平行，错开约 0.8°）：光点做成对的淡重影；T42 起行李架的长边也混一道淡重影，其余面状部分不做。
+ * T42（去「舞台布景」）：对面舷窗的遮光板随机开合、行李架门分段且亮度不一、座椅区按列画参差的椅背 / 头顶 / 娱乐屏微光，边缘按距离放宽虚化。
  * 服务面板上的阅读灯是一组小光点（T34），调用处单独拿出来，不进面状倒影的亮度上限。
  *
  * 能量：返回的是环境辐亮度（kcd/m²），调用处乘菲涅尔反射率；各表面的亮度 = 反照率 / π × 照度，照度来自
@@ -48,8 +49,27 @@ const vec3 RF_BIN_ALB = vec3(0.76, 0.73, 0.68);
 // 认不出是倒影。真实夜航看窗，最先认出来的正是小而亮的东西（行李架边的亮线、阅读灯光点），整片暗区反而读不出。
 // 窗板起伏造成的角度弥散对所有层一样，但低对比的大面（侧壁、天花板、座椅）虚一点无所谓，高对比的边和线要清楚：
 const float RF_BLUR_SOFT = 0.012; // 大面（对面侧壁、天花板、对面舷窗的轮廓）约 0.7°
-const float RF_BLUR_EDGE = 0.006; // 行李架的边、下沿灯带亮线约 0.35°
+// T42：行李架的长边从 0.35° 放宽到约 0.65°。T34 为了「认得出」把边收得太紧，开灯档读成满窗刀切的色带（美术总监第 6 波第 1 条）。
+// 眼睛对焦在窗外时，4–6 m 外的行李架边缘本来就虚；物方虚化宽度 = 瞳孔 / 2 + 角度 × 虚像距离，所以越远的边越糊（按距离的景深）
+const float RF_BLUR_EDGE = 0.0115;
 const float RF_BLUR_PT = 0.0015;  // 光点：只剩窗板微起伏与瞳孔弥散（约 0.1°），另有 1 个像素的下限，不会闪
+// 双层窗板的第二次反射（内层窗板与主窗板不严格平行）：射线方向偏 RF_GHOST_DY（约 0.6°，向下），强度为主像的一小部分。
+// T42 起长边也做一道淡重影（只对行李架的几条水平边，按「主像 + 错位像」混合覆盖率，不重算整层）
+const float RF_GHOST_DY = -0.011;
+const float RF_GHOST_EDGE = 0.2;  // 长边重影的强度
+const float RF_GHOST_PT = 0.12;   // 光点重影的强度：第二次反射比第一次暗得多（原来 0.3，两颗被色调映射压成一样亮，读成「双星」）
+
+// 小哈希（T42：对面舷窗的遮光板、各排乘客、行李架门分段都按编号取随机数，位置固定、不随时间变，不闪）
+float rfHash(vec2 p) {
+  p = fract(p * vec2(0.1031, 0.1030));
+  p += dot(p, p.yx + 33.33);
+  return fract((p.x + p.y) * p.x);
+}
+
+// 乘客座位的列（离本侧内饰面的距离 z，米；示例布局）：对面 2 列、中间 3 列、本侧过道位 1 列（本侧靠窗那列就是自己这一排，不画）。
+// 由远到近画，近的盖住远的
+const int RF_NCOL = 6;
+const float RF_COLS[RF_NCOL] = float[RF_NCOL](-4.80, -4.30, -3.20, -2.75, -2.30, -1.10);
 
 struct ReflLights {
   vec3 eMain;    // 主灯照度（klux，带颜色）
@@ -100,9 +120,36 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
              * (1.0 - smoothstep(RF_BIN_Y - 0.03 - wWe, RF_BIN_Y - 0.03 + wWe, hW.y));
   vec3 eWall = L.eAmb + L.eMain * 0.45 + washW;
   vec3 col = RF_WALL_ALB / M_PI * eWall;
-  // 对面一排舷窗（夜里是黑的，白天是亮的），错开半个窗距
-  float dWin = sdRoundRect(vec2(mod(hW.x + 0.5 * WINDOW_PITCH, WINDOW_PITCH) - 0.5 * WINDOW_PITCH, hW.y), BEZEL_HALF * 0.8, BEZEL_RADIUS * 0.8);
-  col = mix(col, L.lOppWin, 1.0 - smoothstep(-wW, wW, dWin));
+  // 对面一排舷窗（夜里是黑的，白天是亮的），错开半个窗距。
+  // T42：每扇窗的遮光板按窗号随机开合（全开 / 拉下三成 / 七成 / 全关，再加一点连续抖动）。原来 7 扇一模一样的黑窗
+  // 在黑海上读成「城墙垛口」；真实夜航里对面的窗有的拉下（白色，被舱灯照亮）、有的开着（黑），偶尔一扇映出别人的阅读灯
+  float winI = floor((hW.x + 0.5 * WINDOW_PITCH) / WINDOW_PITCH);
+  float dWin = sdRoundRect(vec2(hW.x - winI * WINDOW_PITCH, hW.y), BEZEL_HALF * 0.8, BEZEL_RADIUS * 0.8);
+  float hS1 = rfHash(vec2(winI, 7.0 + uSeatSign));
+  float hS2 = rfHash(vec2(winI, 19.0 - uSeatSign));
+  // 状态 0–3 = 全开 / 三成 / 七成 / 全关。纯随机会连出一串一样的（黄昏截图里连着五扇全开，又读成一排）；
+  // 偶数号窗随便取，奇数号窗在「和两边都不一样」的状态里随机挑一个，保证相邻两扇不同
+  float sE0 = floor(4.0 * rfHash(vec2(winI - 1.0, 7.0 + uSeatSign)));
+  float sE1 = floor(4.0 * rfHash(vec2(winI + 1.0, 7.0 + uSeatSign)));
+  float st = floor(4.0 * hS1);
+  if (mod(winI, 2.0) > 0.5) {
+    // 可选的个数：邻居相同时 3 个，不同时 2 个；挑第 pick 个，再依次跳过被占的两个值（先小后大）
+    float sLo = min(sE0, sE1), sHi = max(sE0, sE1);
+    st = floor(hS1 * (sLo == sHi ? 3.0 : 2.0));
+    st += step(sLo, st);
+    st += step(sLo + 0.5, sHi) * step(sHi, st);
+  }
+  float shadeF = st < 0.5 ? 0.0 : (st < 1.5 ? 0.3 : (st < 2.5 ? 0.7 : 1.0));
+  shadeF = clamp(shadeF + 0.16 * (hS2 - 0.5) * step(0.01, shadeF) * step(shadeF, 0.99), 0.0, 1.0);
+  float winH = 1.6 * BEZEL_HALF.y;
+  // 遮光板从上往下拉：板的下沿在 winTop - shadeF · 窗高；板是浅色塑料，缩在窗洞里，比侧壁略暗
+  float cShade = smoothstep(0.5 * winH - shadeF * winH - wW, 0.5 * winH - shadeF * winH + wW, hW.y) * step(0.01, shadeF);
+  // 窗洞一圈是内凹的（窗框的阴影），拉下的遮光板靠边处更暗：全关的窗仍认得出是一扇窗，只是浅色的
+  vec3 shadeL = col * (0.8 + 0.12 * hS2) * (1.0 - 0.3 * smoothstep(-0.08 - wW, 0.0, dWin));
+  // 开着的窗里偶尔映出一盏暖色的阅读灯（很淡、很虚的一团，不是光点）
+  vec2 gq = vec2(hW.x - winI * WINDOW_PITCH + 0.04 * (hS1 - 0.5), hW.y + 0.05);
+  vec3 winL = L.lOppWin + L.lit * step(0.84, hS2) * READING_LIGHT_COLOR * dot(col, vec3(0.3333)) * 0.45 * exp(-dot(gq, gq) / 0.004);
+  col = mix(col, mix(winL, shadeL, cShade), 1.0 - smoothstep(-wW, wW, dWin));
   // 天花板：靠行李架上沿的地方被向上打的灯带洗得最亮，往过道中间渐暗
   float tC = (RF_CEIL - p.y) / max(ry, 1e-4);
   vec2 hC = p.xz + r.xz * tC;
@@ -126,9 +173,19 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
   float tOB = (zOB - p.z) / rz;
   float yOB = p.y + r.y * tOB;
   float wOB = RF_WIDA(tOB, RF_BLUR_EDGE);
-  float cFace = rfBand(yOB, RF_BIN_Y, RF_BIN_TOP, wOB);
+  // T42 淡重影：第二次反射的射线向下偏 RF_GHOST_DY，在这一层上落低 RF_GHOST_DY · t；覆盖率按「主像 + 错位像」混合
+  float yOBg = yOB + RF_GHOST_DY * tOB;
+  float cFace = mix(rfBand(yOB, RF_BIN_Y, RF_BIN_TOP, wOB), rfBand(yOBg, RF_BIN_Y, RF_BIN_TOP, wOB), RF_GHOST_EDGE);
   float cUnder = smoothstep(RF_BIN_Y - wWe, RF_BIN_Y + wWe, hW.y) * (1.0 - smoothstep(RF_BIN_Y - wOB, RF_BIN_Y + wOB, yOB));
-  vec3 obL = binL + lipL * rfBand(yOB, RF_BIN_Y, RF_BIN_Y + 0.025, wOB);
+  // T42 行李架门不再是均匀的一条：每 1.3–1.6 m 一扇门（门缝是一道暗线），各扇被顶灯洗亮的程度随机差 ±10%；
+  // 门的上半离灯槽近，略亮（竖直方向 ±10% 的渐变）
+  float xOB = (p.x + r.x * tOB) * uSeatSign;
+  float dOB = xOB / 1.45 + 0.37;
+  dOB += 0.12 * sin(dOB * 2.3); // 门宽不等（单调扭曲，1.3–1.6 m）
+  float segOB = floor(dOB);
+  float doorOB = (0.9 + 0.2 * rfHash(vec2(segOB, 3.0))) * mix(0.9, 1.1, clamp((yOB - RF_BIN_Y) / (RF_BIN_TOP - RF_BIN_Y), 0.0, 1.0))
+               * (1.0 - 0.18 * (1.0 - smoothstep(0.0, 0.012 + wOB, (0.5 - abs(fract(dOB) - 0.5)) * 1.45)));
+  vec3 obL = binL * doorOB + lipL * mix(rfBand(yOB, RF_BIN_Y, RF_BIN_Y + 0.025, wOB), rfBand(yOBg, RF_BIN_Y, RF_BIN_Y + 0.025, wOB), RF_GHOST_EDGE);
   col = mix(col, underL, clamp(cUnder, 0.0, 1.0));
   col = mix(col, obL, clamp(cFace, 0.0, 1.0));
 
@@ -136,11 +193,21 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
   float tCB = (RF_CBIN_Z.y - p.z) / rz;
   float yCB = p.y + r.y * tCB;
   float wCB = RF_WIDA(tCB, RF_BLUR_EDGE);
-  float yCB2 = p.y + r.y * ((RF_CBIN_Z.x - p.z) / rz);
-  float cCF = rfBand(yCB, RF_CBIN_Y, RF_CBIN_TOP, wCB);
+  float yCBg = yCB + RF_GHOST_DY * tCB;
+  float tCB2 = (RF_CBIN_Z.x - p.z) / rz;
+  float yCB2 = p.y + r.y * tCB2;
+  float yCB2g = yCB2 + RF_GHOST_DY * tCB2;
+  float cCF = mix(rfBand(yCB, RF_CBIN_Y, RF_CBIN_TOP, wCB), rfBand(yCBg, RF_CBIN_Y, RF_CBIN_TOP, wCB), RF_GHOST_EDGE);
   float cCU = smoothstep(RF_CBIN_Y - wCB, RF_CBIN_Y + wCB, yCB2) * (1.0 - smoothstep(RF_CBIN_Y - wCB, RF_CBIN_Y + wCB, yCB)) * step(yCB2, RF_CBIN_TOP + 0.3);
-  vec3 cbL = binL + lipL * rfBand(yCB, RF_CBIN_Y, RF_CBIN_Y + 0.025, wCB);
-  col = mix(col, underL, clamp(cCU, 0.0, 1.0));
+  float cCUg = smoothstep(RF_CBIN_Y - wCB, RF_CBIN_Y + wCB, yCB2g) * (1.0 - smoothstep(RF_CBIN_Y - wCB, RF_CBIN_Y + wCB, yCBg)) * step(yCB2g, RF_CBIN_TOP + 0.3);
+  float xCB = (p.x + r.x * tCB) * uSeatSign;
+  float dCB = xCB / 1.52 + 0.81;
+  dCB += 0.12 * sin(dCB * 1.7); // 门宽不等（单调扭曲，1.3–1.6 m）
+  float segCB = floor(dCB);
+  float doorCB = (0.9 + 0.2 * rfHash(vec2(segCB, 11.0))) * mix(0.9, 1.1, clamp((yCB - RF_CBIN_Y) / (RF_CBIN_TOP - RF_CBIN_Y), 0.0, 1.0))
+               * (1.0 - 0.18 * (1.0 - smoothstep(0.0, 0.012 + wCB, (0.5 - abs(fract(dCB) - 0.5)) * 1.52)));
+  vec3 cbL = binL * doorCB + lipL * mix(rfBand(yCB, RF_CBIN_Y, RF_CBIN_Y + 0.025, wCB), rfBand(yCBg, RF_CBIN_Y, RF_CBIN_Y + 0.025, wCB), RF_GHOST_EDGE);
+  col = mix(col, underL, clamp(mix(cCU, cCUg, RF_GHOST_EDGE), 0.0, 1.0));
   col = mix(col, cbL, clamp(cCF, 0.0, 1.0));
 
   // 座椅：视线低过头枕顶就落在一排排座椅上（过道处是更暗的地板）。头枕套是浅色皮革，按排距起伏
@@ -158,6 +225,55 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
     vec3 eSeat = L.eAmb + L.eMain * 0.4 + L.moodI * 0.03;
     vec3 seatL = (0.06 + 0.12 * cap - 0.025 * clamp(aisle, 0.0, 1.0)) / M_PI * eSeat;
     col = mix(col, seatL, cov);
+  }
+
+  // T42 座椅区的上沿：原来是一整条水平的暗区，和对面一排黑窗连在一起读成「城墙垛口」。
+  // 现在按列（由远到近）画每排椅背的顶（各排后仰不同，高低差几厘米，两排之间露出一道低处）、
+  // 参差的头顶（有人坐 / 没人、高矮、前后都随机）和娱乐屏照在椅背上的一点冷光（按排随机开，颜色不一）。
+  // 都是按「这条射线在这一列的平面上落在哪」算的软覆盖，没有循环里的三角函数 / normalize（T41 的 FXC 坑）。示例布局
+  {
+    float moodOn = step(1e-5, dot(L.moodI, vec3(1.0)));
+    vec3 eSeat = L.eAmb + L.eMain * 0.4 + L.moodI * 0.03;
+    float scrOn = max(moodOn, L.lit) * mix(0.3, 1.0, L.lit);
+    // 上限写成「RF_NCOL + uLoopGuard」（恒为 RF_NCOL）：常量上限会被 FXC 展开成 6 份，舱内程序冷编译明显变慢
+    for (int k = 0; k < RF_NCOL + uLoopGuard; k++) {
+      float zk = RF_COLS[k];
+      float tk = (zk - p.z) / rz;
+      float yk = p.y + r.y * tk;
+      float xk = (p.x + r.x * tk) * uSeatSign;
+      float wk = max(RF_WID(tk), 0.02);
+      float fk = float(k);
+      // 各列的排错开一点（座椅不是一条直线对齐的）
+      float xr = xk / RF_ROW + 0.23 + 0.31 * fk;
+      float n = floor(xr);
+      float u = fract(xr) * RF_ROW;       // 这一排里的位置（米），椅背在 0.26–0.64，头在椅背前面（约 0.66）
+      float h1 = rfHash(vec2(n, fk + 1.0));
+      float h2 = rfHash(vec2(n + 17.0, fk + 5.0));
+      float h3 = rfHash(vec2(n - 9.0, fk + 13.0));
+      // 本侧过道位那一列：自己这一排（n 对应 x ≈ 0）不画，那是邻座，离得太近
+      float skip = (k == RF_NCOL - 1) ? step(abs((n + 0.5 - 0.23 - 0.31 * fk) * RF_ROW), 0.6) : 0.0;
+      // 椅背（含头枕）的侧影：顶在 RF_SEAT_Y 上下 3 cm，排与排之间是低约 0.3 m 的坐垫 / 扶手
+      // 一排之内的东西都放在格子中段，离格子边留出大于虚化宽度的余量：哈希在格子边上跳变，东西碰到格子边就会切出竖直的硬边
+      float wc = min(wk, 0.07);
+      float topB = RF_SEAT_Y + 0.06 * (h1 - 0.5);
+      // 椅背（含头枕）的侧影：顶在 RF_SEAT_Y 上下 3 cm；排与排之间是低约 0.3 m 的坐垫 / 扶手（这一层不随排变，格子边上连续）
+      float inBack = rfBand(u, 0.26, 0.64, wc) * (1.0 - skip);
+      float cBack = 1.0 - smoothstep(-wk, wk, yk - mix(RF_SEAT_Y - 0.33, topB, inBack));
+      vec3 backL = (0.05 + 0.04 * h2 * inBack) / M_PI * eSeat;
+      // 娱乐屏在前一排椅背的背面（u ≈ 0.26 那一侧），从侧面只看到它照在椅背边、后排人脸上的一小团光，颜色不一
+      float scr = step(0.45, h3) * scrOn * (1.0 - skip);
+      vec3 scrCol = h3 > 0.8 ? vec3(0.45, 0.65, 1.0) : (h3 > 0.62 ? vec3(0.5, 0.95, 0.85) : vec3(1.0, 0.78, 0.55));
+      vec2 sq = vec2(u - 0.24, yk - (topB - 0.12)) / (0.035 + 0.5 * wc);
+      vec3 scrL = scr * scrCol * 0.03 * (0.35 + 0.65 * abs(r.x)) * exp(-dot(sq, sq));
+      col = mix(col, backL, clamp(cBack, 0.0, 1.0));
+      col += scrL;
+      // 头：有人坐的约六成；头顶比头枕顶高 −4 到 +10 cm；前后位置差几厘米。头顶被顶灯照到一点，但整体是暗的（头发）
+      float occ = step(0.4, h2) * (1.0 - skip);
+      vec2 hq = vec2((u - (0.66 + 0.06 * (h1 - 0.5))) / 0.085, (yk - (topB + 0.03 + 0.14 * (h3 - 0.3) - 0.115)) / 0.115);
+      float cHd = occ * (1.0 - smoothstep(1.0 - wc / 0.085, 1.0 + wc / 0.085, length(hq)));
+      vec3 headL = (0.04 + 0.03 * clamp(hq.y, 0.0, 1.0)) / M_PI * eSeat + 0.5 * scrL;
+      col = mix(col, headL, cHd);
+    }
   }
 
   // 本侧行李架的底面（服务面板，只有抬头贴窗时才看得到）
@@ -212,34 +328,34 @@ const vec4 RF_PTS[RF_NPT] = vec4[RF_NPT](
 
 // 倒影里的光点（辐亮度，kcd/m²；调用处乘菲涅尔与增益，但不进面状倒影的亮度上限——灯本来就比墙亮）。
 // 双层窗板的第二次反射（内层窗板与主窗板不严格平行，错开约 0.8°）：整层重影开销翻倍（T24 试过），
-// 只对光点做，强度 0.3，在亮点旁边多一个淡的错位像——夜航时窗上灯的倒影常见这种成对的点
+// 光点重影强度 RF_GHOST_PT（T42 从 0.3 降到 0.12），在亮点旁边多一个淡得多的错位像
 vec3 cabinReflectPoints(vec3 p, vec3 r, float d0, ReflLights L) {
   float moodOn = step(1e-5, dot(L.moodI, vec3(1.0))); // 睡眠档氛围灯亮着，全关档是 0
   // T41：全关档（主灯、氛围灯都关）不画光点。原来全关档还留两盏 + 邻座那盏，连同重影在所有夜景的同一屏幕位置
   // 读成一对「双亮星」（窗外怎么换它都在）；全关的意义是贴窗暗适应看星，零星的阅读灯按用手挡住计 0（和 stars.glsl.ts 的光幕一致）。
   // 睡眠档的光点在 scene.ts 按面状倒影的同一上限软限幅（极弱），开灯档照旧
   if (max(moodOn, L.lit) <= 0.0) return vec3(0.0);
-  vec3 rg = normalize(r + vec3(0.009 * uSeatSign, -0.011, 0.0));
+  vec3 rg = normalize(r + vec3(0.009 * uSeatSign, RF_GHOST_DY, 0.0));
   float frac = mix(mix(0.18, 0.35, moodOn), 0.56, L.lit);
   float acc = 0.0;
   for (int i = 0; i < RF_NPT; i++) {
     vec4 q = RF_PTS[i];
     if (q.w > frac) continue;
     vec3 c = vec3(q.x * uSeatSign, q.y, q.z);
-    acc += rfPoint(p, r, c, 0.012, d0, L) + 0.3 * rfPoint(p, rg, c, 0.012, d0, L);
+    acc += rfPoint(p, r, c, 0.012, d0, L) + RF_GHOST_PT * rfPoint(p, rg, c, 0.012, d0, L);
   }
   vec3 pts = acc * 0.6 * READING_LIGHT_COLOR;
   // 自己这一排邻座的阅读灯（全关 / 睡眠时开着的那盏，离窗板不到一米）：灯头朝下，只有朝下出射的方向亮
   if (L.readOn > 0.0) {
     vec3 lp = vec3(0.30 * uSeatSign, 0.85, -0.70);
     float cone = smoothstep(0.6, 0.92, r.y);
-    pts += L.readOn * READING_LIGHT_COLOR * 3.0 * cone * (rfPoint(p, r, lp, 0.008, d0, L) + 0.3 * rfPoint(p, rg, lp, 0.008, d0, L));
+    pts += L.readOn * READING_LIGHT_COLOR * 3.0 * cone * (rfPoint(p, r, lp, 0.008, d0, L) + RF_GHOST_PT * rfPoint(p, rg, lp, 0.008, d0, L));
   }
   return pts;
 }
 
 // 窗板的总反射：面状部分（返回值）+ 光点（pts，调用处不进亮度上限）。
-// 双层窗板的第二次反射只对光点做（见 cabinReflectPoints），面状部分只算一遍——T24 试过整层重影，开销翻倍
+// 双层窗板的第二次反射：光点见 cabinReflectPoints；面状部分只算一遍（T24 试过整层重影，开销翻倍），T42 只给行李架长边混一道错位覆盖率
 vec3 cabinReflection(vec3 p, vec3 r, float d0, ReflLights L, out vec3 pts) {
   pts = cabinReflectPoints(p, r, d0, L);
   return cabinReflectEnv(p, r, d0, L);
