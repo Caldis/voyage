@@ -25,6 +25,7 @@ import { WonderSystem } from "./wonders/system";
 import { createQualityController, DEFAULT_DPR_CAP } from "./quality";
 import { CabinAudio, audioInputFrom } from "./audio";
 import { LightPollution } from "./light-pollution";
+import { DebugMinimap } from "./debug/minimap";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
@@ -94,6 +95,8 @@ const clouds = new Clouds(pass, atmosphere, cloudUniforms, sceneMat.uniforms);
 const exposure = new Exposure(pass);
 const traffic = new Traffic();
 const weather = new WeatherSystem(cloudUniforms);
+// 调试小地图（DX-06）：默认关，纯 2D canvas 叠层，关着时 update() 直接返回，不做任何工作
+const minimap = new DebugMinimap();
 sceneMat.uniforms.uMoonTexture.value = loadMoonTexture();
 buildStarMap().then((tex) => (sceneMat.uniforms.uStarMap.value = tex));
 // 能线性过滤 32 位浮点纹理时，HDR 用 FloatType：太阳的辐亮度远超半精度上限，截断后眩光就没有能量了
@@ -306,7 +309,7 @@ resize();
 // 重新应用一次分辨率 / DPR——上面的初始 renderer.setPixelRatio + resize() 已经把状态摆对了
 const quality = createQualityController({ renderer, clouds, resize });
 
-setupUi({ state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, quality, audio });
+setupUi({ state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, quality, audio, minimap });
 // 奇观之门（W01 预留、T19b 接入）：遮挡开始时通知奇观系统；只有 wonders.preferGate = true 时才会借遮挡出现
 director.onCover((kind) => wonders.onCover(kind));
 
@@ -487,6 +490,26 @@ function renderFrame(now: number) {
   if (qualityText !== qualityUi) $("quality-status").textContent = qualityUi = qualityText;
 
   updateInfo(now, sun, moon, state, curLat, curLon, ground.pending, director.describe());
+
+  // 调试小地图（DX-06）：关着时 update() 第一行就返回。天气用当前实际渲染中的 storms / hurricane（而不是
+  // 只查天气场），这样不论天气是导演按天气场摆的、还是面板手选的，雷达图都和窗外看到的一致
+  minimap.update({
+    lat: curLat,
+    lon: curLon,
+    heading: state.heading,
+    simTime: state.simTime,
+    field: director.weather.field,
+    storms: weather.storms,
+    hurricane: weather.hurricane,
+    localOffset: { x: off.x, z: off.y },
+    traffic: traffic.planes.map((p) => ({ x: p.pos.x, z: p.pos.z, dirX: p.dir.x, dirZ: p.dir.z, active: p.active })),
+    wonder: wonders.active ? { lat: wonders.active.lat, lon: wonders.active.lon, name: wonders.active.def.name.split("（")[0], reveal: wonders.active.reveal } : null,
+    route: director.leg
+      ? { toLat: director.leg.to.lat, toLon: director.leg.to.lon, toName: director.leg.to.name }
+      : state.preset.dest
+        ? { toLat: state.preset.dest[0], toLon: state.preset.dest[1], toName: state.preset.name }
+        : null,
+  });
 }
 
 /** 推进飞行 simDt 模拟秒（按 0.5 s 拆步）；到达终点上空交给导演接下一段航线（T19a：不再瞬移回起点） */
@@ -624,4 +647,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap };
