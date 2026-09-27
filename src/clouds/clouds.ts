@@ -54,11 +54,21 @@ uniform float uWeatherCull;   // 1：够不着雷暴 / 台风的视线走普通�
 uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；和曝光的 uWhiteout 是同一个 uniform 对象，C01 返工）
 varying vec2 vUv;
 
-// 步进抖动用的蓝噪声（C12）：${BLUE_NOISE_SIZE}² 两通道，R 给主步进抖动、G 给受光步进挑细节格点（gDetailRnd），两张互不相关。
-// 原来用交错梯度噪声（IGN）：它每一帧的空间图样都是同一族对角线，时间累积（blend 0.12，约 8 帧）+ 邻域夹取以后的残差
-// 仍是对角的，云面上一层斜纹 / 棋盘点阵（BIS-7 二分：换白噪声方向性就消失）。蓝噪声各向同性、没有低频，残差是细而均匀的颗粒
+// 每个像素的步进随机数（C12）：x 给主步进抖动（采样点在区间里的位置），y 给受光步进挑细节格点（gDetailRnd），两者互不相关；
+// 每帧再各加一个无理数增量（φ / √2−1，见用处），逐像素的时间序列是低差异的。
+//  - 云外：${BLUE_NOISE_SIZE}² 两通道蓝噪声（scripts/gen-blue-noise.mjs 自生成）。原来用交错梯度噪声（IGN），它每一帧的空间图样都是
+//    同一族平行对角线，时间累积（blend 0.12，约 8 帧）+ 邻域夹取以后留下的残差仍是对角的：云面上一层斜纹 / 纱窗点阵，
+//    飞行中更明显（BIS-7 二分：换白噪声方向性就消失）。蓝噪声各向同性、没有低频，残差是细而均匀的颗粒。
+//    不能每帧整体平移蓝噪声（R2 偏移）：逐像素的时间序列变成白噪声，时间波动 ×1.4–1.6、16 帧低频 ×2（handoff/C12.md）。
+//  - 飞机在云里（uCloudImmersion > 0.5）：仍用 IGN。云里 resolve 把本帧换成 3×3 平均（C11），IGN 的任意 3×3 块里 9 个值几乎
+//    均匀分层，平均出来接近 9 样本分层估计，图样也被平均掉；蓝噪声的 3×3 分层不如它，云里相邻差 ×1.24、时间波动 ×1.23。
+//    这是按 uniform 的整帧分支（同一帧所有像素走同一边），切换只在进出云时发生一次
+float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 uniform sampler2D uBlueNoise;
-vec2 blueNoise() { return texelFetch(uBlueNoise, ivec2(gl_FragCoord.xy) & ${BLUE_NOISE_SIZE - 1}, 0).rg; }
+vec2 blueNoise() {
+  if (uCloudImmersion > 0.5) return vec2(ign(gl_FragCoord.xy), ign(gl_FragCoord.yx + vec2(19.0, 47.0)));
+  return texelFetch(uBlueNoise, ivec2(gl_FragCoord.xy) & ${BLUE_NOISE_SIZE - 1}, 0).rg;
+}
 
 // 软边的云（雷暴的砧和雨幡、台风的卷云盖和砧）的省步数（PERF-2）：不做表面细化，稀薄处（一步的光学厚度 < SOFT_THIN_OD）走 2 倍步长。
 // 这两处在台风外围 / 雨带里占云步进的约三成：往上看时整片卷云盖都是稀薄的有云采样点，每个都要走 8 步受光步进。
@@ -307,6 +317,7 @@ void main() {
   // 多次散射近似第 1、2 阶的相函数（g 按 c^k 变平：c = 0.5、0.25）
   float phMs1 = mix(hg(cosT, -0.125), hg(cosT, 0.4), 0.7);
   float phMs2 = mix(hg(cosT, -0.0625), hg(cosT, 0.2), 0.7);
+  // 空间项（蓝噪声 / 云里 IGN）固定，每帧加 φ：逐像素是低差异序列（约 8 帧的时间窗里分层均匀），空间上保持蓝噪声（C12）
   vec2 bn = blueNoise();
   float jitter = fract(bn.x + uFrame * 0.61803);
   vec3 L = vec3(0.0);
@@ -383,8 +394,9 @@ void main() {
     // 时间累积收敛到的是 E_j[受光(深度(j), 格点(j + i·φ))]，随「在第几步进云」这个整数 i 跳变；掠射看远处云带时 i 逐行变，
     // 受光面上就是一条条水平横纹（backlit-cu 的「梳齿」、clouds-variety 远处云带）。步长减到 1/4 横纹才消失、光照拉平或
     // 受光 od 置 0 横纹消失、mip / 步数上限无关，都指向这里。零开销（handoff/C03.md）。两样都要换：
-    //  - 空间项用一张与 jitter 无关的 IGN（转置 + 平移）。不能用整数倍的 ign：fract(13·ign) 仍是 jitter 的函数，只换了图样，
-    //    还把 IGN 的蓝噪声邻域性质放大没了，实时单帧里是一层菱形交叉细纹（审查返工）；
+    //  - 空间项用与 jitter 无关的一张图：云外是蓝噪声的另一个通道（C12，bn.y），云里是转置 + 平移的 IGN（见 blueNoise）。
+    //    不能用整数倍的 ign：fract(13·ign) 仍是 jitter 的函数，只换了图样，还把 IGN 的邻域分层性质放大没了，
+    //    实时单帧里是一层菱形交叉细纹（C03 审查返工）；
     //  - 每帧增量取 √2−1：与 jitter 的 0.618 在低阶联合谐波上漂移快（R2 的 0.7549 与 0.618 有 4·a + 6·b ≈ 7 的近有理关系，
     //    64 帧只走 0.09 圈），单独当一维序列时分层也与 φ 相当（0.7549 在 TAA 的约 8 帧窗口里只落在约 4 个值上，闪烁偏低频）
     gDetailRnd = fract(bn.y + uFrame * 0.41421356 + float(i) * 0.6180339);
