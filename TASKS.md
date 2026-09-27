@@ -8,9 +8,9 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| W-LAMP | 第 7 波（机翼灯光） | 5232 | worktree | Opus（白位置灯旁翼面过曝按真实灯光物理量修、频闪钝后缘虚线修去亮点限幅；不在无机翼像素写入） | — | 进行中 |
 | C10 | 第 7 波（云锐度，用户主诉求） | 5227 | worktree | Opus（云表皮消光：先诊断剖面与原型——密度 remap / 侵蚀 / 近表面细步——再做成品；不改 resolve） | — | 进行中 |
-| T48c | 第 7 波（T48b 审查 P2-1） | 5224 | `worktree-agent-a2abd849f48161621`（307f782） | Opus | 审查中（5229） | 已交付：1/16 粗网格对数域时间平滑 pass（τ 0.25 / 0.1 s）扣瞬态；机翼只压眩光、翼面 ×0.85；频闪变暗像素 ~6000→≤49、闪电被压像素 13653→0、翼面暗环消失；遗留：贴白灯翼面死白块 220–290 px、运动抖动在噪声内；发现 master 夜城相邻差 18→13.5（审查顺带二分） |
-| W-STAIR | 第 7 波（锯齿，C11 发现） | 5213 | `worktree-agent-abbe8a37c6af3d120`（693ceeb） | Opus | 审查中（5230） | 已交付第一版：分段距离场取下界（命中落体内像素 0.58%→0，云里点阵消失）、子射线步数不足按打中、擦边 2 px、边缘 5 样本；与参考图差和降 4–10 倍；sunset 帧时间 +5.3%（压线）；遗留：商务舱正午前缘略硬、夜间频闪钝后缘虚线、白位置灯旁翼面过曝（W-LAMP） |
+| T48c | 第 7 波（T48b 审查 P2-1） | 5224 | `worktree-agent-a2abd849f48161621`（307f782） | Opus | 审查：返工 | **返工中**：P1-a 稀疏灯点跨粗格被当瞬态 → 巡航城区 16 px 方格斑块（瞬态须成片：3×3 邻格 min 或更深 mip）；P1-b 对数域扣瞬态 → 频闪时常亮位置灯周暗洞（改线性域）；P3 半精度停滞 / 首帧随帧率 / NaN 清不掉。机翼 0.85 通过；夜城 18→13.5 是口径不同（非回归，SOP 已统一口径） |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -23,10 +23,9 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
-| W-LAMP | 白色位置灯旁翼面色调映射前即过曝（≥250 块 220–290 px，T48c 发现）：调 `wingLampIntensity` / `lampLit` 的强度或衰减 | 中 | render/wing* | wing | 1 km 低空夜城、night-city-off 翼尖 |
+| DX-25 | 云不透明度调试出口（exposure 加类似 uDebugMask 的开关或 ab job 导出云 alpha），让 `compare --halo` 能做真实验收；flicker 照搬 ab 逐张解码去掉 48 帧上限 | 低 | exposure（调试开关）/ scripts | exposure | ab 导出云 alpha 后 --halo 跑通 |
+| W-EDGE | 机翼外轮廓内侧解析覆盖率（商务舱正午前缘对天空边略硬，hf2 1.33→1.36；W-STAIR 审查：来自中心样本让覆盖率更准，参考图本身也是硬台阶，需解析覆盖率才能更柔） | 中（锯齿类） | render/wing* | wing | biz-seated 正午前缘放大 |
 | G08-STITCH | 瓦片拼接整个挪进 Worker（消除影像位图在 Worker 同步读回的约 1 次/分 >16.7 ms 尖峰；主线程 CPU 拼接已试、出 59 ms 长任务否决；方案见 handoff/G07b.md） | 中 | ground/* | ground | 1× 巡航 20 分钟同页交替尖峰数 |
-| DX-24 | dev-browser GPU 计时钩子只抓第一个 webgl2 上下文、被抢时静默返回 null → 跳过已丢失上下文并打印警告；Vite HMR 纳入测量锁或提供 --no-hmr；G07-diffs 目录参数与 shots --out 基准不一致 | 中 | scripts/* | — | bench 出 gpu= 列 |
-| DX-23 | `freeze()` 每次调用重设冻结时刻，uTime / 云偏移 / whiteout 跳一帧（同着色器两次测量平均差 0.6）→ 加「沿用原冻结时刻」选项并核对 `shots --pair --base-shader --cloud-live`；收编 C11-ab.mjs / C09 审查的 c09rev-ab.mjs / TM01-measure.mjs 为正式同页换材质工具；shots 默认高画质档 + 降档警告；EOX 瓦片跨域报错聚合；shader-budget --baseline 缺依赖时提示 | 中 | scripts/* | — | 同代码两次测量差为 0 |
 | C-TYPH | 台风外围卷云盖过曝白平板（中位数 235、一半以上 ≥235，底面水平直线 + 规则水波纹；TM02 量化证实非色调映射所致，属 clouds 台风段，T44 遗留；ART-7 #5） | 中高 | clouds（台风段） | clouds | typhoon-outer-11、typhoon-bands |
 | C-TAIL | C11 合并后重定 `CLOUD_MS_TAIL.y`（C01 为压棋盘纹定成 2，约束已解除，按观感重调） | 低 | clouds | clouds | in-cloud |
 | SC-4 | 云程序与场景并行编译 | 最高 | main.ts 启动段、boot/* | 碰 main | 冷启动 −约 6 s，无 ≥1 s 冻结 |
@@ -51,6 +50,8 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 合并日期 | 备注 |
 | --- | --- | --- | --- |
+| DX-23/24 | 收编同页多变体 A/B `dev-browser ab`（多材质 / 补丁 / uniform / file:，逐字节预热、pending 与 CORS 自动作废、交替噪声底、HDR 逐位对照、benchWing）与确定性航迹 `dev-browser flight`（static / reset / cruise / turn / exit / live，真值取 raw 平均，云边 σ，页内逐帧抖动）；compare 补 HSV 饱和度 / 死白连通块 / 斜纹指数 / 光晕；freeze 已冻结保留冻结时刻（main.ts 一行）；shots 默认高画质档；EOX 报错聚合；--only 未知场景报错；shader-budget 缺依赖提示；GPU 计时钩子防御；路径统一相对 worktree 根 | 2026-09-28 | 协调者核验合并（工具类，main.ts 仅 freeze 一行）；DEV_SOP 测量约定冲突两边保留。已通知 C10、T48c、W-LAMP 改用。演示：freeze 隔 0.7 s 重冻结 master 平均差 3.14 → 0；flight 复现 C12b 结论方向。遗留 → DX-25（云 alpha 调试出口、flicker 去 48 帧上限） |
+| W-STAIR | 机翼边阶梯 / 点阵：sdWingMain 分段距离场取下界（段边界按弦向分区防幻影墙）、边缘子射线步数不足 1/4 按打中沿用中心色、内轮廓擦边 2 px、边缘 5 样本 | 2026-09-28 | 审查通过（handoff/W-STAIR-review.md）：真下界、Lipschitz ≤1，sdWing 调用 +0.1–1.8%、单像素最多步数反降；命中落体内像素 0.58%→0，云里 8 姿态点阵消失；与参考图差和降 4–10 倍；无外扩 / 缝被填；TM02 dW 判据下无亮暗环；帧时间 +5.5%（约 0.03 ms）、冷编译 +2–3%（机翼程序只比窗外早 0.2–0.7 s 编好，波次收尾看余量）。遗留 → W-EDGE（前缘解析覆盖率）、W-LAMP（频闪钝后缘虚线）。DX：云里 / 湿窗画的是 wingVariant.wet；跨运行冻结时刻不同机翼会挪；迭代计数代替负载下帧时间 |
 | C12b | 云外 resolve 时间累积降噪：历史 Catmull-Rom 12 取样（先夹 3×3 min/max）、3×3 不透明度加权重投影深度（关键：1 spp 深度重投影会累积错位）、blend = mix(0.04, 0.12, 4·(fx(1−fx)+fy(1−fy)))、reset 后 blend ≥ 1/(n+1) | 2026-09-28 | 审查返工一次后通过（handoff/C12b-review.md）：静止时间波动 ×0.49、对角高频 ×0.55；巡航云边 σ 1.08→0.73 px、对真值误差 ×0.90；转弯最差 ×1.15（噪声分量）；reset 后第 16 帧误差低于 master（初版 ×2.2–2.6 被审查抓到）；云里逐位不变；cloud-resolve 冷编译 +61% 但不在关键路径（冷启动实测云批编好时刻不后移）。观察项：近云压远云时平均深度偏、blend 沿等位移线可能有噪声缓变带（美术看巡航）。SOP 测量约定已补「reset 后收敛」 |
 | G07b | G07 审查遗留：画质档恢复每次从自动起步、地面精度独立开关（自动 / 2048 / 1024，可记忆，待用户确认）；GPU 探测 OffscreenCanvas + high-performance + finally；型号规则 59→63 条；mips 缓冲复用；Worker 水体改 CPU 栅格 | 2026-09-28 | 审查通过（handoff/G07b-review.md）：解耦彻底（GROUND_RES 只在 clipmap 取一次）、存储读写全 try/catch、OffscreenCanvas 回退注入验证；水体 CPU 栅格差异为孤立灯点有无、无锯齿；mips A/B 缓冲串行不覆盖。1× 尖峰每分钟 4.2（G06）/ 3.0（G07）/ 1.5（现）。协调者按审查落地 L1（OffscreenCanvas 抛异常也退回 canvas）、L2（970M / 980M、Pro WX 2100–4100 / 3200 判 1024，自检补 4 条）。顺修 G07 探测上下文抢走 bench 的 GPU 计时。剩影像读回 → G08-STITCH |
 | G07 | 地面纹理后续：Worker 按层 mip（A 通道影像覆盖比例编码，道路只读第 0 级）、暂存缓冲同帧原子换上（修 PERF-8 起重建错位 2 帧闪烁，+45 MB）、白天首载先粗后细（fuji 28→8.5 s 可用）、按 GPU 启动定地面精度 2048/1024 | 2026-09-28 | 审查通过（handoff/G07-review.md）：逐帧读回错位尖峰 0.16→0；所有 A 通道读取路径核过；暂存同帧无缝隙、失败回退与 TR03 半精度回退在；60× 无积压。已推翻「卡顿来自整组 generateMipmap」（5090 上仅 1.3 ms）。遗留 → G07b：M1 1× >16.7 ms 帧 G07 更多（34 对 20，落在 Worker 读回阶段，机理未明）；M2 手动画质档跨载入记忆并决定地面精度（改 PERF-5 行为，协调者决定解耦，待用户确认）；探测缺 powerPreference、异常不释放；夜景 1024 档灯点排布不同（p99 47–56），夜景验收加 ?groundres=1024。加速后降回 1× 重建夜灯换一版（G06 起）未修 |

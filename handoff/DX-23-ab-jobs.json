@@ -1,0 +1,24 @@
+[
+  {
+    "name": "night-city",
+    "scene": "night-city",
+    "crop": [400, 700, 800, 450],
+    "variants": [
+      { "name": "cur" },
+      { "name": "master", "materials": { "exposure.finalMat": "base" } },
+      { "name": "chroma0", "uniforms": { "exposure.finalMat.uniforms.uNightChroma.value.x": 0 } }
+    ]
+  },
+  {
+    "name": "sunset-wing",
+    "scene": "sunset-wing",
+    "crop": [420, 300, 760, 700],
+    "zoom": [[700, 600, 200, 200]],
+    "hdr": "hdrWing",
+    "bench": "benchWing",
+    "variants": [
+      { "name": "cur" },
+      { "name": "master", "materials": { "wingMat": "base" } }
+    ]
+  }
+]

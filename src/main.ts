@@ -384,7 +384,10 @@ let lastFrameAt = performance.now();
 let frozenNow: number | null = null;
 let cloudLive = false;
 function freeze(on: boolean, opts?: { cloudLive?: boolean }) {
-  frozenNow = on ? performance.now() : null;
+  // DX-23：已冻结时再调 freeze(true) 保留原冻结时刻（只切 cloudLive）——以前每次都重取 performance.now()，
+  // 同页多变体 A/B 在两次冻结之间让 uTime / 频闪相位 / 海浪相位跳一截，各变体不在同一时刻（C11 / C12b 靠劫持
+  // performance.now 绕过）。要换冻结时刻就先 freeze(false) 再 freeze(true)。
+  frozenNow = on ? (frozenNow ?? performance.now()) : null;
   cloudLive = on ? Boolean(opts && opts.cloudLive) : false;
 }
 

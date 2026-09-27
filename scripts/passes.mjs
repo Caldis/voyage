@@ -120,7 +120,10 @@ function installTimer() {
   const passObj = v.clouds.pass;
   const renderer = passObj.renderer;
   const gl = renderer.getContext();
-  const ext = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+  // DX-24：上下文已丢失（CONTEXT_LOST_WEBGL，别的代理把 GPU 编译搞超时时会整个浏览器中招）时不装计时——
+  // 丢失的上下文上 getExtension 返回 null、查询永远不可用，以前只会得到一张空表
+  const lost = gl.isContextLost();
+  const ext = lost ? null : gl.getExtension("EXT_disjoint_timer_query_webgl2");
   const DEFINE_MARKERS = [
     ["CLOUD_TYPHOON", "云(台风 #define 变体)"],
     ["CLOUD_HURRICANE", "云(台风 #define 变体)"],
@@ -191,6 +194,7 @@ function installTimer() {
   };
   window.__passes = {
     available: !!ext,
+    lost,
     start() {
       samples = new Map();
       pending = [];
@@ -306,6 +310,7 @@ async function measurePasses(page, sc, frames, rounds) {
   const res = await page.evaluate(() => window.__passes.result());
   await page.evaluate(() => window.__passes.stop());
   if (pendingLeft > 0) console.warn(`[passes] ${sc.name}：还有 ${pendingLeft} 个查询没读到结果（GPU 被占满时常见，样本数会略少）`);
+  if (Object.keys(res).length === 0) console.warn(`[passes] ${sc.name}：一个 GPU 计时样本都没拿到（扩展不可用、上下文丢失或全部 disjoint），这一行不可用`);
   return res;
 }
 
@@ -339,6 +344,7 @@ async function main() {
   const angle = String(args.angle || "d3d11");
   const baseline = args.baseline ? String(args.baseline) : null;
   const only = args.only ? String(args.only).split(",") : null;
+  pickScenes(only); // DX-23：未知场景名在开浏览器之前就报错（pickScenes 会抛出并列出已知场景）
   const frames = Number(args.frames || 30);
   const rounds = Number(args.rounds || 3);
   const params = Array.isArray(args.param) ? args.param : args.param ? [args.param] : [];
@@ -347,7 +353,8 @@ async function main() {
 
   let VARIANTS = null;
   if (args.variants) {
-    const mod = await import(pathToFileURL(path.resolve(args.variants)).href);
+    // DX-24：路径基准统一成仓库根（和 --out、dev-browser / compare 一致；以前按当前目录解析，在 apps/voyage 下和仓库根下跑结果不同）
+    const mod = await import(pathToFileURL(resolveRepoPath(REPO_ROOT, String(args.variants))).href);
     VARIANTS = mod.VARIANTS;
     if (!VARIANTS || VARIANTS.length === 0) throw new Error(`${args.variants} 没有导出非空的 VARIANTS 数组`);
     if (baseline) console.warn("[passes] --variants 与 --baseline 是两个正交的对照维度，一次只用一个；这里忽略 --baseline");
@@ -372,8 +379,9 @@ async function main() {
       const page = await openPage(browser, p, params);
       await page.evaluate(installTimer);
       if (VARIANTS) await page.evaluate(installVariantPatcher);
-      const avail = await page.evaluate(() => window.__passes.available);
-      if (!avail) console.warn(`[passes] 端口 ${p}：没有 EXT_disjoint_timer_query_webgl2，量不出按 pass 的 GPU 耗时`);
+      const { available: avail, lost } = await page.evaluate(() => ({ available: window.__passes.available, lost: window.__passes.lost }));
+      if (lost) console.warn(`[passes] 端口 ${p}：渲染器的 WebGL 上下文已丢失（CONTEXT_LOST_WEBGL），跳过计时；重开浏览器再测`);
+      else if (!avail) console.warn(`[passes] 端口 ${p}：没有 EXT_disjoint_timer_query_webgl2，量不出按 pass 的 GPU 耗时`);
       pages[p] = page;
     }
 
