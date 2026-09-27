@@ -11,7 +11,6 @@
 | T35 | 第 6 波（美术总监发现） | 5235 | worktree | Opus（看前 / 看后舱内去白模感，两舱可分辨） | — | 进行中 |
 | T08 | 第 6 波（主干） | 5208 | worktree | Opus（夜间道路灯带） | — | 进行中 |
 | T09 | 第 6 波（主干） | 5209 | worktree | Opus（银河：先调研许可再接入） | — | 进行中 |
-| DX-04 | 第 6 波（工具） | 5246 | worktree | Sonnet（dev-browser 加 --viewport / --dpr） | — | 进行中 |
 | W00 | 第 6 波（主干） | 5200 | worktree | Opus（云步进奇观层接口，W02 / W03 前提） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -56,6 +55,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | T34 | 舷窗倒影重做：表面反射按舱内均值硬封顶（睡眠 / 全关 0.2、开灯 0.35，黄昏 ≤ 外景 15%），分层虚化 0.7° / 0.35° / 0.1°，阅读灯光点 + 双层玻璃重影；开灯档头肩只是低对比柔和暗区（第一版发亮的「蛋」被否） | 2026-09-27 | Opus 实现，协调者看图退回一次后核验合并；倒影 / 舱壁比：睡眠商务 0.40、经济 0.19、全关 0.03、开灯 0.56、黄昏 0.47 |
 | PERF-5 | 画质「自动」档（默认）：GPU timer query 计时、非对称滞回、强天气先降档、自动档独有「最低」档；计时只包在 rAF 循环，不污染 benchFrame | 2026-09-27 | Sonnet 实现，协调者看代码后合并；RTX 5090 原生分辨率台风稳定「高」，1.5× DPR 稳定「中」。DX 待办：dev-browser 加 --viewport / --dpr |
 | T37 | 雷暴 / 台风去道具感：去掉眼墙「栏杆」（卷云盖顶压到顶沿下）、顶沿塔群起伏、雨带气泡塔群 + 下风砧、乳状云随机成簇、storm-day 砧外缘撕碎 | 2026-09-27 | Opus 实现，协调者看对照图合并；云步进 +0–7.3%（bands 最多），冷编译 14.2→16.5 s。**遗留**：眼壁顶沿平顶台阶、outer 卷云盖底外缘斜直线、远塔像高脚杯、bands 中塔顶偏平偏亮、雨带砧下无乳状云 |
+| DX-04 | dev-browser 的 shots / cold / bench 加 --viewport / --dpr（模拟高分屏 / 弱 GPU） | 2026-09-27 | Sonnet 实现，协调者合并。DX 待办：加 `check` 子命令（只开页面收集控制台 error） |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
