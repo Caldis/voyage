@@ -16,6 +16,8 @@ import { VIEW_COMMON } from "./view.glsl";
 import { HAZE_COMMON } from "./haze.glsl";
 import { WONDER_SKY_COMMON } from "./wonder-sky.glsl";
 import { OPTICS_COMMON } from "./optics.glsl";
+import { RAIL_FAR_COMMON, RAIL_FAR_HIT } from "../rail/far-view.glsl";
+import { railFarUniforms } from "../rail/far-view";
 
 /**
  * 窗外 pass（SC-5）：只算「穿过本窗窗板看出去」的 HDR 辐亮度（天空、太阳月亮星星、云的合成、真实地面、海面、
@@ -35,7 +37,8 @@ import { OPTICS_COMMON } from "./optics.glsl";
  * 依赖：舱内程序只包含 NOISE_COMMON 这一小段公共代码（hash / 噪声），不包含 cabin*.glsl.ts、seats.glsl.ts，
  * 改那些文件不会让这个程序重编。反过来，这里包含的所有 *_COMMON 改了都会让它重编（约十几秒）。
  */
-const OUTSIDE_FRAG = /* glsl */ `
+// rail = true：火车远景变体（TR03）。火车的两段 GLSL 只拼进那个变体，飞机的默认程序源码里没有它们
+const outsideFragment = (rail: boolean) => /* glsl */ `
 ${ATMOSPHERE_COMMON}
 ${VIEW_COMMON}
 ${CLOUD_COMMON}
@@ -61,7 +64,7 @@ ${OCEAN_COMMON}
 ${LIGHTNING_COMMON}
 ${GROUND_DETAIL_COMMON}
 ${INLAND_WATER_COMMON}
-${TERRAIN_SHADING_COMMON}
+${rail ? RAIL_FAR_COMMON : ""}${TERRAIN_SHADING_COMMON}${rail ? RAIL_FAR_HIT : ""}
 ${HAZE_COMMON}
 ${WONDER_SKY_COMMON}
 ${OPTICS_COMMON}
@@ -80,7 +83,11 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   if (onGround && uDebug == 23) return gh.wat * 20.0 * cloud.a + cloud.rgb;
   float tGround;
   if (onGround) tGround = gh.t;
+#ifdef RAIL
+  else tGround = -1.0; // 火车远景（TR03）：内陆线路，没打到地形的视线是天空，不退回海平面球（那会画成海）
+#else
   else tGround = raySphere(ro, rd, BOTTOM);
+#endif
   bool hitGround = tGround > 0.0;
   // 天空视图 LUT 已经包含到地面为止的内散射（空气透视）；真实地面用空气透视 LUT，不需要它
   vec3 L = vec3(0.0);
@@ -129,6 +136,18 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
       water = mix(water, vf.rgb, vf.a);
       fView *= 1.0 - vf.a;
       L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);
+#ifdef RAIL
+      L = mix(skyRadiance(rd, false), L, gh.cov); // 火车远景（TR03）：地形轮廓抗锯齿（擦着轮廓过去的视线只盖住一部分像素）
+      // 层叠山脊之间的抗锯齿：擦过的近处山脊按「同一片地表、换成它那个距离的空气透视」估它的颜色，按覆盖比例混进来
+      if (gh.occ > 0.0) {
+        vec3 surf = (L - gh.apL) / max(gh.apT, vec3(1e-4));
+        vec3 uvwO = aerialPerspectiveUvw(rd, uSunDir, gh.tOcc);
+        vec3 nearL = texture(uAerialInscatterS, uvwO).rgb * uSunIlluminance + texture(uAerialTransmittanceS, uvwO).rgb * surf;
+        L = mix(L, nearL, gh.occ);
+      }
+      // 调试 26（只在火车变体里，不乘曝光前的量级，用 ×0.3 让它在白天的曝光下落在可读范围）：红 = 轮廓覆盖率，绿 = 命中距离 / 50 km，蓝 = 擦过的近处山脊的覆盖率
+      if (uDebug == 26) return vec3(gh.cov, gh.t / 50.0, gh.occ) * 0.3;
+#endif
     } else {
       // 开阔海面：相机到海面的透射率 = T(海面→层顶) / T(相机→层顶)，两段都是朝上的射线
       vec3 tSurface = transmittanceToTop(BOTTOM, dot(n, -rd));
@@ -160,7 +179,18 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
   L += opticsSunDisk(rd, hitGround);
   // 地形挡住它后面的云（T38，clouds.glsl.ts 的 cloudBeforeGround）：云步进不知道地形，只去掉地面之后那一段的云
+#ifdef RAIL
+  // 火车远景（TR03）：轮廓上只盖住一部分像素的地形，身后的云也只挡掉那一部分（否则云在山脊处被一刀切成台阶）
+  // 擦过的近处山脊（gh.occ）同理：按覆盖比例在「切到远山」和「切到近处山脊」之间混
+  if (onGround) {
+    float cDepth = cloudBufferDepth(uClouds, gl_FragCoord.xy / uResolution);
+    vec4 cFar = cloudBeforeGround(cloud, cDepth, tGround);
+    if (gh.occ > 0.0) cFar = mix(cFar, cloudBeforeGround(cloud, cDepth, gh.tOcc), gh.occ);
+    cloud = mix(cloud, cFar, gh.cov);
+  }
+#else
   if (onGround) cloud = cloudBeforeGround(cloud, cloudBufferDepth(uClouds, gl_FragCoord.xy / uResolution), tGround);
+#endif
   // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光（T17：云的光乘宝光 / 本机影子，再加卷云里的幻日和晕）
   return opticsComposite(L, cloud, rd);
 }
@@ -199,16 +229,23 @@ void main() {
  * 窗外材质。uniforms 直接用舱内材质（场景材质）的同一个对象：主循环、机翼、低空细节变体都改的是这一份，
  * 之后再 Object.assign 进去的 uniform（海浪、机翼增升装置……）这里自动可见。
  * 这个程序不声明 uOutside，所以同一份 uniforms 里有它也不会形成「读自己正在写的纹理」的反馈环。
+ * 火车远景（TR03）的 uniform 也并进这份 uniforms（只有火车变体声明它们，RailMode 每帧改 .value）。
  */
 export function createOutsideMaterial(sharedUniforms: Record<string, THREE.IUniform>) {
+  Object.assign(sharedUniforms, railFarUniforms);
   return new THREE.ShaderMaterial({
     vertexShader: FULLSCREEN_VERT,
-    fragmentShader: OUTSIDE_FRAG,
+    fragmentShader: outsideFragment(false),
     depthTest: false,
     depthWrite: false,
     toneMapped: false,
     uniforms: sharedUniforms,
   });
+}
+
+/** 火车远景变体（TR03）的片元源码：默认源码 + rail/far-view.glsl.ts 的两段（编译时再加 #define GROUND_DETAIL / RAIL） */
+export function outsideRailFragment() {
+  return outsideFragment(true);
 }
 
 /**
@@ -225,48 +262,32 @@ export function createOutsideTarget(renderer: THREE.WebGLRenderer) {
   });
 }
 
-/**
- * 低空近景细节的着色器变体（带 GROUND_DETAIL 宏），落在窗外程序上（SC-5 之前落在整个场景程序上）。
- * 细节层让 Windows 上的冷编译明显变长，而且只有离地几公里以内才看得出来，所以默认的窗外着色器不含它：
- * 需要时（离地高度 < ENABLE_BELOW_KM）才用 renderer.compileAsync 在后台编译（KHR_parallel_shader_compile，不阻塞渲染），
- * 编好之后才切过去。变体和默认材质共用同一份 uniforms，切换不需要同步任何状态。
- */
-export class GroundDetailVariant {
-  static readonly ENABLE_BELOW_KM = 4;
-  /** 高于这个高度切回默认材质（带一点滞回，免得在门限附近来回切） */
-  static readonly DISABLE_ABOVE_KM = 4.5;
-  private material: THREE.ShaderMaterial | null = null;
-  private state: "idle" | "compiling" | "ready" | "failed" = "idle";
-  private active = false;
+type VariantState = "idle" | "compiling" | "ready" | "failed";
 
-  /** target：变体真正要画进去的目标。ANGLE 的 D3D 后端按链接时绑定的帧缓冲生成输出布局，绑错会在首次使用时同步重编 */
+/** 一个按需后台编译的窗外变体（和默认材质共用同一份 uniforms，切换不需要同步任何状态） */
+class LazyVariant {
+  material: THREE.ShaderMaterial | null = null;
+  state: VariantState = "idle";
+  /** 从开始后台编译到编好（或失败）的毫秒数（性能核对用；页面里的真实编译，含 KHR_parallel_shader_compile 的轮询粒度） */
+  compileMs = 0;
+
   constructor(
     private readonly base: THREE.ShaderMaterial,
-    private readonly target: THREE.WebGLRenderTarget | null = null,
+    private readonly target: THREE.WebGLRenderTarget | null,
+    private readonly defines: Record<string, number>,
+    private readonly fragmentShader: string,
   ) {}
 
-  /** 每帧调用：给出离地高度（km），返回这一帧该用的材质 */
-  pick(renderer: THREE.WebGLRenderer, aglKm: number): THREE.ShaderMaterial {
-    if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM) this.prepare(renderer);
-    if (this.state !== "ready" || !this.material) return this.base;
-    if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM) this.active = true;
-    else if (aglKm > GroundDetailVariant.DISABLE_ABOVE_KM) this.active = false;
-    return this.active ? this.material : this.base;
-  }
-
-  get status() {
-    return this.state;
-  }
-
-  private prepare(renderer: THREE.WebGLRenderer) {
+  prepare(renderer: THREE.WebGLRenderer) {
     if (this.state !== "idle") return;
     this.state = "compiling";
+    const t0 = performance.now();
     const b = this.base;
     const m = new THREE.ShaderMaterial({
       vertexShader: b.vertexShader,
-      fragmentShader: b.fragmentShader,
+      fragmentShader: this.fragmentShader,
       uniforms: b.uniforms, // 共用同一份 uniforms
-      defines: { ...b.defines, GROUND_DETAIL: 1 },
+      defines: { ...b.defines, ...this.defines },
       depthTest: false,
       depthWrite: false,
       toneMapped: false,
@@ -297,6 +318,69 @@ export class GroundDetailVariant {
       .catch(() => {
         this.state = "failed";
       })
-      .finally(() => geometry.dispose());
+      .finally(() => {
+        this.compileMs = performance.now() - t0;
+        geometry.dispose();
+      });
+  }
+}
+
+/**
+ * 低空近景细节的着色器变体（带 GROUND_DETAIL 宏），落在窗外程序上（SC-5 之前落在整个场景程序上）。
+ * 细节层让 Windows 上的冷编译明显变长，而且只有离地几公里以内才看得出来，所以默认的窗外着色器不含它：
+ * 需要时（离地高度 < ENABLE_BELOW_KM）才用 renderer.compileAsync 在后台编译（KHR_parallel_shader_compile，不阻塞渲染），
+ * 编好之后才切过去。变体和默认材质共用同一份 uniforms，切换不需要同步任何状态。
+ *
+ * 火车远景（TR03）：火车模式下改用另一个变体（GROUND_DETAIL + RAIL，源码多拼了 rail/far-view.glsl.ts），
+ * 第一次进入火车模式时才在后台编译；编好之前沿用低空细节变体 / 默认材质（火车模式下飞机的窗外程序会把近处画成海，只是过渡几秒）。
+ */
+export class GroundDetailVariant {
+  static readonly ENABLE_BELOW_KM = 4;
+  /** 高于这个高度切回默认材质（带一点滞回，免得在门限附近来回切） */
+  static readonly DISABLE_ABOVE_KM = 4.5;
+  private readonly detail: LazyVariant;
+  private readonly rail: LazyVariant;
+  private active = false;
+
+  /** target：变体真正要画进去的目标。ANGLE 的 D3D 后端按链接时绑定的帧缓冲生成输出布局，绑错会在首次使用时同步重编 */
+  constructor(
+    private readonly base: THREE.ShaderMaterial,
+    target: THREE.WebGLRenderTarget | null = null,
+  ) {
+    this.detail = new LazyVariant(base, target, { GROUND_DETAIL: 1 }, base.fragmentShader);
+    this.rail = new LazyVariant(base, target, { GROUND_DETAIL: 1, RAIL: 1 }, outsideRailFragment());
+  }
+
+  /** 每帧调用：给出离地高度（km）、是不是火车模式，返回这一帧该用的材质 */
+  pick(renderer: THREE.WebGLRenderer, aglKm: number, rail = false): THREE.ShaderMaterial {
+    if (rail) {
+      this.rail.prepare(renderer);
+      if (this.rail.state === "ready" && this.rail.material) return this.rail.material;
+    }
+    if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM && !rail) this.detail.prepare(renderer);
+    if (this.detail.state !== "ready" || !this.detail.material) return this.base;
+    if (aglKm < GroundDetailVariant.ENABLE_BELOW_KM) this.active = true;
+    else if (aglKm > GroundDetailVariant.DISABLE_ABOVE_KM) this.active = false;
+    return this.active ? this.detail.material : this.base;
+  }
+
+  /** 低空细节变体的编译状态 */
+  get status() {
+    return this.detail.state;
+  }
+
+  /** 火车远景变体的编译状态（回归场景等它编好再截图） */
+  get railStatus() {
+    return this.rail.state;
+  }
+
+  /** 火车远景变体的后台编译耗时（毫秒） */
+  get railCompileMs() {
+    return this.rail.compileMs;
+  }
+
+  /** 火车远景变体的材质（编好之前是 null；性能对照、探针用） */
+  get railMaterial() {
+    return this.rail.material;
   }
 }
