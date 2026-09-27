@@ -9,7 +9,10 @@ import { buildGroundLevel, type RoadJob } from "./road-raster";
 self.onmessage = (e: MessageEvent<{ id: number; job: RoadJob; albedo: ImageBitmap; nightRaw: Uint8ClampedArray; detail: ImageBitmap | null }>) => {
   const { id, job, albedo, nightRaw, detail } = e.data;
   const t0 = performance.now();
-  const { water, albedo: albedoOut, detailCoverage } = buildGroundLevel(job, albedo, nightRaw, detail);
+  const { water, albedo: albedoOut, detailCoverage, albedoMips, waterMips } = buildGroundLevel(job, albedo, nightRaw, detail);
   const ms = performance.now() - t0;
-  (self as unknown as Worker).postMessage({ id, water, albedo: albedoOut, detailCoverage, ms }, [water.buffer, albedoOut.buffer]);
+  const transfer: Transferable[] = [water.buffer, albedoOut.buffer];
+  if (albedoMips) transfer.push(albedoMips.buffer);
+  if (waterMips) transfer.push(waterMips.buffer);
+  (self as unknown as Worker).postMessage({ id, water, albedo: albedoOut, detailCoverage, albedoMips, waterMips, ms }, transfer);
 };

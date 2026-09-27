@@ -45,6 +45,127 @@ export const DEFAULT_DPR_CAP = LEVELS[0].dprCap;
 const HEAVY_WEATHER_IDS = new Set(["storm", "squall", "typhoon-bands", "typhoon-eye", "typhoon-outer"]);
 export const isHeavyWeather = (weatherId: string) => HEAVY_WEATHER_IDS.has(weatherId);
 
+// ---------- G07：地面纹理精度（启动时定一次，运行时不随自动档切换） ----------
+
+/**
+ * 地面 clipmap 影像 / 水体纹理的边长（G06 的 2048² 或此前的 1024²，两档都带 mip + 16× 各向异性）。
+ *
+ * 为什么只能启动时定：它同时是纹理的不可变尺寸（texStorage3D，两张 7 层）、着色器常量（ground.glsl.ts 的 GROUND_RES，
+ * 参与选级 / 纹素换算 / 道路 / 火车远景）和瓦片缩放级的依据；换一次要重新分配 2 × 150 MB、重编窗外程序、重下全部瓦片，
+ * 几十秒的模糊。PERF-5 的自动档会在大雨 / 台风时降档、雨停后升档，跟着它切就是整套反复重建，所以这里只在模块加载时判一次，
+ * 结果冻结成常量：着色器文本在同一台机器上恒定（2048 档与 G06 逐字一致，离线 FXC 不变），运行时任何调档都不会触发重编。
+ * 手动改档只记下来，下次载入生效（面板状态行提示，见 describe）。
+ *
+ * 判定顺序（第一条命中即定）：
+ * 1. 不在浏览器里（node 离线工具：shader-budget / check:glsl / shader-parity）→ 2048（与 G06 的着色器文本一致）；
+ * 2. URL `?groundres=1024|2048`（调试 / 对照）；
+ * 3. 上次在面板手动选的画质档（localStorage `voyage.quality`）：「高」→ 2048，「中 / 低」→ 1024；「自动」或没选过 → 4；
+ * 4. 按 GPU 自动：开一个临时 WebGL2 上下文读渲染器字符串（WEBGL_debug_renderer_info）与 MAX_TEXTURE_SIZE，读完立即释放。
+ *    - 软件渲染（SwiftShader / llvmpipe / Microsoft Basic Render）、MAX_TEXTURE_SIZE < 8192、上下文开不出来 → 1024；
+ *    - 显存 WebGL 读不到，用 `navigator.deviceMemory`（Chrome 有，上限报 8）粗估：< 8 GB 多半是集显 / 低端机 → 1024；
+ *    - 渲染器是高性能独显 → 2048：NVIDIA GeForce GTX 16 / RTX / Quadro RTX / RTX A 系列，AMD Radeon RX / Radeon Pro，
+ *      Intel Arc A / B（独显），Apple M Pro / Max / Ultra（统一内存大、GPU 核多）；其中 GeForce GT / MX、GTX 9 / 10 系以下这类入门卡除外；
+ *    - 其他（Intel UHD / Iris / Xe 集显、AMD 「Radeon Graphics」/ Vega APU、Apple M 基础款、Safari 隐藏型号的「Apple GPU」、
+ *      移动端 Mali / Adreno、认不出的字符串）→ 1024。宁可保守：1024 档 = G06 之前的清晰度 + mip + 各向异性，不会比 G06 之前差。
+ * PERF-5 的自动档没有「启动时初判」（一律从「高」起步、再按 GPU 计时升降），所以这里不能借它的结果，只能自己按 GPU 判。
+ */
+export interface GroundResDecision {
+  res: 1024 | 2048;
+  /** 依据（面板 / 调试显示） */
+  reason: string;
+  /** 探测到的渲染器字符串（没探测时为空） */
+  renderer: string;
+  /** 探测临时上下文花的时间（毫秒） */
+  probeMs: number;
+}
+
+const QUALITY_STORAGE_KEY = "voyage.quality";
+
+function storedTier(): QualityTier | null {
+  try {
+    const t = JSON.parse(globalThis.localStorage?.getItem(QUALITY_STORAGE_KEY) ?? "null")?.tier;
+    return t === "auto" || t === "high" || t === "medium" || t === "low" ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeTier(tier: QualityTier) {
+  try {
+    globalThis.localStorage?.setItem(QUALITY_STORAGE_KEY, JSON.stringify({ tier }));
+  } catch {
+    // 隐私模式等拿不到 localStorage：不记，下次载入按 GPU 判
+  }
+}
+
+/** 渲染器字符串 → 是不是高性能独显（规则见上） */
+export function isHighEndGpu(renderer: string): boolean {
+  const r = renderer.toLowerCase();
+  if (/swiftshader|llvmpipe|softpipe|basic render/.test(r)) return false;
+  if (/nvidia|geforce|quadro|rtx/.test(r)) {
+    if (/geforce\s*(gt|mx)\s*\d|gtx\s*(6|7|9)\d\d\b|gtx\s*10[1-5]0\b|quadro\s*[kpm]\d/.test(r)) return false;
+    return /rtx|gtx\s*16\d\d|gtx\s*10[6-8]0|quadro/.test(r);
+  }
+  if (/radeon\s*(\(tm\)\s*)?(rx|pro)\b/.test(r)) return true;
+  if (/arc\s*(\(tm\)\s*)?[ab]\d{3}/.test(r)) return true;
+  if (/apple\s*m\d+\s*(pro|max|ultra)/.test(r)) return true;
+  return false;
+}
+
+function decideGroundRes(): GroundResDecision {
+  if (typeof document === "undefined") return { res: 2048, reason: "离线工具（默认 2048）", renderer: "", probeMs: 0 };
+  const q = new URLSearchParams(globalThis.location?.search ?? "").get("groundres");
+  if (q === "1024" || q === "2048") return { res: Number(q) as 1024 | 2048, reason: `URL ?groundres=${q}`, renderer: "", probeMs: 0 };
+  const tier = storedTier();
+  if (tier === "high") return { res: 2048, reason: "手动选「高」", renderer: "", probeMs: 0 };
+  if (tier === "medium" || tier === "low") return { res: 1024, reason: `手动选「${tier === "medium" ? "中" : "低"}」`, renderer: "", probeMs: 0 };
+  return autoGroundRes();
+}
+
+let autoCache: GroundResDecision | null = null;
+/** 按 GPU 自动判（规则 4）；结果缓存，面板提示「下次载入」时复用，不重复开临时上下文 */
+function autoGroundRes(): GroundResDecision {
+  if (autoCache) return autoCache;
+  const t0 = performance.now();
+  let renderer = "";
+  let maxTex = 0;
+  try {
+    const gl = document.createElement("canvas").getContext("webgl2");
+    if (gl) {
+      const generic = gl.getParameter(gl.RENDERER) as string;
+      const ext = /webkit webgl/i.test(generic) ? gl.getExtension("WEBGL_debug_renderer_info") : null;
+      renderer = ext ? (gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) as string) : generic;
+      maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  } catch {
+    // 探测失败按保守处理
+  }
+  const probeMs = performance.now() - t0;
+  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const done = (res: 1024 | 2048, reason: string): GroundResDecision => ({ res, reason, renderer, probeMs });
+  autoCache = !renderer
+    ? done(1024, "GPU 探测失败")
+    : maxTex < 8192
+      ? done(1024, `MAX_TEXTURE_SIZE ${maxTex}`)
+      : mem !== undefined && mem < 8
+        ? done(1024, `内存约 ${mem} GB`)
+        : isHighEndGpu(renderer)
+          ? done(2048, "高性能独显")
+          : done(1024, "集显 / 入门 GPU / 未识别");
+  return autoCache;
+}
+
+/** 本次载入的地面纹理精度（模块加载时定，之后不变；clipmap.ts 的 GROUND_RES 取自这里） */
+export const GROUND_RES_DECISION: GroundResDecision = decideGroundRes();
+
+/** 选了某个档位后，下次载入会用多大的地面纹理 */
+function groundResForTier(tier: QualityTier): 1024 | 2048 {
+  if (tier === "high") return 2048;
+  if (tier === "medium" || tier === "low") return 1024;
+  return typeof document === "undefined" ? 2048 : autoGroundRes().res;
+}
+
 // ---------- GPU 计时：EXT_disjoint_timer_query_webgl2，非阻塞轮询 ----------
 
 /** 扩展没有内置类型声明（非标准 WebGL 扩展），这里只声明用到的两个常量 */
@@ -160,6 +281,8 @@ export class QualityController {
   private nextProbeAt = 0;
   private lastGpuMs: number | null = null;
   private lastIntervalMs = 1000 / 60;
+  /** 这次载入里有没有在面板上改过档（改过才提示「地面精度下次载入生效」） */
+  private tierTouched = false;
 
   constructor(private readonly deps: QualityControllerDeps) {
     this.timer = new GpuTimer(deps.renderer);
@@ -175,6 +298,18 @@ export class QualityController {
 
   get gpuTimingAvailable() {
     return this.timer.available;
+  }
+
+  /** G07：本次载入的地面纹理精度与依据（调试：`__voyage.quality.groundRes`） */
+  get groundRes() {
+    return GROUND_RES_DECISION;
+  }
+
+  /** 面板状态行的地面精度一段：改了档、下次载入会换精度时提示 */
+  private describeGround() {
+    const cur = GROUND_RES_DECISION.res;
+    const next = this.tierTouched ? groundResForTier(this.tierValue) : cur;
+    return next === cur ? `地面 ${cur}²` : `地面 ${cur}²，下次载入改为 ${next}²`;
   }
 
   /** 每个真实动画帧开始时调用。**不要**在 benchFrame 这类合成测量循环里调用——那是给其他任务做性能
@@ -203,6 +338,9 @@ export class QualityController {
   setTier(tier: QualityTier, nowMs = performance.now()) {
     if (tier === this.tierValue) return;
     this.tierValue = tier;
+    // G07：手动改档记下来，地面纹理精度下次载入按它定（这次不变，见 GROUND_RES_DECISION）
+    storeTier(tier);
+    this.tierTouched = true;
     this.overSince = this.underSince = null;
     this.probing = false;
     this.nextProbeAt = nowMs;
@@ -226,11 +364,11 @@ export class QualityController {
   /** 面板文字：手动档标「固定」；自动档带上依据的数字，方便用户判断是不是自己的机器偏弱 */
   describe(): string {
     const p = LEVELS[this.levelIndex];
-    if (this.tierValue !== "auto") return `${p.label}（固定）`;
+    if (this.tierValue !== "auto") return `${p.label}（固定）· ${this.describeGround()}`;
     const basis = this.timer.available
       ? `GPU ${this.lastGpuMs !== null ? this.lastGpuMs.toFixed(1) : "—"} / 预算 ${GPU_BUDGET_MS.toFixed(1)} ms`
       : `无 GPU 计时，帧间隔 ${this.lastIntervalMs.toFixed(1)} ms`;
-    return `自动 → ${p.label}（${basis}）`;
+    return `自动 → ${p.label}（${basis}）· ${this.describeGround()}`;
   }
 
   /** 刷新周期估计：出现更快的帧立刻贴过去（说明之前的估计偏保守，或者显示器 / 窗口换了）；
