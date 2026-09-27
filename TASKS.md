@@ -11,8 +11,9 @@
 | PERF-10/11 | 第 7 波（最高优先） | 5210 | worktree | Opus（云按天气拆变体 + resolve 回 0.05 ms；必审） | — | 进行中 |
 | PERF-12 | 第 7 波（飞机性能） | 5212 | worktree | Opus（舱内合成 0.385→≤0.3 ms、scene-default 编译 7.3→≤5 s：消融归因后治理；碰 scene → 必审） | — | 进行中 |
 | T49 | 第 7 波（插单，用户需求） | 5249 | worktree | Opus（**航向控制 / 巡航方式**：手动航向盘 + 左右转、选目的地机场、等待航线式盘旋；真实时间滚转限速；保留航线接力。用户澄清：不是倾斜缺陷，是想自己控制航向） | — | 进行中 |
+| R-IMAGERY | 第 7 波（飞机地面打磨，用户提问） | — | 主仓库 research/ | Opus 研究代理（高清卫星 / 航空影像：Esri / 国土地理院 / Mapbox / Google 许可原文、实测对比、混用方案 → research/IMAGERY.md） | — | 进行中 |
 | TR03 | 第 7 波（P8） | — | `worktree-agent-ac14bb478e8ff993d`（3f6af34） | Opus（火车远景） | 审查中 | 已交付，独立审查中（用户：搞完了就合，之后专心飞机） |
-| TR07 | 第 7 波（P8） | — | worktree | Opus（火车声音） | — | 进行中（恢复，做完即合；之后火车不再派新任务） |
+| TR07 | 第 7 波（P8） | — | `worktree-agent-ab785837288ae2ca1`（84a46bb） | Opus（火车声音） | 审查中 | 已交付，独立审查中（与 T49 同改 ui.ts / index.html → 必审） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
