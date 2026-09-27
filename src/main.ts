@@ -22,6 +22,7 @@ import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets
 import { BootProgress } from "./boot/progress";
 import { Director } from "./director";
 import { WonderSystem } from "./wonders/system";
+import { Optics } from "./render/optics";
 import { createQualityController, DEFAULT_DPR_CAP } from "./quality";
 import { CabinAudio, audioInputFrom } from "./audio";
 import { LightPollution } from "./light-pollution";
@@ -69,6 +70,9 @@ const wonders = new WonderSystem();
 Object.assign(sceneMat.uniforms, wonders.uniforms);
 // 手动召唤按相机视线方位放置（W00）
 wonders.attachView(sceneMat.uniforms);
+// 罕见光学现象（T17，render/optics.ts）：宝光、本机影子、幻日 / 22° 晕、绿闪的 uniform（只有窗外程序用到）
+const optics = new Optics();
+Object.assign(sceneMat.uniforms, optics.uniforms);
 // 城市天光（T09）：只用来压银河的可见度，不画进天空
 const lightPollution = new LightPollution();
 Object.assign(sceneMat.uniforms, lightPollution.uniforms);
@@ -396,6 +400,9 @@ function renderFrame(now: number) {
   updateHighLift(state, simDt);
   traffic.update(simDt, flightResult.ownDir, flightResult.speedKms, flightResult.outwardW);
   weather.update(dt);
+  const cu17 = cloudUniforms;
+  optics.update({ state, sunAltDeg: sun.altitude, lat: curLat, lon: curLon, inCloud, stormy: weather.storms.length > 0 || weather.hurricane !== null,
+    cloud: { bottom: cu17.uCloudBottom.value, top: cu17.uCloudTop.value, coverage: cu17.uCoverage.value, type: cu17.uCloudType.value, density: cu17.uCloudDensity.value } });
   audio.update(audioInputFrom(state, inCloud, flightResult.speedKms, flightResult.climbing)); // 声音（T11），内部节流到 10 Hz
   const off = cloudUniforms.uCloudOffset.value;
   for (let i = 0; i < 16; i++) {
@@ -651,4 +658,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics };

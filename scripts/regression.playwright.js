@@ -21,6 +21,10 @@
 //   readRenderTargetPixels 同步一次，不经过 requestAnimationFrame，不受刷新率上限影响。
 // - head 除了原来的数字（只设 z）以外，现在也接受 [x, y, z] 三元组（headX），用来表达邻座 / 前排座位
 //   这类横向偏移（参考 T06 复核脚本的 forward-seat / own-seat 场景）。
+// - DX-07：依赖月相 / 星空的夜景、黄昏场景全部写死 date（不写就用「打开页面当天」，月相每天都在变，跨波
+//   对比会误判，第 6 波美术总监报告撞上过一次）。「城市夜景」类用无月夜（月亮在地平线下），另留一个专门看
+//   月光的满月场景（night-sea-fullmoon）。月亮高度 / 方位用仓库自带的 astronomy-engine 算的（T09 用过的
+//   同一套天文库），数值写在下面每条场景的注释里；与 scripts/scenarios.mjs 逐字同步。
 //
 // 维护提示：SCENES 数组与 apps/voyage/scripts/scenarios.mjs 里的同名导出逐字同步（那边是给 dev-browser.mjs
 // 这个真 Node 脚本用 import 的单一源）。这个文件跑在 Playwright MCP 的沙箱执行环境里，没有全局 URL /
@@ -48,12 +52,13 @@ async (page) => {
   }
 
   // 场景：p = 面板上的设置（id → 值），offset = 云的世界偏移，wait = 等待毫秒，ground = 是否等地面瓦片，
-  // head = 头部位置，数字只设 z（向后兼容），[x, y, z] 三元组可以表达横向座位偏移（headX），
-  // wonder = 召唤奇观（W01b，{ id, distKm?, forwardOffsetDeg?, bearingDeg?, reveal? }；不写就关掉奇观模式）
+  // head = 头部位置，数字只设 z（向后兼容），[x, y, z] 三元组可以表达横向座位偏移（headX）
   const SCENES = [
     { name: "noon-cumulus", p: { preset: "wpac", time: 720, "wing-pos": "8" } },
     { name: "sunset-wing", p: { preset: "wpac", time: 1040, "wing-pos": "8" } },
-    { name: "dusk-earthshadow", p: { preset: "wpac", seat: "left", time: 1068, "wing-pos": "-4" } },
+    // DX-07：wpac 17:48 本地，2026-02-16 太阳高度 −4.7°（与旧行为的「当天」量级一致，地影拱仍在合适位置），
+    // 月亮高度 −19.3°（新月相位 1%，在地平线下），不会露头
+    { name: "dusk-earthshadow", p: { preset: "wpac", seat: "left", date: "2026-02-16", time: 1068, "wing-pos": "-4" } },
     { name: "clouds-variety", p: { preset: "wpac", time: 900, coverage: 0.62, altitude: 5, "wing-pos": "-4" }, offset: [37, -12] },
     { name: "low-sea-glint", p: { preset: "wpac", time: 980, coverage: 0, altitude: 0.6, "wing-pos": "-4" } },
     { name: "in-cloud", p: { preset: "wpac", time: 840, "cloud-preset": "stratocumulus", coverage: 0.95, altitude: 1.35, "wing-pos": "8" }, wait: 6000 },
@@ -62,18 +67,24 @@ async (page) => {
     { name: "typhoon-bands", p: { preset: "wpac", time: 900, coverage: 0.2, weather: "typhoon-bands", "wing-pos": "-4" } },
     { name: "typhoon-outer", p: { preset: "wpac", time: 900, coverage: 0.2, altitude: 13, weather: "typhoon-outer", "wing-pos": "-4" } },
     { name: "fuji-day", p: { preset: "fuji", time: 930, altitude: 6, coverage: 0.1, "wing-pos": "-4" }, offset: [-20, 0.2], ground: true },
-    { name: "night-city", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": false }, offset: [0, -25], ground: true, head: -0.25 },
-    { name: "night-city-on", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": true }, offset: [0, -25], ground: true, head: -0.25 },
-    { name: "night-city-off", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": "off" }, offset: [0, -25], ground: true, head: -0.25 },
+    // DX-07：fuji 21:00 本地，2026-01-16 月亮高度 −75.6°（新月相位 5%），全城市夜景系列都是无月夜
+    { name: "night-city", p: { preset: "fuji", date: "2026-01-16", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": false }, offset: [0, -25], ground: true, head: -0.25 },
+    { name: "night-city-on", p: { preset: "fuji", date: "2026-01-16", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": true }, offset: [0, -25], ground: true, head: -0.25 },
+    { name: "night-city-off", p: { preset: "fuji", date: "2026-01-16", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": "off" }, offset: [0, -25], ground: true, head: -0.25 },
     { name: "route-hnd-cts", p: { preset: "hnd-cts", time: 990, coverage: 0.25, "wing-pos": "8" }, ground: true },
-    { name: "route-hnd-cts-night", p: { preset: "hnd-cts", time: 1290, coverage: 0.1, seat: "left", "cabin-light": false, "wing-pos": "8" }, ground: true },
+    // DX-07：hnd-cts 21:30 本地，同一个 2026-01-16 月亮高度 −80.4°，同样是无月夜
+    { name: "route-hnd-cts-night", p: { preset: "hnd-cts", date: "2026-01-16", time: 1290, coverage: 0.1, seat: "left", "cabin-light": false, "wing-pos": "8" }, ground: true },
     { name: "economy-ahead", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "economy" }, head: [-0.42, 0.1, -0.5] },
     // T09：夜间无月（2026-05-15 22:30，残月在地平线下 53°）、关舱灯（全关）、南海上空、左座朝东南：人马座大星云低低地在窗正中
     { name: "night-sea-milkyway", p: { preset: "scs", seat: "left", date: "2026-05-15", time: 1350, coverage: 0.15, "cabin-light": "off", "wing-pos": "-4" } },
-    // W01b：奇观（天幕层）。天梯：左座朝东、日落后约 20 分钟，下段已入地影，上段与高处的中继站仍被阳光照亮，底部系留平台的灯群在地平线的霾里
-    { name: "wonder-tether-dusk", p: { preset: "wpac", seat: "left", time: 1078, coverage: 0.3, "cabin-light": false, "wing-pos": "-4" }, wonder: { id: "tether", distKm: 370 } },
-    // W01b：建木，白天（下午）：缠着树干的云气是白天最先被注意到的东西，树冠在高处
-    { name: "wonder-jianmu-day", p: { preset: "wpac", time: 900, coverage: 0.3, "wing-pos": "-4" }, wonder: { id: "jianmu", distKm: 380 } },
+    // DX-07：专看月光的满月场景。scs 22:30 本地，2026-04-01 月亮相位 99.7%（近满月）、高度 58°、方位 133.8°，
+    // 几乎正对左座窗外方位（heading 225 − 90 = 135°），月亮应该稳稳地挂在窗正中
+    { name: "night-sea-fullmoon", p: { preset: "scs", seat: "left", date: "2026-04-01", time: 1350, coverage: 0.15, "cabin-light": "off", "wing-pos": "-4" } },
+    // W01b：奇观（天幕层，js 召唤：放在窗口正对方向、直接显形；召唤前等两帧，让奇观系统拿到新的座位 / 航向）。
+    // 天梯：左座朝东、日落后约 20 分钟（太阳约 −6.5°），下段已入地影，上段与高处的中继站仍被阳光照亮，缆上红色障碍灯同步慢闪
+    { name: "wonder-tether-dusk", p: { preset: "wpac", seat: "left", date: "2026-09-27", time: 1078, coverage: 0.3, "cabin-light": false, "wing-pos": "-4" }, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"tether\", { forwardOffsetDeg: 0, distKm: 370, reveal: 1 }); return v.wonders.describe();" },
+    // 建木，白天（下午）：缠着树干旋上去的云气是白天最先被注意到的东西，九欘（弯枝）在窗里的高处
+    { name: "wonder-jianmu-day", p: { preset: "wpac", date: "2026-09-27", time: 900, coverage: 0.3, "wing-pos": "-4" }, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 380, reveal: 1 }); return v.wonders.describe();" },
   ];
 
   await page.goto(`${origin}/?regression=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
@@ -137,23 +148,20 @@ async (page) => {
           if (v.ground.pending < 5 && i > 5) break;
         }
       }
-      // wonder（W01b）：召唤一个奇观 { id, distKm?, forwardOffsetDeg?, bearingDeg?, reveal? }，放在窗口正对方向（偏机头 forwardOffsetDeg，默认 0）、直接显形；
-      // 不写就关掉奇观模式并清掉在场的奇观（免得上一个场景的奇观带到下一个）。召唤前等两帧，让奇观系统拿到新的座位 / 航向
+      // 奇观（W01b）：每个场景都从「没有奇观」出发（要奇观的场景在 js 里召唤），免得上一个场景的奇观带到下一个
       if (v.wonders) {
         v.wonders.clear();
-        v.wonders.enabled = !!sc.wonder;
-        if (sc.wonder) {
-          for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r));
-          const w = sc.wonder;
-          v.wonders.trigger(w.id, { forwardOffsetDeg: w.forwardOffsetDeg ?? 0, bearingDeg: w.bearingDeg, distKm: w.distKm, reveal: w.reveal ?? 1 });
-        }
+        v.wonders.enabled = false;
       }
       // 舱等（T25）：没编过的变体在后台编译，画面切过去之前不截图（最多等 120 s）
       const wantClass = sc.p["cabin-class"] ?? "business";
       for (let i = 0; i < 480 && v.cabinClass && v.cabinClass.shown !== wantClass; i++) await new Promise((r) => setTimeout(r, 250));
+      // js（T17，W01b 同步到这里）：一段脚本，参数 v = window.__voyage，在 snapAll 与截图等待之前执行（例如召唤奇观）
+      const jsOut = sc.js ? await new (async () => {}).constructor("v", sc.js)(v) : undefined;
       v.snapAll();
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
-      return document.getElementById("info").textContent;
+      const info = document.getElementById("info").textContent;
+      return jsOut === undefined ? info : `${info}\njs: ${typeof jsOut === "string" ? jsOut : JSON.stringify(jsOut)}`;
     }, sc);
     const path = `${outDir}/${sc.name}.png`;
     await page.screenshot({ path, timeout: 60000 });

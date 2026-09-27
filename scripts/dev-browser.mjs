@@ -10,10 +10,13 @@
 // 用法：
 //   node scripts/dev-browser.mjs check --port 5230 [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--scene '<JSON>' ...]
-//                                       [--out tmp/screenshot/dev-5230] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//                                       [--out tmp/screenshot/dev-5230] [--allow-flash] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
+//
+// --out（shots 的截图输出目录）相对**仓库根**解析，不是当前工作目录（T08 开发体验反馈踩过这个坑：
+//   写了 `../../tmp/...` 结果传到了仓库外面）。不传就是 `tmp/screenshot/dev-<port>`。
 //
 // --angle：ANGLE 图形后端，默认 d3d11（Windows 上与生产环境一致，**这是交付验收的口径，不要改**）。
 //   vulkan 只用于开发内循环：真冷启动快约 18 倍（无 FXC 优化器），但会藏住 D3D11 专属问题
@@ -43,6 +46,13 @@
 //   可以重复传多次 --scene 拍多个临时场景；和 --only（挑 scenarios.mjs 里的固定场景）可以同时用，
 //   两边选中的场景会拼在一起跑。都不传就是原来的行为（全量回归表，或 --only 过滤后的子集）。
 //   例：node scripts/dev-browser.mjs shots --port 5247 --scene "{\"name\":\"biz-behind\",\"p\":{\"preset\":\"wpac\",\"time\":720,\"wing-pos\":\"8\",\"cabin-class\":\"business\"},\"head\":[0.42,0.1,-0.5]}"
+//
+// shots 默认关闪电频闪（DX-07）：`window.__voyage.weather.hold = true` + `heldIntensity = 0`
+//   （src/weather.ts 本来就留了这个调试 / 截图开关，这里只是调用，没改 src/）。截图偶尔会撞上一大团
+//   闪电白光，糊里糊涂当成回归差异（T08 开发体验反馈）。`--allow-flash` 保留旧行为（正常按泊松过程闪，
+//   雷暴 / 台风场景想专门看闪电时用）。
+// shots 现在也会打印截图期间的 console error / pageerror 数（和 check 共用同一份收集逻辑），
+//   不用再另外跑一次 check 才知道有没有炸。
 
 import { chromium } from "playwright-core";
 import fs from "node:fs";
@@ -232,6 +242,24 @@ async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr =
   return { context, page, renderer, angle, viewport, dpr, errors };
 }
 
+/** DX-07：默认关闭闪电频闪（weather.hold + heldIntensity = 0，见 src/weather.ts 的 update()：
+ * hold 为 true 时不再触发新闪电、亮度锁在 heldIntensity），不然截图偶尔会撞上一大团白光，
+ * 差点被当成回归（T08 开发体验反馈）。这个开关本来就是给调试 / 截图用的（weather.ts 注释原话），
+ * 只是调用它，不改 src/。--allow-flash 保留旧行为（正常按泊松过程闪）。 */
+async function setFlashDisabled(page, disabled) {
+  return page.evaluate((disabled) => {
+    const w = window.__voyage && window.__voyage.weather;
+    if (!w) return false;
+    if (disabled) {
+      w.hold = true;
+      w.heldIntensity = 0;
+    } else {
+      w.hold = false;
+    }
+    return true;
+  }, disabled);
+}
+
 // ---------- shots：跑回归场景表，截图 + 每场景一份同名 JSON ----------
 async function cmdShots(args) {
   const port = args.port;
@@ -241,11 +269,17 @@ async function cmdShots(args) {
   fs.mkdirSync(outDir, { recursive: true });
   const viewport = parseViewport(args);
   const dpr = parseDpr(args);
+  const allowFlash = Boolean(args["allow-flash"]);
 
   const browser = await launchBrowser(angle);
   try {
-    const { page, renderer } = await openPage(browser, port, angle, viewport, dpr);
+    // collectErrors：截图期间的 console error / pageerror 数一并打印出来（DX-07），不用另外跑一次 check
+    const { page, renderer, errors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true });
     console.log(`[dev-browser] --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
+    if (!allowFlash) {
+      const applied = await setFlashDisabled(page, true);
+      console.log(`[dev-browser] 默认关闭雷电频闪${applied ? "" : "（没找到 window.__voyage.weather，跳过）"}（--allow-flash 保留旧行为）`);
+    }
     const scenes = resolveScenes(args);
     const results = [];
     for (const sc of scenes) {
@@ -269,7 +303,13 @@ async function cmdShots(args) {
       results.push(meta);
       console.log(`  ${sc.name}: frameMs=${meta.frameMs}`);
     }
-    console.log(`[dev-browser] 完成，共 ${results.length} 个场景，输出目录 ${path.relative(REPO_ROOT, outDir).replace(/\\/g, "/")}`);
+    console.log(`[dev-browser] 完成，共 ${results.length} 个场景，输出目录 ${path.relative(REPO_ROOT, outDir).replace(/\\/g, "/")}（--out 相对仓库根解析）`);
+    if (errors.length === 0) {
+      console.log(`[dev-browser] 截图期间没有 console error / pageerror。`);
+    } else {
+      console.error(`[dev-browser] 截图期间共 ${errors.length} 条 console error / pageerror：`);
+      for (const e of errors) console.error(`  [${e.type}] ${e.text}`);
+    }
     return results;
   } finally {
     await closeBrowserSafely(browser);
@@ -418,12 +458,14 @@ async function main() {
   else if (sub === "bench") result = await cmdBench(args);
   else {
     console.error(
-      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--out 路径] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
+      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--out 路径] [--allow-flash] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
     );
     console.error("  check           只开页面、等启动完成、收集 console error / pageerror，有错误就非 0 退出");
     console.error("  --viewport WxH  浏览器视口尺寸，默认 1600x1200（如 --viewport 2400x1800）");
     console.error("  --dpr N         deviceScaleFactor，默认 1（和 --viewport 组合模拟高分屏 / 弱 GPU）");
     console.error("  --scene '<JSON>'  仅 shots：临时场景，字段同 scenarios.mjs 的 SCENES 条目，可重复，和 --only 可并用");
+    console.error("  --out 路径      仅 shots：截图输出目录，相对仓库根解析（不传是 tmp/screenshot/dev-<端口>）");
+    console.error("  --allow-flash   仅 shots：不关闭雷电频闪（默认关，见 weather.ts 的 hold / heldIntensity 开关）");
     process.exit(1);
   }
   // playwright-core 有时会留一些内部句柄没清干净（尤其是 GPU 争用导致渲染进程中途崩溃过一次的情况），
