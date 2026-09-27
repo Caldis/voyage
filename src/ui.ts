@@ -9,6 +9,7 @@ import { VIEW_PRESETS } from "./view-presets";
 import type { Director } from "./director";
 import { WONDERS } from "./wonders/catalog";
 import { RARITY_LEVELS, type WonderSystem } from "./wonders/system";
+import { isHeavyWeather, type QualityController, type QualityTier } from "./quality";
 
 /**
  * 面板：DOM 绑定、信息栏文字、方位文字（COMPASS）。从 main.ts 拆出（T01 纯重构，未改动任何取值或绑定顺序）。
@@ -101,8 +102,6 @@ export interface UiDeps {
   setPreset: (id: string) => void;
   /** 画面跳变：眼睛直接适应，云的时间累积也清空 */
   snapAll: () => void;
-  /** 画布尺寸变化（画质档位也走这个） */
-  resize: () => void;
   exposure: Exposure;
   clouds: Clouds;
   weather: WeatherSystem;
@@ -115,11 +114,13 @@ export interface UiDeps {
   director: Director;
   /** 奇观系统（W01） */
   wonders: WonderSystem;
+  /** 画质档位（PERF-5）：自动 / 高 / 中 / 低 */
+  quality: QualityController;
 }
 
 /** 绑定面板上的所有控件。调用一次，顺序和原来 main.ts 里一致。 */
 export function setupUi(deps: UiDeps) {
-  const { state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView, director } = deps;
+  const { state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView, director, quality } = deps;
 
   const presetSel = $<HTMLSelectElement>("preset");
   presetSel.innerHTML = PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
@@ -261,6 +262,8 @@ export function setupUi(deps: UiDeps) {
     const out = new THREE.Vector3(Math.cos(h), 0, Math.sin(h)).multiplyScalar(state.seat === "right" ? 1 : -1);
     weather.apply(weatherSel.value, cloudUniforms.uCloudOffset.value, fwd, out);
     clouds.snap();
+    // PERF-5：雷暴 / 台风一上来就重，别等自适应的持续时间判断才反应，先发制人退一档
+    quality.hintHeavyScene(isHeavyWeather(weatherSel.value));
   }
   weatherSel.addEventListener("change", applyWeather);
   // 舱灯三档：开 / 睡眠（主灯关、氛围灯开）/ 全关（只剩阅读灯）
@@ -279,9 +282,11 @@ export function setupUi(deps: UiDeps) {
   setupVoyageUi(director);
   setupWonderUi(deps.wonders);
 
-  $<HTMLSelectElement>("quality").addEventListener("change", (e) => {
-    clouds.resolutionScale = Number((e.target as HTMLSelectElement).value);
-    resize();
+  // 画质（PERF-5）：面板只负责挑档位（自动 / 高 / 中 / 低），具体分辨率 / DPR 上限与自适应逻辑都在 quality.ts
+  const qualitySel = $<HTMLSelectElement>("quality");
+  qualitySel.value = quality.tier; // 与内部默认值对齐（目前都是 "auto"，这里只是兜底）
+  qualitySel.addEventListener("change", () => {
+    quality.setTier(qualitySel.value as QualityTier);
   });
 }
 

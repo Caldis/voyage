@@ -115,11 +115,14 @@
       <label>海面风速 <output id="wind-out"></output><input id="wind" type="range" min="0" max="20" step="1" value="7" /></label>
       <label>画质
         <select id="quality">
-          <option value="1">高（云全分辨率）</option>
-          <option value="0.75">中</option>
-          <option value="0.5">低（云半分辨率）</option>
+          <option value="auto" selected>自动（推荐）</option>
+          <option value="high">高（云全分辨率）</option>
+          <option value="medium">中</option>
+          <option value="low">低（云半分辨率）</option>
         </select>
       </label>
+      <!-- 自动档实际生效的档位（PERF-5）：按最近的 GPU 时间 / 帧间隔自适应，这里显示落在哪一档 -->
+      <p id="quality-status" class="hint"></p>
       <label class="check"><input id="ground-on" type="checkbox" checked />真实地理数据（卫星影像、地形、水体，联网）</label>
       <label>舱等 <output id="cabin-class-status"></output>
         <!-- T25：切到另一档时后台编译它的着色器（首次约几秒），编好之前画面保持原来的舱等 -->
