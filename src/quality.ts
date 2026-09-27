@@ -119,7 +119,7 @@ function clearLegacyQualityStorage() {
 
 /**
  * 渲染器字符串 → 是不是高性能独显（→ 2048）。自检：`handoff/G07-gpu-rules.mts`。
- * - NVIDIA：RTX（含 Quadro RTX / RTX A）、GTX 16 系、GTX 1060–1080、GTX 970 / 980 / 980 Ti（Maxwell 高端，性能约等于 1060–1070）、
+ * - NVIDIA：RTX（含 Quadro RTX / RTX A）、GTX 16 系、GTX 1060–1080、GTX 970 / 980 / 980 Ti（Maxwell 高端，性能约等于 1060–1070；移动版 970M / 980M 约等于桌面 960，不放行）、
  *   Quadro T 系（T1000 起，约等于 GTX 1650）、Quadro P3200 起（P4000 / P5000 / P6000）；
  *   除外：GeForce GT / MX、GTX 6 / 7 系、GTX 950 / 960、GTX 1010–1050、Quadro K / M、Quadro P400–P2200、不带 Quadro 的「NVIDIA T600」这类入门卡。
  * - AMD：Radeon RX / Radeon Pro；除外：Vega APU（「Radeon RX Vega 8 Graphics」名字里也带 RX）、Polaris 入门的 RX 460 / 550 / 560、
@@ -133,11 +133,13 @@ export function isHighEndGpu(renderer: string): boolean {
   if (/nvidia|geforce|quadro|rtx/.test(r)) {
     if (/geforce\s*(gt|mx)\s*\d|gtx\s*(6|7)\d\d\b|gtx\s*9[56]0\b|gtx\s*10[1-5]0\b|quadro\s*[km]\d|quadro\s*p([1-9]\d{2}|1\d{3}|2\d{3})\b/.test(r))
       return false;
-    return /rtx|gtx\s*16\d\d|gtx\s*10[6-8]0|gtx\s*9[78]0|quadro/.test(r);
+    return /rtx|gtx\s*16\d\d|gtx\s*10[6-8]0|gtx\s*9[78]0\b|quadro/.test(r);
   }
   // 「Radeon RX Vega 3 / 8 / 11 Graphics」是 APU 集显，名字里也带 RX
   if (/vega\s*\d+\s*graphics/.test(r)) return false;
   if (/radeon\s*(\(tm\)\s*)?(rx\s*(4[56]0|5[56]0)|pro\s*(4[56][05]|5[56][05]))x?\b/.test(r)) return false;
+  // Radeon Pro WX 2100 / 3100 / 3200 / 4100（Polaris 入门，约等于 RX 550 / 460）同 RX 550 判 1024（G07b 审查 L2）
+  if (/radeon\s*(\(tm\)\s*)?pro\s*wx\s*[234]1\d\d\b|radeon\s*(\(tm\)\s*)?pro\s*wx\s*3200\b/.test(r)) return false;
   if (/radeon\s*(\(tm\)\s*)?(rx|pro)\b/.test(r)) return true;
   if (/arc\s*(\(tm\)\s*)?a3\d{2}/.test(r)) return false;
   if (/arc\s*(\(tm\)\s*)?[ab]\d{3}/.test(r)) return true;
@@ -175,7 +177,12 @@ function autoGroundRes(): GroundResDecision {
     // 优先用 OffscreenCanvas：dev-browser.mjs 的 GPU 计时钩子（installGlProbe）挂在 HTMLCanvasElement.getContext 上、
     // 抓「页面里第一个 webgl2 上下文」，用 <canvas> 探测会让它抓到这个随即释放的临时上下文、bench 的 gpu 计时静默变成 null（G07 起，G07b 发现）。
     // 不支持 OffscreenCanvas 的 WebGL2（Safari 16 及更早）退回 <canvas>
-    gl = typeof OffscreenCanvas !== "undefined" ? (new OffscreenCanvas(1, 1).getContext("webgl2", attrs) as WebGL2RenderingContext | null) : null;
+    // OffscreenCanvas 的 getContext 抛异常（而不是返回 null）时也退回 <canvas>，不误判成「探测失败」（G07b 审查 L1）
+    try {
+      gl = typeof OffscreenCanvas !== "undefined" ? (new OffscreenCanvas(1, 1).getContext("webgl2", attrs) as WebGL2RenderingContext | null) : null;
+    } catch {
+      gl = null;
+    }
     gl ??= document.createElement("canvas").getContext("webgl2", attrs);
     if (gl) {
       const generic = gl.getParameter(gl.RENDERER) as string;

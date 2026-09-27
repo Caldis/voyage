@@ -28,6 +28,10 @@ const cases: [string, boolean][] = [
   ["ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)", true], // 原先偏严
   ["NVIDIA GeForce GTX 980, or similar", true], // Firefox 的模糊型号
   ["ANGLE (NVIDIA, NVIDIA GeForce GTX 970 Direct3D11 vs_5_0 ps_5_0, D3D11)", true],
+  ["ANGLE (NVIDIA, NVIDIA GeForce GTX 970M Direct3D11 vs_5_0 ps_5_0, D3D11)", false], // G07b 审查 L2
+  ["ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)", true],
+  ["ANGLE (AMD, AMD Radeon Pro WX 3100 Direct3D11 vs_5_0 ps_5_0, D3D11)", false], // G07b 审查 L2
+  ["ANGLE (AMD, AMD Radeon Pro WX 7100 Direct3D11 vs_5_0 ps_5_0, D3D11)", true],
   ["ANGLE (NVIDIA, NVIDIA GeForce GTX 960 Direct3D11 vs_5_0 ps_5_0, D3D11)", false],
   ["ANGLE (NVIDIA, NVIDIA GeForce GTX 1080 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)", true],
   ["ANGLE (NVIDIA, NVIDIA Quadro P5000 Direct3D11 vs_5_0 ps_5_0, D3D11)", true], // 原先偏严
