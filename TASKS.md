@@ -12,7 +12,6 @@
 | PERF-14 | 第 7 波（飞机性能） | 5214 | worktree | Opus（舱内 / 机翼程序冷编译回收：关键路径分解、座椅单独 pass 或光照收拢、机翼消融；目标冷启动再降 ≥1.5 s；必审） | — | 进行中 |
 | G06 | 第 7 波（飞机地面） | 5206 | worktree | Opus（clipmap 地面纹理精度 + mipmap / 各向异性：巡航纹素 / 屏幕像素比 ~3 → 1–1.5；先实验比较方案；必审） | — | 进行中 |
 | TM01 | 第 7 波（云锐度，用户需求） | 5216 | `worktree-agent-ab891a9e7f58250c4`（bf805bb） | Opus | 审查中（兼美术） | 已交付：方案③ AgX 前高光段斜率 ×1.4，云芯显示对比 ×1.63–2.42（sunset ×1.55）、非云 RGB ≤2/255 变化 |
-| C03 | 第 7 波（云锐度，用户需求） | 5211 | `worktree-agent-a395f9870209c3f11`（afff7f5） | Opus | 审查中 | 已交付：横纹根因=受光细节随机数与步进 jitter 相关，一行修复（横纹能量 −12–19%，零开销）；边宽细化三种做法都长出新条纹，未合入 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -95,6 +94,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | PERF-12 | 舱内合成开销：先算权重再着色（0 权重层跳过）、倒影早退、朝下射线不算光点、白天点星门限、uLoopGuard 与调用点合并 | 2026-09-27 | Opus 实现，**独立审查通过**（补跑 8 个湿窗 / 云中 / 满月等场景零回归）。舱内合成 GPU 0.39→0.29 ms。**遗留**：scene-default 编译仅 −5%（座椅着色要改结构：单独 pass 或光照收成一个调用点 → PERF-14）；注释「调试 1–4 仍全算」不准确 |
 | PERF-13 | 窗外程序冷编译回收：optics / wonder-sky 拆进按需变体 OW / DOW / DROW，wantedOutsideKey 唯一入口；默认程序断言 | 2026-09-27 | Opus 实现，**独立审查通过**，协调者合并（手工合并编译账本）。**真冷启动 13.4→11.1 s**（三代理并行下的最小值，收尾安静复测）。今日冷启动：早 12.5 → 午 19.0 → 晚 11.1 s。关键路径转为舱内 / 机翼程序。**遗留**：冷启动约 10 s 后宝光 / 本机影子一帧跳出（建议 1 s 渐显）；probe --patch outsideMat 改不到 OW；火车模式下仍预编 OW |
 | DX-11/12 | compare 补 RGB / 饱和度 / 相邻像素差 / 亮暗比 / 遮罩 / 行列曲线 / 缩略图；shots --pair / --ab / --base-shader 同机位 A/B、--scenes-file、--query、view-preset、默认关连续航程；变体就绪后复位云；冻结钉频闪；probe / passes 编译失败报错；测量锁跨 worktree 生效；shader-budget 指令槽；scripts/shader-parity.mjs；ts-resolve | 2026-09-28 | Sonnet 实现，协调者核对改动范围（main.ts 仅调试句柄）后合并，**已通知在途代理**。实现代理报告其内部「只读」分身写了文件（同一 worktree，未波及他人）。**遗留**：--pair 同 js 两次仍有 2.8–4/255 残差（先测噪声底）；src/rail/shader-parity.mjs 旧入口未转发 |
+| C03 | 层状云水平横纹：受光细节随机数与步进 jitter 去相关（独立 IGN + √2−1 增量），横纹能量 −12–15%、对角高频 +1–8%、零开销 | 2026-09-28 | Opus 实现，**独立审查返工一次**（实时单帧菱形交叉纹；flicker 冻结不渲染云、证据无效），协调者核验合并。**未达成**：边宽 −20%（按表面距离变步长都长新条纹 → C10） |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
