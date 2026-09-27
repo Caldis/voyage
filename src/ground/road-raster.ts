@@ -124,7 +124,7 @@ export interface RoadJob {
   mips?: boolean;
   /** G07b：影像 mip 的浮点临时缓冲是否复用（默认复用；false = G07 的每级新分配，同页 A/B 用） */
   mipScratch?: boolean;
-  /** G07b 调查用：水体画布用 CPU 栅格（willReadFrequently），getImageData 不走 GPU 读回 */
+  /** G07b：水体画布用 CPU 栅格（willReadFrequently，默认）；false = G07 及以前的 GPU 画布（同页 A/B 用） */
   waterCpu?: boolean;
 }
 
@@ -394,8 +394,11 @@ export function buildGroundLevel(
   const readMs = performance.now() - tRead;
   const marks: [string, number][] = [["read", readMs]];
   const mark = (name: string) => marks.push([name, performance.now() - tRead]);
+  // G07b：水体画布走 CPU 栅格。默认的 GPU 加速画布在 getImageData 时要经 GPU 进程同步读回 16 MB，
+  // 期间页面的合成 / WebGL 命令排在后面，主线程帧间隔跳到 23–31 ms（1× 巡航约 1.4 次 / 分钟，G07b-spikes.mjs 归因到 waterRead 阶段）；
+  // CPU 栅格多花约 5 ms（在 Worker 里），读回只是内存拷贝。海岸线抗锯齿与 GPU 版有个别像素不同（同页 A/B 平均差 0、p99 ≤ 0.33）
   const canvas = new OffscreenCanvas(RES, RES);
-  const ctx = canvas.getContext("2d", job.waterCpu ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
+  const ctx = canvas.getContext("2d", job.waterCpu !== false ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
   ctx.fillStyle = "black";
   ctx.fillRect(0, 0, RES, RES);
   const frame = new LocalFrame(job.lat0, job.lon0);

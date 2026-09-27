@@ -7,8 +7,8 @@
 // 同时记它离该任务开始多少 ms、这个任务开始前 Worker 空了多久（背靠背任务 = 上一级结果正在暂存上传）、尖峰帧附近有没有上传。
 // 开跑前等测量锁、跑时持锁（帧间隔测量怕别的代理的编译 / 冷启动），结束释放。
 // 用法（apps/voyage 下）：node handoff/G07b-spikes.mjs <端口> [每窗口秒=60] [轮数=4] [做法=G07,G07b] [输出 json]
-//   做法可选：G06（GPU 整组 mip + 每帧一张）、G07（Worker mip 每级新分配 + 暂存）、G07b（Worker mip 复用缓冲 + 暂存）、noMip（GPU 整组 mip + 暂存）、
-//   cpuWater（G07b + 水体画布 CPU 栅格）
+//   做法可选（前四种水体画布都是 GPU 的旧做法）：G06（GPU 整组 mip + 每帧一张）、G07（Worker mip 每级新分配 + 暂存）、
+//   G07b（Worker mip 复用缓冲 + 暂存）、noMip（GPU 整组 mip + 暂存）、cpuWater（G07b + 水体画布 CPU 栅格 = G07b 最终默认）、cpuBoth（再加主线程拼影像 / 细节瓦片的画布也走 CPU 栅格）
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,11 +21,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
 const [port, winS = "60", roundsS = "4", modesS = "G07,G07b", outJson] = process.argv.slice(2);
 const ALL = {
-  G06: { gpuMips: true, staged: false, reuse: true },
-  G07: { gpuMips: false, staged: true, reuse: false },
-  G07b: { gpuMips: false, staged: true, reuse: true },
-  noMip: { gpuMips: true, staged: true, reuse: true },
+  G06: { gpuMips: true, staged: false, reuse: true, waterCpu: false },
+  G07: { gpuMips: false, staged: true, reuse: false, waterCpu: false },
+  G07b: { gpuMips: false, staged: true, reuse: true, waterCpu: false },
+  noMip: { gpuMips: true, staged: true, reuse: true, waterCpu: false },
   cpuWater: { gpuMips: false, staged: true, reuse: true, waterCpu: true },
+  cpuBoth: { gpuMips: false, staged: true, reuse: true, waterCpu: true, imageryCpu: true },
 };
 const modes = modesS.split(",");
 for (const m of modes) if (!ALL[m]) throw new Error(`未知做法 ${m}`);
@@ -51,7 +52,10 @@ try {
     box.checked = true;
     box.dispatchEvent(new Event("change"));
     v.director.rate = 1;
-    const st = (window.__g07b = { frames: [], ups: [] });
+    const st = (window.__g07b = { frames: [], ups: [], long: [] });
+    try {
+      new PerformanceObserver((l) => { for (const e of l.getEntries()) st.long.push(Math.round(e.duration)); }).observe({ type: "longtask" });
+    } catch {}
     const orig = g.drainUploads.bind(g);
     g.drainUploads = () => {
       if (!g.uploadQueue.length) return orig();
@@ -75,10 +79,13 @@ try {
         g.stagedUpload = m.staged;
         g.mipScratchReuse = m.reuse;
         g.waterCanvasCpu = !!m.waterCpu;
+        g.imageryCanvasCpu = !!m.imageryCpu;
         const s = window.__g07b;
         s.frames.length = 0;
         s.ups.length = 0;
         s.t0 = performance.now();
+        s.draw0 = { ...g.imageryStats.draw };
+        s.long.length = 0;
       }, m);
       // Worker 的 recent 只留 64 次，60 s 约 90–130 次：分两次取
       const tasks = [];
@@ -117,6 +124,8 @@ try {
           marksMed: Object.fromEntries((T[0]?.marks ?? []).map(([n]) => [n, med(T.map((t) => t.marks.find((m) => m[0] === n)?.[1] ?? 0))])),
           backToBack: T.filter((t, i) => i > 0 && t.start - T[i - 1].end < 50).length,
           upFrames: s.ups.length, spikes,
+          longTasks: s.long.slice(),
+          draw: (() => { const d = window.__voyage.ground.imageryStats.draw; const n = d.count - s.draw0.count; return { n, avgMs: n ? +((d.totalMs - s.draw0.totalMs) / n).toFixed(2) : null, maxEverMs: +d.maxMs.toFixed(1) }; })(),
         };
       }, tasks);
       windows.push({ round: r, mode: name, ...w });

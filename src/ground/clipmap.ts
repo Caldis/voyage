@@ -374,6 +374,7 @@ export class GroundClipmap {
       warm: this.warm,
       warmup: { ...this.warmMs },
       worker: { ...workerStats, recent: workerStats.recent.slice() },
+      draw: { ...drawStats },
       hosts: imageryStats(),
     };
   }
@@ -611,8 +612,11 @@ export class GroundClipmap {
   gpuMips = false;
   /** 调试开关（G07b）：false = G07 的 mip 浮点临时缓冲每级新分配（mips.ts），同页 A/B 用 */
   mipScratchReuse = true;
-  /** 调试开关（G07b 调查）：true = 水体画布走 CPU 栅格（getImageData 不读回 GPU） */
-  waterCanvasCpu = false;
+  /** 调试开关（G07b）：true（默认）= Worker 里水体画布走 CPU 栅格，getImageData 不经 GPU 进程读回；false = G07 及以前（同页 A/B 用） */
+  waterCanvasCpu = true;
+  /** 调试开关（G07b 调查，已否决）：true = 主线程拼影像 / 细节瓦片的画布走 CPU 栅格（Worker 读回位图不再经 GPU 进程，read 阶段 24 → 10 ms），
+   * 但代价搬到主线程：每次建级出现约 59 ms 的长任务（1× 巡航 33 次 / 分钟 > 16.7 ms 帧），所以默认 false。根治见 handoff/G07b.md（瓦片拼接挪进 Worker） */
+  imageryCanvasCpu = false;
   attachGl(renderer: THREE.WebGLRenderer) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
     this.gl = gl;
@@ -837,7 +841,7 @@ export class GroundClipmap {
     let cover = this.tileCover(size, cx, cz, zoom, RES);
     while (cover.tiles.length > IMAGERY_MAX_TILES && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
     const canvas = new OffscreenCanvas(RES, RES);
-    const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
+    const ctx = canvas.getContext("2d", this.imageryCanvasCpu ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
     ctx.imageSmoothingQuality = "high"; // 瓦片与纹素不是 1:1（缩放级按四舍五入选），缩小时不要走最近邻 / 低质量
     // 没有瓦片的地方（加载失败）：最粗一级涂成深海色；其他级别留透明，由着色器回退到粗一级。
     // 以前一律涂深海色：一张 z14 瓦片偶发取不到，低空时陆地上就出现一块直边的深藏青多边形（T02 复审发现）
@@ -853,7 +857,7 @@ export class GroundClipmap {
         if (!bmp) return;
         const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
         const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
+        drawTimed(ctx, bmp, ax, ay, bx - ax, by - ay);
       }),
     );
     return canvas.transferToImageBitmap();
@@ -869,7 +873,7 @@ export class GroundClipmap {
     const cover = { ...all, tiles: all.tiles.filter((t) => this.detailTileWanted(all.toPx, zoom, t.x, t.y, heightKm)) };
     // G06：和 buildImagery 一样画在 OffscreenCanvas 上、交 ImageBitmap 给 Worker 读回（2048² 时源与纹素 1:1，1024 时是 2:1 缩小）
     const canvas = new OffscreenCanvas(RES, RES);
-    const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
+    const ctx = canvas.getContext("2d", this.imageryCanvasCpu ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
     ctx.imageSmoothingQuality = "high";
     let got = 0;
     let settled = 0;
@@ -883,7 +887,7 @@ export class GroundClipmap {
         got++;
         const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
         const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
+        drawTimed(ctx, bmp, ax, ay, bx - ax, by - ay);
       }),
     );
     // 限时：到点还没齐就不等了（在途的请求照常完成、进缓存，给下一次重建用）
@@ -999,6 +1003,17 @@ export class GroundClipmap {
     const job: RoadJob = { res: RES, nightRes: NIGHT_RES, lat0, lon0, x0: cx - size / 2, z0: cz - size / 2, size, zoom, tiles, water, waterwayMaxM: this.waterwayMaxM };
     return { job };
   }
+}
+
+/** G07b：主线程拼瓦片 drawImage 的耗时（imageryStats.draw），画布换 CPU 栅格时看主线程代价 */
+const drawStats = { count: 0, totalMs: 0, maxMs: 0 };
+function drawTimed(ctx: OffscreenCanvasRenderingContext2D, bmp: ImageBitmap, x: number, y: number, w: number, h: number) {
+  const t = performance.now();
+  ctx.drawImage(bmp, x, y, w, h);
+  const ms = performance.now() - t;
+  drawStats.count++;
+  drawStats.totalMs += ms;
+  drawStats.maxMs = Math.max(drawStats.maxMs, ms);
 }
 
 // ---- 地面栅格化的 Worker（T08 道路，PERF-9 并入水体/夜光）：一个常驻 Worker，按请求号对应回调；
