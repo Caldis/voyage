@@ -351,7 +351,13 @@ void main() {
 #endif
     vec3 p = ro + rd * (t + stepLen * jitter);
     float lod = clamp(log2(dtBase / 0.055), 0.0, 5.0);
-    gDetailRnd = fract(jitter + float(i) * 0.6180339);   // 细节噪声随机平铺给受光步进挑格点用（T32），每步、每帧都换
+    // 细节噪声随机平铺给受光步进挑格点用（T32），每步、每帧都换。
+    // 不能再由 jitter 派生（C03）：旧版 fract(jitter + i·φ) 和采样点在区间里的位置（t + stepLen·jitter）是同一个随机数，
+    // 时间累积收敛到的是 E_j[受光(深度(j), 格点(j + i·φ))]，随「在第几步进云」这个整数 i 跳变；掠射看远处云带时 i 逐行变，
+    // 受光面上就是一条条水平横纹（backlit-cu 的「梳齿」、clouds-variety 远处云带）。步长减到 1/4 横纹才消失、光照拉平或
+    // 受光 od 置 0 横纹消失、mip / 步数上限无关，都指向这里。换一条时间序列（每帧增量 0.7549，与 jitter 的 0.618 不同）就与深度去相关，
+    // 空间项 13·ign 只是换一张分布均匀的屏幕图样；零开销（handoff/C03.md）
+    gDetailRnd = fract(ign(gl_FragCoord.xy) * 13.0 + uFrame * 0.75487767 + float(i) * 0.6180339);
     float dens = cloudDensity(p, lod, t < 150.0);
 #ifdef CLOUD_WEATHER
     float stormW = gStormW;

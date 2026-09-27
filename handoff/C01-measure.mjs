@@ -28,7 +28,10 @@ const EXTRA = {
   "backlit-cu": { name: "backlit-cu", p: { preset: "wpac", time: 1010, altitude: 4, coverage: 0.5, "wing-pos": "-4" } },
   "cu-side": { name: "cu-side", p: { preset: "wpac", time: 840, altitude: 4.5, coverage: 0.5, "cloud-preset": "towering", "wing-pos": "-4" } },
 };
-const sceneList = String(args.scenes || "noon-cumulus").split(",").map((n) => EXTRA[n] || SCENES.find((s) => s.name === n));
+// --offset x,y（C03 加）：没写 offset 的场景用这个云偏移，跨次运行取景一致（否则飞机从打开页面起一直在飞，云的位置每次不同）
+const OFFSET = args.offset ? String(args.offset).split(",").map(Number) : null;
+const sceneList = String(args.scenes || "noon-cumulus").split(",").map((n) => EXTRA[n] || SCENES.find((s) => s.name === n))
+  .map((s) => (OFFSET && !s.offset ? { ...s, offset: OFFSET } : s));
 const wanted = args.variants ? String(args.variants).split(",") : Object.keys(VARIANTS);
 
 const browser = await launchBrowser(chromium, { angle });

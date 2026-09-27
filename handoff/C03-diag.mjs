@@ -92,11 +92,66 @@ function anchor(K) {
 
 const RND_OLD = "gDetailRnd = fract(jitter + float(i) * 0.6180339);";
 const RND_NEW = "gDetailRnd = fract(ign(gl_FragCoord.yx * 1.37 + vec2(float(i) * 5.3, 11.0)) + uFrame * 0.75487767);";
-const RND_C = "gDetailRnd = fract(jitter * 13.0 + float(i) * 0.6180339);";
+const RND_D = "gDetailRnd = fract(ign(gl_FragCoord.xy) * 13.0 + uFrame * 0.75487767 + float(i) * 0.6180339);";
+const RND_A ="gDetailRnd = fract(ign(gl_FragCoord.xy + vec2(19.0, 47.0)) + uFrame * 0.75487767 + float(i) * 0.6180339);";
+const RND_C ="gDetailRnd = fract(jitter * 13.0 + float(i) * 0.6180339);";
 const S_OLD = "vec3 S = sunLight + ambient;";
 const S_FLAT = "vec3 S = vec3(0.02 * uSunIlluminance);";
 const OD_OLD = "od *= CLOUD_EXTINCTION;";
+// 表皮受光：进云那个样本的受光步进起点挪回到「估计的表面下 1/σ」处（割线法估计表面，不多求密度），
+// 受光不再取决于进云样本随机落在表面下多深（那一层被照亮的表皮只有几十米，比步长薄得多）
+function skin(withProx) {
+  const base = withProx ? prox(0.5, 0.5, 0, 0.9) : [
+    [LD_DECL, "float gLayerNear = 0.0;\n" + LD_DECL],
+    [LD_HEAD, "  gLayerNear = 0.0;\n" + LD_HEAD],
+    [LD_DET, LD_DET_NEW],
+    [WAS_OLD, WAS_OLD + " float nearPrev = 0.0;"],
+    [DENS_OLD, DENS_OLD + " nearPrev = 0.0;"],
+  ];
+  return [
+    [RND_OLD, RND_C],
+    ...base.map(([f, r]) => {
+      if (f === WAS_OLD) return [f, r + " float lastEmptyL = seg.x, nearEL = 0.0, skinZ = 0.0;"];
+      if (f === DENS_OLD) return [f, r + "\n    float nearX = gLayerNear;\n    skinZ = (wasEmpty && dens > 0.002) ? (t + stepLen * jitter - max(lastEmptyL, seg.x)) * clamp((nearX - 1.0) / max(nearX - nearEL, 1e-3), 0.0, 1.0) : 0.0;"];
+      return [f, r];
+    }),
+    [EMPTY_OLD, "      wasEmpty = true; lastEmptyL = t + stepLen * jitter; nearEL = nearX;\n#ifdef CLOUD_WEATHER\n      wasThin = false;"],
+    ["      float od = 0.0;\n      float ls = 0.06;", "      float od = 0.0;\n      float ls = 0.06;\n      vec3 pL = p - rd * max(skinZ - 1.0 / sigma, 0.0);"],
+    ["od += layerDensity(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;", "od += layerDensity(pL + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;"],
+  ];
+}
+
+// 细步进云时受光按「原来的 2dt 区间」取深度：不透明度用细步的结果，受光的深度统计与原来一致（表皮受光的偏差处处相同）
+function baseLight(fine, a, tGate) {
+  return [
+    [RND_OLD, RND_C],
+    ...prox(fine, a, 0, tGate).map(([f, r]) => (f === WAS_OLD ? [f, r + " float lightShift = 0.0;"] : f === DENS_OLD ? [f, r + "\n    lightShift = (wasEmpty && dens > 0.002) ? max(2.0 * dt - stepLen, 0.0) * jitter : 0.0;"] : [f, r])),
+    ["      float od = 0.0;\n      float ls = 0.06;", "      float od = 0.0;\n      float ls = 0.06;\n      vec3 pL = p + rd * lightShift;"],
+    ["od += layerDensity(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;", "od += layerDensity(pL + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;"],
+  ];
+}
+
+// 细步区间里的采样位置换一个与「细不细」这个决定去相关的随机数（决定由上一个样本的位置 = jitter 决定）
+function blDec(fine, a, tGate, k) {
+  const v = baseLight(fine, a, tGate);
+  return [
+    ...v.map(([f, r]) => (f === DENS_OLD ? [f, r.replace("max(2.0 * dt - stepLen, 0.0) * jitter", "(2.0 * dt * jitter - stepLen * jSub)")] : [f, r])),
+    [P_OLD, `float jSub = stepLen < 1.99 * dt ? fract(jitter * ${k.toFixed(1)} + 0.31) : jitter;\n    vec3 p = ro + rd * (t + stepLen * jSub);`],
+  ];
+}
+
 export const VARIANTS = {
+  // 源码改好以后（src 里已是 rndD）：old = 页面内改回原来的 fract(jitter + i·φ)
+  new: {},
+  old: { march: [[RND_D, RND_OLD]] },
+  rndD: { march: [[RND_OLD, "gDetailRnd = fract(ign(gl_FragCoord.xy) * 13.0 + uFrame * 0.75487767 + float(i) * 0.6180339);"]] },
+  bd50a3g9: { march: blDec(0.5, 0.3, 0.9, 7) },
+  bd50a5g9: { march: blDec(0.5, 0.5, 0.9, 7) },
+  bl50a5g9: { march: baseLight(0.5, 0.5, 0.9) },
+  bl50a3g9: { march: baseLight(0.5, 0.3, 0.9) },
+  bl100a0: { march: baseLight(1.0, 0.0, 0) },
+  skin: { march: skin(false) },
+  skinP: { march: skin(true) },
   flatS: { march: [[S_OLD, S_FLAT]] },
   flatSq: { march: [[S_OLD, S_FLAT], ["for (int i = 0; i < 448; i++) {", "for (int i = 0; i < 900; i++) {"], [DT_OLD, "float dtBase = clamp(t * 0.002, 0.015, 0.5);"], [LOD_OLD, "float lod = clamp(log2(dtBase * 4.0 / 0.055), 0.0, 5.0);"], [LOOP_OLD, "if (t >= seg.y || T < 0.005 || i >= 800) break;"]] },
   noOd: { march: [[OD_OLD, "od = 0.0;"]] },
@@ -116,6 +171,10 @@ export const VARIANTS = {
   cP50a5g9: { march: [[RND_OLD, RND_C], ...prox(0.5, 0.5, 0, 0.9)] },
   cP50a3g9: { march: [[RND_OLD, RND_C], ...prox(0.5, 0.3, 0, 0.9)] },
   cP35a3g9: { march: [[RND_OLD, RND_C], ...prox(0.35, 0.3, 0, 0.9)] },
+  cP35a5g9: { march: [[RND_OLD, RND_C], ...prox(0.35, 0.5, 0, 0.9)] },
+  cP50a4g9: { march: [[RND_OLD, RND_C], ...prox(0.5, 0.4, 0, 0.9)] },
+  aP50a5g9: { march: [[RND_OLD, RND_A], ...prox(0.5, 0.5, 0, 0.9)] },
+  fP50a5g9: { march: [[RND_OLD, "gDetailRnd = 0.5;"], ...prox(0.5, 0.5, 0, 0.9)] },
   cP50a5: { march: [[RND_OLD, RND_C], ...prox(0.5, 0.5)] },
   base0c: { march: [[RND_OLD, RND_C + " // c03"]] },
   detFix: { march: [[RND_OLD, "gDetailRnd = 0.5;"]] },
