@@ -45,6 +45,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/light-pollution.ts` | 城市光污染的天空背景（T09）：从地面夜光估算，只压银河的可见度 |
 | `src/traffic.ts` / `src/weather.ts` | 远处飞机的运动；天气预设、雷暴 / 台风摆放、闪电调度；天气场 `WeatherField`（T19b：按经纬度 + 时间取样云型 / 云量，雷暴系统与台风的出生、寿命、漂移，粗略东亚海陆分布） |
 | `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
+| `src/rail/*` | 火车模式（TR02）：`data.ts` 读线路烘焙产物；`corridor.ts` 走廊坐标（里程 s、横向 d、高程）、平滑中心线、按规范公式估算的超高；`train.ts` 速度曲线（巡航 90 km/h、曲线限速、终点停车折返）与车体姿态（台车连线、超高侧倾、悬挂外倾）；`vibration.ts` 车体低频振动；`geodesy.ts` 线路 ENU ↔ 经纬度；`mode.ts` 接到 voyage 的相机 / 状态（`window.__voyage.rail`，`rail.teleport(s, dir)` 调试用）；单测 `node src/rail/rail.test.mjs`；飞机模式着色器零回归比对 `node src/rail/shader-parity.mjs <对照 voyage 根目录>` |
 | `src/debug/minimap.ts` | 调试小地图（DX-06）：可选的角落 2D canvas 叠层，画本机 / 轨迹 / 航线 / 交通 / 奇观，以及从天气场采样的云回波「多普勒」图；不碰任何 WebGL 程序 |
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
 | `src/atmosphere/luts.ts` | 透射率 / 多次散射 / 辐照度 / 天空视图 / 空气透视 LUT；`setHaze` 设边界层霾 |
@@ -161,6 +162,19 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 **经验近似（不是物理量，后续要替换）**：舱内受窗外光的系数、夜间自动曝光的目标中灰曲线、水体反射率取值。代码里都标了注释。
 
 ## 坑点
+
+- **火车：OSM 折线直接当相机轨迹，车体「转一下、直一段、再转一下」**（TR02）：烘焙的 `center.x / y` 是 OSM 折线按 2 m 重采样的原样，弯道上节点约 20 m 一个、每个节点折几度（`heading` / `curvature` 是 σ = 15 m 平滑过的，位置没有）。
+  车体方向取前后台车（相距 13.8 m）的连线，经过折角时偏航速度跳变。修法：`rail/corridor.ts` 把平面位置也按 σ = 15 m 高斯平滑，`position()` 用 Catmull-Rom 插值（线性插值时每过一个 2 m 采样点转向速度还会跳一下，约 12 Hz 的细小顿挫）。
+  以后怎么识别：`node src/rail/rail.test.mjs` 的「偏航角速度连续」一项（每帧偏航变化的二阶差分）；近景 / 中景（TR04 / TR05）要和相机对齐，也必须用 `Corridor.position()`，不要直接读 `center.x / y`。
+- **火车：超高（侧倾）一帧一帧地跳、在站场咽喉区一秒翻好几度**（TR02）：①滑动平均曲率按「最近的采样点」取窗口，结果每 2 m 跳一级；②道岔、反向曲线在 OSM 里是一串短促的弯，按公式算出的超高十几米内从一侧翻到另一侧。
+  修法：窗口在相邻采样点之间线性插值；超高再限制沿线变化率（≤ 1.67 mm/m，估，模拟逓減），左右两侧分别前后各推一遍，削成梯形、不产生滞后。识别：单测的「滚转每帧变化」「超高沿线变化率」。
+- **火车：相机贴地后，着色器里的相机高度只有约 0.5 m 的分辨率**（TR02，推算，没有在画面上验证）：`uCamR = 6360 + 高度(km)` 按 float32 上传，6360 附近的最小间隔是 2⁻¹¹ km ≈ 0.49 m。飞机在几公里高度上看不出来；火车眼高 2.5 m 时，坡道上相机会以约 0.5 m 的台阶上下跳。
+  TR03 做远景的 RAIL 变体时要处理（例如把相机高度拆成 uniform 里的「大数 + 小数」，或者近地部分改用相对高度）。
+- **火车：voyage 本地坐标与真实距离南北方向差约 0.35%**（TR02）：`ground/geo.ts` 的 LocalFrame 纬度方向固定 110.574 km/度（赤道附近的值），北纬 36° 真实是约 110.96 km/度。影像、地形都按它摆，所以相机必须走「线路 ENU → 真实经纬度（`rail/geodesy.ts`）→ LocalFrame」，不能把 ENU 米直接除以 1000 当本地公里（35 km 外会错开约 100 m）。
+  近景 / 中景（米级、线路坐标）与远景（LocalFrame）拼接时，500 m 处的比例差约 1.7 m，TR03 / TR04 要知道。
+- **node 直接跑 .ts（类型剥离）不支持参数属性、也不补 `.ts` 扩展名**（TR02）：`ground/geo.ts` 这类用了 `constructor(readonly x…)` 的模块会报 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`；项目里 import 不写扩展名，node 找不到。
+  `src/rail/rail.test.mjs` 用 `module.registerHooks` 补扩展名；想被 node 单测直接加载的模块（`src/rail/` 下除 mode.ts 以外）不要用参数属性、enum 这类非「可擦除」语法。
+- **回归场景切火车要注意面板控件的应用顺序**（TR02）：`applyScene` 先按 DEFAULTS 设 `preset`、`seat`……，再设场景自己的键。火车模式下改 `preset` 会先退出火车（`setPreset` 里 `rail.exit()`），所以火车场景要写 `"vehicle": "train"`（排在 DEFAULTS 之后生效），想要右座的话在 `js` 里再设；进入火车时座位默认换到北阿尔卑斯一侧（往信濃大町是左座）。飞机场景跟在火车场景后面时，要写 `"vehicle": "plane"`（DEFAULTS 里还没有这个键，TR08 可以加上）。
 
 - **窗上的水要做成「折射」，不能画成线和圈**（T29）：旧版把水线画成深色细线加头上一个圆、水珠只剩一圈暗环，在亮背景前读成铅笔线、钉头和空心圆圈。
   现在 `waterOnPane` 只给水面坡度 / 覆盖率 / 暗边，`scene.ts` 按坡度偏折视线、`texelFetch` 偏移后的 `uOutside`，暗边只在下缘（月牙）。
