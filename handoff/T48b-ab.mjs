@@ -93,6 +93,9 @@ try {
       const out = await page.evaluate(async ({ js, src }) => {
         const v = window.__voyage, m = v.exposure.finalMat, u = m.uniforms;
         for (const [k, a] of Object.entries(window.__t48bInit)) { if (Array.isArray(a)) u[k].value.fromArray(a); else u[k].value = a; }
+        // T48c 审查 P3-4：每个变体开头复原频闪（钉灭）与局部适应的 dt 覆盖，结果不再依赖变体的排列顺序
+        if (v.wingDebug) v.wingDebug.strobe = 0;
+        if ("localDt" in v.exposure) v.exposure.localDt = null;
         const want = src || window.__t48bSrc;
         if (m.fragmentShader !== want) { m.fragmentShader = want; m.needsUpdate = true; }
         let r = null;
