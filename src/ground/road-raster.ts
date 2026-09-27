@@ -1,4 +1,5 @@
 import { LocalFrame, tileXToLon, tileYToLat } from "./geo";
+import { blendDetail } from "./imagery-blend";
 
 /**
  * 道路灯带的栅格（T08）：把一级 clipmap 覆盖范围里的道路折线栅格成「到最近道路中心线的有向距离」。
@@ -126,6 +127,11 @@ export interface LevelPixels {
   albedo: Uint8ClampedArray;
   /** 夜光（buildNight 的结果，R 通道） */
   night: Uint8ClampedArray;
+  /**
+   * 判建成区（聚落地毯）用的影像：混高清细节之前的纯 EOX（G03 审查 R1）。不给就用 albedo。
+   * 这样 A 通道的道路照亮宽度与细节层完全无关——细节层开关、黄昏时最细两级重建，路灯都不会换一版
+   */
+  urbanAlbedo?: Uint8ClampedArray;
 }
 
 /**
@@ -283,6 +289,7 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
     }
   }
   const { water, albedo, night } = px;
+  const ua = px.urbanAlbedo ?? albedo;
 
   // 聚落（T43）：和城市灯点（terrain-shading.glsl.ts 的 groundLand）同一个判据——影像里灰白、低饱和的像素是建成区，
   // 灯点亮度 ∝ 夜光² × 建成区。按约 250 m 的格子求「夜光² × 建成区」的平均，再在约 0.4 km 半径内摊平，就是这一片灯点地毯的相对亮度。
@@ -299,7 +306,7 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
       const nn = night[i4] / 255;
       cellCount[c]++;
       if (nn < 0.02) continue;
-      carpetCells[c] += nn * nn * urbanOf(albedo[i4], albedo[i4 + 1], albedo[i4 + 2]);
+      carpetCells[c] += nn * nn * urbanOf(ua[i4], ua[i4 + 1], ua[i4 + 2]);
     }
   }
   for (let c = 0; c < GN * GN; c++) carpetCells[c] = cellCount[c] > 0 ? carpetCells[c] / cellCount[c] : 0;
@@ -344,7 +351,10 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
   }
 }
 
-export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo">;
+export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo"> & {
+  /** 高清细节（G03）实际用上的像素比例；没有细节层时是 0 */
+  detailCoverage: number;
+};
 
 /**
  * 一级的水体 + 道路 + 夜光合成入口（PERF-9）：栅格化水体/河道（OffscreenCanvas，Worker 和主线程兜底都能用）
@@ -355,7 +365,12 @@ export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo">;
  * （`albedo`、`nightRaw`，两个都走 Transferable）和瓦片的几何数据（水体/河道顶点，仍然是复制——它们缓存在
  * `tiles.ts` 的 LRU 里给下次重建复用，不能转移/detach，见类头 `RoadJob.water` 注释）。
  */
-export function buildGroundLevel(job: RoadJob, albedo: Uint8ClampedArray, nightRaw: Uint8ClampedArray): GroundLevelResult {
+export function buildGroundLevel(
+  job: RoadJob,
+  albedo: Uint8ClampedArray,
+  nightRaw: Uint8ClampedArray,
+  detail: Uint8ClampedArray | null = null,
+): GroundLevelResult {
   const RES = job.res;
   const canvas = new OffscreenCanvas(RES, RES);
   const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
@@ -405,10 +420,14 @@ export function buildGroundLevel(job: RoadJob, albedo: Uint8ClampedArray, nightR
     }
   }
   const water = ctx.getImageData(0, 0, RES, RES).data;
+  // 高清细节（G03）：只改影像 RGB（要用上面刚栅格化的水体遮罩挡掉水面），必须在 packRoads 之前——
+  // packRoads 读影像 alpha 判缺影像、再把 A 改写成道路照亮宽度编码
+  const urbanAlbedo = detail ? albedo.slice() : undefined;
+  const detailCoverage = detail ? blendDetail(albedo, detail, water, RES).coverage : 0;
   const night = darkenNight(nightRaw);
-  const px: LevelPixels = { water, albedo, night };
+  const px: LevelPixels = { water, albedo, night, urbanAlbedo };
   packRoads(job, px);
-  return { water: px.water, albedo: px.albedo };
+  return { water: px.water, albedo: px.albedo, detailCoverage };
 }
 
 /** Black Marble 的底图把陆地画成暗蓝色：取「亮度减去蓝色底」，只留下灯光（原来在主线程的 clipmap.ts
