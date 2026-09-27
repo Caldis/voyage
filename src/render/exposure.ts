@@ -94,7 +94,82 @@ void main() {
 }
 `;
 
+// ---- 双区曝光模型（T23 / T28；T30 抽出来给适应 pass 共用，见文件末尾 Exposure 类上方的公式说明） ----
+const EXPOSURE_MODEL = /* glsl */ `
+uniform bool uAuto;
+uniform vec2 uCabinBeta;    // 舱内局部适应比例：x = 暗处（中间视 / 暗视），y = 白天（明视）
+uniform vec2 uCabinCapEv;   // 舱内均值的显示亮度相对窗外均值的上限（EV）：x = 暗处，y = 白天
+uniform float uCabinWhiteEv;// 白天舱内的明度恒常补偿（EV）
+uniform float uCabinMaxBoostEv; // 舱内曝光最多比窗外高多少 EV（局部适应的幅度上限）
+uniform float uCabinHiMarginEv; // 舱内均值的显示亮度最多比窗外高光（线性平均）高多少 EV
+uniform float uSnowEv;      // 窗外是均匀而明亮的视野（云中、雪原）时，窗外目标中灰上调的档位
+uniform vec2 uUniformRange; // 「均匀视野」判据：窗外线性均值与对数均值之差（log2）在此区间内由 1 过渡到 0
+uniform vec2 uPhotopicRange;// 「白天」判定：窗外适应亮度的 log10(cd/m²) 区间
+uniform vec2 uDominanceRange; // 「舱内主导」判据：舱内与窗外适应亮度之差 c − o（log2）在此区间内由 0 过渡到 1
+uniform vec2 uCabinLitRange;  // 「舱灯开着」判据：舱内适应亮度 log10(cd/m²) 在此区间内由 0 过渡到 1
+uniform float uCabinLitWhiteEv; // 舱内主导（开灯）时的明度恒常补偿（EV）
+uniform float uWinGapLitEv;   // T30 开着舱灯时窗内曝光最多比舱内高多少 EV
+uniform vec2 uReflGapEv;      // T30 窗上倒影的曝光最多比舱内高多少 EV：x = 暗处（睡眠 / 全关），y = 开着舱灯
+
+// 目标中灰：亮度低于 100 cd/m² 后逐渐降低（暗处人眼看到的整体更暗；经验近似）
+float exposureKey(float logCd10) { return 0.18 * clamp((logCd10 + 2.0) / 4.0, 0.12, 1.0); }
+
+struct ExpModel { float eO; float eC; float aC; float aO; float dom; float lit; float reflLog; };
+
+// adapted：log2 亮度（kcd/m²）——窗外（对数均值）、舱内（按面积）、窗外（线性均值）
+ExpModel exposureModel(vec4 adapted) {
+    const float L2_10 = 0.30103;                     // log10(2)
+    const float LOG2_1000 = 9.965784;                // kcd → cd
+    float o = adapted.x;
+    float c = adapted.y;
+    float h = adapted.z;
+    // 白天程度：窗外适应亮度从 uPhotopicRange.x 到 .y（log10 cd/m²）之间由 0 过渡到 1
+    float day = smoothstep(uPhotopicRange.x, uPhotopicRange.y, (o + LOG2_1000) * L2_10);
+    // 窗外：按窗外自身的适应亮度曝光
+    float eO = log2(exposureKey((o + LOG2_1000) * L2_10)) - o;
+    // ① 局部适应：舱内的适应亮度从窗外出发，向舱内自身的亮度靠拢一部分；明视时周边视网膜能独立适应得更多
+    // T28「舱内主导」：舱内比窗外亮得多（dom），并且舱内本身够亮、是明视 / 高中间视（lit：开着舱灯，不是睡眠 / 全关），
+    //    这时眼睛适应的是舱内：舱内按自身完全适应（β → 1）、明度恒常照样成立、不再受「不许比窗外亮」的约束。
+    ExpModel m;
+    float dom = smoothstep(uDominanceRange.x, uDominanceRange.y, c - o);
+    float lit = dom * smoothstep(uCabinLitRange.x, uCabinLitRange.y, (c + LOG2_1000) * L2_10);
+    float beta = mix(mix(uCabinBeta.x, uCabinBeta.y, day), 1.0, lit);
+    float aC = o + beta * (c - o);
+    float eC = log2(exposureKey((aC + LOG2_1000) * L2_10)) - aC;
+    // ② 明度恒常：白天舱内大多是浅色饰面，人眼把它看成「白墙在阴影里」而不是中灰，所以舱内的中灰锚点上调
+    eC += max(uCabinWhiteEv * day, uCabinLitWhiteEv * lit);
+    // ③ 上限：舱内均值在屏幕上的亮度不超过窗外均值 + cap（暗处 cap < 0：舱内一定比窗外暗）
+    //    舱内均值的显示亮度 = eC + c，窗外均值 = eO + o；窗外是一片均匀的雾时（h ≈ o）收紧；舱内主导时放开
+    float cap = mix(min(mix(uCabinCapEv.x, uCabinCapEv.y, day), h - o + uCabinHiMarginEv), uCabinMaxBoostEv, lit);
+    eC = min(eC, eO + o - c + cap);
+    // ④ 局部适应的幅度有限：余光里的舱内最多比注视的窗外多提亮 uCabinMaxBoostEv 档
+    eC = min(eC, eO + uCabinMaxBoostEv);
+    aC = log2(exposureKey((aC + LOG2_1000) * L2_10)) - eC; // 等效适应亮度（浦肯野用），与曝光一致
+    // ④' T30 反方向的幅度上限，只在「舱内主导」（开着舱灯，lit）时生效：这时眼睛真的适应在舱内的亮度上（β → 1，
+    //    eC 是真实的适应而不是 ③ 的压暗），窗内最多比舱内多提亮 uWinGapLitEv 档——夜里开着灯看窗外本来就更难看清。
+    //    改前窗内的测光里混着很亮的倒影，把窗外曝光「顺带」压住了；倒影按 ⑦ 压暗后测光只剩窗外，要靠这一条接住。
+    //    睡眠 / 全关（lit ≈ 0）时 eC 是 ③ 为了「舱内一定比窗外暗」压出来的显示值，不代表适应，不拿它牵制窗外
+    float eO0 = eO;
+    eO = mix(eO, min(eO, eC + uWinGapLitEv), lit);
+    m.aO = o + (eO0 - eO); // 窗内被压低了曝光，相当于适应在更亮的水平上（浦肯野随之减弱）
+    // ⑤ 雪景补偿（只作用于窗外，放在舱内的约束之后，不连带抬亮舱内）：白天窗外是均匀而明亮的视野
+    //    （云中白茫茫一片）时，测光会把它压成中灰；人眼看到的是白，窗应当是画面最亮处。
+    //    判据：线性均值与对数均值几乎相等 ⇔ 视野里没有明暗起伏（有天空 / 海 / 云影的画面差 ≥ 0.15 档）
+    float uniformField = day * (1.0 - smoothstep(uUniformRange.x, uUniformRange.y, h - o));
+    eO += uSnowEv * uniformField;
+    m.eO = eO; m.eC = eC; m.aC = aC; m.dom = dom; m.lit = lit;
+    // ⑦ T30 倒影的显示增益（log2，≤ 0，写进适应结果左像素的 w，舱内合成读它乘到窗板倒影上）：
+    //    倒影是舱内表面的像，人眼把它当作「舱内」这一层来看（透明层分解 / 锚定框架：Anderson 的 scission、
+    //    Gilchrist 的 anchoring），它的明暗跟舱内同一个框架走，而不是跟着窗外暗处被单独拉高。
+    //    所以倒影最多比舱内的曝光高 uReflGapEv 档（局部适应的余量），超出的部分在舱内合成里预先扣掉；
+    //    窗外本身照旧按窗外曝光（T23），城市灯光、机翼不受影响。白天 eO ≤ eC，从不触发
+    m.reflLog = uAuto ? min(0.0, eC + mix(uReflGapEv.x, uReflGapEv.y, lit) - eO) : 0.0;
+    return m;
+}
+`;
+
 const ADAPT_FRAG = /* glsl */ `
+${EXPOSURE_MODEL}
 uniform sampler2D uPrev;
 uniform sampler2D uMeter;
 uniform float uDt;
@@ -114,6 +189,8 @@ void main() {
   }
   vec4 rate = mix(vec4(0.4), vec4(2.0), dir);
   vec4 next = uReset ? target : prev + (target - prev) * (1.0 - exp(-uDt * rate));
+  // 左像素的 w：倒影的显示增益（T30，由适应后的亮度直接算出，不参与时间积分）
+  if (vUv.x < 0.5) next.w = exposureModel(next).reflLog;
   gl_FragColor = next;
 }
 `;
@@ -121,35 +198,21 @@ void main() {
 const FINAL_FRAG = /* glsl */ `
 uniform sampler2D uHdr;
 uniform sampler2D uAdapted;
-uniform bool uAuto;
+${EXPOSURE_MODEL}
 uniform float uManualEv;
 uniform float uEvComp;
 uniform sampler2D uBloom;
 uniform float uBloomLevels;
 uniform float uGlare;       // 被眼睛和窗板散射到周围的能量比例
 uniform bool uDebugMask;    // 调试：输出窗外遮罩
-uniform vec2 uCabinBeta;    // 舱内局部适应比例：x = 暗处（中间视 / 暗视），y = 白天（明视）
-uniform vec2 uCabinCapEv;   // 舱内均值的显示亮度相对窗外均值的上限（EV）：x = 暗处，y = 白天
-uniform float uCabinWhiteEv;// 白天舱内的明度恒常补偿（EV）
-uniform float uCabinMaxBoostEv; // 舱内曝光最多比窗外高多少 EV（局部适应的幅度上限）
-uniform float uCabinHiMarginEv; // 舱内均值的显示亮度最多比窗外高光（线性平均）高多少 EV
-uniform float uSnowEv;      // 窗外是均匀而明亮的视野（云中、雪原）时，窗外目标中灰上调的档位
-uniform vec2 uUniformRange; // 「均匀视野」判据：窗外线性均值与对数均值之差（log2）在此区间内由 1 过渡到 0
-uniform vec2 uPhotopicRange;// 「白天」判定：窗外适应亮度的 log10(cd/m²) 区间
 uniform vec2 uChromaD;      // T28 舱内色适应程度：x = 窗外主导，y = 舱内主导（0 = 关掉色适应）
 uniform vec2 uChromaCabinW; // 适应白点里舱内白点的权重：x = 窗外主导，y = 舱内主导（其余来自窗外）
-uniform vec2 uDominanceRange; // 「舱内主导」判据：舱内与窗外适应亮度之差 c − o（log2）在此区间内由 0 过渡到 1
 uniform vec3 uCabinRefAlbedo; // 舱内饰面的平均反照率（只用色度）：舱内平均色 ÷ 它 = 舱内光源色
-uniform vec2 uCabinLitRange;  // 「舱灯开着」判据：舱内适应亮度 log10(cd/m²) 在此区间内由 0 过渡到 1
-uniform float uCabinLitWhiteEv; // 舱内主导（开灯）时的明度恒常补偿（EV）
 uniform vec2 uOffLocusAdapt; // 适应白点偏离普朗克轨迹的那部分人眼只适应这个比例：x = 偏绿一侧，y = 偏品红 / 紫一侧（1 = 和轨迹方向一样）
 uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度限幅（log2 色度向量的长度）
 #include <common>
 #include <dithering_pars_fragment>
 varying vec2 vUv;
-
-// 目标中灰：亮度低于 100 cd/m² 后逐渐降低（暗处人眼看到的整体更暗；经验近似）
-float exposureKey(float logCd10) { return 0.18 * clamp((logCd10 + 2.0) / 4.0, 0.12, 1.0); }
 
 // 线性 sRGB ↔ CAT02 LMS（M = M_CAT02 · M_sRGB→XYZ，按列写）
 const mat3 RGB2LMS = mat3(0.390473, 0.070926, 0.023143,
@@ -189,39 +252,10 @@ void main() {
   if (uAuto) {
     vec4 adapted = texture(uAdapted, vec2(0.25, 0.5)); // log2 亮度（kcd/m²）：窗外（对数均值）、舱内（按面积）、窗外（线性均值）
     vec4 chroma = texture(uAdapted, vec2(0.75, 0.5));  // log2(R/G)、log2(B/G)：舱内 xy、窗外 zw（T28）
-    const float L2_10 = 0.30103;                     // log10(2)
-    const float LOG2_1000 = 9.965784;                // kcd → cd
-    float o = adapted.x;
-    float c = adapted.y;
-    float h = adapted.z;
-    // 白天程度：窗外适应亮度从 uPhotopicRange.x 到 .y（log10 cd/m²）之间由 0 过渡到 1
-    float day = smoothstep(uPhotopicRange.x, uPhotopicRange.y, (o + LOG2_1000) * L2_10);
-    // 窗外：按窗外自身的适应亮度曝光
-    float eO = log2(exposureKey((o + LOG2_1000) * L2_10)) - o;
-    // ① 局部适应：舱内的适应亮度从窗外出发，向舱内自身的亮度靠拢一部分；明视时周边视网膜能独立适应得更多
-    // T28「舱内主导」：舱内比窗外亮得多（dom），并且舱内本身够亮、是明视 / 高中间视（lit：开着舱灯，不是睡眠 / 全关），
-    //    这时眼睛适应的是舱内：舱内按自身完全适应（β → 1）、明度恒常照样成立、不再受「不许比窗外亮」的约束。
-    float dom = smoothstep(uDominanceRange.x, uDominanceRange.y, c - o);
-    float lit = dom * smoothstep(uCabinLitRange.x, uCabinLitRange.y, (c + LOG2_1000) * L2_10);
-    float beta = mix(mix(uCabinBeta.x, uCabinBeta.y, day), 1.0, lit);
-    float aC = o + beta * (c - o);
-    float eC = log2(exposureKey((aC + LOG2_1000) * L2_10)) - aC;
-    // ② 明度恒常：白天舱内大多是浅色饰面，人眼把它看成「白墙在阴影里」而不是中灰，所以舱内的中灰锚点上调
-    eC += max(uCabinWhiteEv * day, uCabinLitWhiteEv * lit);
-    // ③ 上限：舱内均值在屏幕上的亮度不超过窗外均值 + cap（暗处 cap < 0：舱内一定比窗外暗）
-    //    舱内均值的显示亮度 = eC + c，窗外均值 = eO + o；窗外是一片均匀的雾时（h ≈ o）收紧；舱内主导时放开
-    float cap = mix(min(mix(uCabinCapEv.x, uCabinCapEv.y, day), h - o + uCabinHiMarginEv), uCabinMaxBoostEv, lit);
-    eC = min(eC, eO + o - c + cap);
-    // ④ 局部适应的幅度有限：余光里的舱内最多比注视的窗外多提亮 uCabinMaxBoostEv 档
-    eC = min(eC, eO + uCabinMaxBoostEv);
-    aC = log2(exposureKey((aC + LOG2_1000) * L2_10)) - eC; // 等效适应亮度（浦肯野用），与曝光一致
-    // ⑤ 雪景补偿（只作用于窗外，放在舱内的约束之后，不连带抬亮舱内）：白天窗外是均匀而明亮的视野
-    //    （云中白茫茫一片）时，测光会把它压成中灰；人眼看到的是白，窗应当是画面最亮处。
-    //    判据：线性均值与对数均值几乎相等 ⇔ 视野里没有明暗起伏（有天空 / 海 / 云影的画面差 ≥ 0.15 档）
-    float uniformField = day * (1.0 - smoothstep(uUniformRange.x, uUniformRange.y, h - o));
-    eO += uSnowEv * uniformField;
+    ExpModel em = exposureModel(adapted);
+    float eO = em.eO, eC = em.eC, aC = em.aC, o = adapted.x, dom = em.dom;
     logExposure = mix(eC, eO, src.a);
-    logAdapt = mix(aC, o, src.a);
+    logAdapt = mix(aC, em.aO, src.a);
     // ⑥ 色适应（T28，只作用于舱内）：适应白点 = 舱内光源色与窗外平均色的对数混合，
     //    舱内越主导（舱内比窗外亮得多：夜里开灯），越以舱内光源为准、适应得越完全。
     //    窗外平均色先限幅：很蓝的天空不是灰色表面，照单全收会把舱内的红补过头（fuji-day 偏粉）
@@ -317,18 +351,51 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  *      偏绿一侧照常（人眼沿暖 ↔ 冷适应得充分，对紫色氛围灯不会完全适应：睡眠档保留淡紫）；
  *      CAT02 LMS 里的部分 von Kries：g = mix(1, LMS(D65) / LMS(W), D)，D = mix(0.7, 0.72, dom)；
  *      结果再按原亮度归一（只改色度，不碰 T23 标定的亮度）。色度测光与亮度同速做时间适应。
+ * T30「窗上倒影与曝光一致」：
+ *   根因：夜里窗内按窗外单独适应，eO 比 eC 高 5–7 档（睡眠 7.0、开灯 5.2、全关 6.4），倒影（舱内表面 × 菲涅尔 × 1.5，约 −3.5 EV）
+ *      在屏幕上反比它的来源亮 1.5–3.5 档：睡眠档的洗墙光带接近白，开灯时座椅的倒影成了下半窗一层均匀的棕褐纱。
+ *   ⑦ 倒影按「舱内」这一层显示：增益 reflLog = min(0, eC + uReflGapEv − eO)（暗处 2.5、开灯 2.0 档余量），
+ *      由适应 pass 写进左像素的 w，舱内合成（scene.ts）乘到倒影上；窗外本身不受影响。
+ *   ④' 开着舱灯（lit）时窗内曝光最多比舱内高 uWinGapLitEv = 6.5 档：倒影压暗后测光不再被它抬高，
+ *      没有这一条的话开灯时窗外会亮得和全关一样（改前是被倒影「顺带」压住的）。
+ *   倒影的色度在 scene.ts 里按主灯色温预先抵掉 70%（和舱内的色适应一致，窗外不做舱内色适应）。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
  * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
  * 目标是用户给的屏幕亮度（白天舱壁 150–185、关灯夜里 25–45、窗最亮）。这是经验模型，不是视觉科学的定量结果。
  * 调试：finalMat.uniforms.uDebugMask = true 输出窗外遮罩。
  */
+/**
+ * 上一帧的适应结果（2×1 浮点纹理），给舱内合成读：左像素 w = 窗上倒影的显示增益（log2，T30，见 EXPOSURE_MODEL ⑦）。
+ * 模块级共享的 uniform 对象：scene.ts 直接放进自己的 uniforms，不用在 main.ts 里接线。
+ * 舱内合成在曝光之前画，读到的是上一帧的值（适应本来就是秒级的慢变量，差一帧看不出）。
+ */
+export const EXPOSURE_STATE: THREE.IUniform<THREE.Texture | null> = { value: null };
+
 export class Exposure {
   private readonly meter = tinyTarget();
   private adapted = [tinyTarget(), tinyTarget()];
   private reset = true;
 
   private readonly meterMat = material(METER_FRAG, { uHdr: { value: null }, uPrevAdapted: { value: null }, uReset: { value: true } });
+  /** 双区曝光模型的参数（EXPOSURE_MODEL），适应 pass 与最终合成共用同一批 uniform 对象 */
+  private readonly model: Record<string, THREE.IUniform> = {
+    uAuto: { value: true },
+    uCabinBeta: { value: new THREE.Vector2(0.3, 0.8) },
+    uCabinCapEv: { value: new THREE.Vector2(-0.75, 2.0) },
+    uCabinWhiteEv: { value: 2.2 },
+    uCabinMaxBoostEv: { value: 4.5 },
+    uCabinHiMarginEv: { value: 1.4 },
+    uSnowEv: { value: 2.0 },
+    uUniformRange: { value: new THREE.Vector2(0.05, 0.12) },
+    uPhotopicRange: { value: new THREE.Vector2(1.5, 3.0) },
+    uDominanceRange: { value: new THREE.Vector2(-1.0, 2.0) },
+    uCabinLitRange: { value: new THREE.Vector2(0.5, 1.2) },
+    uCabinLitWhiteEv: { value: 0.35 },
+    uWinGapLitEv: { value: 6.5 },
+    uReflGapEv: { value: new THREE.Vector2(2.5, 2.0) },
+  };
   private readonly adaptMat = material(ADAPT_FRAG, {
+    ...this.model,
     uPrev: { value: null },
     uMeter: { value: this.meter.texture },
     uDt: { value: 0 },
@@ -337,36 +404,27 @@ export class Exposure {
   readonly finalMat = material(
     FINAL_FRAG,
     {
+      ...this.model,
       uHdr: { value: null },
       uAdapted: { value: null },
-      uAuto: { value: true },
       uManualEv: { value: 14 },
       uEvComp: { value: 0 },
       uBloom: { value: null },
       uBloomLevels: { value: Bloom.WEIGHT_SUM },
       uGlare: { value: 0.04 },
       uDebugMask: { value: false },
-      uCabinBeta: { value: new THREE.Vector2(0.3, 0.8) },
-      uCabinCapEv: { value: new THREE.Vector2(-0.75, 2.0) },
-      uCabinWhiteEv: { value: 2.2 },
-      uCabinMaxBoostEv: { value: 4.5 },
-      uCabinHiMarginEv: { value: 1.4 },
-      uSnowEv: { value: 2.0 },
-      uUniformRange: { value: new THREE.Vector2(0.05, 0.12) },
-      uPhotopicRange: { value: new THREE.Vector2(1.5, 3.0) },
       uChromaD: { value: new THREE.Vector2(0.7, 0.72) },
       uChromaCabinW: { value: new THREE.Vector2(0.7, 1.0) },
-      uDominanceRange: { value: new THREE.Vector2(-1.0, 2.0) },
       uCabinRefAlbedo: { value: new THREE.Vector3(0.75, 0.72, 0.665) },
-      uCabinLitRange: { value: new THREE.Vector2(0.5, 1.2) },
-      uCabinLitWhiteEv: { value: 0.35 },
       uOffLocusAdapt: { value: new THREE.Vector2(1.0, 0.4) },
       uWinChromaMax: { value: 0.6 },
     },
     true,
   );
 
-  constructor(private readonly pass: FullscreenPass) {}
+  constructor(private readonly pass: FullscreenPass) {
+    EXPOSURE_STATE.value = this.adapted[0].texture;
+  }
 
   /** 跳变（换地点、拖时间）后让眼睛直接适应到新亮度 */
   snap() {
@@ -387,6 +445,7 @@ export class Exposure {
     this.pass.render(this.adaptMat, next);
     this.adapted = [next, prev];
     this.reset = false;
+    EXPOSURE_STATE.value = next.texture;
 
     this.finalMat.uniforms.uHdr.value = hdr;
     this.finalMat.uniforms.uAdapted.value = next.texture;
