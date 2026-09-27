@@ -408,11 +408,17 @@ float flcMedium(vec3 q, out vec3 albedo, out vec3 emit) {
   float grow = smoothstep(0.0, 0.1, rev);
   float fade = 1.0 - smoothstep(0.2, 0.7, rev);
   // 云的形状：包住整座城的球（半径约 4.8 km）+ 噪声，噪声只在外沿起作用（里面一定是实的，城被整个裹住），外沿成团、不是光滑的蛋
-  vec3 ei = c / vec3(4.8, 4.9, 4.8);
-  float pi = 1.0 - dot(ei, ei);
-  float C = (pi + (0.6 * (n.r - 0.5) + 0.45 * (n.g - 0.5)) * (1.2 - pi)) * smoothstep(-0.25, 0.1, pi);
-  float thr = mix(1.05, 0.05, grow);
-  float sThick = fade > 0.0 ? 6.0 * smoothstep(thr, thr + 0.15, C) * fade : 0.0;
+  // 外形再加一次很低频的起伏（整团云歪向一边、底部偏平），免得是一个正圆的球
+  float sThick = 0.0;
+  if (fade > 0.0) {
+    vec4 nb = textureLod(uShapeNoise, c * 0.06 + vec3(S * 2.9, 0.4, 0.1), 0.0);
+    vec3 ei = (c - vec3(0.0, 0.3, 0.0)) / vec3(5.3 + 1.2 * (nb.g - 0.5), 4.6, 5.0 + 1.2 * (nb.b - 0.5));
+    ei.y *= c.y < 0.0 ? 1.12 : 1.0;
+    float pi = 1.0 - dot(ei, ei) + 0.35 * (nb.r - 0.5);
+    float C = (pi + (0.6 * (n.r - 0.5) + 0.45 * (n.g - 0.5)) * (1.2 - pi)) * smoothstep(-0.25, 0.1, pi);
+    float thr = mix(1.05, 0.05, grow);
+    sThick = 6.0 * smoothstep(thr, thr + 0.15, C) * fade;
+  }
   // 根须的帘子：底座下面、按水平位置的一次纹理立起来的一根根细柱（纹理与 y 无关），长短不齐
   float sRoot = 0.0;
   float rr = length(c.xz);
