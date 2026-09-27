@@ -148,6 +148,197 @@
           "note": "离线不可信"
         }
       }
+    },
+    {
+      "date": "2026-09-27",
+      "commit": "7a10129",
+      "label": "shader-budget --ledger",
+      "quick": false,
+      "jobs": 1,
+      "rounds": 3,
+      "programs": {
+        "scene-default": {
+          "min": 7694,
+          "median": 10820,
+          "mad": 3126
+        },
+        "scene-economy": {
+          "min": 7606,
+          "median": 8435,
+          "mad": 829
+        },
+        "outside-default": {
+          "min": 6074,
+          "median": 6270,
+          "mad": 196
+        },
+        "outside-extras": {
+          "min": 8969,
+          "median": 9086,
+          "mad": 117
+        },
+        "outside-ground-detail": {
+          "min": 11977,
+          "median": 12548,
+          "mad": 34
+        },
+        "outside-rail": {
+          "min": 12375,
+          "median": 13482,
+          "mad": 162
+        },
+        "wing": {
+          "min": 7483,
+          "median": 7695,
+          "mad": 212
+        },
+        "cloud-march": {
+          "min": 481,
+          "median": 482,
+          "mad": 1
+        },
+        "cloud-march-storm": {
+          "min": 4071,
+          "median": 4125,
+          "mad": 54
+        },
+        "cloud-march-typhoon": {
+          "min": 7410,
+          "median": 7604,
+          "mad": 120
+        },
+        "cloud-march-severe": {
+          "min": 13639,
+          "median": 13674,
+          "mad": 35
+        },
+        "cloud-occupancy": {
+          "min": 2562,
+          "median": 2629,
+          "mad": 67
+        },
+        "cloud-shadow-map": {
+          "min": 198,
+          "median": 387,
+          "mad": 69
+        },
+        "cloud-shadow-map-weather": {
+          "min": 2551,
+          "median": 2653,
+          "mad": 49
+        },
+        "cloud-probe": {
+          "min": 159,
+          "median": 388,
+          "mad": 211
+        },
+        "cloud-probe-weather": {
+          "min": 786,
+          "median": 842,
+          "mad": 56
+        },
+        "cloud-march-wonder": {
+          "min": 719,
+          "median": 724,
+          "mad": 5
+        },
+        "cloud-march-cirrus": {
+          "min": 598,
+          "median": 1012,
+          "mad": 295
+        },
+        "wonder-layer": {
+          "min": 8786,
+          "median": 9150,
+          "mad": 364
+        },
+        "cloud-resolve": {
+          "min": 58,
+          "median": 66,
+          "mad": 8
+        },
+        "cloud-noise-0": {
+          "min": 230,
+          "median": 244,
+          "mad": 14
+        },
+        "cloud-noise-1": {
+          "min": 141,
+          "median": 143,
+          "mad": 2
+        },
+        "cloud-noise-2": {
+          "min": 162,
+          "median": 162,
+          "mad": 0
+        },
+        "ocean-evolve": {
+          "min": 327,
+          "median": 355,
+          "mad": 5
+        },
+        "ocean-butterfly": {
+          "min": 31,
+          "median": 32,
+          "mad": 1
+        },
+        "ocean-finalize": {
+          "min": 23,
+          "median": 25,
+          "mad": 0
+        },
+        "bloom-down": {
+          "min": 32,
+          "median": 35,
+          "mad": 3
+        },
+        "bloom-up": {
+          "min": 28,
+          "median": 30,
+          "mad": 0
+        },
+        "exposure-meter": {
+          "min": 29355,
+          "median": 44704,
+          "mad": 1041,
+          "note": "离线不可信"
+        },
+        "exposure-adapt": {
+          "min": 45,
+          "median": 50,
+          "mad": 0
+        },
+        "exposure-final": {
+          "min": 77,
+          "median": 80,
+          "mad": 1
+        },
+        "atmosphere-lut-0": {
+          "min": 67,
+          "median": 72,
+          "mad": 1
+        },
+        "atmosphere-lut-1": {
+          "min": 508,
+          "median": 539,
+          "mad": 9
+        },
+        "atmosphere-lut-2": {
+          "min": 281,
+          "median": 283,
+          "mad": 2
+        },
+        "atmosphere-sky-view": {
+          "min": 142,
+          "median": 152,
+          "mad": 4
+        },
+        "atmosphere-aerial": {
+          "min": 114,
+          "median": 117,
+          "mad": 3
+        }
+      }
     }
   ]
 }

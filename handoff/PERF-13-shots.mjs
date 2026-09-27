@@ -27,7 +27,8 @@ for (const s of scenes) {
   const sc = { ...s, p: { ...s.p } };
   // 其他场景的光学开关不带过来：非强制场景一律回到默认（按条件 + 随机，种子每次打开页面不同，所以非强制场景里光学要么没有、要么只有影子）
   // 种子写死（optics.ts 的 seed 默认是每次打开页面随机的）：两边掷出同样的宝光 / 幻日段落
-  const reset = "v.optics.seed = 12345;" + (s.js && s.js.includes("v.optics.force") ? "" : "v.optics.disabled = false; v.optics.pinGreenFlash(null); v.optics.force = {};");
+  // 翼尖频闪钉成灭（wingDebug.strobe = 0）：冻结时刻落在频闪相位的哪一点两边不同，夜景第一轮有一张正好拍到闪光（整窗发白，与窗外 pass 无关）
+  const reset = "v.optics.seed = 12345; v.wingDebug.strobe = 0;" + (s.js && s.js.includes("v.optics.force") ? "" : "v.optics.disabled = false; v.optics.pinGreenFlash(null); v.optics.force = {};");
   const [ox, oy] = s.offset ?? [0, 0];
   const time = s.p.time;
   const settle =

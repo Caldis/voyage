@@ -21,6 +21,7 @@
 | 精度 | 大气 LUT（天空视图）、云缓冲（raw / history）都要用**32 位浮点**（有 `OES_texture_float_linear` 时）：半精度最小次正规数 5.96e-8，暗场景 / 无月夜会下溢成阶梯或纯黑 | [大气与曝光](#pit-atmos)、[云](#pit-cloud) |
 | 云缓冲格式 | 云的 history 缓冲是**两倍宽**（`2×w`）：左半是颜色，右半存 `(深度 × 不透明度, 不透明度)`（T38），读它一律走 `cloudBufferColor` / `cloudBufferDepth`，不要直接 `texture(uClouds, uv)`；右半**只在附近有高出海面的真实地形、或相机低于 1 km（火车 / 起降）时才写**（PERF-11，`uCloudDepthOn`，不写时 `cloudBufferDepth` 返回 0），别的用途要深度先改这个条件 | [云](#pit-cloud) |
 | 云的天气变体 | 雷暴 / 台风密度只在 `#ifdef CLOUD_STORM` / `CLOUD_TYPHOON`（共用部分 `CLOUD_WEATHER`）里，默认云步进 / 云影图 / 探针预处理后不含它们（PERF-10）；**新的天气代码一律写进这些宏里**，新的「平时不走」的功能照样做成变体，并在 `lint-shaders.mjs` 登记 | [着色器编译](#pit-shader)、[云](#pit-cloud) |
+| 窗外程序的变体 | 罕见光学（宝光 / 本机影子 / 幻日 / 晕）只在 `#ifdef OUTSIDE_OPTICS`、天幕层奇观只在 `#ifdef OUTSIDE_WONDER` 里，窗外默认程序（冷启动关键路径）预处理后不含它们（PERF-13，`check:glsl` 断言）；只有 `""` / `OW` / `DOW` / `DROW` 四个组合，选哪个只由 `outside-pass.ts` 的 `wantedOutsideKey` 决定；新的「平时不出现」的窗外效果照样写进宏，并让 `opticsWanted` / `wantedOutsideKey` 认得它 | [着色器编译](#pit-shader) |
 | 窗外输出 alpha 语义 | 窗外 pass 输出的 alpha 不是占位不透明度，是 `1 + 能看到多少点星`（T41）；改窗外输出时**别把它写回 1** | [舱内与倒影](#pit-cabin) |
 | 影像 A 通道语义 | 影像纹理的 A 通道**兼存道路照亮宽度**（T08）：< 0.5 表示「缺影像比例 / 2」，≥ 0.5 表示有影像、其余 7 位是宽度；判断缺瓦片一律用 `min(A·2, 1)`（`sampleGroundAlbedo`），不能直接读 A | [地面与数据](#pit-ground) |
 | 数据真实性与许可 | 通告 / 路段 / 地理数据逐字摘录并注明来源；匹配不上的写进报告，不猜、不补全；示例数据要标「示例」 | [数据来源与许可](#数据来源与许可) |
@@ -89,7 +90,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/ground/geo.ts` / `tiles.ts` / `clipmap.ts` | 经纬度换算；瓦片加载（影像、地形、水体、道路、夜光）；7 级 clipmap |
 | `src/ground/road-raster.ts` / `road-raster.worker.ts` | 夜间道路灯带（T08）：OSM 道路栅格成有向距离场 + 照亮宽度，在 Web Worker 里算；着色见 `ground.glsl.ts` 的 `groundRoadCoverage`、`terrain-shading.glsl.ts` 的 `groundRoadLights` |
 | `src/render/scene.ts` | 场景（舱内合成）着色器：舱内 uniform 声明、主函数（舱壁 / 内衬 / 遮光板 / 座椅 / 窗板效果、alpha 打包）、`createSceneMaterial`（持有所有 pass 共用的 uniforms） |
-| `src/render/outside-pass.ts` | 窗外着色器（SC-5）：`outsideRadiance`（地面 / 海面 / 天空的唯一调用点）、交通、闪电；`createOutsideMaterial` / `createOutsideTarget`；低空细节变体 `GroundDetailVariant` |
+| `src/render/outside-pass.ts` | 窗外着色器（SC-5）：`outsideRadiance`（地面 / 海面 / 天空的唯一调用点）、交通、闪电；`createOutsideMaterial` / `createOutsideTarget`；窗外变体（PERF-13：`""` / `OW` 罕见光学 + 天幕层奇观 / `DOW` 低空细节 / `DROW` 火车）由 `GroundDetailVariant` 管，选择只在 `wantedOutsideKey` |
 | `src/render/noise.glsl.ts` | 窗外与舱内共用的小噪声（hash12 / vnoise / hash22 / fbm2）和 `uLoopGuard`；改它两个程序都重编 |
 | `src/render/ocean.glsl.ts` | 海面：菲涅尔、12 波斜率场、风痕、`oceanRadiance` |
 | `src/render/terrain-shading.glsl.ts` | 真实地面着色 `groundRadiance` |
@@ -265,6 +266,12 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   坑一：`check:glsl` 的「同名函数」检查不展开条件编译，`#ifdef A` / `#else` 里各写一份同名函数会被报重名——在**函数体里**分 `#ifdef`（见 `cloudStormsOn`）。
   坑二：`lint-shaders` 的条件展开器（sampler 统计用）只认单个 `defined(X)`，不认 `#if defined(A) || defined(B)`；需要「任一」时由 JS 端多加一个宏（本任务的 `CLOUD_WEATHER`）。
   识别：`node handoff/PERF-10-preproc.mjs` 用 glslangValidator `-E` 真预处理，逐程序列出雷暴 / 台风标识符出现次数，默认程序应只剩 uniform 声明。
+- **窗外程序的罕见光学 / 天幕层奇观拆成按需变体后，真冷启动 13.4 → 11.1 s**（PERF-13）：两者平时不出现，却一直编在窗外默认程序里（离线 FXC 消融：去掉宝光 / 影子 / 晕 −15%、去掉天梯 / 建木 −20%、两者一起 −34~38%；太阳圆盘 + 绿闪只有 −2%，留在默认程序）。拆成 `OUTSIDE_OPTICS` / `OUTSIDE_WONDER` 后默认程序离线 FXC 约 5.8 s（同轮 master 8.8–11 s），组合只留 `""`、`OW`（巡航，首帧后后台预编，冷缓存约 10–12 s 编好）、`DOW`（低空，和原低空细节变体同一程序）、`DROW`（火车，同原火车变体），三个变体预处理后与改动前的对应程序逐字相同（`node handoff/PERF-13-parity.mjs <master 的 apps/voyage>`）。
+  坑一：**本机影子是纯物理的，只要下面有云、太阳在上面就开着**——白天在云上几乎总要 `OW`，所以 `OW` 必须预编而不是等「稀有」时才编；判断「看不看得出」按着色器覆盖公式取上界（`optics.ts` 的 `opticsWanted`：压暗 ≤ 0.4 × 360 m² / 半影半径² × 0.7，< 0.2% 当看不出），日落时半影大，默认程序就够。
+  坑二：**关掉真实地理数据时 main.ts 原来直接画 `outsideMat`**，拆变体后这条路会丢掉光学与奇观——现在一律走 `groundDetail.pick`（高度传 Infinity）。
+  坑三：挪 uniform 声明的顺序会让「预处理后逐字相同」失败（常量缓冲布局也跟着变）：包 `#ifdef` 时保持原来的声明顺序。
+  坑四：零回归截图里，夜景偶尔整窗发白是**翼尖频闪**被冻结在亮相（与窗外 pass 无关）；逐像素对比夜景前设 `__voyage.wingDebug.strobe = 0`（`handoff/PERF-13-shots.mjs` 已带）。
+  识别：`check:glsl` 的「窗外默认程序不含罕见光学 / 天幕层奇观代码」一节；`__voyage.groundDetail.variantStatus` 看想要 / 实际画的变体与各变体编译状态。
 
 <a id="pit-cloud"></a>
 ### 云
