@@ -117,6 +117,8 @@ export async function collectPrograms(server) {
     const { pass } = capturingPass();
     const clouds = new m.Clouds(pass, deepMock(), {}, {});
     add("cloud-march", clouds.marchMat);
+    add("cloud-occupancy", clouds.occMat);
+    add("cloud-shadow-map", clouds.shadowMat);
     add("cloud-probe", clouds.probeMat);
     add("cloud-resolve", clouds.resolveMat);
   }

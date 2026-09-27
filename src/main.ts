@@ -444,26 +444,8 @@ requestAnimationFrame(() =>
     // 不在首帧里同步编译：同步编译太久时 Chrome 会认为 GPU 卡死，报 VALIDATE_STATUS false 并丢失 WebGL 上下文
     // （上下文恢复后 LUT、噪声纹理都没了，画面错乱）。渲染目标要和真正渲染时一致（hdr），程序缓存才能命中
     //
-    // SC-4：云光线步进（marchMat）和它的时域累积 resolve（resolveMat）原来要等这一批编完、首帧前才单独
-    // 触发一次「假渲染」来编译，同步卡住主线程约 7 秒（T16 的发现，见 handoff/T16.md「还能做但本任务没做」）。
-    // 这里把它们并进同一批 compileAsync 后台编译。clouds.ts 目前没有导出这两个材质和它们的渲染目标（T04
-    // 正在并行改这个文件，约定本任务不碰它），下面用类型断言读运行时属性——clouds.ts 里写的是 TS 的
-    // `private` 关键字，不是原生 `#私有字段`，运行时就是普通属性，断言不会报运行时错误，也不改 clouds.ts
-    // 一个字符。等 T04 收敛后应该把这几个字段（或一个 warmup 方法）转成正式的公开 API，
-    // 建议 diff 见 apps/voyage/handoff/SC-4.md。
-    interface CloudsInternals {
-      marchMat: THREE.ShaderMaterial;
-      resolveMat: THREE.ShaderMaterial;
-      raw: THREE.WebGLRenderTarget;
-      history: THREE.WebGLRenderTarget[];
-    }
-    const cloudsInternal = clouds as unknown as CloudsInternals;
-    // resolveMat 采样 uCurrent / uCurrentDepth / uHistory：真正跑 clouds.render() 之前它们都是
-    // null，这里先绑上真纹理（和 Clouds.render() 里赋的值同一批对象），避免第一次用到这个材质时
-    // 采样不完整纹理
-    cloudsInternal.resolveMat.uniforms.uCurrent.value = cloudsInternal.raw.textures[0];
-    cloudsInternal.resolveMat.uniforms.uCurrentDepth.value = cloudsInternal.raw.textures[1];
-    cloudsInternal.resolveMat.uniforms.uHistory.value = cloudsInternal.history[1].texture;
+    // 云光线步进 / resolve / 占据网格 / 云影图四个程序由 clouds.compileTargets() 给出（连同真正画进去的目标），
+    // 和窗外、舱内、机翼并进同一批 compileAsync 后台编译（SC-4、PERF-1）。
     try {
       // 几何体、相机和 FullscreenPass 的一致（只有 position + uv 的全屏三角形），程序缓存的键才相同
       const geo = new THREE.BufferGeometry();
@@ -471,8 +453,8 @@ requestAnimationFrame(() =>
       geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
       // 窗外、舱内合成（场景）、机翼、云光线步进、云 resolve 五个程序各自绑定自己真正要画进去的目标再发起编译
       // （compileAsync 调用时就同步提交链接，之后只是轮询）：Windows 上 ANGLE 的 D3D 后端按「链接时绑定的帧缓冲」
-      // 生成像素着色器的输出布局。窗外、场景、机翼和云 resolve 各画进一张、云步进画进两张（MRT，颜色 + 深度），
-      // 绑错的话首帧画的时候要按新布局同步重编一遍（实测首帧卡了 52 秒）。所有链接都提交后一起等，驱动并行编译。
+      // 生成像素着色器的输出布局，绑错会在首帧按新布局同步重编。注意：MRT 程序在 ANGLE / D3D11 上并行编译后
+      // 第一次 draw 仍会同步重编整个像素着色器，与绑哪个目标无关（PERF-1）——所以云步进改成了单输出（深度走 gl_FragDepth），新程序尽量单输出。
       // SC-5：原来的场景程序拆成了窗外 + 舱内合成两个，它们也在这一批里并行编译（最慢的是窗外，决定这一批的墙钟）
       const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
       const jobs: Promise<unknown>[] = [];
@@ -480,8 +462,7 @@ requestAnimationFrame(() =>
         [outsideMat, hdrOutside],
         [sceneMat, hdr],
         [wingMat, hdrWing],
-        [cloudsInternal.marchMat, cloudsInternal.raw],
-        [cloudsInternal.resolveMat, cloudsInternal.history[0]],
+        ...clouds.compileTargets(),
       ];
       for (const [mat, target] of batch) {
         const probe = new THREE.Scene();
@@ -497,22 +478,6 @@ requestAnimationFrame(() =>
       console.warn("场景 / 云着色器后台编译失败，改为首帧同步编译", err);
     }
     tick("窗外 / 舱内 / 机翼 / 云着色器编译（后台）");
-    // march / resolve 的编译已经在上面那一批里做完了（isReady() 实测确认为 true），不用再像 T16
-    // 那样假渲染一次触发编译、也不用 clouds.snap() 撤销假调用留下的时间累积痕迹了。
-    // 但实测发现一个新问题：compileAsync 批次刚 resolve 之后，不管哪个材质，第一次真正调用
-    // renderer.render() 都还会额外同步卡住主线程约 3 秒——单独计时过，march 自己只要几毫秒，卡住
-    // 的是「这批编译完之后第一次真正 render()」这件事本身，换成先渲染谁都一样。这不是 SC-4 引入的
-    // 新问题：master 分支原有的「假渲染」同样会撞上这一下，只是和 march/resolve 从零开始的真实编译
-    // 时间叠在一起，没被单独看出来（数据、排查过程见 handoff/SC-4.md）。这里主动触发一次，把这笔跑
-    // 不掉的开销留在语义还算贴切的「云光线步进程序编译」里，好过任它随机砸到后面不相关的阶段
-    // （比如海面 FFT）误导排查
-    {
-      pass.render(cloudsInternal.marchMat, cloudsInternal.raw);
-      pass.render(cloudsInternal.resolveMat, cloudsInternal.history[0]);
-    }
-    tick("云光线步进程序编译");
-    // SC-5：清单的「着色器」阶段在这之后才打勾——上面这一下冷启动时实测约 4.8 s（缓存命中时约 0），
-    // 原来 finish 放在它前面，这笔时间被记进了下一阶段「海面波浪程序」（默认估算只有 0.4 s），进度条在那里卡住不动
     boot.finish("shaders");
     await nextPaint();
 
@@ -540,8 +505,9 @@ requestAnimationFrame(() =>
     startup["窗外材质的程序数"] = programs(outsideMat);
     startup["场景材质的程序数"] = programs(sceneMat);
     startup["机翼材质的程序数"] = programs(wingMat);
-    startup["云光线步进材质的程序数"] = programs(cloudsInternal.marchMat);
-    startup["云 resolve 材质的程序数"] = programs(cloudsInternal.resolveMat);
+    const [[marchMat], [resolveMat]] = clouds.compileTargets();
+    startup["云光线步进材质的程序数"] = programs(marchMat);
+    startup["云 resolve 材质的程序数"] = programs(resolveMat);
     (window as unknown as { __voyageStartup: unknown }).__voyageStartup = startup;
     $("loading").classList.add("done");
   }, 50),
