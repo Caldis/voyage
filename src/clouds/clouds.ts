@@ -497,6 +497,11 @@ function occTarget() {
 
 /** 飞机离网格中心超过这么远就重建（网格覆盖 ±128 km，步进最远约 170 km，网格外照旧逐点求值） */
 const OCC_RECENTER_KM = 24;
+/**
+ * 每帧画几层网格。整张网格（84 层）一次画完在 RTX 5090 上要 5–9 ms，弱一些的 GPU（Mac）可能到几十毫秒，
+ * 一帧里画完就是一次明显的卡顿；分到 7 帧，每帧约 1 ms。画在后台缓冲里，画完再换上来
+ */
+const OCC_LAYERS_PER_FRAME = 12;
 
 export class Clouds {
   private raw = rawTarget(1, 1);
@@ -518,10 +523,15 @@ export class Clouds {
   private readonly resolveMat: THREE.ShaderMaterial;
   // ---- 雷暴 / 台风的占据网格（PERF-2）----
   private readonly occMat: THREE.ShaderMaterial;
-  private readonly occ = occTarget();
-  /** 上一次建网格时的天气签名（雷暴、台风、高空风、云壳高度）；变了就重建 */
+  /** 前台（步进正在查的）和后台（正在分帧重建的）两张网格 */
+  private occ = [occTarget(), occTarget()];
+  /** 前台网格对应的天气签名（雷暴、台风、高空风、云壳高度）；天气一变前台立刻作废 */
   private occKey = "";
   private readonly occCenter = new THREE.Vector2(1e9, 1e9);
+  /** 后台正在建的网格：签名、中心，下一层是第几层（-1 = 没在建） */
+  private occBuildKey = "";
+  private readonly occBuildCenter = new THREE.Vector2();
+  private occBuildLayer = -1;
   /** 网格程序是否已编译好（后台编译，没好之前步进照旧逐点求值，不卡主线程） */
   private occState: "idle" | "compiling" | "ready" = "idle";
   /** 调试 / 对照：false 时步进不查占据网格（逐点求完整密度，等于改动前的行为） */
@@ -550,7 +560,7 @@ export class Clouds {
         uAerialTransmittance: { value: atmosphere.aerialTransmittance.texture },
         uFrame: { value: 0 },
         uCloudResolution: { value: new THREE.Vector2(1, 1) },
-        uOcc: { value: this.occ.texture },
+        uOcc: { value: this.occ[0].texture },
         uOccOrigin: { value: new THREE.Vector2() },
         uOccAlt: { value: new THREE.Vector2(0, 1) },
         uOccValid: { value: 0 },
@@ -562,9 +572,9 @@ export class Clouds {
       uniforms: {
         ...atmosphere.sharedUniforms,
         ...this.uniforms,
-        // 网格的原点、层高和步进程序共用同一组对象：建网格与步进在同一帧里先后进行，值总是一致
-        uOccOrigin: this.marchMat.uniforms.uOccOrigin,
-        uOccAlt: this.marchMat.uniforms.uOccAlt,
+        // 后台网格的原点、层高（分帧重建期间步进还在用前台网格，两边各用各的）
+        uOccOrigin: { value: new THREE.Vector2() },
+        uOccAlt: { value: new THREE.Vector2(0, 1) },
         uOccLayer: { value: 0 },
       },
     });
@@ -598,7 +608,7 @@ export class Clouds {
     return [
       [this.marchMat, this.raw],
       [this.resolveMat, this.history[0]],
-      [this.occMat, this.occ],
+      [this.occMat, this.occ[1]],
     ];
   }
 
@@ -614,7 +624,7 @@ export class Clouds {
     mesh.frustumCulled = false;
     scene.add(mesh);
     const prev = renderer.getRenderTarget();
-    renderer.setRenderTarget(this.occ);
+    renderer.setRenderTarget(this.occ[1]);
     const job = renderer.compileAsync(scene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
     renderer.setRenderTarget(prev);
     job
@@ -624,10 +634,11 @@ export class Clouds {
   }
 
   /**
-   * 雷暴 / 台风的占据网格：天气变了、或飞机离网格中心太远时重建（整张网格在一帧里画完：84 层，每层 512² 个格点）。
-   * 没有雷暴 / 台风时什么都不做（步进里也不查网格）
+   * 雷暴 / 台风的占据网格：天气变了、或飞机离网格中心太远时，在后台缓冲里分帧重建（每帧 OCC_LAYERS_PER_FRAME 层），
+   * 建完换到前台。天气变了时前台立刻作废（这几帧步进照旧逐点求值）；只是飞远了时前台继续用，网格覆盖 ±128 km 足够。
+   * 没有雷暴 / 台风时什么都不做（步进里也不查网格）。all = true：一次建完（调试 / 计时用）
    */
-  private updateOccupancy() {
+  private updateOccupancy(all = false) {
     const u = this.uniforms;
     const mu = this.marchMat.uniforms;
     const hasWeather = u.uStormCount.value > 0 || u.uHurricane.value.w > 0.5;
@@ -638,22 +649,42 @@ export class Clouds {
     const storms = u.uStorms.value.slice(0, u.uStormCount.value).map((v) => v.toArray().join(","));
     const key = [storms.join(";"), u.uHurricane.value.toArray().join(","), u.uUpperWind.value.toArray().join(","), u.uShellBottom.value, u.uShellTop.value].join("|");
     const off = u.uCloudOffset.value;
-    mu.uOccValid.value = 1;
-    if (key === this.occKey && off.distanceTo(this.occCenter) < OCC_RECENTER_KM) return;
-    this.occKey = key;
-    // 网格中心对齐到格点上，前后两次重建的格点位置一致
-    this.occCenter.set(Math.round(off.x / OCC_SPACING) * OCC_SPACING, Math.round(off.y / OCC_SPACING) * OCC_SPACING);
-    const half = ((OCC_N - 1) / 2) * OCC_SPACING;
-    mu.uOccOrigin.value.set(this.occCenter.x - half, this.occCenter.y - half);
-    const bottom = u.uShellBottom.value;
-    mu.uOccAlt.value.set(bottom, (u.uShellTop.value - bottom) / (OCC_LAYERS - 1));
-    const tex = this.occ.texture;
-    for (let k = 0; k < OCC_LAYERS; k++) {
+    if (key !== this.occKey) this.occKey = ""; // 天气变了：前台作废
+    mu.uOccValid.value = this.occKey ? 1 : 0;
+    const building = this.occBuildLayer >= 0 && this.occBuildKey === key;
+    if (!building && (!this.occKey || off.distanceTo(this.occCenter) >= OCC_RECENTER_KM)) {
+      // 开始（或因天气又变了而重新开始）建后台网格。中心对齐到格点上，前后两次重建的格点位置一致
+      this.occBuildKey = key;
+      this.occBuildCenter.set(Math.round(off.x / OCC_SPACING) * OCC_SPACING, Math.round(off.y / OCC_SPACING) * OCC_SPACING);
+      const half = ((OCC_N - 1) / 2) * OCC_SPACING;
+      const ou = this.occMat.uniforms;
+      ou.uOccOrigin.value.set(this.occBuildCenter.x - half, this.occBuildCenter.y - half);
+      const bottom = u.uShellBottom.value;
+      ou.uOccAlt.value.set(bottom, (u.uShellTop.value - bottom) / (OCC_LAYERS - 1));
+      this.occBuildLayer = 0;
+    }
+    if (this.occBuildLayer < 0) return;
+    const back = this.occ[1];
+    const tex = back.texture;
+    const end = all ? OCC_LAYERS : Math.min(OCC_LAYERS, this.occBuildLayer + OCC_LAYERS_PER_FRAME);
+    for (let k = this.occBuildLayer; k < end; k++) {
       this.occMat.uniforms.uOccLayer.value = k;
+      // 只在画最后一层时生成 mipmap（three 每画一层都会按这个开关重新生成一遍）
       tex.generateMipmaps = k === OCC_LAYERS - 1;
-      this.pass.render(this.occMat, this.occ, k);
+      this.pass.render(this.occMat, back, k);
     }
     tex.generateMipmaps = false;
+    this.occBuildLayer = end;
+    if (end < OCC_LAYERS) return;
+    // 建完：换到前台
+    this.occBuildLayer = -1;
+    this.occ = [back, this.occ[0]];
+    mu.uOcc.value = back.texture;
+    mu.uOccOrigin.value.copy(this.occMat.uniforms.uOccOrigin.value);
+    mu.uOccAlt.value.copy(this.occMat.uniforms.uOccAlt.value);
+    this.occKey = this.occBuildKey;
+    this.occCenter.copy(this.occBuildCenter);
+    mu.uOccValid.value = 1;
   }
 
   /** 每几帧调用一次：在 GPU 上算飞机位置的云密度，异步读回（不阻塞渲染） */
