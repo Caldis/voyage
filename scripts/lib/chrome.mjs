@@ -1,8 +1,11 @@
-// dev-browser.mjs 和 shader-budget.mjs 共用：定位并启动本机缓存的完整版 chrome.exe（headless=new，真实 GPU）。
+// dev-browser.mjs、shader-budget.mjs 和 compare.mjs 共用：定位并启动本机缓存的完整版 chrome.exe
+// （headless=new，真实 GPU）。
 //
 // **不能**用 chrome-headless-shell.exe——会静默退化成 SwiftShader 软渲染，且没有
 // EXT_disjoint_timer_query_webgl2 扩展，冷编译时间 / sampler 上限 / GPU 计时全部失真且不报错
-// （开发体验官实测结论，见 apps/voyage/research/DX_REPORT_wave2.md §1.1）。
+// （开发体验官实测结论，见 apps/voyage/research/DX_REPORT_wave2.md §1.1）。compare.mjs 只用它做
+// Canvas2D 图片合成，不需要真实 GPU，但复用同一份「怎么找到本机 chrome.exe」逻辑更省事，
+// 也不用再额外装一次 chrome-headless-shell。
 
 import fs from "node:fs";
 import os from "node:os";

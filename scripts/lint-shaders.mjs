@@ -39,7 +39,7 @@ import { createServer } from "vite";
 import * as THREE from "three";
 import glslangPkg from "glslang-validator-prebuilt-predownloaded";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -526,6 +526,35 @@ function checkScenariosSync() {
   return { ok: true };
 }
 
+// ---------- 附带检查：src/ 下有没有 CRLF 行尾 ----------
+//
+// T35 坑点（README「坑点」倒数第一条）：Windows 上 Python 用 `open(p, 'w')` 文本模式写回源文件，
+// `\n` 会被自动写成 `\r\n`，git 提交时才报 "CRLF will be replaced"——发现得晚，且要等到 git add 才暴露。
+// `.gitattributes` 把仓库文本统一成 LF，这里提前到 check:glsl 里做一次快速扫描（读文件找有没有裸的
+// \r 字节），提交前就能抓住，不用等 git 提醒。
+
+/** 递归列出 dir 下所有文件（全路径） */
+function listFilesRecursive(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listFilesRecursive(p));
+    else out.push(p);
+  }
+  return out;
+}
+
+/** src/ 下出现 \r 字节（CRLF 或裸 CR）的文件列表，仓库相对路径、正斜杠 */
+function findCrlfFiles() {
+  const srcRoot = path.join(VOYAGE_ROOT, "src");
+  const offenders = [];
+  for (const file of listFilesRecursive(srcRoot)) {
+    const buf = readFileSync(file);
+    if (buf.includes(0x0d)) offenders.push(path.relative(VOYAGE_ROOT, file).replace(/\\/g, "/"));
+  }
+  return offenders;
+}
+
 // ---------- 主流程 ----------
 
 async function main() {
@@ -533,6 +562,20 @@ async function main() {
     // 只测 samplerAudit / resolveConditionals 本身，不需要 vite / glslangValidator，几十毫秒跑完
     process.exit(runSelfTest() ? 0 : 1);
   }
+
+  let exitCode = 0;
+  console.log("== DX-02 离线 GLSL 检查 ==\n");
+
+  // -- 0. src/ 下 CRLF 行尾（不需要 vite，先做这个最快） --
+  console.log("-- src/ 下 CRLF 行尾 --");
+  const crlfFiles = findCrlfFiles();
+  if (crlfFiles.length === 0) console.log("  [OK]   没有发现 CRLF");
+  else {
+    exitCode = 1;
+    console.log(`  [FAIL] ${crlfFiles.length} 个文件有 CRLF 行尾（仓库统一 LF，见 .gitattributes）：`);
+    for (const f of crlfFiles) console.log(`         ${f}`);
+  }
+
   const bin = glslangBin();
   const server = await createServer({ root: VOYAGE_ROOT, server: { middlewareMode: true }, appType: "custom", logLevel: "error" });
   let programs;
@@ -542,9 +585,7 @@ async function main() {
     await server.close();
   }
 
-  let exitCode = 0;
-  console.log("== DX-02 离线 GLSL 检查 ==\n");
-  console.log(`枚举到 ${programs.length} 个程序：${programs.map((p) => p.id).join(", ")}\n`);
+  console.log(`\n枚举到 ${programs.length} 个程序：${programs.map((p) => p.id).join(", ")}\n`);
 
   // -- 1. glslangValidator 语法校验 --
   console.log("-- 语法校验（glslangValidator） --");
