@@ -220,11 +220,12 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     // 夕阳下每隔几个像素就冒一个亮点（一串亮珠）
     float c = single > 0.5 ? w.cov : step(1.0, w.cov);
     if (c <= 0.0) continue;
-    // 颜色从哪来（PERF-3）：边缘像素上中心射线照常着色，但它的颜色只给子样本沿用、不直接计入；
+    // 颜色从哪来（PERF-3）：边缘像素上中心射线照常着色，它的颜色给子样本沿用，W-STAIR 起也作为第 5 个样本计入平均（见循环后）；
     // 子样本和中心射线打在同一块表面上（同一部件、法线差 < 18°）就沿用中心的颜色，
     // 否则（换了部件、跨过薄后缘的上下表面、圆前缘上法线转得快）自己着色。
     // 丢掉的只是像素内的纹理 / 高光变化。调试位 256：每条子样本都自己着色（旧做法，对照用）
-    bool useC = k > 0 && (uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95;
+    // 步数用完的子样本（wingStarved，见 wingTrace）一律沿用中心的颜色
+    bool useC = k > 0 && (wingStarved(w) || ((uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95));
     vec3 col = colC;
     if (!useC) {
       if (k > 0) w.shadow = shC;
@@ -251,12 +252,19 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
   if (single < 0.5) {
     // 子样本去亮点（firefly）：薄后缘这类地方偶尔有一条子射线打到一个法线极端的点（后缘端面、掠射的镜面），
     // 亮度是周围的几十倍，平均后就是一颗白点，沿后缘排成虚线。把每个子样本的亮度限制在
-    // 「打中的子样本里最暗的 3 倍」和「背后窗外亮度的 1.2 倍」两者中较大的那个以内——真实的明暗交界不受影响
-    float lMin = 1e30;
+    // 「打中的样本里最暗的 2 倍」和「背后窗外亮度的 0.7 倍」两者中较大的那个以内——真实的明暗交界不受影响
+    // W-STAIR：中心射线本身也是这个像素里的一个样本（像素中心），一起平均：4 条旋转网格 + 中心 = 5 个样本。
+    // 以前只用 4 条子射线，中心射线的颜色只给子样本沿用。细于半个像素的亮线（夜里频闪照亮的钝后缘端面）
+    // 4 个样本的固定图案沿斜线轮流「碰上 / 碰不上」，成了一段一段的虚线；中心样本每个像素都碰上，线就连续了。
+    // 中心射线能进到这里一定是打中了（覆盖率 1），不会把轮廓外扩
+    float lC = dot(colC, vec3(0.2126, 0.7152, 0.0722));
+    float lMin = lC;
     for (int i = 0; i < 4; i++) {
       if (subCov[i] > 0.0) lMin = min(lMin, dot(subCol[i], vec3(0.2126, 0.7152, 0.0722)));
     }
     float lCap = max(2.0 * lMin, 0.7 * refL);
+    acc += colC * (lC > lCap ? lCap / lC : 1.0);
+    covSum += 1.0;
     for (int i = 0; i < 4; i++) {
       if (subCov[i] <= 0.0) continue;
       float l = dot(subCol[i], vec3(0.2126, 0.7152, 0.0722));
@@ -265,7 +273,7 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     }
   }
   if (covSum <= 0.0) return vec4(0.0);
-  return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.25);
+  return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.2);
 }
 
 // 翼尖的航行灯（右绿左红）、白色频闪、尾灯：小光源 + 周围的光晕（光晕靠后面的眩光处理放大）；

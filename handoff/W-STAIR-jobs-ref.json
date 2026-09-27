@@ -1,0 +1,30 @@
+[
+  { "name": "biz-seated-noon", "scene": { "name": "biz-seated-noon", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business" }, "head": [0, 0.02, -0.42] },
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "ref", "js": "v.sceneMat.uniforms.uWingDebug.value = 1024 + 8192;" },
+      { "name": "oldref", "js": "__wsPatch([], __wsBase); v.sceneMat.uniforms.uWingDebug.value = 1024;" }
+    ] },
+  { "name": "sunset-wing", "scene": "sunset-wing",
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "ref", "js": "v.sceneMat.uniforms.uWingDebug.value = 1024 + 8192;" },
+      { "name": "oldref", "js": "__wsPatch([], __wsBase); v.sceneMat.uniforms.uWingDebug.value = 1024;" }
+    ] },
+  { "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "ref", "js": "v.sceneMat.uniforms.uWingDebug.value = 1024 + 8192;" },
+      { "name": "oldref", "js": "__wsPatch([], __wsBase); v.sceneMat.uniforms.uWingDebug.value = 1024;" }
+    ] },
+  { "name": "night-wing-on", "scene": { "name": "night-wing-on", "p": { "preset": "wpac", "date": "2026-01-16", "time": 1320, "coverage": 0.15, "cabin-light": true, "wing-pos": "8" } },
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;" },
+      { "name": "new", "js": "v.wingDebug.strobe = 1;" },
+      { "name": "ref", "js": "v.wingDebug.strobe = 1; v.sceneMat.uniforms.uWingDebug.value = 1024 + 8192;" },
+      { "name": "oldref", "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1; v.sceneMat.uniforms.uWingDebug.value = 1024;" }
+    ] }
+]
