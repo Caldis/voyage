@@ -58,7 +58,7 @@ export interface WonderDef {
     albedo: [number, number, number];
     /** 着色器皮肤编号：0 天梯、1 建木 */
     skin: number;
-    /** 夜里高处的航标灯与上升的轿厢 */
+    /** 天梯的附属结构：中继站、舱体、系留平台、航标灯（建木没有） */
     beacons: boolean;
   };
 }
@@ -108,7 +108,9 @@ export const WONDERS: WonderDef[] = [
     fadeS: 90,
     // 很暗的缆索（反照率约 3.5%）：正午只是一道很淡的细线（天空的亮度大多来自它前面的空气）；
     // 暮色里被阳光照到的那段像月亮一样亮（暮色的天空比阳光暗 4–5 个数量级），反照率再高就会晕成一道粗光柱，
-    // 再低（< 2%）正午就完全看不见了。取值见 handoff/W01.md 的对照
+    // 再低（< 2%）正午就完全看不见了。取值见 handoff/W01.md 的对照（待用户确认，W01b 保留）。
+    // W01b：缆上挂着中继站、上下行的舱体、斜拉的稳定缆、海上系留平台、节律航标灯与面板闪光——白天被注意到的是这些
+    // 比天空亮的东西（线本身在正午几乎看不见），见 render/wonder-sky.glsl.ts
     look: { radiusKm: 0.28, albedo: [0.034, 0.035, 0.037], skin: 0, beacons: true },
   },
   {
@@ -124,7 +126,8 @@ export const WONDERS: WonderDef[] = [
     riseS: 120,
     holdSimS: [420, 720],
     fadeS: 120,
-    // 深色的木质、偏暖：白天是一道比天空暗的细线，黄昏上段被染成暗金（比天梯稍粗、稍亮）
+    // 深色的木质、偏暖：树干白天几乎看不见，黄昏上段被染成暗金（比天梯稍粗、稍亮）。
+    // W01b：高处九根弯枝（九欘）、12–30 km 缠着树干的云气（白天最先被注意到的就是它）、树冠一带的萤光，见 render/wonder-sky.glsl.ts
     look: { radiusKm: 0.34, albedo: [0.05, 0.035, 0.022], skin: 1, beacons: false },
   },
 ];

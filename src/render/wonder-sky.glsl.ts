@@ -177,7 +177,7 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   float reach = max(radius + haloPx * 3.0 * wPix, 4.0);
   if (tether) { if (s < 34.0) reach = 58.0; }
   else if (s > 46.0) reach = 46.0;
-  else if (s > 9.0 && s < 34.0) reach = 22.0;
+  else if (s > 9.0 && s < 34.0) reach = 40.0;
   if (dist > reach) return L;
 
   // 可见前沿（浮现 / 退场的编排）：前沿以上是长渐变，不是硬边
@@ -367,7 +367,8 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       float th = (0.6 + 0.7 * hc2) * (0.6 + 0.8 * vnoise(vec2(X * 0.3 + kc * 9.0, 2.0)));
       float ds = s - sc - 0.05 * X * (hc2 - 0.5) - 1.2 * (vnoise(vec2(X * 0.18 + T * 0.003, kc * 7.0)) - 0.5);
       float nz = 0.6 * vnoise(vec2(X * 0.2 - T * 0.003, ds * 0.8 + kc * 13.0)) + 0.4 * vnoise(vec2(X * 0.5 + 3.0, ds * 1.3 + kc * 5.0));
-      float tau = (2.6 - 0.7 * kc) * exp(-ds * ds / (th * th) - xo * xo / (wid * wid)) * smoothstep(0.15, 0.75, nz);
+      // 最后一项：离轴线 28–38 km 渐隐到 0（上面 reach 在 40 km 处截断，不能留下硬边）
+      float tau = (2.6 - 0.7 * kc) * exp(-ds * ds / (th * th) - xo * xo / (wid * wid)) * smoothstep(0.15, 0.75, nz) * (1.0 - smoothstep(28.0, 38.0, dist));
       // 薄雾：贴着树干、很淡，把几圈云连成「缭绕」
       tau += 0.22 * exp(-X * X / 30.0) * smoothstep(10.0, 14.0, s) * (1.0 - smoothstep(24.0, 32.0, s)) * vnoise(vec2(X * 0.25, s * 0.3 - T * 0.002));
       // 云：反照率约 0.8；朝太阳看时前向散射更亮
