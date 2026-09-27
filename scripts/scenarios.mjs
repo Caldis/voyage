@@ -208,9 +208,14 @@ export async function applyScene(arg) {
   // 云步进变体（PERF-10）：雷暴 / 台风 / 卷云 / 奇观及其组合第一次需要时在后台编译，编好之前画的是替代的变体（天气系统暂时不画）；
   // 等它编好再截图（最多 120 s；老版本没有 cloudVariantPending 就不等）。放在 js 之后：奇观是在 js 里召唤的
   for (let i = 0; i < 480 && v.clouds && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250));
-  // DX-12（PERF-10 反馈）：云的世界偏移放在这里最后再摆一次，而不是更早——等变体编译的这段时间（最长 120 s）
-  // 如果偏移已经摆好，云本身没有被冻结，一直在按 dt 正常演化，编译完真正截图时云已经跑到别的位置去了，
-  // 「同一份场景」的云看起来会和没等编译的版本不一样。放在这里（wait 之前的最后一步）才是「编好了再摆」。
+  // 窗外变体（PERF-13）：罕见光学 / 天幕层奇观第一次需要时在后台编译，编好之前这些效果不画。先让主循环跑两帧、按新场景选出想要的变体，
+  // 再等它编好（最多 120 s；老版本没有 pending 就不等）
+  for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r));
+  for (let i = 0; i < 480 && v.groundDetail && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250));
+  // DX-12（PERF-10 反馈）：云的世界偏移放在这里最后再摆一次，而不是更早——上面这些变体（云 + 窗外）
+  // 编译期间（最长各 120 s）如果偏移已经摆好，云本身没有被冻结，一直在按 dt 正常演化，编译完真正截图时
+  // 云已经跑到别的位置去了，「同一份场景」的云看起来会和没等编译的版本不一样。放在这里（所有变体都等完、
+  // wait 之前的最后一步）才是「编好了再摆」。
   if (sc.offset) v.cloudUniforms.uCloudOffset.value.set(sc.offset[0], sc.offset[1]);
   v.snapAll();
   await new Promise((r) => setTimeout(r, sc.wait ?? 2500));

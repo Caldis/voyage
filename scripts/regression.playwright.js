@@ -184,7 +184,10 @@ async (page) => {
       const jsOut = sc.js ? await new (async () => {}).constructor("v", sc.js)(v) : undefined;
       // 云步进变体（PERF-10，与 scenarios.mjs 的 applyScene 同步）：雷暴 / 台风 / 卷云 / 奇观变体编好之前不截图（最多 120 s）
       for (let i = 0; i < 480 && v.clouds && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250));
-      // DX-12（与 scenarios.mjs 同步）：云偏移放在等变体编译完之后最后再摆一次，不然编译期间云没冻结会继续跑
+      // 窗外变体（PERF-13，与 scenarios.mjs 同步）：先跑两帧选出想要的变体，罕见光学 / 天幕层奇观变体编好之前不截图（最多 120 s）
+      for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r));
+      for (let i = 0; i < 480 && v.groundDetail && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250));
+      // DX-12（与 scenarios.mjs 同步）：云偏移放在所有变体都等完之后最后再摆一次，不然编译期间云没冻结会继续跑
       if (sc.offset) v.cloudUniforms.uCloudOffset.value.set(sc.offset[0], sc.offset[1]);
       v.snapAll();
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));

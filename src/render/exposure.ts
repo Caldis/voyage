@@ -105,6 +105,8 @@ uniform float uCabinMaxBoostEv; // 舱内曝光最多比窗外高多少 EV（局
 uniform float uCabinHiMarginEv; // 舱内均值的显示亮度最多比窗外高光（线性平均）高多少 EV
 uniform float uSnowEv;      // 窗外是均匀而明亮的视野（云中、雪原）时，窗外目标中灰上调的档位
 uniform vec2 uUniformRange; // 「均匀视野」判据：窗外线性均值与对数均值之差（log2）在此区间内由 1 过渡到 0
+uniform float uWhiteout;    // C02 飞机在云里的程度（0–1），云里窗外是白茫茫一片：直接算「均匀视野」
+uniform vec2 uDayEvAnchor;  // C02 白天窗外曝光的下限：x = 相当于 EV100 多少的相机曝光（再亮的视野不再往下压），y = 强度（0 = 关）
 uniform vec2 uPhotopicRange;// 「白天」判定：窗外适应亮度的 log10(cd/m²) 区间
 uniform vec2 uDominanceRange; // 「舱内主导」判据：舱内与窗外适应亮度之差 c − o（log2）在此区间内由 0 过渡到 1
 uniform vec2 uCabinLitRange;  // 「舱灯开着」判据：舱内适应亮度 log10(cd/m²) 在此区间内由 0 过渡到 1
@@ -129,6 +131,13 @@ ExpModel exposureModel(vec4 adapted) {
     float day = smoothstep(uPhotopicRange.x, uPhotopicRange.y, (o + LOG2_1000) * L2_10);
     // 窗外：按窗外自身的适应亮度曝光
     float eO = log2(exposureKey((o + LOG2_1000) * L2_10)) - o;
+    // ⑨ C02 物理 EV 锚定 + 有限自适应：白天窗外越亮，眼睛（和相机）越不会把它完整地压回中灰——满窗受光的云海按
+    //    「对数均值 = 中灰」曝光时，受光最亮的云顶只有显示值 157–163/255，一片灰（research/CLOUD_SHARPNESS.md §1.7）。
+    //    所以白天窗外的曝光不低于 EV100 = uDayEvAnchor.x 的相机曝光（sunny-16 是 EV100 15），比它暗的视野（海面、陆地、
+    //    天空为主的窗）照旧自动曝光、一点不变。强度 uDayEvAnchor.y（0 = 关）。
+    //    放在舱内的约束之前：锚定之后眼睛就适应在这个水平上，③ ④ 的「舱内相对窗外」都按它算——否则云越亮、窗外对数均值越高，
+    //    ④「舱内最多比窗外多提亮 4.5 档」把舱壁一起压暗（clouds-variety 舱壁 139 → 123）
+    eO = mix(eO, max(eO, log2(1000.0 / 1.2) - uDayEvAnchor.x), day * uDayEvAnchor.y);
     // ① 局部适应：舱内的适应亮度从窗外出发，向舱内自身的亮度靠拢一部分；明视时周边视网膜能独立适应得更多
     // T28「舱内主导」：舱内比窗外亮得多（dom），并且舱内本身够亮、是明视 / 高中间视（lit：开着舱灯，不是睡眠 / 全关），
     //    这时眼睛适应的是舱内：舱内按自身完全适应（β → 1）、明度恒常照样成立、不再受「不许比窗外亮」的约束。
@@ -157,7 +166,9 @@ ExpModel exposureModel(vec4 adapted) {
     // ⑤ 雪景补偿（只作用于窗外，放在舱内的约束之后，不连带抬亮舱内）：白天窗外是均匀而明亮的视野
     //    （云中白茫茫一片）时，测光会把它压成中灰；人眼看到的是白，窗应当是画面最亮处。
     //    判据：线性均值与对数均值几乎相等 ⇔ 视野里没有明暗起伏（有天空 / 海 / 云影的画面差 ≥ 0.15 档）
-    float uniformField = day * (1.0 - smoothstep(uUniformRange.x, uUniformRange.y, h - o));
+    //    C02：再加一条直接的判据——飞机在云里（uWhiteout，云的密度探针给的，见 clouds.ts keyVisibility）。
+    //    C01 以后云里的雾不再被高阶散射抹匀，机翼比雾亮，in-cloud 的 h − o 从 0.016 升到约 0.1，统计判据落在边缘上
+    float uniformField = day * max(1.0 - smoothstep(uUniformRange.x, uUniformRange.y, h - o), uWhiteout);
     eO += uSnowEv * uniformField;
     m.eO = eO; m.eC = eC; m.aC = aC; m.dom = dom; m.lit = lit;
     // ⑦ T30 倒影的显示增益（log2，≤ 0，写进适应结果左像素的 w，舱内合成读它乘到窗板倒影上）：
@@ -380,6 +391,9 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  *   ⑤ 雪景补偿（只加在窗外，舱内的约束用补偿前的 eO）：eO += 2.0·day·(1 − smoothstep(0.05, 0.12, h − o))。
  *      均匀而明亮的视野（云中白茫茫一片）被测光压成中灰，人眼看到的却是白；h − o 是线性均值与对数均值之差，
  *      只有视野里几乎没有明暗起伏时才接近 0（实测云中 0.035 档；其他白天回归场景 0.15–2.2 档，判据为 0）。
+ *      C02：判据取 max(上式, uWhiteout)，uWhiteout = 飞机在云里的程度（C01 后云中的 h − o 升到约 0.1，统计判据不再可靠）。
+ *   ⑨ C02 白天窗外的曝光下限（放在 ① 之前，舱内的约束都按锚定后的 eO 算）：eO = max(eO, log2(1000/1.2) − 15)·day，
+ *      即不比 EV100 15（sunny-16）的相机更暗；只有比锚点亮的视野（满窗受光的云海）会被抬高，其余不变。
  *   窗外看不到（遮光板全放下）时 o 取绝对锚点：o = c − 2.2·(1 − smoothstep(1.0, 2.5, log10 c[cd/m²]))，
  *      白天等于舱内亮度，暗处比舱内低 2.2 档（关灯夜里实测窗外比舱内低约 2.7 档），按窗外可见权重连续混合。
  * T28「人眼式色适应」（用户定，选项 A）：
@@ -421,6 +435,12 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  */
 export const EXPOSURE_STATE: THREE.IUniform<THREE.Texture | null> = { value: null };
 
+/**
+ * 飞机在云里的程度（0–1，C02）：clouds.ts 的 keyVisibility 按密度探针写（已按 0.5 s 平滑），EXPOSURE_MODEL ⑤ 读。
+ * 同 EXPOSURE_STATE 一样是模块级共享的 uniform 对象，不用在 main.ts 里接线
+ */
+export const EXPOSURE_WHITEOUT: THREE.IUniform<number> = { value: 0 };
+
 /** 双区曝光模型的参数（EXPOSURE_MODEL）：适应 pass、最终合成、舱内合成（scene.ts，T34 倒影上限）共用同一批 uniform 对象 */
 export const EXPOSURE_MODEL_UNIFORMS: Record<string, THREE.IUniform> = {
   uAuto: { value: true },
@@ -431,6 +451,8 @@ export const EXPOSURE_MODEL_UNIFORMS: Record<string, THREE.IUniform> = {
   uCabinHiMarginEv: { value: 1.4 },
   uSnowEv: { value: 2.0 },
   uUniformRange: { value: new THREE.Vector2(0.05, 0.12) },
+  uWhiteout: EXPOSURE_WHITEOUT,
+  uDayEvAnchor: { value: new THREE.Vector2(15.0, 1.0) }, // C02：sunny-16（14.0 / 14.5 时满窗云海的云芯被 AgX 肩部压平，见 handoff/C01-02.md）
   uPhotopicRange: { value: new THREE.Vector2(1.5, 3.0) },
   uDominanceRange: { value: new THREE.Vector2(-1.0, 2.0) },
   uCabinLitRange: { value: new THREE.Vector2(0.5, 1.2) },

@@ -120,11 +120,22 @@ float sdSeatPart(vec3 p, float row, float isShell) {
   return sdSeatBack(seatFrame(p, row), row);
 }
 
-float sdSeats(vec3 p) {
-  float d = min(sdSeatBack(seatFrame(p, 0.0), 0.0), sdSeatBack(seatFrame(p, 1.0), 1.0));
-#ifndef CABIN_CLASS_ECONOMY
-  d = min(d, min(sdSeatShell(p, 0.0), sdSeatShell(p, 1.0)));
+// 部件编号 i：row = i 的最低位（0 本排、1 前排），isShell = i ≥ 2（壳体只有商务舱有）
+#ifdef CABIN_CLASS_ECONOMY
+const int SEAT_NPART = 2;
+#else
+const int SEAT_NPART = 4;
 #endif
+
+// PERF-12：按部件循环（上限「常数 + uLoopGuard」）。原来四个部件各写一次，FXC 在每个调用点（步进循环、座椅 AO、
+// 侧壁的接触阴影）把靠背 / 壳体的距离场各内联两份；改成循环后每个调用点只有一份（舱内程序离线 FXC 的大头在座椅）
+float sdSeats(vec3 p) {
+  float d = 1e9;
+  for (int i = 0; i < SEAT_NPART + uLoopGuard; i++) {
+    float fi = float(i);
+    float row = fi - 2.0 * floor(fi * 0.5);
+    d = min(d, sdSeatPart(p, row, step(1.5, fi)));
+  }
   return d;
 }
 
@@ -191,9 +202,13 @@ SeatHit traceSeats(vec3 ro, vec3 rd, float tMax, float pixAng) {
 }
 
 vec3 seatNormal(vec3 p, float e, float row, float isShell) {
-  const vec2 k = vec2(1.0, -1.0);
-  return normalize(k.xyy * sdSeatPart(p + k.xyy * e, row, isShell) + k.yyx * sdSeatPart(p + k.yyx * e, row, isShell)
-                 + k.yxy * sdSeatPart(p + k.yxy * e, row, isShell) + k.xxx * sdSeatPart(p + k.xxx * e, row, isShell));
+  // 四面体差分（PERF-12：写成循环，距离场只内联一份；原来四个调用点各一份）
+  vec3 g = vec3(0.0);
+  for (int i = 0; i < 4 + uLoopGuard; i++) {
+    vec3 k = i == 0 ? vec3(1.0, -1.0, -1.0) : (i == 1 ? vec3(-1.0, -1.0, 1.0) : (i == 2 ? vec3(-1.0, 1.0, -1.0) : vec3(1.0)));
+    g += k * sdSeatPart(p + k * e, row, isShell);
+  }
+  return normalize(g);
 }
 
 // 距离场 AO：沿法线取两个点，看离别的表面（另一排座椅、侧壁）有多近
@@ -220,25 +235,33 @@ vec2 seatSeams(vec3 q, float fr, float wz, float pix, float coverZone, out vec3 
     ys = SEAT_TOP - 0.065;
     singleH = 1.0;
   }
-  vec4 h = leatherSeam(q.y - ys, wz, pix, singleH) * coverZone;
   // 竖缝：头枕区两侧是撞色包边（单线），靠背正面是两道分片缝（双明线）
   bool upper = q.y > SEAT_TOP - 0.25;
   float xs = upper ? SEAT_HW - 0.03 : 0.11;
   float vOn = upper ? 1.0 : step(0.45, fr);
-  vec4 v = leatherSeam(abs(wz) - xs, q.y, pix, upper ? 1.0 : 0.0) * vOn;
   vec3 sec = seatSection(q.y, wz);
   float xc = q.x - sec.x;
   // 护翼的分片缝：头枕正面、离两侧 10 cm，双明线。T47：只走正面和正面的圆棱，到顶面前沿那道顶缝为止（T 字接进去）；
   // 原来一直走过顶面的前半，和顶缝交叉成「十」字（美术总监 wave6 第 8 条）
   float onFace = smoothstep(-0.002, 0.002, xc - (sec.y - sec.z) + 0.001);
-  vec4 vw = leatherSeam(abs(wz) - (SEAT_HW - 0.10), q.y, pix, 0.0) * (upper ? step(0.45, fr) * coverZone * onFace : 0.0);
-  // 顶缝：顶面平的那块两侧（离截面中心 半厚 − 倒圆），双明线；只在头枕顶上约 4 cm 的范围
-  vec4 c = leatherSeam(abs(xc) - (sec.y - sec.z), q.z, pix, 0.0) * smoothstep(SEAT_TOP - 0.05, SEAT_TOP - 0.035, q.y) * coverZone;
   vec3 up = seatDirToCabin(vec3(0.0, 1.0, 0.0));
   vec3 fwd = seatDirToCabin(vec3(1.0, 0.0, 0.0)) * (xc < 0.0 ? -1.0 : 1.0);
   vec3 side = vec3(0.0, 0.0, wz < 0.0 ? -1.0 : 1.0);
-  dn = -up * h.z - side * (v.z + vw.z) - fwd * c.z;
-  return vec2(max(max(h.x, v.x), max(vw.x, c.x)), max(max(h.y, v.y), max(vw.y, c.y)));
+  // 四道缝（PERF-12：写成循环，leatherSeam 只内联一份；原来四个调用点各一份）：
+  // 0 横缝 / 包边下沿；1 竖缝（包边或分片缝）；2 护翼分片缝；3 顶缝（顶面平的那块两侧，只在头枕顶上约 4 cm）
+  vec2 res = vec2(0.0);
+  dn = vec3(0.0);
+  for (int i = 0; i < 4 + uLoopGuard; i++) {
+    float across = i == 0 ? q.y - ys : (i == 1 ? abs(wz) - xs : (i == 2 ? abs(wz) - (SEAT_HW - 0.10) : abs(xc) - (sec.y - sec.z)));
+    float along = i == 0 ? wz : (i == 3 ? q.z : q.y);
+    float singleI = i == 0 ? singleH : (i == 1 ? (upper ? 1.0 : 0.0) : 0.0);
+    float w = i == 0 ? coverZone : (i == 1 ? vOn : (i == 2 ? (upper ? step(0.45, fr) * coverZone * onFace : 0.0)
+                                                 : smoothstep(SEAT_TOP - 0.05, SEAT_TOP - 0.035, q.y) * coverZone));
+    vec4 sm = leatherSeam(across, along, pix, singleI) * w;
+    res = max(res, sm.xy);
+    dn -= (i == 0 ? up : (i == 3 ? fwd : side)) * sm.z;
+  }
+  return res;
 }
 #endif
 
@@ -246,19 +269,18 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
   vec3 p = ro + rd * sh.t;
   float pixRaw = sh.t * pixAng;
   // 哪一排、哪个部件、局部坐标
-  vec3 q0 = seatFrame(p, 0.0), q1 = seatFrame(p, 1.0);
-  float dB0 = sdSeatBack(q0, 0.0), dB1 = sdSeatBack(q1, 1.0);
-  bool front = dB1 < dB0;
-  vec3 q = front ? q1 : q0;
-  float seatId = front ? 1.0 : 0.0;
-  float isShell = 0.0;
-#ifndef CABIN_CLASS_ECONOMY
-  float dS0 = sdSeatShell(p, 0.0), dS1 = sdSeatShell(p, 1.0);
-  if (min(dS0, dS1) < min(dB0, dB1)) {
-    isShell = 1.0;
-    seatId = dS1 < dS0 ? 1.0 : 0.0;
+  // 最近的部件（PERF-12：和 sdSeats 同一个部件循环，距离场只内联一份）。backRow：两排靠背里近的那排（着色的局部坐标总用靠背的）
+  float dBest = 1e9, dBack = 1e9, backRow = 0.0, seatId = 0.0, isShell = 0.0;
+  for (int i = 0; i < SEAT_NPART + uLoopGuard; i++) {
+    float fi = float(i);
+    float row = fi - 2.0 * floor(fi * 0.5);
+    float sh = step(1.5, fi);
+    float d = sdSeatPart(p, row, sh);
+    // 严格小于：并列时取编号小的（和原来「dB1 < dB0 才算前排」「壳体严格更近才算壳体」一致）
+    if (sh < 0.5 && d < dBack) { dBack = d; backRow = row; }
+    if (d < dBest) { dBest = d; seatId = row; isShell = sh; }
   }
-#endif
+  vec3 q = seatFrame(p, backRow);
   vec3 n = seatNormal(p, max(0.0006, pixRaw * 0.7), seatId, isShell);
   vec3 v = -rd;
   float nvGeo = max(dot(n, v), 0.0);
@@ -454,9 +476,16 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
   vec3 r = reflect(rd, nn);
   float a2 = rough * rough;
   vec3 lw = normalize(vec3(0.0, 0.0, PANE_DEPTH) - p);
-  col += keySpec(nn, v, lw, max(a2, 0.12), 0.04, eWin) * sqrt(ao);
-  col += keySpec(nn, v, cl.sunC, a2, 0.04, cl.eSunNormal) * sunVis;
-  col += cabinMoodSpec(p, nn, v, max(a2, 0.08), 0.04, cl.moodI) * ao;
+  // 三路高光（PERF-12：写成循环，keySpec 只内联一份）：窗户、直射光、氛围灯（cabinMoodSpec 的展开）
+  float rMood;
+  vec3 lMood = cabinMoodDir(p, rMood);
+  vec3 eMoodSpec = cl.moodI * pow(max(dot(-lMood, MOOD_AIM), 0.0), 1.5) / rMood;
+  for (int i = 0; i < 3 + uLoopGuard; i++) {
+    vec3 l = i == 0 ? lw : (i == 1 ? cl.sunC : lMood);
+    float a = i == 0 ? max(a2, 0.12) : (i == 1 ? a2 : max(a2, 0.08));
+    vec3 eS = i == 0 ? eWin * sqrt(ao) : (i == 1 ? cl.eSunNormal * sunVis : eMoodSpec * ao);
+    col += keySpec(nn, v, l, a, 0.04, eS);
+  }
   // 胡桃木是开放漆面：掠射时漆膜的反射按菲涅尔涨得很快，会把木色冲成灰白（「看前方」时整条饰条发白）。
   // 真实的开放漆面有导管纹打散的微观起伏，掠射反射远弱于镜面清漆，这里在木饰条上把环境反射压掉一半多（T25）
   // T47：轮廓上的菲涅尔按 n·v ≥ 0.3 算（同机翼边缘的做法）。n·v 在轮廓最后一两个像素里从 0.2 掉到 0，

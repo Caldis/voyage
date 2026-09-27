@@ -152,30 +152,32 @@ void main() {
   cabinMoodScene(uCabinLight, uSunDir.y, uMoodLight, mainTint, moodI);
   cl.eCabin += uCabinLight * (mainTint - CABIN_LIGHT_COLOR) + moodI * 0.05; // 洗墙光在上墙、行李架之间的回弹
   cl.moodI = moodI;
-  // 窗板里的舱内倒影用的灯光（T24，见 cabin-reflect.glsl.ts）
-  ReflLights rl;
-  // 面板「关灯」时 uCabinLight 留着 0.001 的底数（别处要用），倒影里当成全关，否则曝光拉高后这 1 lux 也会显出一层灯带
-  rl.eMain = uCabinLight * mainTint * smoothstep(0.005, 0.05, uCabinLight);
-  rl.eAmb = 0.06 * M_PI * lWin + 0.004 * eSunNormal * max(sunC.z, 0.0);
-  rl.moodI = moodI;
-  rl.wash = moodI + rl.eMain * 1.2; // 主灯里行李架下沿的洗墙灯带（和氛围灯同一条灯槽）
-  rl.lOppWin = mix(cl.lGlow, lWin, 0.5);
-  rl.readOn = cl.readOn;
-  rl.pupil = mix(0.0065, 0.0045, smoothstep(0.005, 0.05, uCabinLight)); // 夜里暗适应时瞳孔更大，倒影更虚
-  rl.lit = smoothstep(0.005, 0.05, uCabinLight);
-  rl.pixAng = pixAng;
-
   // ---- 座椅：挡在侧壁和窗前面（见 seats.glsl.ts） ----
   float tWall = rd.z > 1e-4 ? traceWall(ro, rd) : 1e3;
   SeatHit seat = traceSeats(ro, rd, tWall, pixAng);
   vec3 seatCol = seat.cov > 0.0 ? shadeSeat(ro, rd, seat, pixAng, cl, uShadeBottom) : vec3(0.0);
 
+  // ---- 合成权重先算好（PERF-12）：后面每一层只在它的权重不为 0 时才着色 ----
+  float inBezel = 1.0 - smoothstep(-wB, wB, dBezel);
+  float inPane = 1.0 - smoothstep(-wP, wP, dPane);
+  float shadeBottom = mix(NB_SHADE, uShadeBottom, isMain);
+  // hidden：座椅完全挡住；paneOnly：视线整个穿过本窗的窗板开口（这时侧壁、内衬的权重都是 0）；
+  // shadeFree：遮光板盖不到这个像素（这时内衬的命中深度 hitZ 也用不上）。窗板开口里的像素约占画面三分之一，
+  // 原来侧壁（shadeWall）、内衬（marchFunnel 一路走满 24 步）、遮光板（shadeShade）都照算一遍再乘 0。调试 1–4 要看这些层，不跳
+  bool hidden = seat.cov >= 1.0;
+  bool paneOnly = isMain > 0.5 && inBezel >= 1.0 && inPane >= 1.0 && rd.z >= 1e-4;
+  bool shadeFree = pShade.y - shadeBottom <= -wS;
+  bool dbgLayers = uDebug >= 1 && uDebug <= 4;
+
   // ---- 舱壁（带弧度的内饰板、窗罩翻边、接缝、脏污；见 cabin-shading.glsl.ts） ----
   vec3 pW = ro + rd * tWall;
-  // 座椅顶在窗中心以下约 5 cm，再往上 12 cm 以外不可能有接触阴影，省掉距离场
-  float wallSeatAO = pW.y < 0.08 ? mix(0.55, 1.0, smoothstep(0.0, 0.12, sdSeats(pW))) : 1.0;
   float seed = wi * 3.7 + 1.0;
-  vec3 wall = shadeWall(pW, rd, tWall, pixAng, wq, dBezel, seed, wallSeatAO, cl);
+  vec3 wall = vec3(0.0);
+  if (!hidden && !paneOnly) {
+    // 座椅顶在窗中心以下约 5 cm，再往上 12 cm 以外不可能有接触阴影，省掉距离场
+    float wallSeatAO = pW.y < 0.08 ? mix(0.55, 1.0, smoothstep(0.0, 0.12, sdSeats(pW))) : 1.0;
+    wall = shadeWall(pW, rd, tWall, pixAng, wq, dBezel, seed, wallSeatAO, cl);
+  }
   if (rd.z < 1e-4) {
     gl_FragColor = vec4(mix(wall, seatCol, seat.cov), 0.0);
     return;
@@ -186,12 +188,12 @@ void main() {
   vec3 reveal = wall;
   float hitZ = 1.0; // 打到内衬的深度，没打到就是 1（比窗板还深）
   vec3 roL = ro - vec3(wOff, 0.0);
-  float shadeBottom = mix(NB_SHADE, uShadeBottom, isMain);
-  bool rvHit = dBezel < 0.01 && marchFunnel(roL, rd, hit);
+  bool needReveal = dbgLayers || !(hidden || (paneOnly && shadeFree));
+  bool rvHit = needReveal && dBezel < 0.01 && marchFunnel(roL, rd, hit);
   // T47：窗板开口边上抗锯齿的那一圈（inPane 在 0..1 之间、dPane 在 (−wP, 0)），视线其实穿进了开口、步进没打到内衬，
   // 原来 reveal 退回成侧壁的颜色混进来：夜里开灯时侧壁亮、窗外黑，窗板边缘一圈带台阶的 1 px 白线（美术总监 wave6 第 6 条）。
   // 这一圈改成取开口边上的内衬（密封条），着色仍只调用一次 shadeReveal
-  if (!rvHit && dBezel < 0.01 && dPane > -wP) {
+  if (needReveal && !rvHit && dBezel < 0.01 && dPane > -wP) {
     hit = vec3(pPane.xy - wOff, PANE_DEPTH);
     rvHit = true;
   }
@@ -203,19 +205,27 @@ void main() {
     if (uDebug == 4) reveal = n * 0.5 + 0.5;
   }
 
-  // ---- 遮光板：半透的白色塑料，下沿有把手（见 cabin-shading.glsl.ts） ----
-  vec3 shade = shadeShade(pShade - vec3(wOff, 0.0), rd, pixShade, cl, shadeBottom, seed);
-
   // ---- 合成 ----
-  float inBezel = 1.0 - smoothstep(-wB, wB, dBezel);
-  float inPane = 1.0 - smoothstep(-wP, wP, dPane);
   // 视线在遮光板所在深度之前就打到内衬的话，遮光板被内衬挡住
   float shaded = smoothstep(-wS, wS, pShade.y - shadeBottom) * step(SHADE_DEPTH, hitZ);
+
+  // ---- 遮光板：半透的白色塑料，下沿有把手（见 cabin-shading.glsl.ts）；只在盖得到这个像素时着色 ----
+  vec3 shade = vec3(0.0);
+  if (shaded > 0.0 && !hidden) shade = shadeShade(pShade - vec3(wOff, 0.0), rd, pixShade, cl, shadeBottom, seed);
+
+  // PERF-12：先把与窗外无关的各层（侧壁、内衬、遮光板、座椅）按原来的 mix 顺序合成成 col = kView·view + colFixed，
+  // 进窗板分支之前就收成一个 vec3。原来 wall / reveal / shade / seatCol 四个 vec3 要一直活到窗板分支（划痕、倒影……）之后，
+  // 寄存器压力拖慢了整个程序（消融：去掉划痕、侧壁、内衬任何一项都「省」0.03–0.05 ms，远超它们本身的运算量）。
+  // 展开：col = (1 − cov)·[(1 − inBezel)·wall + inBezel·((1 − shaded)·((1 − inPane)·reveal + inPane·view) + shaded·shade)] + cov·seat
+  float kView = inBezel * (1.0 - shaded) * inPane * (1.0 - seat.cov);
+  vec3 colFixed = mix(mix(wall, mix((1.0 - inPane) * reveal, shade, shaded), inBezel), seatCol, seat.cov);
+  if (uDebug == 3 || uDebug == 4) { colFixed = mix(vec3(0.0), reveal, inBezel * (1.0 - inPane)); kView = 0.0; }
+  if (uDebug == 1) { colFixed = vec3(hitZ / PANE_DEPTH, inBezel, shaded) * 10.0; kView = 0.0; }
 
   // 邻窗遮光板下沿以下（窗洞最深处）：只有一点暗光
   vec3 view = reveal * 0.3;
   float logExpOC = 0.0;        // log2(窗外曝光 / 舱内曝光)，给交界像素的覆盖率重映射用（T47，见文末）
-  if (inBezel > 0.0 && isMain > 0.5) {
+  if (inBezel > 0.0 && isMain > 0.5 && !hidden) {
   // 机翼和翼尖灯不在这里画：由单独的机翼 pass（wing-pass.ts）读这张结果、按 alpha（窗外遮罩）合成上去。
   // 窗外（天空、云、地面、海面、交通、闪电，已乘窗板透射率）由窗外 pass 算好（outside-pass.ts），这里按像素读回。
   // 窗外 pass 只在本窗窗洞与窗板开口以内算，判定和这个分支、inPane 同一公式（略放宽），这里读到的都是算过的值
@@ -224,7 +234,10 @@ void main() {
   // 点星（T41，stars.glsl.ts）：窗外程序在 alpha 里写 1 + 这个像素能看到多少星（天空 × 云 × 交通的透射率），
   // 这里补上相机上方大气的消光和窗板透射率。点星放在舱内程序是为了冷编译（放进窗外程序 d3d11 冷编译 17 → 52 s，见 handoff/T41.md）。
   // 算进 viewPre（窗外的颜色），机翼 pass 按窗外遮罩合成时机翼会挡住它
-  if (outside.a > 1.0) {
+  // PERF-12：窗外本身够亮时点星看不出来，不算。星表里最亮的天狼星（−1.46 等）照度约 9.8e-9 klux，落在一个像素里的份额最多约 0.35，
+  // 再乘窗板透射率 0.85，辐亮度 ≤ 2.9e-9 / pixAng²（kcd/m²）；窗外亮度超过它的 200 倍（白天的天空与云、黄昏亮的那半边）时，
+  // 最亮的星也只让这个像素亮 0.5%，看不出。只省运行时（正午整扇窗都是天空，每个像素都要查 3×3 格），编译不变
+  if (outside.a > 1.0 && dot(view, vec3(0.2126, 0.7152, 0.0722)) * pixAng * pixAng < 6e-7) {
     vec3 rdW = uCabinToWorld * rd;
     view += starPoints(rdW) * sunTransmittance(uCamR, rdW.y) * (PANE_TRANSMITTANCE * (outside.a - 1.0));
   }
@@ -289,6 +302,18 @@ void main() {
   // 也按同样程度抵掉主灯的色温；曝光 pass 分不开倒影和窗外（窗外不做舱内色适应），所以在这里预先乘上。
   // 睡眠档的淡紫氛围灯不抵（T28 本来就只适应它一小部分）
   vec3 reflWB = mix(vec3(1.0), vec3(dot(mainTint, vec3(0.2126, 0.7152, 0.0722))) / mainTint, 0.7 * smoothstep(0.005, 0.05, uCabinLight));
+  // 窗板里的舱内倒影用的灯光（T24，见 cabin-reflect.glsl.ts）。PERF-12：只在窗板分支里组装（原来在 main 开头，整段程序都占着寄存器）
+  ReflLights rl;
+  // 面板「关灯」时 uCabinLight 留着 0.001 的底数（别处要用），倒影里当成全关，否则曝光拉高后这 1 lux 也会显出一层灯带
+  rl.eMain = uCabinLight * mainTint * smoothstep(0.005, 0.05, uCabinLight);
+  rl.eAmb = 0.06 * M_PI * lWin + 0.004 * eSunNormal * max(sunC.z, 0.0);
+  rl.moodI = moodI;
+  rl.wash = moodI + rl.eMain * 1.2; // 主灯里行李架下沿的洗墙灯带（和氛围灯同一条灯槽）
+  rl.lOppWin = mix(cl.lGlow, lWin, 0.5);
+  rl.readOn = cl.readOn;
+  rl.pupil = mix(0.0065, 0.0045, smoothstep(0.005, 0.05, uCabinLight)); // 夜里暗适应时瞳孔更大，倒影更虚
+  rl.lit = smoothstep(0.005, 0.05, uCabinLight);
+  rl.pixAng = pixAng;
   float reflMax = reflGain * dot(0.3 * (rl.eAmb + 2.5 * rl.eMain + rl.moodI) + rl.lOppWin, vec3(0.2126, 0.7152, 0.0722));
   vec3 reflAdd = vec3(0.0);
   if (rl.readOn > 0.0 || reflMax > 0.003 * dot(view, vec3(0.2126, 0.7152, 0.0722))) {
@@ -320,10 +345,7 @@ void main() {
   paneK = (1.0 - 0.1 * sm) * (1.0 - WATER_RIM * wat.w)
     * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
   }
-  vec3 col = mix(wall, mix(mix(reveal, view, inPane), shade, shaded), inBezel);
-  col = mix(col, seatCol, seat.cov);
-  if (uDebug == 3 || uDebug == 4) col = mix(vec3(0.0), reveal, inBezel * (1.0 - inPane));
-  if (uDebug == 1) col = vec3(hitZ / PANE_DEPTH, inBezel, shaded) * 10.0;
+  vec3 col = colFixed + kView * view;
   if (uDebug == 2) col = vec3(log2(max(dot(col, vec3(0.2126, 0.7152, 0.0722)), 1e-6)) * 0.1 + 1.0) * 10.0;
   // HDR 目标是 32 位浮点时可以原样存下太阳的辐亮度（约 1.8e6 kcd/m²），眩光的能量才对。
   // alpha 存「这个像素有多少是窗外」，曝光时窗外和舱内分开适应

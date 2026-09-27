@@ -40,6 +40,36 @@ export interface OpticsInput {
   stormy: boolean;
 }
 
+/** 太阳角半径（弧度，与 atmosphere/common.glsl.ts 的 SUN_ANGULAR_RADIUS 一致） */
+const SUN_ANGULAR_RADIUS_RAD = 0.004654;
+/**
+ * 本机影子的遮挡面积上界（m²）：optics.glsl.ts 的 opticsPlaneShadow 那 6 段带厚度线段各取最厚时的 Σ 2w·(长 + 2w)
+ * （机身 168、两翼 137、两侧平尾 27、垂尾 22）。
+ */
+const PLANE_SHADOW_AREA_M2 = 360;
+/** 影子最多压暗云辐亮度的比例低于这个值就当看不出来（0.2%，白云上不到 0.5/255） */
+const SHADOW_VISIBLE_MIN = 0.002;
+
+/**
+ * 这一帧罕见光学（宝光 / 本机影子 / 幻日 / 22° 晕）会不会画出看得出的东西（PERF-13）。
+ * 窗外程序只在 OUTSIDE_OPTICS 变体里有这几项；这里返回 false 时默认程序与变体逐像素相同（宝光 = 0、晕 = 0 时着色器的
+ * 因子是精确的 1 和 0），返回 true 时 outside-pass.ts 的 wantedOutsideKey 要光学变体。只读 uniform 的值（u 传共用的 uniforms）。
+ * 影子是纯物理、只要云在下面就开着，但远了只挡住太阳圆盘的一小点：按着色器的覆盖公式取上界——每段带子挡住圆盘（半影半径 b）
+ * 的比例 ≤ 0.75·2w/b × (长 + 2w)/(2b)，合起来 ≤ 0.375·面积 / b²（这里取 0.4），再乘「最多压暗多少」。
+ */
+export function opticsWanted(u: Record<string, THREE.IUniform>): boolean {
+  const glory = u.uOpticsGlory?.value as THREE.Vector4 | undefined;
+  const halo = u.uOpticsHalo?.value as THREE.Vector4 | undefined;
+  const shadow = u.uOpticsShadow?.value as THREE.Vector4 | undefined;
+  if (!glory || !halo || !shadow) return false;
+  if (glory.x > 0 || halo.x + halo.y + halo.z > 0) return true;
+  if (shadow.x <= 0 || shadow.y <= 0) return false;
+  const sunY = (u.uSunDir?.value as THREE.Vector3 | undefined)?.y ?? 1;
+  // 影子落点在反日点方向上：视线朝下的分量 = 太阳高度的正弦（着色器里按像素取 max(−rd.y, 0.02)）
+  const b = ((shadow.x * 1000) / Math.max(sunY, 0.02)) * SUN_ANGULAR_RADIUS_RAD;
+  return (shadow.y * 0.4 * PLANE_SHADOW_AREA_M2) / (b * b) > SHADOW_VISIBLE_MIN;
+}
+
 function hash01(a: number, b: number): number {
   let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul((b | 0) + 0x7f4a7c15, 0xc2b2ae35);
   h ^= h >>> 16;
