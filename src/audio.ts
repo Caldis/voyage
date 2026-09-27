@@ -1,5 +1,7 @@
 import { effectiveTargetKm, outsideAirTempC } from "./flight";
 import type { VoyageState } from "./state";
+import { RailAudio, type RailSoundSource } from "./rail/audio-rail";
+import type { JointMode } from "./rail/sound-model";
 
 /**
  * 声音（T11）：Web Audio 程序化合成，不用任何音频素材文件。
@@ -22,7 +24,7 @@ import type { VoyageState } from "./state";
 // ---------------------------------------------------------------------------------------------
 // 频谱表：倍频程中心频率 → 伪 dB SPL（非计权）。所有图层共用同一个参考，所以表里的数就是它们之间的相对响度
 // ---------------------------------------------------------------------------------------------
-type Spectrum = ReadonlyArray<readonly [number, number]>;
+export type Spectrum = ReadonlyArray<readonly [number, number]>;
 
 /** 气流 / 边界层噪声（巡航，q = 巡航动压时的 0 dB 状态）：能量集中在 125–1000 Hz */
 const AIRFLOW: Spectrum = [[16, 50], [31.5, 62], [63, 70], [125, 75], [250, 78], [500, 77], [1000, 72], [2000, 65], [4000, 57], [8000, 47], [16000, 33]];
@@ -80,8 +82,8 @@ export function makeRng(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-type Rng = () => number;
-function gauss(rng: Rng) {
+export type Rng = () => number;
+export function gauss(rng: Rng) {
   const u = Math.max(rng(), 1e-12);
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng());
 }
@@ -122,7 +124,7 @@ function spectrumDb(table: Spectrum, f: number) {
   return table[n - 1][1];
 }
 /** 表的总能量（dB） */
-function spectrumTotalDb(table: Spectrum) {
+export function spectrumTotalDb(table: Spectrum) {
   return 10 * Math.log10(table.reduce((s, [, db]) => s + Math.pow(10, db / 10), 0));
 }
 function interp(table: ReadonlyArray<readonly [number, number]>, x: number) {
@@ -176,7 +178,7 @@ function diffuseCoherence(f: number, d = 0.25) {
  * 左右声道 R = γ·L + √(1−γ²)·N（γ 由 coherence 给出）。两个实信号打包成一个复数逆 FFT 一次算完。
  * 返回的幅度已经乘了 scale（全局参考，见 Soundscape.scale）。
  */
-function synthNoise(table: Spectrum, n: number, sr: number, stereo: boolean, rng: Rng, scale: number, coherence: (f: number) => number = diffuseCoherence) {
+export function synthNoise(table: Spectrum, n: number, sr: number, stereo: boolean, rng: Rng, scale: number, coherence: (f: number) => number = diffuseCoherence) {
   const re = new Float64Array(n);
   const im = new Float64Array(n);
   const df = sr / n;
@@ -207,13 +209,13 @@ function synthNoise(table: Spectrum, n: number, sr: number, stereo: boolean, rng
   return R ? [L, R] : [L];
 }
 
-function rms(x: Float32Array) {
+export function rms(x: Float32Array) {
   let s = 0;
   for (let i = 0; i < x.length; i++) s += x[i] * x[i];
   return Math.sqrt(s / x.length);
 }
 
-function makeBuffer(ctx: BaseAudioContext, chans: Float32Array[]) {
+export function makeBuffer(ctx: BaseAudioContext, chans: Float32Array[]) {
   const buf = ctx.createBuffer(chans.length, chans[0].length, ctx.sampleRate);
   chans.forEach((c, i) => buf.copyToChannel(c as Float32Array<ArrayBuffer>, i));
   return buf;
@@ -250,9 +252,12 @@ export interface SoundOptions {
   aircon: boolean;
   /** 偶尔的客舱提示音（很少、很轻），默认关 */
   chime: boolean;
+  /** 火车（TR07）：钢轨接缝。"jointed" = 定尺 25 m（**示例**：本线是否已长轨化未核实，默认用它是因为 TRAIN.md 第一期要「ガタンゴトン」）；
+   *  "welded" = 长轨化（只剩道岔、伸缩接头的零星撞击） */
+  railJoints: JointMode;
 }
 
-export const DEFAULT_SOUND_OPTIONS: SoundOptions = { aircon: true, chime: false };
+export const DEFAULT_SOUND_OPTIONS: SoundOptions = { aircon: true, chime: false, railJoints: "jointed" };
 
 /** 从主循环的状态取声音输入 */
 export function audioInputFrom(state: VoyageState, inCloud: number, speedKms: number, climbing: boolean): AudioInput {
@@ -328,6 +333,14 @@ export class Soundscape {
   private nextChime = Infinity;
   /** 已排程的雷声时间段 [开始, 结束]（音频时间） */
   private thunderSlots: [number, number][] = [];
+  /** 火车模式（TR07）：噪声床静音、不排颠簸 / 咯吱 / 提示音，只留雷声（天气照常打雷） */
+  private thunderOnly = false;
+
+  setThunderOnly(on: boolean) {
+    if (on === this.thunderOnly || !this.bed) return;
+    this.thunderOnly = on;
+    this.bed.gain.setTargetAtTime(on ? 0 : 1, this.ctx.currentTime, 0.4);
+  }
 
   constructor(ctx: BaseAudioContext, options: SoundOptions = DEFAULT_SOUND_OPTIONS, seed = 1) {
     this.ctx = ctx;
@@ -616,20 +629,20 @@ export class Soundscape {
     // 事件：泊松过程，预排到 horizon 内
     const horizon = now + (opts.horizon ?? 0.25);
     const exp = (rate: number) => -Math.log(1 - rng()) / rate;
-    if (thumpRate <= 0) this.nextThump = Infinity;
+    if (thumpRate <= 0 || this.thunderOnly) this.nextThump = Infinity;
     else if (!isFinite(this.nextThump)) this.nextThump = now + exp(thumpRate);
     while (this.nextThump < horizon) {
       this.thump(this.nextThump, tb);
       this.nextThump += exp(thumpRate);
     }
-    if (creakRate <= 0) this.nextCreak = Infinity;
+    if (creakRate <= 0 || this.thunderOnly) this.nextCreak = Infinity;
     else if (!isFinite(this.nextCreak)) this.nextCreak = now + exp(creakRate);
     while (this.nextCreak < horizon) {
       this.creak(this.nextCreak, s.seatSign);
       this.nextCreak += exp(creakRate);
     }
     // 提示音：平均 25 分钟一次，至少隔 8 分钟
-    if (!this.options.chime) this.nextChime = Infinity;
+    if (!this.options.chime || this.thunderOnly) this.nextChime = Infinity;
     else if (!isFinite(this.nextChime)) this.nextChime = now + 480 + exp(1 / 1020);
     while (this.nextChime < horizon) {
       this.chimeAt(this.nextChime);
@@ -789,6 +802,10 @@ export class CabinAudio {
   private building: Promise<void> | null = null;
   private suspendTimer = 0;
   private lastInput: AudioInput | null = null;
+  /** 火车模式（TR07）：声音来源（RailMode）、火车声音控制器、当前是否在火车里 */
+  private rail: RailSoundSource | null = null;
+  readonly railAudio: RailAudio;
+  private inTrain = false;
   /** 主线程上 update 的累计耗时（毫秒）与调用次数：量 CPU 开销用 */
   readonly cost = { ms: 0, calls: 0 };
   /** 状态变化时通知面板（例如按 M 键切换） */
@@ -796,15 +813,27 @@ export class CabinAudio {
 
   constructor() {
     try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as { volume?: number; aircon?: boolean; chime?: boolean } | null;
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as { volume?: number; aircon?: boolean; chime?: boolean; railJoints?: string } | null;
       if (saved) {
         if (typeof saved.volume === "number") this.volume = clamp(saved.volume, 0, 1);
         if (typeof saved.aircon === "boolean") this.options.aircon = saved.aircon;
         if (typeof saved.chime === "boolean") this.options.chime = saved.chime;
+        if (saved.railJoints === "jointed" || saved.railJoints === "welded") this.options.railJoints = saved.railJoints;
       }
     } catch {
       /* 无痕模式 / 存储被禁：用默认值 */
     }
+    this.railAudio = new RailAudio({ aircon: this.options.aircon, joints: this.options.railJoints });
+  }
+
+  /** 火车模式的状态来源（ui.ts 在 setupUi 里接上 RailMode） */
+  attachRail(src: RailSoundSource) {
+    this.rail = src;
+  }
+
+  /** 火车的车内广播字幕（空串 = 不显示）。声音关着也会更新 */
+  get caption() {
+    return this.railAudio.caption;
   }
 
   private save() {
@@ -817,6 +846,25 @@ export class CabinAudio {
 
   private gain() {
     return this.volume * this.volume;
+  }
+
+  /** 飞机 / 火车切换：飞机的噪声床静掉（雷声照常），火车的声音图淡入 */
+  private applyMode(tau = 0.8) {
+    this.scape?.setThunderOnly(this.inTrain);
+    this.railAudio.scape?.setMaster(this.inTrain && this.enabled ? this.gain() : 0, tau);
+  }
+
+  /** 第一次在火车模式下出声：建火车的声音图，建好后淡入 */
+  private async ensureRail() {
+    const cor = this.rail?.corridor;
+    if (!this.ctx || !cor) return;
+    try {
+      await this.railAudio.ensure(this.ctx, this.ctx.destination, cor);
+    } catch (err) {
+      console.warn("火车声音初始化失败", err);
+      return;
+    }
+    this.applyMode(0.9);
   }
 
   /** 开启声音：第一次调用时创建 AudioContext 并合成缓冲（约几百毫秒），之后淡入 */
@@ -845,6 +893,8 @@ export class CabinAudio {
     if (!this.enabled || !this.scape) return;
     if (this.lastInput) this.scape.update(this.lastInput, { immediate: true });
     this.scape.setMaster(this.gain(), 0.9);
+    this.applyMode(0.9);
+    if (this.inTrain) await this.ensureRail();
   }
 
   /** 关闭：淡出后挂起 AudioContext（挂起后音频线程不再消耗 CPU） */
@@ -853,6 +903,7 @@ export class CabinAudio {
     this.onChange?.();
     if (!this.ctx || !this.scape) return;
     this.scape.setMaster(0, 0.15);
+    this.railAudio.scape?.setMaster(0, 0.15);
     const ctx = this.ctx;
     this.suspendTimer = window.setTimeout(() => {
       if (!this.enabled) void ctx.suspend();
@@ -867,24 +918,43 @@ export class CabinAudio {
   setVolume(v: number) {
     this.volume = clamp(v, 0, 1);
     this.save();
-    if (this.enabled && this.scape) this.scape.setMaster(this.gain(), 0.1);
+    if (this.enabled && this.scape) {
+      this.scape.setMaster(this.gain(), 0.1);
+      this.applyMode(0.1);
+    }
   }
 
-  setOption(key: keyof SoundOptions, on: boolean) {
+  setOption(key: "aircon" | "chime", on: boolean) {
     this.options[key] = on;
     this.save();
+    if (key === "aircon") this.railAudio.setOptions({ aircon: on });
     if (this.scape) {
       this.scape.options[key] = on;
       if (this.lastInput) this.scape.update(this.lastInput, { force: true });
     }
   }
 
-  /** 每帧调用（内部节流到 10 Hz）。没开声音时只记下输入 */
+  /** 火车：钢轨接缝模式（定尺 25 m · 示例 / 长轨化） */
+  setRailJoints(mode: JointMode) {
+    this.options.railJoints = mode;
+    this.save();
+    this.railAudio.setOptions({ joints: mode });
+  }
+
+  /** 每帧调用（内部节流到 10 Hz）。没开声音时只记下输入（火车广播的字幕照常更新） */
   update(input: AudioInput) {
     this.lastInput = input;
-    if (!this.enabled || !this.scape) return;
+    const playing = this.enabled && !!this.scape;
     const t0 = performance.now();
-    this.scape.update(input);
+    const train = this.railAudio.frame(this.rail, input.seatSign, playing);
+    if (train !== this.inTrain) {
+      this.inTrain = train;
+      this.applyMode();
+    }
+    if (!playing) return;
+    if (train) {
+      if (!this.railAudio.scape) void this.ensureRail();
+    } else this.scape!.update(input);
     this.cost.ms += performance.now() - t0;
     this.cost.calls++;
   }
@@ -895,8 +965,8 @@ export class CabinAudio {
     this.scape.lightning(distanceKm, cg);
   }
 
-  /** 调试：音频上下文、当前目标 */
+  /** 调试：音频上下文、当前目标（火车模式下 rail 是火车声音图的目标） */
   debug() {
-    return { state: this.ctx?.state ?? "none", sampleRate: this.ctx?.sampleRate, baseLatency: this.ctx?.baseLatency, targets: this.scape?.targets ?? null, cost: this.cost };
+    return { state: this.ctx?.state ?? "none", sampleRate: this.ctx?.sampleRate, baseLatency: this.ctx?.baseLatency, targets: this.scape?.targets ?? null, train: this.inTrain, rail: this.railAudio.scape?.targets ?? null, caption: this.caption, cost: this.cost };
   }
 }

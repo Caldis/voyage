@@ -252,6 +252,7 @@ GroundDetail groundDetail(vec2 g, vec3 alb, float fp, vec3 sun, float lod) {
   }
 
   // ---- 城区 ----
+#ifndef RAIL // 火车远景（TR03）不画城区：从 2.5 m 眼高掠射，画在地面上的楼顶 / 街道只是一片条纹
   if (cls.z > 0.02) {
     float fadeU = 1.0 - smoothstep(5.0, 16.0, fp);
     // 粗三级（近处约 60 m 像素）的水体遮罩 > 0：几十米内有海、河，是海滩、河堤、护岸，不放楼
@@ -288,6 +289,7 @@ GroundDetail groundDetail(vec2 g, vec3 alb, float fp, vec3 sun, float lod) {
       o.ao = mix(o.ao, ao, cls.z * fadeU);
     }
   }
+#endif
   return o;
 }
 

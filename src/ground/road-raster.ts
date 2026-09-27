@@ -114,6 +114,8 @@ export interface RoadJob {
   tiles: { x: number; y: number; data: RoadTileData }[];
   /** 同一批瓦片的水体 / 河道几何（PERF-9，和道路一起搬进 Worker 合成，见 buildGroundLevel） */
   water: { x: number; y: number; data: WaterTileData }[];
+  /** 河道折线的最大画宽（米，TR03）：不给 = 按类别估计的宽度原样画（飞机）；火车模式给一个小值，见 GroundClipmap.waterwayMaxM */
+  waterwayMaxM?: number;
 }
 
 /** 一级的像素数据（RES² × RGBA，getImageData 的结果）：在 Worker 里就地写入道路，再原样转移回主线程 */
@@ -388,7 +390,7 @@ export function buildGroundLevel(job: RoadJob, albedo: Uint8ClampedArray, nightR
     ctx.lineJoin = "round";
     for (let l = 0; l < w.lineWidth.length; l++) {
       const s0 = w.lineStart[l], s1 = w.lineStart[l + 1];
-      const widthPx = w.lineWidth[l] / 1000 / kmPerPx;
+      const widthPx = Math.min(w.lineWidth[l], job.waterwayMaxM ?? Infinity) / 1000 / kmPerPx;
       ctx.lineWidth = Math.max(widthPx, 1);
       ctx.globalAlpha = Math.min(widthPx, 1);
       ctx.strokeStyle = "rgb(255,0,0)";

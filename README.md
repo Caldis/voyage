@@ -36,6 +36,7 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 | `scene-economy` | 16 | 5 / 8 |
 | `outside-default` | 16 | 14 / 18 |
 | `outside-ground-detail` | 16 | 14 / 18 |
+| `outside-rail` | 16 | 14 / 18 |
 <!-- DX-09:sampler-table:end -->
 
 ## 使用
@@ -75,7 +76,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/light-pollution.ts` | 城市光污染的天空背景（T09）：从地面夜光估算，只压银河的可见度 |
 | `src/traffic.ts` / `src/weather.ts` | 远处飞机的运动；天气预设、雷暴 / 台风摆放、闪电调度；天气场 `WeatherField`（T19b：按经纬度 + 时间取样云型 / 云量，雷暴系统与台风的出生、寿命、漂移，粗略东亚海陆分布） |
 | `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
-| `src/rail/*` | 火车模式（TR02）：`data.ts` 读线路烘焙产物；`corridor.ts` 走廊坐标（里程 s、横向 d、高程）、平滑中心线、按规范公式估算的超高；`train.ts` 速度曲线（巡航 90 km/h、曲线限速、终点停车折返）与车体姿态（台车连线、超高侧倾、悬挂外倾）；`vibration.ts` 车体低频振动；`geodesy.ts` 线路 ENU ↔ 经纬度；`mode.ts` 接到 voyage 的相机 / 状态（`window.__voyage.rail`，`rail.teleport(s, dir)` 调试用）；单测 `node src/rail/rail.test.mjs`；飞机模式着色器零回归比对 `node src/rail/shader-parity.mjs <对照 voyage 根目录>` |
+| `src/rail/*` | 火车模式（TR02）：`data.ts` 读线路烘焙产物；`corridor.ts` 走廊坐标（里程 s、横向 d、高程）、平滑中心线、按规范公式估算的超高；`train.ts` 速度曲线（巡航 90 km/h、曲线限速、终点停车折返）与车体姿态（台车连线、超高侧倾、悬挂外倾）；`vibration.ts` 车体低频振动；`geodesy.ts` 线路 ENU ↔ 经纬度；`mode.ts` 接到 voyage 的相机 / 状态（`window.__voyage.rail`，`rail.teleport(s, dir)` 调试用）；`far-view.ts` / `far-view.glsl.ts` 窗外程序的火车远景变体（TR03，`#define RAIL`，近处国土地理院平面带、掠射步进、相对高度、轮廓抗锯齿）；单测 `node src/rail/rail.test.mjs`；飞机模式着色器零回归比对 `node src/rail/shader-parity.mjs <对照 voyage 根目录>` |
 | `src/debug/minimap.ts` | 调试小地图（DX-06）：可选的角落 2D canvas 叠层，画本机 / 轨迹 / 航线 / 交通 / 奇观，以及从天气场采样的云回波「多普勒」图；不碰任何 WebGL 程序 |
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
 | `src/atmosphere/luts.ts` | 透射率 / 多次散射 / 辐照度 / 天空视图 / 空气透视 LUT；`setHaze` 设边界层霾 |
@@ -103,6 +104,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/render/traffic.glsl.ts` | 航迹云与远处飞机 |
 | `src/render/exposure.ts` / `bloom.ts` / `pass.ts` | 曝光与色调映射；眩光；全屏 pass |
 | `src/audio.ts` | 声音（T11）：Web Audio 程序化合成（频域合成的可循环噪声床 + 发动机谐波 + 事件），`Soundscape`（可建在 OfflineAudioContext 上）/ `CabinAudio`（面板与主循环用的控制器）；`scripts/audio-check.mjs` 离线出频谱表 |
+| `src/rail/sound-model.ts`、`src/rail/audio-rail.ts` | 火车声音（TR07）：接缝节奏的几何（车轴过接缝时刻）、道口警报规格与多普勒、广播时机（纯计算，node 可跑）；`RailSoundscape` / `RailAudio`（火车模式下 `CabinAudio` 改驱动它，飞机噪声床静音、雷声照常）。`scripts/audio-check.mjs --rail` 离线出节奏周期、多普勒、频谱 |
 | `scripts/build_stars.py` | 从 CDS 下载 BSC5，生成 `public/data/bsc5.json` |
 
 **热点文件**：`src/main.ts` 和 `src/render/scene.ts` 几乎每个功能都会改到，并行开发时按 `DEV_SOP.md` 的规则分配（T01 已把它们拆小，但新增 uniform 仍要同时改 scene.ts 的声明块和 `createSceneMaterial`；新增面板状态要同时碰 state.ts / main.ts / ui.ts）。
@@ -450,6 +452,21 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   修法：位置夹在两个终点停车位之间，初速不超过到下一停车点的制动曲线，停在终点上直接进入停站；`enter()` 不给参数时列车原样继续。识别：单测第 7、8 节（终点跳转、停站中切换）。
 - **回归场景切火车要注意面板控件的应用顺序**（TR02）：`applyScene` 先按 DEFAULTS 设 `preset`、`seat`……，再设场景自己的键。火车模式下改 `preset` 会先退出火车（`setPreset` 里 `rail.exit()`），所以火车场景要写 `"vehicle": "train"`（排在 DEFAULTS 之后生效），想要右座的话在 `js` 里再设；进入火车时座位默认换到北阿尔卑斯一侧（往信濃大町是左座）。飞机场景跟在火车场景后面时，要写 `"vehicle": "plane"`（DEFAULTS 里还没有这个键，TR08 可以加上）。
 
+- **火车声音：跳位置被当成加速播放，把广播吞掉**（TR07）：`rail/audio-rail.ts` 按「音频时钟里走了多远 / 车速」估模拟流速，加速播放（导演流速）时静掉接缝、道口、广播这类节奏事件。`rail.teleport` 一下跳 30 km，被估成约 40 倍速，fastForward 持续约 0.7 s，正好把刚触发的「まもなく」吞掉。
+  修法：位移超过「100 倍速一个更新周期能走的距离」就当跳位置，重新排程、不参与估计；字幕无论如何都显示，只是加速时不放喃喃声。识别：teleport 之后 `__voyage.audio.debug().rail.rateEst` 应仍约 1。
+- **火车声音：警报声第一版低了 25 dB，完全听不见**（TR07）：车体隔声（−27 dB）之后又乘了一遍噪声床的 RMS 参考，经过道口时警报 −65 dBFS。识别：`node scripts/audio-check.mjs --rail` 的「道口通过」行，±1 s 的总声级应与底噪相当（现在 −41.7，峰 −24）。
+- **火车声音：广播喃喃声现算是一次 63 ms 的主线程长任务**（TR07）：共振峰合成在 JS 里逐样本算，5 s 的一段约 60–90 ms。修法：建图时预合成 3 段 7 s（逐段让出主线程），广播时截取需要的长度、末尾淡出。识别：`handoff/TR07-prof.mjs` 的 `maxMs`（现在约 0.6 ms）。
+- **离线节奏检查：包络自相关会报成两倍周期**（TR07）：接缝节奏的包络在 T、2T 处的自相关几乎一样高，随机数流一变（加了一段预合成就变了），最大值就从 1 s 跳到 2 s。修法：取「≥ 最大值 90%」的局部峰里最短的滞后。以后写周期检测都要加这个防倍周期。
+- **火车声音的数值多是估值 / 示例**（TR07，详见 `handoff/TR07.md`）：本线是否已长轨化、接缝是相对式还是相互式、警报两音交替还是同时，都**未核实**；面板接缝下拉默认「定尺 25 m（示例）」。道口多普勒用**运动听者**公式 (c + v·cosθ)/c（实现为 1 − ṙ/c），`research/TRAIN.md` §6.2 写的 c/(c ∓ v) 是声源运动的公式，90 km/h 时差 0.6%。
+- **火车：贴地相机下飞机的窗外程序把近处画成海、山脚一条白带**（TR03）：三个根因叠在一起。①眼高 2.5 m 时地平线附近的视线在平原上方几米处走十几公里，飞机版「按离地高度缩步」在 96 步内用完，`terrainHit` 退回海平面球（`tSea`），画成海；②AWS 地形在近处比国土地理院轨面高（弯道处 7–30 m），视线从地形里面出发，第一步就「打中」t = 0，`groundHit` 返回 false，也退回海；③地面瓦片的河道折线按类别估宽（river 60 m），十几米的小河在铁路边画成 70 m 宽的「湖」（12.65 km 处实测，线路烘焙的 OSM 里那里根本没有水面多边形）。
+  修法：窗外程序的 `#define RAIL` 变体（`rail/far-view.glsl.ts`，只拼进火车变体，共用模块里只有 `#ifdef RAIL` 钩子）：近处 250 m 内是国土地理院标高的解析平面、600 m 渐变到 clipmap 地形（近处按基准差平移到国土地理院）；步长下限按距离放大（4–10%），地形逼近时按逼近速度预估；没打到地形的视线是天空、不退回海平面球；火车模式下河道折线限宽 12 m（`GroundClipmap.waterwayMaxM`）。眼睛不再按 clipmap 抬高。
+  识别：火车模式窗外出现大片反射天空的水面 → `uDebug = 23` 看水体遮罩（红 = 水）；是遮罩里真的有水就去查瓦片的 waterway 宽度，遮罩没水却是水面就是退回了海平面球。
+- **火车：着色器里相机高度的 float32 精度**（TR03 已处理）：`uCamR = 6360 + 海拔` 在 6360 附近只有约 0.49 m 一级。火车变体的求交、阴影全部用相对量：`uRailCamAltKm`（海拔本身，亚毫米精度）+ 沿视线的增量 `t(2·rc·μ + t) / (√(rc² + q) + rc)`（`railAltAlong`，不在 6360 附近相减）。以后往火车变体加任何「比高度」的代码都走 `railAltAlong` / `gh.alt`，不要写 `length(P) − BOTTOM`。
+- **火车：高度 clipmap 半精度把平原量化成台地**（TR03）：半精度在 0.5–1 km 海拔只有约 0.5 m 一级，飞机上看不出；贴地掠射时远处地平线是一级级台阶。高度纹理改成 R32F（`clipmap.ts`，线性过滤要 `OES_texture_float_linear`，three 已启用）。飞机模式的地形高度因此变准了一点（fuji-day 与 master 平均差 0.23/255，属噪声）。
+- **火车：斜看的影像要沿足迹长轴取样**（TR03）：1 km 外像素在地面上沿视线方向的足迹是横向的几百倍，取一个点就是严重欠采样，列车一动整片平原闪。火车变体沿长轴取最多 4 点（`railGroundSample`），级别选到每点约一个纹素；地形法线在求交时就算好（`gh.nT`），掠射角按法线算（按天顶算会把正对我们的山坡也模糊掉）。
+- **火车：远处山脊几乎和地平线平行，轮廓是 1 像素的水平台阶，列车一动就沿轮廓爬**（TR03）：两类边都要抗锯齿。①地形对天空（没打到）：步进途中记下离地形最近处（以像素竖直足迹计），在它附近两轮细找，覆盖率 = 1 − 距离，和天空按覆盖率混；②近处山脊挡远处山脊（都打到）：只记「局部最近、之后又离远」的一处，把远山的颜色按那道山脊的距离重新加一遍空气透视当作它的颜色混进来。**云的切割（`cloudBeforeGround`）也要按同一覆盖率混**，不然山脊边的云还是一刀切（第一版只改地面颜色，截图看不出变化，查了半天才发现台阶是云被切出来的）。识别：`uDebug = 26`（火车变体专用：红 = 覆盖率，绿 = 距离 / 50 km，蓝 = 近处山脊覆盖率）。仍未解决：平原上相隔几公里的低矮起伏之间的遮挡边（对比很低，放大 5 倍才看得出）。
+- **火车远景变体第一次进入火车模式时后台编译约 18–19 s（d3d11 真冷），期间沿用飞机的窗外程序，窗外会先画成海**（TR03，已知）：飞机模式不受影响（变体只在火车模式下编译）。以后若要消掉，可在面板选「火车」的同时开始编译、编好之前在状态文字里提示。
+
 <a id="pit-tools"></a>
 ### 工具与环境
 
@@ -465,7 +482,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - 回归脚本在 Playwright MCP 的 `browser_run_code_unsafe` 里运行时**没有全局 `URL`**（`ReferenceError: URL is not defined`）。只在 Node 侧可用的全局不要假设存在；取 origin 用正则。以后识别：脚本一开始就抛 ReferenceError。
 - **测帧时间**：本机 GPU 远快于刷新率，rAF 间隔被锁在约 6.2 ms，看不出着色器代价；`gl.finish()` 在 Chrome 里也不等 GPU。用 `EXT_disjoint_timer_query_webgl2`，或「一个 rAF 里连渲染 N 帧后 readPixels 1 像素」。多个代理同时占 GPU 时任何计时都不可信。
 - **真冷启动**：同一端口的着色器缓存会让「冷启动」其实是热的；测编译时间要用 addInitScript 往着色器注入随机数强制缓存不命中（审查脚本 `tmp/review-t02/cold.js`）。
-- **调试模式编号**：`uDebug` 1–10 原有；11 / 12 海浪（T14：白浪覆盖率、可分辨斜率）；21 地表分类、22 像素足迹、23 水体遮罩（T02）；24 只画道路灯带（T08，地面处辐亮度，不含空气透视）；25 去掉道路灯带（T43）。新增前先查占用。
+- **调试模式编号**：`uDebug` 1–10 原有；11 / 12 海浪（T14：白浪覆盖率、可分辨斜率）；21 地表分类、22 像素足迹、23 水体遮罩（T02）；24 只画道路灯带（T08，地面处辐亮度，不含空气透视）；25 去掉道路灯带（T43）；26 火车远景的轮廓覆盖率 / 距离 / 近处山脊覆盖率（TR03，只在火车变体里）。新增前先查占用。
 - **glslang-validator-prebuilt-predownloaded 没有 `bin` 字段**：不能 `npx` 直接跑，要 `require("glslang-validator-prebuilt-predownloaded").getPath()` 拿到可执行文件路径自己 `spawn`（`apps/voyage/scripts/lint-shaders.mjs` 已经封装好）。
 - **离线校验 THREE 的 `#include <chunk>`**：不能直接展开 `THREE.ShaderChunk` 的原文喂给 `glslangValidator`——它的 `common` chunk 里的 `average()` 函数会被 glslangValidator 误报「redeclaration of existing name」（ANGLE / 真实浏览器编译完全正常，是 glslangValidator 自己符号表的问题）。`lint-shaders.mjs` 用手写的桩替换（`INCLUDE_STUBS`）绕开。
 - **按文本数 sampler 引用，光展开 `#ifdef` 还不够，要连着做「从 main() 可达性剪枝」**：一个函数即使在源码里正常定义、正常读了某个 sampler，只要这个函数本身从场景程序的 `main()` 顺着调用链走不到（比如只被另一个程序调用），真实驱动的死代码消除会把它和它读的 sampler 一起砍掉——纯文本「这个名字出现过好几次」看不出「是否真的可达」。`lint-shaders.mjs` 的 `reachableFromMain`/`pruneUnreachable` 就是为了修这个坑（撞上的真实案例：`uMultiScatteringLut` 只被 LUT 预计算程序用，场景程序的 `main()` 到不了它）。加新的静态分析工具时留意这一条。
@@ -478,7 +495,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **对比截图前冻结翼尖姿态**：`uWingFlex` 每帧按时间摆动（turbulence 0 也在动），同一端口前后两张图边缘会错开 1 像素；1:1 对比要把它冻结。同一版本前后两次截图也可能差一两颗云 / 海面高光，看到亮点先同版本再拍一次确认。
 - **测「省了多少」要带关掉该功能的对照组**：只看总时间会被别处的开销（例如多开的数组让所有像素都慢 0.02 ms）误导。
 - **同页 `material.clone()` 做 A/B 计时，排第一个的场景数字不可信**（能差 2 倍，根因未明）；最终数字用两个端口整轮交替测。
-- **headless 里听不见声音，但可以离线分析**（T11）：`node scripts/audio-check.mjs [--port 5211]`（没有开发服务器会自己起 vite）直接打开 `/src/audio.ts` 这个地址（同源、不启动渲染器）再动态 import，用 OfflineAudioContext 渲染各状态并输出倍频程表 / A 计权 / 峰值 / 左右相干度到 `tmp/audio-check/spectra.json`。页面上那条 404 是 favicon，无关。
+- **headless 里听不见声音，但可以离线分析**（T11）：`node scripts/audio-check.mjs [--port 5211]`（没有开发服务器会自己起 vite）直接打开 `/src/audio.ts` 这个地址（同源、不启动渲染器）再动态 import，用 OfflineAudioContext 渲染各状态并输出倍频程表 / A 计权 / 峰值 / 左右相干度到 `tmp/audio-check/spectra.json`。页面上那条 404 是 favicon，无关。火车（TR07）加 `--rail`（只查火车）或 `--rail --all`，结果写 `tmp/audio-check/rail.json`。
 - **同一时刻拍「正常 / 调试」两张图做减法不可靠**（T43）：即使停掉主循环、把 uCloudOffset 拨回原点，头部 / 航向仍会漂几个像素，城市灯点整体错位，相减全是灯点。
   道路的贡献直接拍调试 24（同一冻结曝光），调试 25 = 去掉道路灯带（`handoff/T43-shots.mjs`）。
 - **回归场景的日期默认是「今天」，夜景的月相每天不同**（T09）：场景只设 `time` 时日期沿用页面打开那天，月亮在不在天上、多亮随运行日期变，夜间场景的基线不可比。要稳定的夜景写 `date`（`applyScene` 对日期框发 `change`，没写 `date` 的场景恢复成页面打开时的日期）。选银河场景的办法：用 astronomy-engine 扫全年「太阳 < −18°、月亮 < −5°、人马座大星云高 4–16°、方位对着窗」，本仓库的 `night-sea-milkyway` 就是这样挑出来的（南海、左座朝东南、2026-05-15 22:30）。
