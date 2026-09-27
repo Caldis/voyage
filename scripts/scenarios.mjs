@@ -230,6 +230,10 @@ js: ${typeof jsOut === "string" ? jsOut : JSON.stringify(jsOut)}`;
 /** 按名字过滤场景表；only 为空 / null 时返回全部 */
 export function pickScenes(only) {
   if (!only || only.length === 0) return SCENES;
+  // DX-23：未知场景名直接报错（以前静默过滤，`passes.mjs --only 拼错名` 会一个场景都不测、只打印空表）
+  const known = new Set(SCENES.map((s) => s.name));
+  const unknown = only.filter((n) => !known.has(n));
+  if (unknown.length) throw new Error(`--only 里有未知场景：${unknown.join(", ")}\n已知场景：${[...known].join(", ")}`);
   const set = new Set(only);
   return SCENES.filter((s) => set.has(s.name));
 }
