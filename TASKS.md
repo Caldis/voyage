@@ -11,7 +11,7 @@
 | INV-INCLOUD | 第 7 波（回归调查） | — | 主仓库 handoff/ | Opus 调查代理（C03 合并后 in-cloud 实时相邻像素差 2.56→8.38？同口径对比 C03 前 / 定稿 / 回退一行，给零开销修法） | — | 进行中 |
 | C09 | 第 7 波（云锐度，用户需求） | 5209 | worktree | Opus（逆光银边：backlit-close 场景 + 银边指标，比较前向峰加宽瓣 / 受光首步缩短；必审） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
-| PERF-14 | 第 7 波（飞机性能） | 5214 | worktree | Opus（舱内 / 机翼程序冷编译回收：关键路径分解、座椅单独 pass 或光照收拢、机翼消融；目标冷启动再降 ≥1.5 s；必审） | — | 进行中 |
+| PERF-14 | 第 7 波（飞机性能） | 5214 | `worktree-agent-ae3e95f93a3e4d63a`（cfb2969） | Opus | 审查中 | 已交付：**真冷启动 12.0→9.1 s**（座椅单独 pass、WING_WET 变体；scene-default 离线 −46%），44 组零回归 |
 | G06 | 第 7 波（飞机地面） | 5206 | worktree | Opus（clipmap 地面纹理精度 + mipmap / 各向异性：巡航纹素 / 屏幕像素比 ~3 → 1–1.5；先实验比较方案；必审） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -81,7 +81,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | DX-10 | 测量可信度：shader-budget 最小值判定 + MAD、--baseline 容错、--chain 归因、--variants、--wait-quiet、--ledger；测量锁 tmp/measure.lock；passes 归类 bloom / 变体；compile-ledger.json 账本；applyScene 跨版本容错 | 2026-09-27 | Sonnet 实现，协调者合并。**合并后已通知在途代理** |
 | TR07 | 火车声音：接缝节奏（定尺示例 / 长轨化开关）、滚动 / 变频器 / 轮缘 / 空调、道口警报多普勒、停站与广播示意 + 字幕 | 2026-09-27 | Opus 实现（中途暂停又恢复），**独立审查通过**，协调者合并。火车按用户要求收尾，**遗留不修**：火车模式首次开声音漏一声飞机底噪（P2-a）、火车声音初始化失败每帧 warn（P2-b）、广播改单声道省 6 MB、弯道尖啸像颤音、audio-check 无断言 |
 | G04-G08 | 地面影像后续（research/IMAGERY.md）：G04 其他地区用 Esri（**待用户确认**：旧端点灰区 vs ArcGIS Location Platform token，每月 200 万免费）；G06 提高 clipmap 纹理精度 + 各向异性（巡航整体变清晰的真正手段，改着色器，先做一天实验量闪烁 / 冷编译）；其余见报告 | 中 | ground / 着色器 | — | — |
-| DX-22 | **冻结工具对云是瞎的**：flicker / shots --freeze / --pair / --base-shader 冻结时跳过云渲染 → 加 `--cloud-live`（冻结其余、云照常渲染并输出时间波动），把 C03rev-rt.mjs 实时路径收进 scripts；compare 加分方向（对角 / 行 / 列）高频指标；shots --pair 在带地面的夜景里机位没钉住（同 js 两张差 8.9%，城市灯光整体移动）；compare --measure 支持用云缓冲不透明度作遮罩分云 / 非云统计；FXC 对 abs 写法敏感（max+abs 慢 13%，clamp 平方持平）写进坑点或 lint 提示；--live 连跑多场景 WebGL 上下文丢失待查（TM01 反馈） | 中 | scripts | — | — |
+| DX-22 | **`shots --pair` / `--base-shader` 冻结失效**：每拍后跑 benchFrame(30) 绕过冻结、推进模拟时间与曝光，master 自比也有 5–48% 像素超阈值 → 今晚用它得出的零回归结论不可靠（临时绕法 `v.benchFrame = () => 0`）；`--base-shader` 无 `--pair` 时静默忽略；`--material` 支持舱等 / 变体材质；`cold` 输出各程序编好时刻表（PERF-14 已记进 __voyageStartup）。**冻结工具对云是瞎的**：flicker / shots --freeze / --pair / --base-shader 冻结时跳过云渲染 → 加 `--cloud-live`（冻结其余、云照常渲染并输出时间波动），把 C03rev-rt.mjs 实时路径收进 scripts；compare 加分方向（对角 / 行 / 列）高频指标；shots --pair 在带地面的夜景里机位没钉住（同 js 两张差 8.9%，城市灯光整体移动）；compare --measure 支持用云缓冲不透明度作遮罩分云 / 非云统计；FXC 对 abs 写法敏感（max+abs 慢 13%，clamp 平方持平）写进坑点或 lint 提示；--live 连跑多场景 WebGL 上下文丢失待查（TM01 反馈） | 中 | scripts | — | — |
 | C04-C07 | 运动中时间累积保边（与 resolve 协调）、画质自动档切场景尖峰降档、DPR 2 按 1.5 渲染再放大、细节噪声 mip 偏粗 1.4 级（见报告） | 中 | clouds / quality | — | — |
 | C10 | 云边锐度（C03 未达成部分）：按表面距离变步长都会因采样位置依赖 jitter 产生新条纹；评估与 jitter 无关的表面距离场（Nubis³ 思路）或其他方案，先研究再实现 | 中 | clouds | — | backlit-cu、clouds-variety |
 | TM02 | 局部色调映射：按低通亮度算增益、细节按原斜率加回，让云体对比与最亮段（边缘高光）细节兼得（TM01 结论） | 中 | exposure | — | clouds-variety、backlit-cu、sunset-wing |
