@@ -95,7 +95,7 @@ void main() {
 `;
 
 // ---- 双区曝光模型（T23 / T28；T30 抽出来给适应 pass 共用，见文件末尾 Exposure 类上方的公式说明） ----
-const EXPOSURE_MODEL = /* glsl */ `
+export const EXPOSURE_MODEL = /* glsl */ `
 uniform bool uAuto;
 uniform vec2 uCabinBeta;    // 舱内局部适应比例：x = 暗处（中间视 / 暗视），y = 白天（明视）
 uniform vec2 uCabinCapEv;   // 舱内均值的显示亮度相对窗外均值的上限（EV）：x = 暗处，y = 白天
@@ -110,11 +110,12 @@ uniform vec2 uCabinLitRange;  // 「舱灯开着」判据：舱内适应亮度 l
 uniform float uCabinLitWhiteEv; // 舱内主导（开灯）时的明度恒常补偿（EV）
 uniform float uWinGapLitEv;   // T30 开着舱灯时窗内曝光最多比舱内高多少 EV
 uniform vec2 uReflGapEv;      // T30 窗上倒影的曝光最多比舱内高多少 EV：x = 暗处（睡眠 / 全关），y = 开着舱灯
+uniform vec2 uReflCapK;       // T34 窗上倒影（面状部分）显示亮度的硬上限 = 舱内均值显示亮度 × k（线性）：x = 暗处，y = 开着舱灯
 
 // 目标中灰：亮度低于 100 cd/m² 后逐渐降低（暗处人眼看到的整体更暗；经验近似）
 float exposureKey(float logCd10) { return 0.18 * clamp((logCd10 + 2.0) / 4.0, 0.12, 1.0); }
 
-struct ExpModel { float eO; float eC; float aC; float aO; float dom; float lit; float reflLog; };
+struct ExpModel { float eO; float eC; float aC; float aO; float dom; float lit; float reflLog; float reflCapLog; };
 
 // adapted：log2 亮度（kcd/m²）——窗外（对数均值）、舱内（按面积）、窗外（线性均值）
 ExpModel exposureModel(vec4 adapted) {
@@ -164,6 +165,11 @@ ExpModel exposureModel(vec4 adapted) {
     //    所以倒影最多比舱内的曝光高 uReflGapEv 档（局部适应的余量），超出的部分在舱内合成里预先扣掉；
     //    窗外本身照旧按窗外曝光（T23），城市灯光、机翼不受影响。白天 eO ≤ eC，从不触发
     m.reflLog = uAuto ? min(0.0, eC + mix(uReflGapEv.x, uReflGapEv.y, lit) - eO) : 0.0;
+    // ⑧ T34 倒影的硬上限（log2，窗内 HDR 单位，已含倒影增益之后的量）：⑦ 只管「曝光差」，管不住来源本身就比
+    //    看得见的舱壁亮得多的情况（睡眠档对面紧挨氛围灯的那段侧壁约 20 cd/m²，是可见舱壁均值的 30 倍，⑦ 之后在屏幕上
+    //    仍比舱壁亮 2.8 倍）。所以再给显示亮度一个绝对上限：倒影 · 2^eO ≤ k · 舱内均值 · 2^eC，
+    //    即倒影 ≤ k · 2^(c + eC − eO)。k 是线性比（AgX 下显示 Y 的一半约等于线性的 0.2）；手动曝光时不限
+    m.reflCapLog = uAuto ? log2(mix(uReflCapK.x, uReflCapK.y, lit)) + c + eC - eO : 60.0;
     return m;
 }
 `;
@@ -359,6 +365,13 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  *   ④' 开着舱灯（lit）时窗内曝光最多比舱内高 uWinGapLitEv = 6.5 档：倒影压暗后测光不再被它抬高，
  *      没有这一条的话开灯时窗外会亮得和全关一样（改前是被倒影「顺带」压住的）。
  *   倒影的色度在 scene.ts 里按主灯色温预先抵掉 70%（和舱内的色适应一致，窗外不做舱内色适应）。
+ * T34「倒影亮度自洽」：
+ *   ⑦ 只约束「倒影的曝光 ≤ 舱内曝光 + 余量」，等于说「倒影不比它的来源亮」；可睡眠档倒影的来源是对面紧挨氛围灯的
+ *      那段侧壁（约 20 cd/m²，是可见舱壁均值的 30 倍），⑦ 之后在屏幕上仍是舱壁的 2.8 倍（Y 83 对 30）。
+ *   ⑧ 所以再加一条按显示亮度的硬上限：面状倒影 · 2^eO ≤ k · 2^(c + eC)（舱内均值的显示亮度），
+ *      reflCapLog = log2 k + c + eC − eO，k = uReflCapK（暗处 0.2、开灯 0.35，按 lit 混合；AgX 下线性 0.2 ≈ 显示 Y 的 0.4–0.5）。
+ *      舱内合成（scene.ts）用 4 次范数软限幅，并在窗外够亮（黄昏）时再收紧到窗外的 15%；阅读灯光点不进上限。
+ *      scene.ts 直接内联 EXPOSURE_MODEL、共用 EXPOSURE_MODEL_UNIFORMS，按上一帧的适应结果算。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
  * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
  * 目标是用户给的屏幕亮度（白天舱壁 150–185、关灯夜里 25–45、窗最亮）。这是经验模型，不是视觉科学的定量结果。
@@ -371,29 +384,33 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  */
 export const EXPOSURE_STATE: THREE.IUniform<THREE.Texture | null> = { value: null };
 
+/** 双区曝光模型的参数（EXPOSURE_MODEL）：适应 pass、最终合成、舱内合成（scene.ts，T34 倒影上限）共用同一批 uniform 对象 */
+export const EXPOSURE_MODEL_UNIFORMS: Record<string, THREE.IUniform> = {
+  uAuto: { value: true },
+  uCabinBeta: { value: new THREE.Vector2(0.3, 0.8) },
+  uCabinCapEv: { value: new THREE.Vector2(-0.75, 2.0) },
+  uCabinWhiteEv: { value: 2.2 },
+  uCabinMaxBoostEv: { value: 4.5 },
+  uCabinHiMarginEv: { value: 1.4 },
+  uSnowEv: { value: 2.0 },
+  uUniformRange: { value: new THREE.Vector2(0.05, 0.12) },
+  uPhotopicRange: { value: new THREE.Vector2(1.5, 3.0) },
+  uDominanceRange: { value: new THREE.Vector2(-1.0, 2.0) },
+  uCabinLitRange: { value: new THREE.Vector2(0.5, 1.2) },
+  uCabinLitWhiteEv: { value: 0.35 },
+  uWinGapLitEv: { value: 6.5 },
+  uReflGapEv: { value: new THREE.Vector2(2.5, 2.0) },
+  uReflCapK: { value: new THREE.Vector2(0.2, 0.35) },
+};
+
 export class Exposure {
   private readonly meter = tinyTarget();
   private adapted = [tinyTarget(), tinyTarget()];
   private reset = true;
 
   private readonly meterMat = material(METER_FRAG, { uHdr: { value: null }, uPrevAdapted: { value: null }, uReset: { value: true } });
-  /** 双区曝光模型的参数（EXPOSURE_MODEL），适应 pass 与最终合成共用同一批 uniform 对象 */
-  private readonly model: Record<string, THREE.IUniform> = {
-    uAuto: { value: true },
-    uCabinBeta: { value: new THREE.Vector2(0.3, 0.8) },
-    uCabinCapEv: { value: new THREE.Vector2(-0.75, 2.0) },
-    uCabinWhiteEv: { value: 2.2 },
-    uCabinMaxBoostEv: { value: 4.5 },
-    uCabinHiMarginEv: { value: 1.4 },
-    uSnowEv: { value: 2.0 },
-    uUniformRange: { value: new THREE.Vector2(0.05, 0.12) },
-    uPhotopicRange: { value: new THREE.Vector2(1.5, 3.0) },
-    uDominanceRange: { value: new THREE.Vector2(-1.0, 2.0) },
-    uCabinLitRange: { value: new THREE.Vector2(0.5, 1.2) },
-    uCabinLitWhiteEv: { value: 0.35 },
-    uWinGapLitEv: { value: 6.5 },
-    uReflGapEv: { value: new THREE.Vector2(2.5, 2.0) },
-  };
+  /** 双区曝光模型的参数：模块级共享（EXPOSURE_MODEL_UNIFORMS），舱内合成也要读 */
+  readonly model = EXPOSURE_MODEL_UNIFORMS;
   private readonly adaptMat = material(ADAPT_FRAG, {
     ...this.model,
     uPrev: { value: null },

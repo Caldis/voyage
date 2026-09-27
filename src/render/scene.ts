@@ -7,7 +7,7 @@ import { LEATHER_COMMON } from "./cabin-leather.glsl";
 import { FABRIC_COMMON } from "./fabric.glsl";
 import { SEATS_COMMON } from "./seats.glsl";
 import { CABIN_REFLECT_COMMON } from "./cabin-reflect.glsl";
-import { EXPOSURE_STATE } from "./exposure";
+import { EXPOSURE_MODEL, EXPOSURE_MODEL_UNIFORMS, EXPOSURE_STATE } from "./exposure";
 import { VIEW_COMMON } from "./view.glsl";
 import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
 import { LIGHTS_COMMON } from "./lights.glsl";
@@ -52,7 +52,8 @@ uniform sampler2D uExposureState; // 上一帧的曝光适应结果（exposure.t
 // 5 海面本身，6 海面天空反射，7 海面的内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子，
 // 11 白浪覆盖率 / 本地粗糙度，12 海面可分辨的平均斜率（11、12 见 ocean.glsl.ts），
 // 21 真实地面的地表分类（红 树林、绿 农田、蓝 城区），22 真实地面的像素足迹（21、22 只在低空细节变体里有），
-// 23 真实地面的水体遮罩（红 水面、绿 海洋通道、蓝 夜光）
+// 23 真实地面的水体遮罩（红 水面、绿 海洋通道、蓝 夜光）；
+// 31 窗内只留舱内倒影（窗外置黑）、32 关掉倒影、33 只留面状倒影（不含光点）（T34，这三个在这里）
 uniform int uDebug;
 varying vec2 vUv;
 
@@ -83,6 +84,7 @@ ${LEATHER_COMMON}
 ${FABRIC_COMMON}
 ${SEATS_COMMON}
 ${CABIN_REFLECT_COMMON}
+${EXPOSURE_MODEL}
 
 void main() {
   vec3 viewPre = vec3(0.0);   // 窗外加窗板效果之前的颜色，打包给机翼 pass
@@ -153,6 +155,8 @@ void main() {
   rl.lOppWin = mix(cl.lGlow, lWin, 0.5);
   rl.readOn = cl.readOn;
   rl.pupil = mix(0.0065, 0.0045, smoothstep(0.005, 0.05, uCabinLight)); // 夜里暗适应时瞳孔更大，倒影更虚
+  rl.lit = smoothstep(0.005, 0.05, uCabinLight);
+  rl.pixAng = pixAng;
 
   // ---- 座椅：挡在侧壁和窗前面（见 seats.glsl.ts） ----
   float tWall = rd.z > 1e-4 ? traceWall(ro, rd) : 1e3;
@@ -253,15 +257,34 @@ void main() {
   vec3 rr = vec3(rd.xy, -rd.z);
   // T30：倒影跟舱内同一个适应框架（见 exposure.ts ⑦）——夜里窗外暗、窗内曝光比舱内高很多档时，
   // 倒影不能跟着被拉亮到比它的来源（舱壁、灯带）还亮，超出「舱内曝光 + 余量」的部分在这里扣掉
-  float reflGain = fr * 1.5 * exp2(texelFetch(uExposureState, ivec2(0, 0), 0).w);
+  vec4 expState = texelFetch(uExposureState, ivec2(0, 0), 0);
+  float reflGain = fr * 1.5 * exp2(expState.w);
   // 倒影的色适应：舱内按 T28 部分适应了舱灯的暖色（D ≈ 0.7，舱壁看上去接近中性），倒影是同一批表面、同一个框架，
   // 也按同样程度抵掉主灯的色温；曝光 pass 分不开倒影和窗外（窗外不做舱内色适应），所以在这里预先乘上。
   // 睡眠档的淡紫氛围灯不抵（T28 本来就只适应它一小部分）
   vec3 reflWB = mix(vec3(1.0), vec3(dot(mainTint, vec3(0.2126, 0.7152, 0.0722))) / mainTint, 0.7 * smoothstep(0.005, 0.05, uCabinLight));
   float reflMax = reflGain * dot(0.3 * (rl.eAmb + 2.5 * rl.eMain + rl.moodI) + rl.lOppWin, vec3(0.2126, 0.7152, 0.0722));
+  vec3 reflAdd = vec3(0.0);
   if (rl.readOn > 0.0 || reflMax > 0.003 * dot(view, vec3(0.2126, 0.7152, 0.0722))) {
-    view += reflGain * reflWB * cabinReflection(pPane, rr, length(pPane - ro), rl);
+    vec3 pts;
+    vec3 surf = reflGain * reflWB * cabinReflection(pPane, rr, length(pPane - ro), rl, pts);
+    // T34 面状倒影的硬上限（exposure.ts ⑧）：显示亮度不超过同屏舱内均值的 k 倍（睡眠 / 全关 k 使显示 Y ≤ 舱壁一半）。
+    // 软限幅（4 次范数），低于上限的部分几乎不变，所以倒影内部的明暗结构（灯带的亮线、行李架的边）还在；
+    // 光点是灯本身，不进上限
+    ExpModel em = exposureModel(expState);
+    float capL = exp2(em.reflCapLog);
+    // 窗外亮的时候（黄昏开着灯，窗外显示亮度 Y 过 100 左右），倒影不超过背后窗外的 15%：
+    // 这时窗外才是主角，倒影只该是一层淡淡的「玻璃感」（美术总监第三次检查的建议）
+    float lOut = dot(viewPre, vec3(0.2126, 0.7152, 0.0722));
+    // 在对数域里过渡（线性混合时 min 那一项要到权重接近 1 才起作用）；0.05–0.15 是色调映射前的显示亮度，约 Y 70–110
+    capL *= exp2(smoothstep(0.05, 0.15, lOut * exp2(em.eO)) * min(0.0, log2(max(0.15 * lOut, 1e-12) / capL)));
+    float sl = dot(surf, vec3(0.2126, 0.7152, 0.0722)) / capL;
+    surf *= inversesqrt(sqrt(1.0 + sl * sl * sl * sl));
+    reflAdd = surf + (uDebug == 33 ? vec3(0.0) : reflGain * reflWB * pts);
   }
+  // 调试 31：窗内只留倒影（窗外置黑，量倒影本身的显示亮度）；32：关掉倒影（T34）
+  if (uDebug == 31 || uDebug == 33) view = reflAdd;
+  else if (uDebug != 32) view += reflAdd;
   paneK = (1.0 - 0.1 * sm) * (1.0 - WATER_RIM * wat.w)
     * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
   }
@@ -342,6 +365,7 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uAerialTransmittanceS: { value: atmosphere.aerialTransmittance.texture },
       uHdrMax: { value: 6e4 },
       uExposureState: EXPOSURE_STATE,
+      ...EXPOSURE_MODEL_UNIFORMS, // T34：倒影的亮度上限要在舱内合成里按同一个曝光模型算（与曝光 pass 共用同一批 uniform 对象）
       uDebug: { value: 0 },
       uLoopGuard: { value: 0 },
     },
