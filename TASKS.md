@@ -14,7 +14,6 @@
 | R-IMAGERY | 第 7 波（飞机地面打磨，用户提问） | — | 主仓库 research/ | Opus 研究代理（高清卫星 / 航空影像：Esri / 国土地理院 / Mapbox / Google 许可原文、实测对比、混用方案 → research/IMAGERY.md） | — | 进行中 |
 | R-CLOUD-SHARP | 第 7 波（飞机，用户提问） | — | 主仓库 research/ | Opus 研究代理（云不够锐利 / 边缘高光缺高分辨率质感：诊断分辨率 / 上采样 / TAA / 噪声 LOD / 受光，对照 MSFS 与业界 → research/CLOUD_SHARPNESS.md） | — | 进行中 |
 | R-METEO | 第 7 波（飞机，用户需求） | — | 主仓库 research/ | Opus 研究代理（气象学体检：云属 / 多层云 / 锋面 / 台风 / 雷暴 / 雾 / 山地波；真实天气数据许可；可规划功能 → research/METEOROLOGY.md） | — | 进行中 |
-| TR03 | 第 7 波（P8） | — | `worktree-agent-ac14bb478e8ff993d`（3f6af34） | Opus（火车远景） | 审查中 | 已交付，独立审查中（用户：搞完了就合，之后专心飞机） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -82,6 +81,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | DX-09 | README 顶部硬约束速查表（sampler 用量由 `lint-shaders --emit-table` 生成、check:glsl 比对防过时）、research/PARAMS.md、坑点按八个主题分节 | 2026-09-27 | Sonnet 实现，协调者合并；实测 sampler：舱内 5/16、窗外 14/16（旧 README 写 3/16、16/16 已过时）。Windows GBK 打印坑已写进根 AGENTS.md |
 | DX-10 | 测量可信度：shader-budget 最小值判定 + MAD、--baseline 容错、--chain 归因、--variants、--wait-quiet、--ledger；测量锁 tmp/measure.lock；passes 归类 bloom / 变体；compile-ledger.json 账本；applyScene 跨版本容错 | 2026-09-27 | Sonnet 实现，协调者合并。**合并后已通知在途代理** |
 | TR07 | 火车声音：接缝节奏（定尺示例 / 长轨化开关）、滚动 / 变频器 / 轮缘 / 空调、道口警报多普勒、停站与广播示意 + 字幕 | 2026-09-27 | Opus 实现（中途暂停又恢复），**独立审查通过**，协调者合并。火车按用户要求收尾，**遗留不修**：火车模式首次开声音漏一声飞机底噪（P2-a）、火车声音初始化失败每帧 warn（P2-b）、广播改单声道省 6 MB、弯道尖啸像颤音、audio-check 无断言 |
+| TR03 | 火车远景：窗外 RAIL 变体（按需编译）、近处平面渐变、相对相机高度、河道限宽、轮廓 / 云抗锯齿；高度 clipmap 32 位浮点（不支持浮点线性过滤时退回半精度）；applyScene 日期顺序修复 | 2026-09-27 | Opus 实现，**独立审查返工一处**（高度纹理无回退 → 不支持的设备飞机地形全丢），协调者修复并强制半精度路径验证后合并。**火车到此收尾**（用户：不做其他交通工具）；近处 250 m 是占位，火车模式不适合展示 |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
