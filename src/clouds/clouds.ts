@@ -713,6 +713,7 @@ uniform vec3 uMotion;
 uniform bool uReset;
 uniform bool uResetDepth;   // 右半（深度）这一帧从停用变回启用：右半不取历史（PERF-11）
 uniform vec2 uCloudResolution;
+uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；与步进程序、曝光的 uWhiteout 同一个 uniform 对象，C11）
 varying vec2 vUv;
 // 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半是云的深度——窗外程序要拿它判断云在山前还是山后
 // （clouds.glsl.ts 的 cloudBeforeGround），放进同一张纹理，窗外 / 机翼程序不多占 sampler。两半各自时间累积、各自邻域夹取。
@@ -737,6 +738,7 @@ void main() {
   if (uReset || (depthHalf && uResetDepth)) { gl_FragColor = cur; return; }
 
   vec4 mn = cur, mx = cur;
+  vec4 nsum = vec4(0.0);
   for (int x = -1; x <= 1; x++)
   for (int y = -1; y <= 1; y++) {
     ivec2 q = clamp(ip + ivec2(x, y), ivec2(0), hi);
@@ -744,7 +746,17 @@ void main() {
     if (depthHalf) s = vec4(texelFetch(uCurrentDepth, q, 0).r * CLOUD_DEPTH_SCALE * (1.0 - s.a), 1.0 - s.a, 0.0, 1.0);
     mn = min(mn, s);
     mx = max(mx, s);
+    nsum += s;
   }
+  // 云里的 2×2 棋盘纹（C11，handoff/INCLOUD-CHECKER.md）：飞机在云里时，步进的两个 1 spp 随机源（步进位置、受光挑格点）
+  // 打在对受光 od 极敏感的介质上，blend 0.12 + 邻域夹取的时间累积压不住，收敛后剩下抖动序列的空间图样。
+  // 本帧值按「在云里的程度」换成已经读进来的 3×3 平均（不加取样）：历史收敛到的是本帧的 3×3 盒式滤波，
+  // 相当于云缓冲上固定一次 3×3 模糊——云里满窗是几十米内的雾，没有需要保住的细节。
+  // 不会跨深度边：左半只有云（步进不认识机翼 / 机身 / 地面，地面在窗外 pass 按右半的深度再合成，机翼在机翼 pass 里盖上去），
+  // 3×3 里没有别的物体的边；右半（深度）不做，免得云山前 / 山后的判断被抹宽。窗板外的 (0, 0, 0, 1) 只在窗板外 0.02 的那圈里，看不到。
+  // 权重从 uCloudImmersion = 0.02 起算：它出云后按 0.5 s 指数衰减、要约一分钟才真正变成 0，
+  // 不设门槛的话出云后几秒内还在做 1% 量级的平均（看不出，但云外不再逐位等于改动前）；约 2 s 后 < 0.02，结果逐位等于 cur
+  if (!depthHalf) cur = mix(cur, nsum * (1.0 / 9.0), clamp(uCloudImmersion * 1.0204 - 0.0204, 0.0, 1.0));
 
   vec3 rd = uCabinToWorld * rdC;
   vec3 prevDir = normalize(rd * dCur + uMotion);
@@ -1241,6 +1253,7 @@ export class Clouds {
         uReset: { value: true },
         uResetDepth: { value: false },
         uCloudResolution: this.marchMat.uniforms.uCloudResolution,
+        uCloudImmersion: EXPOSURE_WHITEOUT, // 云里的空间平均（C11，见 RESOLVE_FRAG）
       },
     });
   }
