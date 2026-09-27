@@ -8,6 +8,22 @@ import { VIEW_COMMON } from "../render/view.glsl";
 import { createWonderCloudUniforms, wonderCloudGlsl, wonderMarchGlsl } from "../wonders/wonder-cloud.glsl";
 import { CLOUD_COMMON, CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES, OCC_LAYERS, OCC_N, OCC_SPACING } from "./clouds.glsl";
 import type { CloudNoise } from "./noise";
+import { BLUE_NOISE_RG8_BASE64, BLUE_NOISE_SIZE } from "./blue-noise";
+
+/** 步进抖动的蓝噪声纹理（C12）：RG8，最近邻、平铺（着色器里 texelFetch + 按位与取模，不经过滤） */
+function createBlueNoiseTexture(): THREE.DataTexture {
+  const bin = atob(BLUE_NOISE_RG8_BASE64);
+  const data = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+  const tex = new THREE.DataTexture(data, BLUE_NOISE_SIZE, BLUE_NOISE_SIZE, THREE.RGFormat, THREE.UnsignedByteType);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.generateMipmaps = false;
+  tex.unpackAlignment = 1;
+  tex.needsUpdate = true;
+  return tex;
+}
 
 /**
  * 体积云：光线步进 + 时间累积（默认全分辨率，面板「画质」可降到 0.75 / 0.5）。
@@ -38,8 +54,11 @@ uniform float uWeatherCull;   // 1：够不着雷暴 / 台风的视线走普通�
 uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；和曝光的 uWhiteout 是同一个 uniform 对象，C01 返工）
 varying vec2 vUv;
 
-// 交错梯度噪声：每个像素的步进起点错开，时间累积后抹平成平滑结果
-float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+// 步进抖动用的蓝噪声（C12）：${BLUE_NOISE_SIZE}² 两通道，R 给主步进抖动、G 给受光步进挑细节格点（gDetailRnd），两张互不相关。
+// 原来用交错梯度噪声（IGN）：它每一帧的空间图样都是同一族对角线，时间累积（blend 0.12，约 8 帧）+ 邻域夹取以后的残差
+// 仍是对角的，云面上一层斜纹 / 棋盘点阵（BIS-7 二分：换白噪声方向性就消失）。蓝噪声各向同性、没有低频，残差是细而均匀的颗粒
+uniform sampler2D uBlueNoise;
+vec2 blueNoise() { return texelFetch(uBlueNoise, ivec2(gl_FragCoord.xy) & ${BLUE_NOISE_SIZE - 1}, 0).rg; }
 
 // 软边的云（雷暴的砧和雨幡、台风的卷云盖和砧）的省步数（PERF-2）：不做表面细化，稀薄处（一步的光学厚度 < SOFT_THIN_OD）走 2 倍步长。
 // 这两处在台风外围 / 雨带里占云步进的约三成：往上看时整片卷云盖都是稀薄的有云采样点，每个都要走 8 步受光步进。
@@ -288,7 +307,8 @@ void main() {
   // 多次散射近似第 1、2 阶的相函数（g 按 c^k 变平：c = 0.5、0.25）
   float phMs1 = mix(hg(cosT, -0.125), hg(cosT, 0.4), 0.7);
   float phMs2 = mix(hg(cosT, -0.0625), hg(cosT, 0.2), 0.7);
-  float jitter = fract(ign(gl_FragCoord.xy) + uFrame * 0.61803);
+  vec2 bn = blueNoise();
+  float jitter = fract(bn.x + uFrame * 0.61803);
   vec3 L = vec3(0.0);
   float T = 1.0;
   float depthSum = 0.0;
@@ -367,7 +387,7 @@ void main() {
     //    还把 IGN 的蓝噪声邻域性质放大没了，实时单帧里是一层菱形交叉细纹（审查返工）；
     //  - 每帧增量取 √2−1：与 jitter 的 0.618 在低阶联合谐波上漂移快（R2 的 0.7549 与 0.618 有 4·a + 6·b ≈ 7 的近有理关系，
     //    64 帧只走 0.09 圈），单独当一维序列时分层也与 φ 相当（0.7549 在 TAA 的约 8 帧窗口里只落在约 4 个值上，闪烁偏低频）
-    gDetailRnd = fract(ign(gl_FragCoord.yx + vec2(19.0, 47.0)) + uFrame * 0.41421356 + float(i) * 0.6180339);
+    gDetailRnd = fract(bn.y + uFrame * 0.41421356 + float(i) * 0.6180339);
     float dens = cloudDensity(p, lod, t < 150.0);
 #ifdef CLOUD_WEATHER
     float stormW = gStormW;
@@ -1165,6 +1185,7 @@ export class Clouds {
         uAerialInscatter: { value: atmosphere.aerialInscatter.texture },
         uAerialTransmittance: { value: atmosphere.aerialTransmittance.texture },
         uFrame: { value: 0 },
+        uBlueNoise: { value: createBlueNoiseTexture() },
         uCloudResolution: { value: new THREE.Vector2(1, 1) },
         uWeatherCull: { value: 1 },
         uOcc: { value: this.occ[0].texture },
