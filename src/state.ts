@@ -66,6 +66,8 @@ export interface VoyageState {
   cabinLight: boolean;
   /** 氛围洗墙灯（舱灯「全关」时才关） */
   moodLight: boolean;
+  /** 舱等（T25）：商务舱（默认，高端）/ 经济舱（廉航）。舱内合成按它选着色器变体（scene.ts 的 CabinClassVariant） */
+  cabinClass: CabinClass;
   cloudPreset: CloudPreset;
   /** 翼根前缘在机头方向上相对窗口的距离（米）：座位在机翼前方时为负 */
   wingRootLE: number;
@@ -82,6 +84,9 @@ export interface VoyageState {
   /** 爬升 / 下降率（km/s，T19a）：连续航程由导演设成真实值（约 0.01）；没设时用飞行阶段按钮的 10 倍加速值 */
   altRateKms?: number;
 }
+
+/** 舱等（T25）：business 商务舱（皮革、胡桃木、氛围灯）；economy 经济舱（织物座椅、浅灰塑料、冷白灯） */
+export type CabinClass = "business" | "economy";
 
 /** 增升装置设定：Airbus 襟翼手柄的档位（0 / 1 / 1+F / 2 / 3 / FULL），或减速板，或按高度自动 */
 export type HighLiftSetting = "auto" | "0" | "1" | "1+F" | "2" | "3" | "full" | "speedbrake";

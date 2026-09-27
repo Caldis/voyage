@@ -34,6 +34,14 @@ const float RF_SEAT_Y = -0.06;   // 座椅头枕顶（窗中心以下约 5 cm，
 const vec2 RF_AISLE1 = vec2(-2.02, -1.52); // 两条过道的 z 范围
 const vec2 RF_AISLE2 = vec2(-3.98, -3.48);
 const float RF_ROW = 0.96;       // 排距（示例）
+// 对面侧壁、行李架门的反照率：跟本侧饰面同一套（T25：经济舱是浅灰塑料，商务舱是暖白柔光饰面）
+#ifdef CABIN_CLASS_ECONOMY
+const vec3 RF_WALL_ALB = vec3(0.68, 0.68, 0.66);
+const vec3 RF_BIN_ALB = vec3(0.72, 0.72, 0.70);
+#else
+const vec3 RF_WALL_ALB = vec3(0.72, 0.69, 0.64);
+const vec3 RF_BIN_ALB = vec3(0.76, 0.73, 0.68);
+#endif
 const float RF_BLUR_ANG = 0.03;  // 角度弥散（弧度，约 1.7°）：窗板起伏 + 多层窗板的错位 + 眼睛并不完全对焦在无穷远
 
 struct ReflLights {
@@ -80,7 +88,7 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
   vec3 washW = cabinMoodWash(vec3(hW.x, min(hW.y, RF_BIN_Y - 0.03 - 0.7 * wW), 0.0), vec3(0.0, 0.0, -1.0), L.wash)
              * (1.0 - smoothstep(RF_BIN_Y - 0.03 - wW, RF_BIN_Y - 0.03 + wW, hW.y));
   vec3 eWall = L.eAmb + L.eMain * 0.45 + washW;
-  vec3 col = vec3(0.72, 0.69, 0.64) / M_PI * eWall;
+  vec3 col = RF_WALL_ALB / M_PI * eWall;
   // 对面一排舷窗（夜里是黑的，白天是亮的），错开半个窗距
   float dWin = sdRoundRect(vec2(mod(hW.x + 0.5 * WINDOW_PITCH, WINDOW_PITCH) - 0.5 * WINDOW_PITCH, hW.y), BEZEL_HALF * 0.8, BEZEL_RADIUS * 0.8);
   col = mix(col, L.lOppWin, 1.0 - smoothstep(-wW, wW, dWin));
@@ -97,7 +105,7 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
   col = mix(col, ceilL, smoothstep(RF_CEIL - wW, RF_CEIL + wW, hW.y));
 
   // ---- 由远到近一层层盖上去 ----
-  vec3 binL = vec3(0.76, 0.73, 0.68) / M_PI * (L.eAmb + L.eMain * 0.85 + L.moodI * 0.03);
+  vec3 binL = RF_BIN_ALB / M_PI * (L.eAmb + L.eMain * 0.85 + L.moodI * 0.03);
   vec3 underL = 0.3 / M_PI * (L.eAmb * 0.5 + L.eMain * 0.3);
   // 行李架下沿灯带本身（灯头朝下朝侧壁，从过道对面只看到灯罩边一道亮线）
   vec3 lipL = L.wash * 0.12;

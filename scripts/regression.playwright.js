@@ -65,6 +65,7 @@ async (page) => {
     { name: "night-city-on", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": true }, offset: [0, -25], ground: true, head: -0.25 },
     { name: "night-city-off", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": "off" }, offset: [0, -25], ground: true, head: -0.25 },
     { name: "route-hnd-cts", p: { preset: "hnd-cts", time: 990, coverage: 0.25, "wing-pos": "8" }, ground: true },
+    { name: "economy-ahead", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "economy" }, head: [-0.42, 0.1, -0.5] },
   ];
 
   await page.goto(`${origin}/?regression=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
@@ -96,7 +97,7 @@ async (page) => {
         }
       };
       // 默认状态
-      const defaults = { preset: "wpac", seat: "right", weather: "fair", "cloud-preset": "cumulus", "cabin-light": true, altitude: 10.7, shade: 0, wind: 7, "wing-pos": "8", "ground-on": true };
+      const defaults = { preset: "wpac", seat: "right", weather: "fair", "cloud-preset": "cumulus", "cabin-light": true, "cabin-class": "business", altitude: 10.7, shade: 0, wind: 7, "wing-pos": "8", "ground-on": true };
       for (const [id, val] of Object.entries({ ...defaults, ...sc.p })) set(id, val);
       if (sc.p.coverage === undefined) set("coverage", 0.42);
       if (sc.p.time !== undefined) set("time", sc.p.time);
@@ -124,6 +125,9 @@ async (page) => {
           if (v.ground.pending < 5 && i > 5) break;
         }
       }
+      // 舱等（T25）：没编过的变体在后台编译，画面切过去之前不截图（最多等 120 s）
+      const wantClass = sc.p["cabin-class"] ?? "business";
+      for (let i = 0; i < 480 && v.cabinClass && v.cabinClass.shown !== wantClass; i++) await new Promise((r) => setTimeout(r, 250));
       v.snapAll();
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
       return document.getElementById("info").textContent;

@@ -4,11 +4,13 @@
  *
  * 对标商务舱 / 头等舱套间（卡塔尔 Qsuite、达美 Delta One、新航 A350 商务舱）的做法：软包皮革 + 精密缝线 + 木饰 / 金属饰条。
  * 颜色、尺寸都是示意值，不对应任何航司的实际配色。
+ * 只用于商务舱（T25：经济舱变体 #define CABIN_CLASS_ECONOMY 时整段不编译，座椅换成 fabric.glsl.ts 的织物）。
  *
  * 抗锯齿：皮纹、缝线、木纹都按解析的像素足迹（米）淡出；皮纹淡出后把「看不见的起伏」折算成更高的粗糙度（Toksvig 思路），
  * 远处的高光变宽变柔，不会闪。所有随机都用多尺度、非整数比、带旋转的噪声（铁律 4：不要规整重复）。
  */
 export const LEATHER_COMMON = /* glsl */ `
+#ifndef CABIN_CLASS_ECONOMY
 struct Leather {
   vec3 albedo;
   vec2 slope;   // 高度对 uv（米）的梯度，调用方按切线方向合成法线
@@ -88,9 +90,11 @@ vec3 leatherWalnut(vec2 uv, float pix, float seed, out float rough) {
   float pores = smoothstep(0.62, 0.8, vnoise(vec2(uv.x * 90.0, uv.y * 2600.0) + seed * 7.0)) * fp;
   // 大尺度的色块（一整张薄木皮里颜色也不均匀）
   float blotch = vnoise(uv * vec2(9.0, 30.0) + seed * 2.0);
-  vec3 dark = vec3(0.10, 0.056, 0.03), light = vec3(0.32, 0.19, 0.10);
+  // T25（美术总监 wave3）：原来 (0.32,0.19,0.10)–(0.10,0.056,0.03) 在新曝光下读成深棕色块、不像木头，两端都提亮
+  vec3 dark = vec3(0.14, 0.08, 0.045), light = vec3(0.40, 0.25, 0.13);
   vec3 col = mix(light, dark, rings * 0.35 + 0.2 * blotch + 0.25 * knot) * (1.0 - 0.3 * pores);
-  rough = 0.2 + 0.08 * pores;
+  rough = 0.3 + 0.08 * pores; // 开放漆面、缎光（T25：0.2 → 0.3，掠射时漆面反射不再把木色冲成一片灰白）
   return col;
 }
+#endif
 `;

@@ -94,6 +94,8 @@ export async function collectPrograms(server) {
     const ground = { albedo: null, water: null, height: null, levelUniform: [] };
     const mat = m.createSceneMaterial(deepMock(), {}, ground);
     add("scene-default", mat);
+    // T25：舱内合成的经济舱变体（CabinClassVariant 在运行时加 #define CABIN_CLASS_ECONOMY 1，这里手动补上）
+    programs.push({ id: "scene-economy", fragmentShader: "#define CABIN_CLASS_ECONOMY 1\n" + mat.fragmentShader, vertexShader: mat.vertexShader });
     const o = await server.ssrLoadModule("/src/render/outside-pass.ts");
     const outside = o.createOutsideMaterial(mat.uniforms);
     add("outside-default", outside);
@@ -604,8 +606,8 @@ async function main() {
   // gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) 复核一次再下结论。
   console.log("\n-- 场景 / 窗外程序 sampler 数（ANGLE 上限 16，已用真实 GPU 交叉验证，见 handoff/DX.md） --");
   for (const prog of programs) {
-    if (prog.id !== "scene-default" && prog.id !== "outside-default" && prog.id !== "outside-ground-detail") continue;
-    const defines = prog.id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : new Set();
+    if (prog.id !== "scene-default" && prog.id !== "scene-economy" && prog.id !== "outside-default" && prog.id !== "outside-ground-detail") continue;
+    const defines = prog.id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : prog.id === "scene-economy" ? new Set(["CABIN_CLASS_ECONOMY"]) : new Set();
     const { declaredCount, activeCount, active } = samplerAudit(prog.fragmentShader, defines);
     const over = activeCount > 16;
     if (over) exitCode = 1;
