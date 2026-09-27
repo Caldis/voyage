@@ -263,15 +263,22 @@ export class GroundClipmap {
     const gen = this.generation;
     l.building = true;
     try {
-      const [albedo, water, height, night] = await Promise.all([
+      const [albedo, vec, height, night] = await Promise.all([
         this.buildImagery(l.size, cx, cz, i === GROUND_LEVELS - 1),
         this.buildWater(l.size, cx, cz),
         this.buildHeight(l.size, cx, cz),
         this.buildNight(l.size, cx, cz),
       ]);
       if (gen !== this.generation || i < this.minLevel) return;
-      // 夜光亮度放进水体纹理的 B 通道
-      for (let k = 0; k < RES * RES; k++) water[k * 4 + 2] = night[k * 4];
+      const { water, roads } = vec;
+      // 夜光亮度放进水体纹理的 B 通道。道路灯带（T08）：水体纹理的 A 通道存到最近道路中心线的有向距离，
+      // 影像纹理的 A 通道在「有影像」的前提下再存这条路的照亮宽度（编码见 packRoads）
+      for (let k = 0; k < RES * RES; k++) {
+        const n = night[k * 4];
+        water[k * 4 + 2] = n;
+        water[k * 4 + 3] = roadSdByte(roads.sd[k]);
+        albedo[k * 4 + 3] = roadAlbedoAlpha(albedo[k * 4 + 3], roads.w[k], roads.hw[k], n);
+      }
       this.upload(this.albedo, i, albedo, RES * RES * 4);
       this.upload(this.water, i, water, RES * RES * 4);
       this.upload(this.height, i, height.data, HRES * HRES);
@@ -458,8 +465,97 @@ export class GroundClipmap {
         ctx.globalAlpha = 1;
       }
     }
-    return ctx.getImageData(0, 0, RES, RES).data;
+    // 道路（T08）：按真实矢量算每个像素到最近道路中心线的有向距离（见 rasterRoads）
+    const roads = new RoadRaster();
+    const texelM = kmPerPx * 1000;
+    for (const { t, w } of results) {
+      if (!w) continue;
+      const proj = (p: { x: number; y: number }) =>
+        cover.toPx(tileYToLat(t.y + p.y / w.extent, zoom), tileXToLon(t.x + p.x / w.extent, zoom));
+      for (const road of w.roads) {
+        // 双向分离的高速在数据里是相隔 20–40 m 的两条线；像素比这宽时两条线在距离场里并成一条，照亮宽度按两条算
+        const width = road.width * (road.highway && road.weight >= 1 && texelM > 20 ? 2 : 1);
+        roads.add(road.points.map(proj), road.weight * width, road.highway);
+      }
+    }
+    return { water: ctx.getImageData(0, 0, RES, RES).data, roads };
   }
+}
+
+/**
+ * 道路灯带的栅格（T08）。为什么不直接画「覆盖率」：clipmap 一个像素在巡航高度看出去的中远处是 60–250 m，
+ * 比屏幕像素在地面上的宽度大 2–3 倍，覆盖率图双线性放大后每条路都是 2 个纹素宽的软带子（实测 4–6 个屏幕像素），糊。
+ * 改存「到最近道路中心线的有向距离」（在线的右侧为正、左侧为负，单位纹素）：它在线两侧是线性的，双线性插值能在纹素以内
+ * 准确还原线的位置，着色器再按屏幕像素的足迹做解析的抗锯齿，得到细而准的线（和 SDF 字体同一个道理）。
+ * 另存这条路的「照亮宽度」w（米，= 照明强度 × 路宽，只写在离中心线 ROAD_MASK_TEXELS 以内）：它同时当遮罩用，
+ * 把有向距离在两条路之间、或在路的负侧与「无路」之间跳变时插值出来的假零点（假线）挡掉。
+ */
+export const ROAD_SD_RANGE = 4; // 有向距离的编码范围（± 纹素）；ground.glsl.ts 的 ROAD_SD_RANGE 要一致
+const ROAD_MASK_TEXELS = 2;
+/** 照亮宽度的编码上限（米）；ground.glsl.ts 的 ROAD_W_MAX 要一致 */
+export const ROAD_W_MAX = 40;
+
+class RoadRaster {
+  readonly sd = new Float32Array(RES * RES).fill(ROAD_SD_RANGE);
+  private readonly dist = new Float32Array(RES * RES).fill(ROAD_SD_RANGE);
+  readonly w = new Float32Array(RES * RES);
+  readonly hw = new Uint8Array(RES * RES);
+
+  /** 一条折线（像素坐标）：逐段在包围盒内求点到线段的距离，保留最近的那条路 */
+  add(pts: [number, number][], width: number, highway: boolean) {
+    const R = ROAD_SD_RANGE;
+    for (let s = 0; s + 1 < pts.length; s++) {
+      const [ax, ay] = pts[s];
+      const [bx, by] = pts[s + 1];
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy;
+      if (len2 < 1e-8) continue;
+      const x0 = Math.max(0, Math.floor(Math.min(ax, bx) - R)), x1 = Math.min(RES - 1, Math.ceil(Math.max(ax, bx) + R));
+      const y0 = Math.max(0, Math.floor(Math.min(ay, by) - R)), y1 = Math.min(RES - 1, Math.ceil(Math.max(ay, by) + R));
+      for (let py = y0; py <= y1; py++) {
+        const cy = py + 0.5 - ay;
+        for (let px = x0; px <= x1; px++) {
+          const cxr = px + 0.5 - ax;
+          const t = Math.min(Math.max((cxr * dx + cy * dy) / len2, 0), 1);
+          const ex = cxr - t * dx, ey = cy - t * dy;
+          const d = Math.sqrt(ex * ex + ey * ey);
+          const k = py * RES + px;
+          if (d >= this.dist[k]) continue;
+          this.dist[k] = d;
+          this.sd[k] = dx * cy - dy * cxr >= 0 ? d : -d;
+          const inMask = d < ROAD_MASK_TEXELS;
+          this.w[k] = inMask ? width : 0;
+          this.hw[k] = highway ? 1 : 0;
+        }
+      }
+    }
+  }
+}
+
+/** 有向距离 → 水体纹理 A 通道（0..255） */
+function roadSdByte(sd: number) {
+  return Math.round(255 * Math.min(Math.max(0.5 + sd / (2 * ROAD_SD_RANGE), 0), 1));
+}
+
+function smooth(e0: number, e1: number, x: number) {
+  const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1);
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * 影像纹理的 A 通道（T08 起兼存道路照亮宽度）：原来的含义「这里有没有影像」保留——没有影像（alpha < 128，瓦片没取到）时
+ * 存 alpha / 2（着色器按 A·2 还原成原来的覆盖比例）；有影像时存 128 + 照亮宽度的 7 位编码。
+ * 照亮宽度 = 路的强度 × 路宽 × 这里路灯亮不亮。亮不亮由夜光（NASA Black Marble，0..255）决定——数据里没有「有没有路灯」
+ * 这一项，不去编：
+ * - 普通道路只在有人居住、夜光亮起来的地方亮（乡间公路基本不装路灯），没有夜光的地方宁可暗；
+ * - 高速 / 快速路在城区外也留约 2 成（互通立交、收费站的照明和车流的前灯尾灯），城市之间仍是一条连续的淡线，进城后变亮。
+ * 两处阈值是经验取值，按夜景截图调的。
+ */
+function roadAlbedoAlpha(alpha: number, w: number, highway: number, night: number) {
+  if (alpha < 128) return alpha >> 1;
+  const n = night / 255;
+  const lit = highway ? 0.2 + 0.8 * smooth(0.02, 0.25, n) : smooth(0.03, 0.3, n);
+  return 128 + Math.round(127 * Math.min((w * lit) / ROAD_W_MAX, 1));
 }
 
 /** 把一级的高度图 / 水体遮罩压成 GRID² 的粗网格（最高点、平均高度、陆地比例），CPU 侧查询用（T18） */

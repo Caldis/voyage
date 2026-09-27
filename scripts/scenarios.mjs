@@ -48,6 +48,7 @@ export const SCENES = [
   { name: "night-city-on", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": true }, offset: [0, -25], ground: true, head: -0.25 },
   { name: "night-city-off", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": "off" }, offset: [0, -25], ground: true, head: -0.25 },
   { name: "route-hnd-cts", p: { preset: "hnd-cts", time: 990, coverage: 0.25, "wing-pos": "8" }, ground: true },
+  { name: "route-hnd-cts-night", p: { preset: "hnd-cts", time: 1290, coverage: 0.1, seat: "left", "cabin-light": false, "wing-pos": "8" }, ground: true },
   { name: "economy-ahead", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "economy" }, head: [-0.42, 0.1, -0.5] },
 ];
 
