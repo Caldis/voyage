@@ -13,8 +13,9 @@ import type { FullscreenPass } from "./pass";
  *    窗外永远按窗外的亮度曝光（和改前一致）；舱内的曝光由窗外的曝光出发，
  *    按绝对亮度决定能独立适应多少，并且不许比窗外还亮。因为遮罩是解析算出来的，交界处没有光晕。
  *    T28：舱内再做部分色适应（von Kries / CAT02）；舱灯开、窗外暗时舱内成为主导适应区。
- * 4. 输出：曝光 × HDR → 舱内色适应 → 浦肯野（T48：窗外高饱和、够亮的发光体只保色度）→（TM01：白天窗外的高光段抬斜率）
- *    → AgX 色调映射（T48：夜里窗外高饱和像素做色度保持）→ sRGB，最后加抖动避免天空渐变出现色带。
+ * 4. 输出：曝光 × HDR → 舱内色适应 → 浦肯野（T48：窗外高饱和、够亮的发光体只保色度）→（T48b：夜里窗外按低通亮度局部适应）
+ *    →（TM01：白天窗外的高光段抬斜率）→ AgX 色调映射（T48：夜里窗外高饱和像素做色度保持，T48b 起亮度保持 AgX 的结果）
+ *    → sRGB，最后加抖动避免天空渐变出现色带。
  */
 
 // 测光目标是 2×1：左像素是亮度（本段），右像素是色度（CHROMA_METER，T28）
@@ -238,9 +239,7 @@ uniform vec2 uOffLocusAdapt; // 适应白点偏离普朗克轨迹的那部分人
 uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度限幅（log2 色度向量的长度）
 uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 x→y、像素亮度 log10 cd/m² z→w 之间由 0 过渡到 1（只在窗外）
 uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
-uniform vec4 uT48bDbg; // 临时调试
-uniform vec3 uT48bFade; // 临时调试
-uniform vec3 uT48bLoc; // 临时调试
+uniform vec2 uNightLocal;     // T48b 夜里窗外的局部适应：低通亮度超过中灰 x 档的部分，整个像素压暗 y × 超出量（log2）；y = 0 关
 uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
 uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透明度 x→y 之间由 0 过渡到 1，z = 1 开 / 0 不看云（整窗都给）
 uniform float uDayHiSatRoll;  // TM01 返工：收回段按饱和度前移的倍数（见 dayHighlightGain）
@@ -392,7 +391,7 @@ void main() {
   float satIn = 1.0 - min(min(c.r, c.g), c.b) / max(max(max(c.r, c.g), c.b), 1e-12);
   float logPix = log2(max(dot(c, vec3(0.2126, 0.7152, 0.0722)) * 1000.0, 1e-6)) * 0.30103; // log10 cd/m²
   float nightChroma = 0.0; // T48 夜里饱和发光体的色度保持权重（窗外），色调映射之后用
-  float nightLoc = 0.0;
+  float nightLoc = 0.0;    // T48b 夜间局部适应的作用程度（夜 × 窗外遮罩），色调映射之前用
   if (uAuto) {
     float cdAdapt = exp2(logAdapt) * 1000.0;
     float scotopic = 1.0 - smoothstep(-2.0, 0.5, log(max(cdAdapt, 1e-6)) / log(10.0));
@@ -407,10 +406,9 @@ void main() {
     float keep = satKeep * smoothstep(uMesopicKeep.z, uMesopicKeep.w, logPix);
     float rod = dot(c, vec3(0.05, 0.62, 0.33));
     vec3 cs = mix(c, rod * vec3(0.66, 0.82, 1.0), scotopic * 0.8);
-    float ycIn = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12);
-    float ycs = dot(cs, vec3(0.2126, 0.7152, 0.0722));
-    float lumPh = uT48bDbg.y * smoothstep(uT48bDbg.z, uT48bDbg.w, logPix);
-    c = mix(cs, c * (mix(ycs, ycIn, lumPh) / ycIn), keep);
+    //    T48b 试过「亮度在视杆与明视之间按像素亮度混合」（BIS-7 建议 2）：城区相邻差 17.8 → 17.4、光晕更亮，没有采用——
+    //    像素 ≥ 1 cd/m² 时上面的 scotopic 本来就归零（亮灯已走明视），路网被淹的主因是下面的低频过曝，见 uNightLocal
+    c = mix(cs, c * (dot(cs, vec3(0.2126, 0.7152, 0.0722)) / max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12)), keep);
     // 窗外适应在暗视 / 低中间视（夜里）时才做色调映射后的色度保持，黄昏、白天一律不动
     float nightO = 1.0 - smoothstep(uNightChroma.y, uNightChroma.z, (logAdaptO + 9.965784) * 0.30103);
     //    只按饱和度门控、不再乘像素亮度门限：暗处 AgX 本来就几乎不压色度（目标 ≈ AgX 自己），叠两道门限会让雾边缘的色相变化太陡
@@ -422,26 +420,32 @@ void main() {
   #ifdef TONE_MAPPING
   {
     vec3 x = gl_FragColor.rgb;
-    {
-      float lb = log2(max(dot(glare * exposure, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18) - uT48bLoc.x;
-      float kq = clamp(lb + 0.5, 0.0, 1.0);
-      x *= exp2(-uT48bLoc.y * (0.5 * kq * kq + max(lb - 0.5, 0.0)) * nightLoc * uT48bLoc.z);
-    }
+    // T48b 夜间局部适应（只在夜里的窗外，nightLoc = 夜 × 窗外遮罩）：无月夜窗外的对数均值被大片黑地拉到约 0.001 cd/m²，
+    //    4 km 看一座亮城时整片城区被曝光推到中灰之上 4–7 档，AgX 把灯点、灯下的路面、城区的地毯光一起顶到肩部，
+    //    连成一块奶白平台（BIS-7）。人眼对这样一大片亮区会局部适应：按低通亮度（眩光的 mip 链，已经读过，不多占 sampler）
+    //    超过中灰 + uNightLocal.x 档的部分，把整个像素压暗 uNightLocal.y × 超出量（软铰链，C1 连续）。
+    //    低通之上的细节（单个灯点、路网）原样保留——压的是「地毯」不是「灯」，灯点与路网因此重新分开。
+    //    黑地、星空、月夜的海（低通远低于拐点）逐位不变；白天 / 黄昏 nightLoc = 0。
+    float lb = log2(max(dot(glare * exposure, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18) - uNightLocal.x;
+    float lq = clamp(lb + 0.5, 0.0, 1.0);
+    x *= exp2(-uNightLocal.y * (0.5 * lq * lq + max(lb - 0.5, 0.0)) * nightLoc);
     // TM01：白天窗外的受光云在 AgX 肩部保留对比（见 dayHighlightGain）；夜里、黄昏、舱内、云里 hiGate = 0，逐位不变
     //    TM02：低通取眩光（uBloom 的 mip 链，各级加权平均，已经读过），按同一个曝光换算
     vec3 a = toneMapping(x * exp2(dayHighlightGain(x, glare * exposure) * hiGate));
     // T48 色度保持：AgX 在对数域逐通道压缩，高光的通道比被压扁，夜里被曝光拉到中灰之上 4–7 档的钠灯 / 灯照的雾
-    //    就成了奶白。对「夜里、窗外、高饱和、够亮」的像素，把 AgX 的结果往「同色相、同显示亮度（放不下时降亮度保色度）」
-    //    的颜色拉一部分：钠灯读成橙黄、LED（饱和度低，不进这条）仍是白。中性色的目标就是 AgX 自己，不受影响
+    //    就成了奶白。对「夜里、窗外、高饱和、够亮」的像素，把 AgX 的结果往「同色相、同显示亮度」的颜色拉一部分：
+    //    钠灯读成橙黄、LED（饱和度低，不进这条）仍是白。中性色的目标就是 AgX 自己，不受影响
     //    （不写分支：shader-budget 实测带 if 的版本 exposure-final 编译 +7–10%，无分支 +3–6%，约 +4 ms）
+    //    T48b：放不下时（同色相的最大通道 > 1）不再按 1/max 降亮度，而是保持 AgX 的亮度、向同亮度的白去饱和。
+    //    旧写法把所有过曝的灯都归一到「最大通道 = 1」，4 倍亮和 100 倍亮的灯一样亮，灯点、光晕、城区底色连成一块奶油色平台
+    //    （BIS-7：≥250 的像素 21% → 0、相邻差 6.2 → 4.6）。现在亮度层次完全等于 AgX，色度只在放得下的范围内保：
+    //    灯芯发白、周边带色，和真实的夜城照片一致
     float yx = max(dot(x, vec3(0.2126, 0.7152, 0.0722)), 1e-9);
     float ya = dot(a, vec3(0.2126, 0.7152, 0.0722));
-    vec3 hueOld = x * min(ya / yx, 1.0 / max(max(max(x.r, x.g), x.b), 1e-9));
     vec3 hue = x * (ya / yx);
     float mh = max(max(hue.r, hue.g), hue.b);
     hue = mix(hue, vec3(ya), clamp((mh - 1.0) / max(mh - ya, 1e-6), 0.0, 1.0));
-    hue = mix(hueOld, hue, uT48bDbg.x);
-    gl_FragColor.rgb = mix(a, hue, nightChroma * mix(1.0, 1.0 - smoothstep(uT48bFade.x, uT48bFade.y, max(max(x.r, x.g), x.b)), uT48bFade.z));
+    gl_FragColor.rgb = mix(a, hue, nightChroma);
   }
   #endif
   #include <colorspace_fragment>
@@ -527,6 +531,9 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  *      reflCapLog = log2 k + c + eC − eO，k = uReflCapK（暗处 0.2、开灯 0.25（T42，原 0.35），按 lit 混合；AgX 下线性 0.2 ≈ 显示 Y 的 0.4–0.5）。
  *      舱内合成（scene.ts）用 4 次范数软限幅，并在窗外够亮（黄昏）时再收紧到窗外的 15%；阅读灯光点不进上限。
  *      scene.ts 直接内联 EXPOSURE_MODEL、共用 EXPOSURE_MODEL_UNIFORMS，按上一帧的适应结果算。
+ * T48b「夜城不连成奶白平台」（只在夜里的窗外，门控同 T48 的 nightO × 窗外遮罩）：
+ *   ① AgX 之前按眩光低通亮度 b 局部适应：x ·= 2^(−0.6 · 软铰链(log2(b / 0.18) − 3))，城区的地毯光被压回 AgX 的线性段，灯点 / 路网（低通之上的细节）照原样；
+ *   ② T48 色度保持的目标改成「同色相、亮度 = AgX」，放不下时向同亮度的白去饱和（旧写法按 1/max 降亮度，把所有过曝的灯压到同一亮度）。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
  * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
  * 目标是用户给的屏幕亮度（白天舱壁 150–185、关灯夜里 25–45、窗最亮）。这是经验模型，不是视觉科学的定量结果。
@@ -601,9 +608,8 @@ export class Exposure {
       uWinChromaMax: { value: 0.6 },
       uMesopicKeep: { value: new THREE.Vector4(0.5, 0.85, -2.0, -0.8) },
       uNightChroma: { value: new THREE.Vector3(0.45, -1.5, 0.0) }, // 协调者合并时 0.6 → 0.45：雾芯留一点明暗层次
-      uT48bDbg: { value: new THREE.Vector4(0, 0, -1, 0) },
-      uT48bFade: { value: new THREE.Vector3(1, 4, 0) },
-      uT48bLoc: { value: new THREE.Vector3(2, 0.5, 0) },
+      // T48b：拐点中灰 +3 档、斜率 0.6（+2 / 0.5、+2.5 / 0.6 更暗，+2 / 0.7 城区发灰；见 handoff/T48b.md）
+      uNightLocal: { value: new THREE.Vector2(3.0, 0.6) },
       // TM01：膝点中灰 +0.5 档（显示约 144）、顶点 +2.5（约 203）、收回到 +5.0，段内斜率 1.4；w = 1 即关（见 handoff/TM01.md 的方案对比）
       // 返工：收回终点 4.0 → 5.0（+2.5→+4 档的局部对比从 0.39 回到 0.54；最亮的云边 / 砧顶细节要留住）
       uDayHiLook: { value: new THREE.Vector4(0.5, 2.5, 5.0, 1.3) }, // 协调者合并时斜率 1.4 → 1.3：云芯对比 ×1.59–1.71，最亮段（边缘高光所在）细节保到 0.94–0.95（TM01 返工取舍表）
