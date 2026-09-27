@@ -45,7 +45,7 @@ ${STAR_MAP_COMMON}
 ${STARS_COMMON}
 ${ISLANDS_COMMON}
 ${GROUND_COMMON}
-uniform sampler2D uClouds;       // 云缓冲：两倍宽，左半 RGB 预乘辐亮度 + A 透射率，右半 R 云的平均深度（用 cloudBufferColor / cloudBufferDepth 取，T38）
+uniform sampler2D uClouds;       // 云缓冲：两倍宽，左半 RGB 预乘辐亮度 + A 透射率，右半 RG =（深度×不透明度, 不透明度），相除得平均深度（用 cloudBufferColor / cloudBufferDepth 取，T38）
 uniform float uWind;
 uniform float uTime;            // 秒，给波浪和闪烁用
 uniform float uHdrMax;          // 窗外目标能存的最大值（半精度时是 6e4）
