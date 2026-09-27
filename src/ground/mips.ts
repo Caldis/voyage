@@ -54,6 +54,25 @@ export function buildMipChain(px: Uint8ClampedArray, res: number, kind: "albedo"
 }
 
 /**
+ * G07b：影像 mip 的浮点临时缓冲按模块复用（两块轮换：第 1 级 (res/2)²·4 个 float = 2048 档 16 MB，第 2 级 4 MB），
+ * 原来每级 new Float32Array，一层约 21 MB 的短命分配，Worker 的 GC 可能落在下一个任务的位图读回阶段（G07 审查 M1 的低成本假设）。
+ * 这两块只在 albedoChain 内部读写，不外传、不转移，所以复用安全；res 变了（只会在启动时定一次）才重新分配。
+ */
+let scratchA: Float32Array | null = null;
+let scratchB: Float32Array | null = null;
+/** 调试开关：false = G07 的每级新分配（同页 A/B 用，Worker 里由 job.reuseScratch 设置） */
+export const mipScratch = { reuse: true };
+function scratch(which: 0 | 1, len: number): Float32Array {
+  if (!mipScratch.reuse) return new Float32Array(len);
+  if (which === 0) {
+    if (!scratchA || scratchA.length < len) scratchA = new Float32Array(len);
+    return scratchA.subarray(0, len);
+  }
+  if (!scratchB || scratchB.length < len) scratchB = new Float32Array(len);
+  return scratchB.subarray(0, len);
+}
+
+/**
  * 影像：第 1 级直接从第 0 级的 8 位像素解码（线性 RGB + 覆盖比例）并平均，之后每级从上一级的浮点结果平均（误差不累积）。
  * 不先把第 0 级整个转成浮点：2048² × 4 个 float 是 64 MB 的临时缓冲。热循环按级拆开写、不在逐像素里分支（2048² 一层影像约 35 ms、水体约 21 ms，拆开前 62 / 36 ms，handoff/G07-mipbench.mts）
  */
@@ -65,7 +84,8 @@ function albedoChain(px: Uint8ClampedArray, res: number): Uint8Array {
   const COV = new Float32Array(256).map((_, a) => (a >= 128 ? 1 : (a * 2) / 255));
   let w = res;
   let h = w >> 1;
-  let cur = new Float32Array(h * h * 4);
+  let which: 0 | 1 = 0;
+  let cur = scratch(which, h * h * 4);
   for (let y = 0; y < h; y++) {
     const r0 = 2 * y * w, r1 = r0 + w;
     let o = y * h * 4;
@@ -93,7 +113,8 @@ function albedoChain(px: Uint8ClampedArray, res: number): Uint8Array {
     if (h === 1) break;
     w = h;
     h = w >> 1;
-    const next = new Float32Array(h * h * 4);
+    which = which === 0 ? 1 : 0;
+    const next = scratch(which, h * h * 4);
     for (let y = 0; y < h; y++) {
       const r0 = 2 * y * w, r1 = r0 + w;
       let o = y * h * 4;

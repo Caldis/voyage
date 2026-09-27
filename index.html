@@ -159,6 +159,15 @@
       </label>
       <!-- 自动档实际生效的档位（PERF-5）：按最近的 GPU 时间 / 帧间隔自适应，这里显示落在哪一档 -->
       <p id="quality-status" class="hint"></p>
+      <!-- G07b：地面纹理精度与画质档解耦；只有这一项的手动选择跨载入记忆，改了下次载入生效 -->
+      <label>地面精度
+        <select id="ground-res">
+          <option value="auto" selected>自动（按显卡）</option>
+          <option value="2048">2048²（清晰）</option>
+          <option value="1024">1024²（省显存）</option>
+        </select>
+      </label>
+      <p id="ground-res-status" class="hint"></p>
       <label class="check"><input id="ground-on" type="checkbox" checked />真实地理数据（卫星影像、地形、水体，联网）</label>
       <label>舱等 <output id="cabin-class-status"></output>
         <!-- T25：切到另一档时后台编译它的着色器（首次约几秒），编好之前画面保持原来的舱等 -->

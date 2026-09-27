@@ -256,10 +256,10 @@ export class GroundClipmap {
       const t = new THREE.DataArrayTexture(data, w, w, GROUND_LEVELS);
       t.format = format;
       t.type = type;
-      // G06：影像和水体带 mipmap + 各向异性（着色器用 textureGrad 按像素足迹取样）。每次上传一层后 three 会对整个数组
-      // 重新 generateMipmap（GPU 上做，见 handoff/G06.md 的计时）。
-      // 注意：两张纹理的 A 通道都是编码值（影像 A = 缺影像比例 / 道路照亮宽度，水体 A = 道路有向距离），mip 平均后没有意义，
-      // 着色器里凡是读 A 的地方都必须 textureLod(…, 0.0) 只读第 0 级（groundRoadTap）；各向异性取样只用 RGB（缺影像比例例外，见 groundSampleAniso）
+      // G06：影像和水体带 mipmap + 各向异性（着色器用 textureGrad 按像素足迹取样）。G07 起 mip 由 Worker 按层生成（mips.ts），
+      // attachGl(renderer) 接上后主线程按层按级直传；只有没接 GL 时才退回 three 按层上传、再对整个数组 generateMipmap（G06 的做法）。
+      // 注意：两张纹理的 A 通道都是编码值（影像 A = 缺影像比例 / 道路照亮宽度，水体 A = 道路有向距离），编码值在 mip 级没有宽度 / 距离的意义，
+      // 着色器里凡是读 A 编码的地方都必须 textureLod(…, 0.0) 只读第 0 级（groundRoadTap）；各向异性取样只用 RGB（缺影像比例例外，见 groundSampleAniso）
       t.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
       t.magFilter = THREE.LinearFilter;
       t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
@@ -373,7 +373,7 @@ export class GroundClipmap {
       res: RES,
       warm: this.warm,
       warmup: { ...this.warmMs },
-      worker: { ...workerStats },
+      worker: { ...workerStats, recent: workerStats.recent.slice() },
       hosts: imageryStats(),
     };
   }
@@ -550,6 +550,7 @@ export class GroundClipmap {
       }
       // G07：直传路径可用时让 Worker 顺带算这一层的 mip 链（没接 GL 时 three 按层上传、整组 generateMipmap，算了也用不上）
       vec.job.mips = this.gl !== null && !this.gpuMips;
+      vec.job.mipScratch = this.mipScratchReuse;
       const { water, albedo, detailCoverage, albedoMips, waterMips } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailDone ? detailPx.px : null);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
@@ -607,6 +608,8 @@ export class GroundClipmap {
   private readonly glTex = new Map<THREE.DataArrayTexture, WebGLTexture>();
   /** 调试开关：true = G06 的做法（只传第 0 级、整个数组 generateMipmap），同页 A/B 对照用（`__voyage.ground.gpuMips = true` 后 `rebuildAll()`） */
   gpuMips = false;
+  /** 调试开关（G07b）：false = G07 的 mip 浮点临时缓冲每级新分配（mips.ts），同页 A/B 用 */
+  mipScratchReuse = true;
   attachGl(renderer: THREE.WebGLRenderer) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
     this.gl = gl;
@@ -1000,8 +1003,11 @@ export class GroundClipmap {
 // 像素缓冲区是转移过去的（主线程这边随即失效），所以 Worker 中途出错时没法在这里补算：让这次构建失败，
 // build 的 finally 清掉 building 标志，下一帧 update 发现这一级还没建好会重建，那时已经改走主线程
 let roadWorker: Worker | null | undefined;
-/** Worker 每级合成耗时（G06 诊断：`__voyage.ground.imageryStats.worker`） */
-const workerStats = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
+/** Worker 每级合成耗时（G06 诊断：`__voyage.ground.imageryStats.worker`）。
+ * recent（G07b）：最近 WORKER_RECENT 次任务的起止时刻（主线程 performance.now() 时间轴）与分阶段耗时，归因帧尖峰用 */
+type WorkerTask = { start: number; end: number; ms: number; readMs: number; mipMs: number };
+const WORKER_RECENT = 64;
+const workerStats = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0, recent: [] as WorkerTask[] };
 let roadReq = 0;
 const roadPending = new Map<number, { resolve: (r: GroundLevelResult) => void; reject: (e: Error) => void }>();
 
@@ -1014,11 +1020,14 @@ function buildGroundLevelAsync(
   if (roadWorker === undefined) {
     try {
       roadWorker = new Worker(new URL("./road-raster.worker.ts", import.meta.url), { type: "module" });
-      roadWorker.onmessage = (e: MessageEvent<GroundLevelResult & { id: number; ms: number }>) => {
+      roadWorker.onmessage = (e: MessageEvent<GroundLevelResult & { id: number; ms: number; t0Abs: number }>) => {
         workerStats.count++;
         workerStats.totalMs += e.data.ms;
         workerStats.maxMs = Math.max(workerStats.maxMs, e.data.ms);
         workerStats.lastMs = e.data.ms;
+        const start = e.data.t0Abs - performance.timeOrigin;
+        workerStats.recent.push({ start, end: start + e.data.ms, ms: e.data.ms, readMs: e.data.phases?.readMs ?? 0, mipMs: e.data.phases?.mipMs ?? 0 });
+        if (workerStats.recent.length > WORKER_RECENT) workerStats.recent.shift();
         const req = roadPending.get(e.data.id);
         roadPending.delete(e.data.id);
         const d = e.data;

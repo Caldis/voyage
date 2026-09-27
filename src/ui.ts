@@ -10,7 +10,7 @@ import type { Director } from "./director";
 import { AIRPORTS } from "./routes";
 import { WONDERS } from "./wonders/catalog";
 import { RARITY_LEVELS, type WonderSystem } from "./wonders/system";
-import { isHeavyWeather, type QualityController, type QualityTier } from "./quality";
+import { describeGroundRes, groundResPref, isHeavyWeather, setGroundResPref, type GroundResPref, type QualityController, type QualityTier } from "./quality";
 import type { CabinAudio } from "./audio";
 import type { RailSoundSource } from "./rail/audio-rail";
 import type { DebugMinimap } from "./debug/minimap";
@@ -308,9 +308,19 @@ export function setupUi(deps: UiDeps) {
 
   // 画质（PERF-5）：面板只负责挑档位（自动 / 高 / 中 / 低），具体分辨率 / DPR 上限与自适应逻辑都在 quality.ts
   const qualitySel = $<HTMLSelectElement>("quality");
-  qualitySel.value = quality.tier; // 与内部默认值对齐（目前都是 "auto"，这里只是兜底）
+  qualitySel.value = quality.tier; // 每次载入都是 "auto"（PERF-5，不跨载入记忆），这里只是兜底
   qualitySel.addEventListener("change", () => {
     quality.setTier(qualitySel.value as QualityTier);
+  });
+
+  // 地面精度（G07b）：与画质档解耦；手动选择跨载入记忆，这次载入不变，状态行提示下次载入用多大
+  const groundResSel = $<HTMLSelectElement>("ground-res");
+  const groundResStatus = $("ground-res-status");
+  groundResSel.value = groundResPref();
+  groundResStatus.textContent = describeGroundRes();
+  groundResSel.addEventListener("change", () => {
+    setGroundResPref(groundResSel.value as GroundResPref);
+    groundResStatus.textContent = describeGroundRes();
   });
 }
 
