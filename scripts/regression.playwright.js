@@ -178,6 +178,9 @@ async (page) => {
       const jsOut = sc.js ? await new (async () => {}).constructor("v", sc.js)(v) : undefined;
       // 云步进变体（PERF-10，与 scenarios.mjs 的 applyScene 同步）：雷暴 / 台风 / 卷云 / 奇观变体编好之前不截图（最多 120 s）
       for (let i = 0; i < 480 && v.clouds && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250));
+      // 窗外变体（PERF-13，与 scenarios.mjs 同步）：先跑两帧选出想要的变体，罕见光学 / 天幕层奇观变体编好之前不截图（最多 120 s）
+      for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r));
+      for (let i = 0; i < 480 && v.groundDetail && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250));
       v.snapAll();
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
       const info = document.getElementById("info").textContent;
