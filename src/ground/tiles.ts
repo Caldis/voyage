@@ -167,7 +167,9 @@ export function loadWater(z: number, x: number, y: number): Promise<WaterFeature
             if (f.type !== 2) continue;
             const c = ROAD_CLASS[String(f.properties.class)];
             if (!c || f.properties.brunnel === "tunnel") continue;
-            for (const line of f.loadGeometry()) rb.add(line, c.width, c.weight, c.highway);
+            // ramp = 1：互通立交 / 出入口的匝道（*_link）。T43 用它找互通，城外高速只在互通附近成片亮
+            const ramp = Number(f.properties.ramp) === 1;
+            for (const line of f.loadGeometry()) rb.add(line, c.width, c.weight, c.highway, ramp);
           }
           out.roads = rb.build();
         }

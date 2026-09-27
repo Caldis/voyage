@@ -151,8 +151,9 @@ vec4 groundLand(GroundHit gh, float cs, vec3 eFlash) {
 // 线来自 OSM 道路的有向距离栅格（clipmap.ts 的 RoadRaster，照亮宽度已按夜光决定亮不亮），像素覆盖率由 groundRoadCoverage
 // 解析算出（含沿视线方向的各向异性过滤）。这里只做：近处一盏盏路灯的光斑、沿线的明暗起伏与钠灯 / LED 的色温混合、黄昏时各片区先后亮灯。
 // 返回地面处的辐亮度（kcd/m²），调用处乘空气透视的透射率
-const float ROAD_LUMINANCE = 1.6e-3;           // 满覆盖、强度 1 的路面亮度（1.6 cd/m²，道路照明标准里高速路面 1.5–2 cd/m²，照亮宽度里已含路侧溢光所以取低一点；
-                                               // 再亮线会在夜间曝光下过曝成一片平色，抗锯齿的灰阶被截掉、成了台阶，经验值）
+const float ROAD_LUMINANCE = 3.2e-3;           // 满覆盖、强度 1 的路面亮度（cd/m² × 1e-3）。T08 取 1.6（道路照明标准里高速路面 1.5–2 cd/m²）；
+                                               // T43 起强度按聚落地毯的亮度线性给（road-raster.ts 的 cityLit，市中心才到 1），市中心的路要跟得上灯点，所以这里 ×2。
+                                               // 再亮线会在夜间曝光下过曝成一片平色，抗锯齿的灰阶被截掉、成了台阶（经验值）
 const vec3 ROAD_SODIUM = vec3(1.0, 0.45, 0.12); // 高压钠灯：橙
 const vec3 ROAD_LED = vec3(1.0, 0.80, 0.62);    // 约 4500 K 的 LED：偏白
 vec3 groundRoadLights(GroundHit gh) {
@@ -205,6 +206,7 @@ vec3 groundFinish(GroundHit gh, vec3 land, vec3 water, float fView, vec3 skyCam,
   // 道路灯带（T08）不乘水体遮罩：跨河、跨海湾的桥上也亮（隧道在 CPU 侧已剔除）
   vec3 road = groundRoadLights(gh);
   if (uDebug == 24) return road; // 调试 24：只画道路灯带（地面处的辐亮度，不含空气透视、城市灯点和地表）
+  if (uDebug == 25) road = vec3(0.0); // 调试 25（T43）：正常画面去掉道路灯带，和正常画面相减就是道路的贡献（含空气透视）
   vec3 L = (1.0 - gh.wat.r) * land + road;
   if (gh.wat.r <= 0.001) return L * gh.apT + gh.apL;
   vec3 alb = gh.alb.rgb;

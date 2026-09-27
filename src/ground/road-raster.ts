@@ -31,6 +31,8 @@ export interface RoadTileData {
   /** 照明强度 0..1 */
   weight: Float32Array;
   highway: Uint8Array;
+  /** 1 = 高速 / 快速路的匝道（互通立交、出入口；T43 用来找互通） */
+  ramp: Uint8Array;
 }
 
 /** 一级 clipmap 的栅格化任务 */
@@ -67,16 +69,17 @@ export class RoadTileBuilder {
   private width: number[] = [];
   private weight: number[] = [];
   private highway: number[] = [];
+  private ramp: number[] = [];
   constructor(private readonly extent: number) {}
 
-  add(line: { x: number; y: number }[], width: number, weight: number, highway: boolean) {
+  add(line: { x: number; y: number }[], width: number, weight: number, highway: boolean, ramp = false) {
     const E = this.extent;
     let open = false;
     for (let i = 0; i + 1 < line.length; i++) {
       const a = line[i], b = line[i + 1];
       const out = (a.x < 0 && b.x < 0) || (a.x > E && b.x > E) || (a.y < 0 && b.y < 0) || (a.y > E && b.y > E);
       if (out) {
-        if (open) this.close(width, weight, highway);
+        if (open) this.close(width, weight, highway, ramp);
         open = false;
         continue;
       }
@@ -84,14 +87,15 @@ export class RoadTileBuilder {
       this.xy.push(b.x, b.y);
       open = true;
     }
-    if (open) this.close(width, weight, highway);
+    if (open) this.close(width, weight, highway, ramp);
   }
 
-  private close(width: number, weight: number, highway: boolean) {
+  private close(width: number, weight: number, highway: boolean, ramp: boolean) {
     this.start.push(this.xy.length / 2);
     this.width.push(width);
     this.weight.push(weight);
     this.highway.push(highway ? 1 : 0);
+    this.ramp.push(highway && ramp ? 1 : 0);
   }
 
   build(): RoadTileData {
@@ -102,6 +106,7 @@ export class RoadTileBuilder {
       width: new Float32Array(this.width),
       weight: new Float32Array(this.weight),
       highway: new Uint8Array(this.highway),
+      ramp: new Uint8Array(this.ramp),
     };
   }
 }
@@ -127,6 +132,21 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
   const w = new Float32Array(RES * RES);
   const hw = new Uint8Array(RES * RES);
   let pts = new Float32Array(2 * 4096);
+  // 互通立交（T43）：高速 / 快速路匝道经过的格子（格子约 250 m，太粗的级别上至少 1 像素）
+  const cellPx = Math.max(1, RAMP_CELL_KM * k);
+  const GN = Math.ceil(RES / cellPx);
+  const rampCells = new Uint8Array(GN * GN);
+  let anyRamp = false;
+  const markRamp = (ax: number, ay: number, bx: number, by: number) => {
+    const len = Math.hypot(bx - ax, by - ay);
+    const steps = Math.max(1, Math.ceil(len / (0.5 * cellPx)));
+    for (let s = 0; s <= steps; s++) {
+      const cx = Math.floor((ax + ((bx - ax) * s) / steps) / cellPx), cy = Math.floor((ay + ((by - ay) * s) / steps) / cellPx);
+      if (cx < 0 || cy < 0 || cx >= GN || cy >= GN) continue;
+      rampCells[cy * GN + cx] = 1;
+      anyRamp = true;
+    }
+  };
 
   const segment = (ax: number, ay: number, bx: number, by: number, width: number, hwy: number) => {
     const dx = bx - ax, dy = by - ay;
@@ -188,19 +208,109 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
       const hwy = data.highway[r];
       const width = data.width[r] * data.weight[r] * (hwy && data.weight[r] >= 1 && texelM > 20 ? 2 : 1);
       if (width <= 0) continue;
+      if (data.ramp[r]) for (let i = 0; i + 1 < m; i++) markRamp(pts[2 * i], pts[2 * i + 1], pts[2 * i + 2], pts[2 * i + 3]);
       for (let i = 0; i + 1 < m; i++) segment(pts[2 * i], pts[2 * i + 1], pts[2 * i + 2], pts[2 * i + 3], width, hwy);
     }
   }
   const { water, albedo, night } = px;
-  const ks = 255 / (2 * R), kw = 127 / ROAD_W_MAX / 255;
+
+  // 聚落（T43）：和城市灯点（terrain-shading.glsl.ts 的 groundLand）同一个判据——影像里灰白、低饱和的像素是建成区，
+  // 灯点亮度 ∝ 夜光² × 建成区。按约 250 m 的格子求「夜光² × 建成区」的平均，再在约 0.4 km 半径内摊平，就是这一片灯点地毯的相对亮度。
+  // 为什么不只看夜光：Black Marble 是拉伸过的可视化产品，关东平原一半以上的像素 ≥ 0.45（实测，handoff/T43-night-hist.py），
+  // 只按夜光的话田里的乡道也全亮——正是「像地图」的根因。影像能分出村镇和农田，夜光再给出亮度。
+  const carpetCells = new Float32Array(GN * GN);
+  const cellCount = new Float32Array(GN * GN);
+  for (let qy = 0; qy < RES; qy++) {
+    const cy = Math.min(Math.floor(qy / cellPx), GN - 1);
+    for (let qx = 0; qx < RES; qx++) {
+      const i4 = (qy * RES + qx) * 4;
+      if (albedo[i4 + 3] < 128) continue; // 缺影像
+      const c = cy * GN + Math.min(Math.floor(qx / cellPx), GN - 1);
+      const nn = night[i4] / 255;
+      cellCount[c]++;
+      if (nn < 0.02) continue;
+      carpetCells[c] += nn * nn * urbanOf(albedo[i4], albedo[i4 + 1], albedo[i4 + 2]);
+    }
+  }
+  for (let c = 0; c < GN * GN; c++) carpetCells[c] = cellCount[c] > 0 ? carpetCells[c] / cellCount[c] : 0;
+  const carpet = boxBlur(carpetCells, GN, Math.max(1, Math.round(CARPET_REACH_KM / (cellPx / k))));
+  // 互通：匝道经过的格子在约 0.6 km 半径内的比例，≥ 约 1/8 就算完全在互通里
+  const ic = anyRamp ? boxBlur(rampCells, GN, Math.max(1, Math.round(RAMP_REACH_KM / (cellPx / k)))) : null;
+  const at = (f: Float32Array, qx: number, qy: number) => {
+    const fx = Math.min(Math.max((qx + 0.5) / cellPx - 0.5, 0), GN - 1), fy = Math.min(Math.max((qy + 0.5) / cellPx - 0.5, 0), GN - 1);
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(x0 + 1, GN - 1), y1 = Math.min(y0 + 1, GN - 1);
+    const tx = fx - x0, ty = fy - y0;
+    const a = f[y0 * GN + x0] * (1 - tx) + f[y0 * GN + x1] * tx;
+    const b = f[y1 * GN + x0] * (1 - tx) + f[y1 * GN + x1] * tx;
+    return a * (1 - ty) + b * ty;
+  };
+  // 城外高速的断续段：世界坐标上的值噪声（和级别无关，各级一致）。纹素比段长还粗时淡出成平均值，免得粗级别上是采样出来的随机斑
+  const segFade = smooth(0.3 * SEG_KM * 1000, 0.9 * SEG_KM * 1000, texelM);
+
+  const ks = 255 / (2 * R), kw = 127 / ROAD_W_MAX; // lit 是 0..1
   for (let i = 0; i < RES * RES; i++) {
     const i4 = i * 4;
     const n = night[i4];
     water[i4 + 2] = n;
     water[i4 + 3] = 127.5 + sd[i] * ks; // Uint8ClampedArray：写入时自动四舍五入并截到 0..255
     const a = albedo[i4 + 3];
-    albedo[i4 + 3] = a < 128 ? a >> 1 : 128 + Math.min(w[i] * (hw[i] ? ROAD_LIT_HIGHWAY[n] : ROAD_LIT_OTHER[n]) * kw, 127);
+    if (a < 128) {
+      albedo[i4 + 3] = a >> 1;
+      continue;
+    }
+    let lit = 0;
+    if (w[i] > 0) {
+      const qx = i % RES, qy = (i - qx) / RES;
+      const cp = at(carpet, qx, qy);
+      lit = cityLit(cp);
+      if (hw[i]) {
+        const X = job.x0 + (qx + 0.5) / k, Z = job.z0 + (qy + 0.5) / k;
+        const seg = smooth(0.58, 0.68, 0.75 * vnoise(X / SEG_KM, Z / SEG_KM) + 0.25 * vnoise(X / (0.4 * SEG_KM) + 17.3, Z / (0.4 * SEG_KM) + 5.1));
+        const segF = seg + (HWY_SEG_MEAN - seg) * segFade;
+        lit = Math.max(lit, highwayRural(cp, ic ? smooth(0, 0.12, at(ic, qx, qy)) : 0, segF));
+      }
+    }
+    albedo[i4 + 3] = 128 + Math.min(w[i] * lit * kw, 127);
   }
+}
+
+/** GN×GN 网格的盒式平均（半径 rc 格，可分离，边界外按 0 计） */
+function boxBlur(src: Uint8Array | Float32Array, GN: number, rc: number) {
+  const tmp = new Float32Array(GN * GN), out = new Float32Array(GN * GN);
+  for (let y = 0; y < GN; y++) {
+    let acc = 0;
+    for (let x = -rc; x < GN + rc; x++) {
+      if (x + rc < GN && x + rc >= 0) acc += src[y * GN + x + rc];
+      if (x - rc - 1 >= 0 && x - rc - 1 < GN) acc -= src[y * GN + x - rc - 1];
+      if (x >= 0 && x < GN) tmp[y * GN + x] = acc;
+    }
+  }
+  const norm = 1 / ((2 * rc + 1) * (2 * rc + 1));
+  for (let x = 0; x < GN; x++) {
+    let acc = 0;
+    for (let y = -rc; y < GN + rc; y++) {
+      if (y + rc < GN && y + rc >= 0) acc += tmp[(y + rc) * GN + x];
+      if (y - rc - 1 >= 0 && y - rc - 1 < GN) acc -= tmp[(y - rc - 1) * GN + x];
+      if (y >= 0 && y < GN) out[y * GN + x] = acc * norm;
+    }
+  }
+  return out;
+}
+
+/** sRGB 8 位 → 线性（影像纹理是 SRGBColorSpace，着色器里读到的是线性值） */
+const SRGB_LIN = new Float32Array(256).map((_, v) => {
+  const c = v / 255;
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+});
+
+/** 这个影像像素是不是建成区（0..1）：和 groundLand 的城市灯点判据一致（灰白、低饱和，再取平方、过 smoothstep(0.15, 0.5)） */
+function urbanOf(r8: number, g8: number, b8: number) {
+  const r = SRGB_LIN[r8], g = SRGB_LIN[g8], b = SRGB_LIN[b8];
+  const lumA = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const sat = (Math.max(r, g, b) - Math.min(r, g, b)) / Math.max(lumA, 1e-3);
+  let u = smooth(0.04, 0.14, lumA) * (1 - smooth(0.25, 0.7, sat));
+  u *= u;
+  return smooth(0.15, 0.5, u);
 }
 
 function smooth(e0: number, e1: number, x: number) {
@@ -208,11 +318,51 @@ function smooth(e0: number, e1: number, x: number) {
   return t * t * (3 - 2 * t);
 }
 
+function hash2(ix: number, iy: number) {
+  let h = Math.imul(ix | 0, 0x27d4eb2d) ^ Math.imul(iy | 0, 0x165667b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/** 二维值噪声（0..1，平滑插值） */
+function vnoise(x: number, y: number) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  let fx = x - ix, fy = y - iy;
+  fx = fx * fx * (3 - 2 * fx);
+  fy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+  return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+}
+
+/** 匝道格子边长（km）与互通的照亮半径（km）：日本的互通 / JCT 整片装高杆灯，范围约是匝道外扩几百米（经验值） */
+const RAMP_CELL_KM = 0.25;
+const RAMP_REACH_KM = 0.6;
+/** 断续段噪声的尺度（km）与它在远处淡出时取的平均值（两层噪声过 smooth(0.58, 0.68) 后大约 1/4 是亮段） */
+const SEG_KM = 0.35;
+const HWY_SEG_MEAN = 0.25;
+
+/** 聚落「地毯」的摊平半径（km） */
+const CARPET_REACH_KM = 0.4;
+/** 地毯亮度（夜光² × 建成区比例的片区平均）到这个值时道路满亮（市中心约 0.3–0.5） */
+const CARPET_FULL = 0.6;
+
 /**
- * 路灯亮不亮（0..255，按夜光 0..255 查表）。数据里没有「有没有路灯」这一项，不去编，由夜光（NASA Black Marble）决定：
- * - 普通道路只在有人居住、夜光亮起来的地方亮（乡间公路基本不装路灯），没有夜光的地方宁可暗；
- * - 高速 / 快速路在城区外也留约 2 成（互通立交、收费站的照明和车流的前灯尾灯），城市之间仍是一条连续的淡线，进城后变亮。
- * 两处阈值是经验取值，按夜景截图调的。
+ * 路灯亮不亮（T43 重做；T08 的版本只看夜光，见 git 历史）。数据里没有「有没有路灯」这一项，不去编，
+ * 原则是**亮度跟着聚落走，不跟着路网走**，聚落亮度 cp 用和城市灯点同一个量（夜光² × 建成区，见 packRoads）：
+ * - 城里（各等级，cityLit）：和 cp 成正比，这样道路和同一片灯点地毯的亮度比在市中心和郊区大致不变；
+ *   cp 很小（农田、山林：影像不是建成区）时直接关——乡道默认不亮，只在村镇里亮。
+ * - 城外的高速 / 快速路（highwayRural）：一串断续的亮段——互通立交（匝道附近）满亮、沿线村镇处 7 成，
+ *   中间只有稀疏的短段 45%（车流、服务区、收费站；数据里没有这些位置，用噪声代表「有的地方有、有的地方没有」，只控制比例、不编造地点），
+ *   整体再乘 HWY_RURAL。
+ * 比例是按夜航照片和截图定的经验值（handoff/T43.md 有量化结果）。
  */
-export const ROAD_LIT_HIGHWAY = new Uint16Array(256).map((_, n) => Math.round(255 * (0.2 + 0.8 * smooth(0.02, 0.25, n / 255))));
-export const ROAD_LIT_OTHER = new Uint16Array(256).map((_, n) => Math.round(255 * smooth(0.03, 0.3, n / 255)));
+function cityLit(cp: number) {
+  return Math.min(1, (cp / CARPET_FULL) ** 0.6) * smooth(0.004, 0.015, cp);
+}
+
+const HWY_RURAL = 0.08;
+function highwayRural(cp: number, ic: number, seg: number) {
+  const settle = smooth(0.02, 0.08, cp);
+  return HWY_RURAL * Math.max(ic, 0.7 * settle, 0.45 * seg);
+}
