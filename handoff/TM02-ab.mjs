@@ -27,6 +27,12 @@ export const VARIANTS = {
   sr03: { exp: { uDayHiLocal: LOC(1.3, 0.4, 0.3) } },
   sr10: { exp: { uDayHiLocal: LOC(1.3, 0.4, 1.0) } },
   sr100: { exp: { uDayHiLocal: LOC(1.3, 0.4, 100.0) } }, // 不做值域回落（纯低通，看光晕有多大）
+  // 机翼遮挡（wave7 第 1 条）：tm01bug = 合并时的 TM01（不看机翼）；noOcc = TM02 不看机翼
+  tm01bug: { exp: { uDayHiLocal: LOC(1.3, 0.4, 0.6, 0), uWingOcc: [1e9, 2e9] } },
+  noOcc: { exp: { uWingOcc: [1e9, 2e9] } },
+  // 台风卷云盖（wave7 第 5 条）：noAnchor = 关 C02 的 EV 锚定；offAll = 高光段与锚定都关
+  noAnchor: { exp: { uDayEvAnchor: [15, 0] } },
+  offAll: { exp: { uDayHiLook: LOOK(1.0), uDayHiLocal: LOC(1.3, 0.4, 0.6, 0), uDayEvAnchor: [15, 0] } },
   mask: { exp: { uDebugMask: true } }, // 窗外遮罩（TM02-halo.py 用它限定窗内）
   b14: { exp: { uDayHiLook: LOOK(1.4), uDayHiLocal: LOC(1.4, 0.4, 0.6) } },
 };

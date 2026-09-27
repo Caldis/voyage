@@ -243,6 +243,8 @@ uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透
 uniform float uDayHiSatRoll;  // TM01 返工：收回段按饱和度前移的倍数（见 dayHighlightGain）
 uniform vec4 uDayHiLocal;     // TM02 局部色调映射：x = 细节在中间段的斜率 sd、y = 肩部补偿 κ、z = 值域回落 σr（档）、w = 1 开 / 0 关（见 dayHighlightGain）
 uniform float uDayHiLocalTop; // TM02 局部项在收回终点前多少档（按最大通道）内淡出到 0
+uniform sampler2D uPreWing;   // TM02 机翼 pass 之前的场景 HDR（main.ts 的 hdr，每帧 finalMat.uniforms.uPreWing.value = hdr.texture）：与 uHdr 不同的像素就是被机翼 / 翼尖灯挡住的
+uniform vec2 uWingOcc;        // TM02 「被机翼挡住」判据：|ΔY| / Y 在 x → y 之间由 0 过渡到 1（高光段门控乘 1 − 它）
 uniform sampler2D uClouds;    // 云缓冲（clouds.ts 的 history，两倍宽；main.ts 每帧 finalMat.uniforms.uClouds.value = clouds.texture）
 #include <common>
 #include <dithering_pars_fragment>
@@ -341,6 +343,14 @@ void main() {
     float cw = float(textureSize(uClouds, 0).x) * 0.5;
     float cloudOp = 1.0 - textureLod(uClouds, vec2(min(vUv.x * cw, cw - 0.5) / (2.0 * cw), vUv.y), 0.0).a;
     hiGate = em.day * (1.0 - em.uniformField) * src.a * mix(1.0, smoothstep(uDayHiCloud.x, uDayHiCloud.y, cloudOp), uDayHiCloud.z);
+    //    TM02 修 TM01 回归（美术总监 wave7 第 1 条）：云缓冲是按屏幕位置读的，机翼挡在云前时，机翼的白漆落在高光段里，
+    //    「背后有云」的那几块被单独提亮，翼面出现跟着背后的云滑动的迷彩斑。机翼 pass 只在机翼 / 翼尖灯处改像素（其余逐位照抄场景），
+    //    所以「机翼前后的 HDR 不一样」就是「这里看到的不是云」。没接线（uPreWing 为空纹理，读到 0）时不排除任何像素。
+    //    地形（T38）挡在云前的情况这里管不到（云缓冲右半的深度只在低空 / 有山时才写），见 handoff/TM02.md
+    vec3 cPre = texelFetch(uPreWing, ivec2(gl_FragCoord.xy), 0).rgb;
+    vec3 cWing = texelFetch(uHdr, ivec2(gl_FragCoord.xy), 0).rgb; // 与机翼 pass 同样按像素取，不经过滤
+    vec3 dW = abs(cWing - cPre) / max(max(cWing, cPre), vec3(1e-12)); // 逐通道相对差：白漆与背后白云亮度相同、颜色不同时也认得出
+    hiGate *= max(max(cPre.r, cPre.g), cPre.b) > 0.0 ? 1.0 - smoothstep(uWingOcc.x, uWingOcc.y, max(max(dW.r, dW.g), dW.b)) : 1.0;
     float eO = em.eO, eC = em.eC, aC = em.aC, o = adapted.x, dom = em.dom;
     // T47：交界像素（遮罩 0 < a < 1，窗板开口边、座椅 / 头枕压在窗前的轮廓）按「曝光的倒数」线性混合，不在 log 域混合。
     // HDR 里这个像素 = a·窗外 + (1 − a)·舱内，窗外绝对亮度高、曝光低；log 域混合给出两者的几何平均曝光，
@@ -580,6 +590,10 @@ export class Exposure {
       //   sd 1.4：云芯对比到 TM01 全局斜率 1.4 的水平，大尺度仍按 1.3（银边 / 云体亮度不再变亮）；σr 0.5：光晕 ≤ 约 1.3 级、≤ 8 px（handoff/TM02.md）
       uDayHiLocal: { value: new THREE.Vector4(1.4, 0.4, 0.5, 1.0) },
       uDayHiLocalTop: { value: 1.0 },
+      uPreWing: { value: null },
+      // 没有机翼的像素机翼 pass 逐位照抄（差恰为 0），所以门限可以极小：取 0.002 → 0.02 时，白漆与背后白云亮度相近的像素
+      // 漏过门限，翼面留下一片随云纹闪烁的散点（tmp/screenshot/tm02/wing）。
+      uWingOcc: { value: new THREE.Vector2(1e-5, 1e-4) }, //(1e9, 2e9) 等价于不看机翼（A/B 用）
       uDayHiCloud: { value: new THREE.Vector3(0.05, 0.35, 1.0) },
       uDayHiSatRoll: { value: 0.3 }, // 返工：sunset-wing ≥250 +0.21% → +0.045%（0.5 以上把夕照 / 逆光场景的效果一起关掉，见 handoff/TM01.md）
       uClouds: { value: null },

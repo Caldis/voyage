@@ -559,6 +559,7 @@ function renderFrame(now: number) {
   const cabinMat = cabinClass.pick(renderer, state.cabinClass);
   exposure.finalMat.uniforms.uCabinRefAlbedo.value.copy(CABIN_REF_ALBEDO[cabinClass.shown]);
   exposure.finalMat.uniforms.uClouds.value = clouds.texture; // TM01：高光段只给云（曝光合成读云缓冲的不透明度）
+  exposure.finalMat.uniforms.uPreWing.value = hdr.texture; // TM02：机翼前后的 HDR 一比，机翼挡住的像素不按背后的云提亮
   pass.render(cabinClass.seat(), hdrSeat);
   pass.render(cabinMat, hdr);
   // 面板上的舱等状态：变体后台编译时提示一下（编好之前画面保持原来的舱等）
