@@ -22,8 +22,8 @@
  *   白天改成中继站两端的高强度白色频闪，从下往上依次闪一遍（白天红灯看不见，真实的高塔也是白天白闪、夜里红闪）。
  * 建木（skin 1，《淮南子·地形训》「众帝所自上下」、《山海经·海内经》「百仞无枝，上有九欘」）：
  * - 九欘：高处（55 km 以上）九根弯着往上长的枝，树冠在窗里的高处，向阳一侧被照亮。
- * - 云气缭绕：15–24 km 高处缠着树干旋上去的一团云气（真实的旗云 / 帽云：高大的山、塔身边会挂云），
- *   云的反照率高，白天是地平线上方最先被注意到的白色云絮，黄昏被染成粉橙。
+ * - 云气缭绕：12–30 km 高处树干上挂着的三圈云环（圈间有薄雾相连），远看是横在树干上、顺风拖向一侧的云絮（真实的旗云 / 帽云：
+ *   高山、高塔身边会挂云）。云的反照率高，白天是地平线上方最先被注意到的白色云絮，黄昏被染成粉橙。
  * - 萤光：树冠一带稀疏的金色光点，夜里是缓慢明灭的微光，白天偶尔有一两点被阳光照到「闪一下」（黄实）。
  * - 众帝上下：沿树干缓慢升降的暖色光团（夜里才看得见）。
  *
@@ -123,26 +123,26 @@ vec4 wonderSpheroid(vec3 w0, vec3 rd, vec3 a, float sc, float R, float H, float 
 }
 
 // 从轴线伸出去的一根「撑杆」（天梯的稳定缆 / 建木的枝）：在水平方位 h（垂直于轴线的单位向量）上，
-// 高度 σ ∈ [sa, sb] 处离轴线 r(σ) = rA + (rB − rA)·u^p（u = (σ − sa)/(sb − sa)），半径从 thA 渐变到 thB（km）。
+// 高度 σ ∈ [sa, sb] 处离轴线 r(σ) = rA + (rB − rA)·g(u)，u = (σ − sa)/(sb − sa)，g(u) = u + bend·u·(1 − u)
+// （bend = 0 直线；bend = 1 时根部斜着长出、梢部转成竖直，导数处处有限），半径从 thA 渐变到 thB（km）。
 // 像面上：横向 X_Q = r·(h·n̂)，纵向 = sn·(σ − k·r)（k = b·(h·rd)/sn²，h 有朝向相机的分量时看起来会偏高 / 偏低）。
 // 解出和本像素同一纵向位置的 σ（牛顿法两步），返回像素覆盖率
 float wonderStrut(float X, float s, float sn, float b, vec3 nh, vec3 rd, vec3 h, float wPix,
-                  float sa, float sb, float rA, float rB, float p, float thA, float thB) {
+                  float sa, float sb, float rA, float rB, float bend, float thA, float thB) {
   float hx = dot(h, nh);
   float k = b * dot(h, rd) / (sn * sn);
   float span = sb - sa;
   float sig = s;
   for (int j = 0; j < 2; j++) {
-    float u = clamp((sig - sa) / span, 0.02, 1.0);
-    float r = rA + (rB - rA) * pow(u, p);
-    float dr = (rB - rA) * p * pow(u, p - 1.0) / span;
+    float u = clamp((sig - sa) / span, 0.0, 1.0);
+    float r = rA + (rB - rA) * (u + bend * u * (1.0 - u));
+    float dr = (rB - rA) * (1.0 + bend * (1.0 - 2.0 * u)) / span;
     sig -= (sig - s - k * r) / (1.0 - k * dr);
   }
   float u = (sig - sa) / span;
-  if (u < -0.02 || u > 1.0) return 0.0;
-  u = clamp(u, 0.02, 1.0);
-  float r = rA + (rB - rA) * pow(u, p);
-  float dr = (rB - rA) * p * pow(u, p - 1.0) / span;
+  if (u < 0.0 || u > 1.0) return 0.0;
+  float r = rA + (rB - rA) * (u + bend * u * (1.0 - u));
+  float dr = (rB - rA) * (1.0 + bend * (1.0 - 2.0 * u)) / span;
   float m = dr * hx / (sn * (1.0 - k * dr));
   float perp = abs(X - r * hx) * inversesqrt(1.0 + m * m);
   return wonderStrip(perp / wPix, mix(thA, thB, u) / wPix);
@@ -173,11 +173,11 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   // 越往上越细
   float radius = uWonderShape.x * mix(1.0, 0.45, smoothstep(0.0, 600.0, s));
   float haloPx = 5.0;
-  // 这一高度上最远的东西离轴线多远：稳定缆 / 系留平台（天梯低处）、云气（建木 11–28 km）、树冠与萤光（建木 46 km 以上）
+  // 这一高度上最远的东西离轴线多远：稳定缆 / 系留平台（天梯低处）、云气（建木 9–34 km）、树冠与萤光（建木 46 km 以上）
   float reach = max(radius + haloPx * 3.0 * wPix, 4.0);
   if (tether) { if (s < 34.0) reach = 58.0; }
   else if (s > 46.0) reach = 46.0;
-  else if (s > 11.0 && s < 28.0) reach = 18.0;
+  else if (s > 9.0 && s < 34.0) reach = 22.0;
   if (dist > reach) return L;
 
   // 可见前沿（浮现 / 退场的编排）：前沿以上是长渐变，不是硬边
@@ -235,7 +235,7 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
     float h1 = hash12(vec2(fi, 11.0 + uWonderShape.z));
     float h2 = hash12(vec2(fi, 23.0 + uWonderShape.z));
     float h3 = hash12(vec2(fi, 37.0 + uWonderShape.z));
-    float sa, sb, rA, rB, p, thA, thB, phi;
+    float sa, sb, rA, rB, bend, thA, thB, phi;
     if (tether) {
       // 稳定缆：前三根从最低的中继站拉到 18–24 km 外，后三根从第二个拉到 40–52 km 外；方位错开
       bool lo = i < 3;
@@ -244,7 +244,7 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       sb = wonderStationS(lo ? 0.0 : 1.0);
       rA = lo ? 18.0 + 6.0 * h1 : 40.0 + 12.0 * h1;
       rB = 0.0;
-      p = 1.0;
+      bend = 0.0;
       thA = 0.05;
       thB = 0.035;
       phi = fj * 2.0944 + (lo ? 0.35 : 1.4) + 0.25 * h2;
@@ -254,13 +254,13 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       sb = sa + 35.0 + 45.0 * h2;
       rA = 0.0;
       rB = 12.0 + 26.0 * h3;
-      p = 0.55;
+      bend = 1.0;
       thA = 0.26;
       thB = 0.04;
       phi = fi * 0.6981 + 0.5 * h2;
     }
     vec3 h = cos(phi) * e1 + sin(phi) * e2;
-    covS += wonderStrut(X, s, sn, b, nh, rd, h, wPix, sa, sb, rA, rB, p, thA, thB);
+    covS += wonderStrut(X, s, sn, b, nh, rd, h, wPix, sa, sb, rA, rB, bend, thA, thB);
   }
   float c = min(cov + covS, 1.0) * vis;
   L = mix(L, lFront + apT * Lt, c);
@@ -347,28 +347,36 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       float wl = wonderPoint(x - gx * 0.5 / wPix, (s - 0.35 - gy * 0.55) * sn / wPix);
       lampBase = col * 6.0 * step(0.5, hl) * (0.4 + hl) * inPlat * (1.0 - dayF) * wl;
     }
-    // 缆上的红色障碍灯：每 30 km 一盏，全部同步慢闪（2 s 一次，像白炽灯一样缓起缓落），常亮底 8%
+    // 缆上的红色障碍灯：每 30 km 一盏，全部同步慢闪（2 s 一次，像白炽灯一样缓起缓落），常亮底 10%
     float kb = max(floor(s / 30.0 + 0.5), 1.0);
     float dyb = (s - kb * 30.0) * sn / wPix;
     float phb = fract(T / 2.0);
-    float blink = 0.08 + 0.92 * smoothstep(0.0, 0.12, phb) * (1.0 - smoothstep(0.4, 0.62, phb));
-    lamp += vec3(1.0, 0.08, 0.03) * 60.0 * blink * (1.0 - dayF) * wonderPoint(x, dyb);
+    float blink = 0.1 + 0.9 * smoothstep(0.0, 0.12, phb) * (1.0 - smoothstep(0.4, 0.62, phb));
+    lamp += vec3(1.0, 0.08, 0.03) * 300.0 * blink * (1.0 - dayF) * wonderPoint(x, dyb);
   } else if (!tether) {
-    // ---- 建木：云气缭绕（15–24 km，缠着树干旋上去）
-    float band = smoothstep(14.0, 17.5, s) * (1.0 - smoothstep(20.0, 24.5, s));
-    if (band > 0.0) {
-      float swirl = 2.4 * sin(s * 0.55 + T * 0.01);
-      float wid = 4.0 + 3.5 * vnoise(vec2(s * 0.3, 7.0));
-      float xn = (X - swirl) / wid;
-      float nz = 0.65 * vnoise(vec2(X * 0.33 + T * 0.004, s * 0.9)) + 0.35 * vnoise(vec2(X * 0.8 - T * 0.003, s * 1.2 + 5.0));
-      float tau = 3.5 * band * exp(-xn * xn) * smoothstep(0.3, 0.7, nz);
+    // ---- 建木：云气缭绕。树干上挂着三圈云（约 12–30 km，间隔不规则），每圈是绕着树干的一道云环，远看是横在树干上、
+    // 顺风往一侧拖长的云絮（像山顶的旗云），越往上越薄；圈与圈之间有一层很淡的薄雾把它们连起来。
+    // 噪声沿横向拉长（絮状），最细的起伏约 2 km（六七个像素），不会逐帧闪
+    if (s > 9.0 && s < 34.0) {
+      float kc = clamp(floor((s - 12.5) / 7.0 + 0.5), 0.0, 2.0);
+      float hc1 = hash12(vec2(kc, 61.0));
+      float hc2 = hash12(vec2(kc, 67.0));
+      float sc = 12.5 + 7.0 * kc + 2.4 * (hc1 - 0.5);
+      float xo = X - 3.0 * (hc1 - 0.4);
+      float wid = (6.0 + 6.0 * hc2 - kc) * (xo > 0.0 ? 1.8 : 0.7);
+      float th = (0.6 + 0.7 * hc2) * (0.6 + 0.8 * vnoise(vec2(X * 0.3 + kc * 9.0, 2.0)));
+      float ds = s - sc - 0.05 * X * (hc2 - 0.5) - 1.2 * (vnoise(vec2(X * 0.18 + T * 0.003, kc * 7.0)) - 0.5);
+      float nz = 0.6 * vnoise(vec2(X * 0.2 - T * 0.003, ds * 0.8 + kc * 13.0)) + 0.4 * vnoise(vec2(X * 0.5 + 3.0, ds * 1.3 + kc * 5.0));
+      float tau = (2.6 - 0.7 * kc) * exp(-ds * ds / (th * th) - xo * xo / (wid * wid)) * smoothstep(0.15, 0.75, nz);
+      // 薄雾：贴着树干、很淡，把几圈云连成「缭绕」
+      tau += 0.22 * exp(-X * X / 30.0) * smoothstep(10.0, 14.0, s) * (1.0 - smoothstep(24.0, 32.0, s)) * vnoise(vec2(X * 0.25, s * 0.3 - T * 0.002));
       // 云：反照率约 0.8；朝太阳看时前向散射更亮
       float fwd = 1.0 + 1.5 * pow(max(dot(rd, uSunDir), 0.0), 4.0);
       vec3 Lc = 0.8 / M_PI * (eSun * 0.8 * fwd + eMoon * 0.8 + eSkyUp + 0.5 * eUp);
       L = mix(L, lFront + apT * Lc, (1.0 - exp(-tau)) * visF);
     }
     // 众帝上下：沿树干升降的暖色光团（夜里才看得见）
-    if (hasPod) lamp += vec3(1.0, 0.8, 0.5) * 18.0 * (1.0 - dayF) * wonderPoint(x, (s - sPod) * sn / wPix);
+    if (hasPod) lamp += vec3(1.0, 0.8, 0.5) * 40.0 * (1.0 - dayF) * wonderPoint(x, (s - sPod) * sn / wPix);
     // 萤光（黄实）：树冠一带稀疏的金色光点，格子 2.6 km × 3.4 km，缓慢上飘；夜里明灭的微光，白天偶尔被阳光照到闪一下
     if (s > 45.0 && s < 240.0) {
       float sd = s - 0.004 * T;
@@ -378,8 +386,8 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       if (hc.x < 0.35 * near) {
         vec2 pc = (cell + 0.5 + (hc - 0.5) * 0.5) * vec2(2.6, 3.4);
         float tw = 0.5 + 0.5 * sin(T * (0.5 + hc.y) + hc.x * 40.0);
-        float spark = pow(max(sin(T * (0.3 + 0.5 * hc.y) + hc.y * 60.0), 0.0), 60.0);
-        vec3 glow = vec3(1.0, 0.78, 0.4) * (6.0 * tw * tw * (1.0 - dayF) + 4e5 * spark * dot(tS, vec3(0.333)));
+        float spark = pow(max(sin(T * (0.3 + 0.5 * hc.y) + hc.y * 60.0), 0.0), 24.0);
+        vec3 glow = vec3(1.0, 0.78, 0.4) * (15.0 * tw * tw * (1.0 - dayF) + 1.2e6 * spark * dot(tS, vec3(0.333)));
         lamp += glow * wonderPoint(x - pc.x / wPix, (sd - pc.y) * sn / wPix);
       }
     }
