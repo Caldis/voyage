@@ -286,6 +286,11 @@ try {
         const rt = await page.evaluate(([c]) => window.__cs.realtime(96, 128, c), [crop]);
         await page.screenshot({ path: path.join(dir, vn + ".png") });
         const r = await page.evaluate(() => window.__cs.readCloud());
+        // --avg：再拍一张 64 帧真平均（只剩静态细节，没有单帧噪声），对照单帧看高频增量是细节还是噪声
+        if (args.avg) {
+          await page.evaluate(async () => { const v = window.__voyage; window.__cs.accumulate(64); v.sceneMat.uniforms.uClouds.value = v.clouds.texture; await window.__cs.frames(2); v.exposure.snap(); await window.__cs.frames(4); });
+          await page.screenshot({ path: path.join(dir, vn + "-avg.png") });
+        }
         const buf = decode(r);
         if (!ang && sun) ang = angleMap(g, r.W, r.H);
         const { out, Y, AL } = metrics(buf, r.W, r.H, ang);
