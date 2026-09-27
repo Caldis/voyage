@@ -1,5 +1,6 @@
 import { LocalFrame, tileXToLon, tileYToLat } from "./geo";
 import { blendDetail } from "./imagery-blend";
+import { buildMipChain } from "./mips";
 
 /**
  * 道路灯带的栅格（T08）：把一级 clipmap 覆盖范围里的道路折线栅格成「到最近道路中心线的有向距离」。
@@ -119,6 +120,8 @@ export interface RoadJob {
   water: { x: number; y: number; data: WaterTileData }[];
   /** 河道折线的最大画宽（米，TR03）：不给 = 按类别估计的宽度原样画（飞机）；火车模式给一个小值，见 GroundClipmap.waterwayMaxM */
   waterwayMaxM?: number;
+  /** G07：顺带生成影像 / 水体这一层的 mip 链（mips.ts），主线程按层按级上传、不再调整个数组的 generateMipmap */
+  mips?: boolean;
 }
 
 /** 一级的像素数据（RES² × RGBA，getImageData 的结果）：在 Worker 里就地写入道路，再原样转移回主线程 */
@@ -356,6 +359,9 @@ export function packRoads(job: RoadJob, px: LevelPixels) {
 export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo"> & {
   /** 高清细节（G03）实际用上的像素比例；没有细节层时是 0 */
   detailCoverage: number;
+  /** G07：第 1 级起的 mip 链（按级连续存放，见 mips.ts）；job.mips 为假时是 null */
+  albedoMips: Uint8Array | null;
+  waterMips: Uint8Array | null;
 };
 
 /**
@@ -432,7 +438,10 @@ export function buildGroundLevel(
   const night = upsample(darkenNight(nightRaw), job.nightRes, RES);
   const px: LevelPixels = { water, albedo, night, urbanAlbedo };
   packRoads(job, px);
-  return { water: px.water, albedo: px.albedo, detailCoverage };
+  // G07：mip 必须在 packRoads 之后算（影像 A 的覆盖比例要按最终编码解）
+  const albedoMips = job.mips ? buildMipChain(px.albedo, RES, "albedo") : null;
+  const waterMips = job.mips ? buildMipChain(px.water, RES, "water") : null;
+  return { water: px.water, albedo: px.albedo, detailCoverage, albedoMips, waterMips };
 }
 
 /** ImageBitmap → RES² RGBA 像素（非预乘：getImageData 的约定，和原来主线程 canvas 读回的一样），读完关掉位图 */

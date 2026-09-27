@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { LocalFrame, latToTileY, lonToTileX, tileXToLon, tileYToLat, zoomForResolution } from "./geo";
 import { DEM_MAX_ZOOM, DEM_URL, EOX_S2, GSI_PHOTO, NIGHT_MAX_ZOOM, NIGHT_URL, VECTOR_MAX_ZOOM, imageryStats, inBounds, loadBitmap, loadImageryTile, loadWater } from "./tiles";
 import { buildGroundLevel, type GroundLevelResult, type RoadJob } from "./road-raster";
+import { GROUND_RES_DECISION } from "../quality";
 
 /**
  * 地面的 clipmap：以飞机正下方为中心的 7 级方形区域，边长 8、16 … 512 km，
@@ -11,7 +12,7 @@ import { buildGroundLevel, type GroundLevelResult, type RoadJob } from "./road-r
  * 飞机移动超过该级边长的 1/8 时重建这一级；重建期间这一级仍用旧数据，着色器按 valid 标志回退到粗一级。
  */
 
-// 最细一级 8 km / 2048 ≈ 3.9 m/像素（z14 影像是 Sentinel-2 原生约 10 m，最细一级只是放大；清晰度的收益在第 1–6 级）
+// 最细一级 8 km / 2048 ≈ 3.9 m/像素（1024 档 7.8 m）（z14 影像是 Sentinel-2 原生约 10 m，最细一级只是放大；清晰度的收益在第 1–6 级）
 export const GROUND_LEVELS = 7;
 export const GROUND_BASE_KM = 8;
 /**
@@ -20,8 +21,10 @@ export const GROUND_BASE_KM = 8;
  * 级别的覆盖范围（按距离选级，groundLod）是硬约束——某个距离上只能用盖得住它的那一级，所以同一距离想要细一倍的纹素，
  * 只能把每级的像素数翻倍。配套：mipmap + 各向异性过滤（ground.glsl.ts 的 groundSampleAniso），否则纹素变细后
  * 沿视线方向（斜看时足迹是横向的 5–50 倍）欠采样更严重、飞机一动就闪。方案对比与数字见 handoff/G06.md
+ * G07：2048² 只在启动时判定为高性能 GPU 时用，其余 1024²（仍带 mip + 各向异性）；模块加载时定一次、之后不变
+ * （判定规则见 quality.ts 的 GROUND_RES_DECISION；着色器常量取自这里，运行时不会变、不会重编）
  */
-export const GROUND_RES = 2048;
+export const GROUND_RES: number = GROUND_RES_DECISION.res;
 const RES = GROUND_RES;
 const HRES = 256; // 地形高度
 /**
@@ -38,6 +41,10 @@ const NIGHT_RES = 1024;
 const IMAGERY_MAX_TILES = 169;
 /** 分块直传时每块的行数：2048 × 512 × 4 B = 4 MB（和 1024² 一整层一样大，实测一次 0.5 ms 以内） */
 const UPLOAD_ROWS = 512;
+/** 暂存上传每帧最多写进像素解包缓冲的字节数（G07，见 drainStaged）：和直传分块一样 4 MB，实测一次 0.5 ms 上下 */
+const STAGE_BYTES = 4 * 1024 * 1024;
+/** 纹理的 mip 级数（texStorage3D 按 log2(RES) + 1 分配，three 的 getMipLevels） */
+const MIP_LEVELS = Math.log2(RES) + 1;
 
 /**
  * 高清细节层（G03）：只进最细的这几级（第 0 级 8 km、第 1 级 16 km）。研究结论（research/IMAGERY.md §1、§4.1）：
@@ -84,8 +91,10 @@ interface Level {
   detail: boolean;
   /** 实际用上高清细节的像素比例（诊断） */
   detailCoverage: number;
-  /** 这一版影像是不是按 RES 选的缩放级（G06）；false = 加速航程时按 1024 选的粗一级，流速降下来后要重建 */
+  /** 这一版影像是不是按 RES 选的缩放级（G06）；false = 加速航程 / 首载时按 1024 选的粗一级，之后要重建（1024 档恒为 true） */
   fine: boolean;
+  /** 调试：rebuildAll 标记，下一帧原地重建（位置不变） */
+  stale?: boolean;
 }
 
 /** 每级的粗网格边长（格数）。高度图 256² → 每格 8×8 个高度像素；水体 1024² → 每格 32×32 个像素 */
@@ -126,6 +135,26 @@ interface UploadJob {
   layer: number;
   data: ArrayLike<number>;
   layerSize: number;
+  /** G07：这一层第 1 级起的 mip 链（Worker 算好，按级连续存放）；没有时退回 generateMipmap */
+  mips?: Uint8Array | null;
+}
+
+/**
+ * 一次重建要上传的一批（同一级的影像 / 水体 / 高度），after 在全部传完的那一帧把这一级换成新的中心（PERF-8）。
+ * plan：G07 暂存上传的进度（见 GroundClipmap.drainStaged）
+ */
+interface UploadBatch {
+  jobs: UploadJob[];
+  after: () => void;
+  plan?: StagePlan;
+}
+
+/** G07：一批的暂存计划——影像 / 水体（第 0 级 + mip 链）在暂存缓冲里的位置，和按帧写入的分块 */
+interface StagePlan {
+  pieces: { src: Uint8Array; dst: number }[];
+  next: number;
+  /** 每张 RGBA 纹理：第 0 级、mip 链（没有时为 -1，退回 generateMipmap）在缓冲里的偏移 */
+  slots: { job: UploadJob; l0: number; mips: number }[];
 }
 
 /**
@@ -184,12 +213,25 @@ export class GroundClipmap {
   private frame: LocalFrame;
   /** 航程流速（setDetailContext 传进来）：> FINE_MAX_RATE 时影像按粗一级取（G06） */
   private rate = 1;
+  /** 太阳高度（sin，setDetailContext 传进来）：夜里首载不走先粗后细（见 warm） */
+  private sunY = 1;
   /** 高清细节此刻开没开（G03，setDetailContext 按高度 / 视角 / 流速 / 太阳算，带回差） */
   private detailOn = false;
   /** 上一次 update 的飞机位置（km），setDetailContext 算离地高度用 */
   private lastX = 0;
   private lastZ = 0;
   private generation = 0;
+  /**
+   * 首载先粗后细（G07）：换起点后，各级先按 1024 的缩放级（fine = false，瓦片数约 1/4）出完整一版，全部就位后才放开 fine、
+   * 在后台逐级升级成按 RES 选的缩放级（G06 首载 13.4 → 33.7 s，期间逐级「一圈变清楚」，低清露得更久）。
+   * 升级只换影像的锐度（同一片 EOX 细一级；矢量 / 夜光 / 高度 / 高清细节都与 fine 无关）。影像 A 的路灯照亮宽度经聚落地毯
+   * （约 250 m 格平均的建成区判据）间接依赖影像颜色，会有很小的变化。旧的一版照常用到新的一版传完才切换。
+   * 1024 档恒为 true（两种缩放级相同，不用升级）；夜里首载也直接为 true（见 updateWarm）
+   */
+  private warm = RES <= TILE_RES_COARSE;
+  /** 首载时间（诊断，`imageryStats.warmup`）：reset 起到粗版全部就位、到全部升级成 fine 的毫秒数 */
+  private warmStart = performance.now();
+  private warmMs = { coarse: -1, fine: -1 };
   /** 瓦片统计，面板上显示加载状态 */
   pending = 0;
   /**
@@ -200,7 +242,7 @@ export class GroundClipmap {
    * 全部上传完才把这一级标记为 valid（`l.building` 也要撑到那时候才清，见 `build()`），
    * 避免着色器读到「影像已经是新的、地形还是旧的」这种半新半旧的一级。
    */
-  private uploadQueue: { jobs: UploadJob[]; after: () => void }[] = [];
+  private uploadQueue: UploadBatch[] = [];
 
   /** CPU 端的高度（km），始终 32 位；GPU 纹理在不支持浮点线性过滤时存半精度（TR03 审查 B1） */
   private readonly heightCpu: Float32Array;
@@ -250,6 +292,9 @@ export class GroundClipmap {
   reset(lat0: number, lon0: number) {
     this.frame = new LocalFrame(lat0, lon0);
     this.generation++;
+    this.warm = RES <= TILE_RES_COARSE;
+    this.warmStart = performance.now();
+    this.warmMs = { coarse: -1, fine: -1 };
     for (const l of this.levels) {
       l.valid = false;
       l.building = false;
@@ -308,6 +353,7 @@ export class GroundClipmap {
     const day = sunDirY > (on ? DETAIL_SUN_OFF : DETAIL_SUN_ON);
     this.detailOn = this.detailEnabled && allowed && (low || wingView) && rate <= DETAIL_MAX_RATE && day;
     this.rate = rate;
+    this.sunY = sunDirY;
   }
 
   /** 第 i 级以 (cx, cz) 为中心时要不要高清细节 */
@@ -324,6 +370,9 @@ export class GroundClipmap {
       detailOn: this.detailOn,
       levels: this.levels.slice(0, DETAIL_LEVELS).map((l) => ({ detail: l.detail, coverage: +l.detailCoverage.toFixed(3) })),
       fine: this.levels.map((l) => l.fine),
+      res: RES,
+      warm: this.warm,
+      warmup: { ...this.warmMs },
       worker: { ...workerStats },
       hosts: imageryStats(),
     };
@@ -337,8 +386,9 @@ export class GroundClipmap {
     this.drainUploads();
     // 粗的级别先建，远景先出来
     // G06：流速 ≤ 2× 时影像按 2048² 选缩放级（fine）；加速时按 1024 选、请求量不涨。已经是 fine 的一版在加速时照常用（不为变粗重建），
-    // 流速降回来以后还不是 fine 的级别重建一次
-    const fine = this.rate <= FINE_MAX_RATE;
+    // 流速降回来以后还不是 fine 的级别重建一次。G07：首载时也先按 1024 出一版（见 warm）
+    this.updateWarm();
+    const fine = RES <= TILE_RES_COARSE || (this.warm && this.rate <= FINE_MAX_RATE);
     for (let i = GROUND_LEVELS - 1; i >= this.minLevel; i--) {
       const l = this.levels[i];
       if (l.building) continue;
@@ -346,8 +396,30 @@ export class GroundClipmap {
       const cx = Math.round(x / snap) * snap;
       const cz = Math.round(z / snap) * snap;
       const detail = this.wantDetail(i, cx, cz);
-      if (cx === l.cx && cz === l.cz && detail === l.detail && (l.fine || !fine)) continue;
+      if (!l.stale && cx === l.cx && cz === l.cz && detail === l.detail && (l.fine || !fine)) continue;
+      l.stale = false;
       void this.build(i, cx, cz, detail, fine);
+    }
+  }
+
+  /** 首载粗版全部就位（最细可用级以上都 valid）→ 放开 fine；再记一下全部升级完的时刻。
+   * 不等「没有在建的」：低空日本时最细两级会因高清细节没取齐（DETAIL_WAIT_MS）反复重建，等它会把升级拖后十几秒 */
+  private updateWarm() {
+    const settled = () => {
+      for (let i = this.minLevel; i < GROUND_LEVELS; i++) if (!this.levels[i].valid) return false;
+      return true;
+    };
+    // 夜里（太阳低于 +6°，路灯 / 城市灯点看得见）不走先粗后细：灯点（着色器按影像颜色判建成区）和路灯（Worker 按影像算聚落地毯）
+    // 都随影像的锐度非线性地变，粗版升级成细版时整片灯光换一版（同页实测 night-city 平均差 1.25、p99 23，hnd-cts 夜景 1.9 / 45；
+    // 白天同样的升级只有 0.03–0.12 / 0.7–2.7）。夜里直接按细级建（G06 的行为），宁可慢，不让灯光在眼前换一版
+    if (!this.warm && this.sunY < DETAIL_SUN_ON) this.warm = true;
+    if (this.warmMs.fine >= 0 || !settled()) return;
+    if (this.warmMs.coarse < 0) this.warmMs.coarse = performance.now() - this.warmStart;
+    this.warm = true;
+    if (this.rate <= FINE_MAX_RATE) {
+      let allFine = true;
+      for (let i = this.minLevel; i < GROUND_LEVELS; i++) allFine &&= this.levels[i].fine;
+      if (allFine) this.warmMs.fine = performance.now() - this.warmStart;
     }
   }
 
@@ -476,13 +548,15 @@ export class GroundClipmap {
         if (detailDone) detailPx.px?.close();
         return;
       }
-      const { water, albedo, detailCoverage } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailDone ? detailPx.px : null);
+      // G07：直传路径可用时让 Worker 顺带算这一层的 mip 链（没接 GL 时 three 按层上传、整组 generateMipmap，算了也用不上）
+      vec.job.mips = this.gl !== null && !this.gpuMips;
+      const { water, albedo, detailCoverage, albedoMips, waterMips } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailDone ? detailPx.px : null);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
       this.queueUpload(
         [
-          { tex: this.albedo, layer: i, data: albedo, layerSize: RES * RES * 4 },
-          { tex: this.water, layer: i, data: water, layerSize: RES * RES * 4 },
+          { tex: this.albedo, layer: i, data: albedo, layerSize: RES * RES * 4, mips: albedoMips },
+          { tex: this.water, layer: i, data: water, layerSize: RES * RES * 4, mips: waterMips },
           { tex: this.height, layer: i, data: height.data, layerSize: HRES * HRES },
         ],
         () => {
@@ -522,12 +596,19 @@ export class GroundClipmap {
    * 分块直传（G06）：2048² 一层 16 MB，交给 three 按层上传是一次 texSubImage3D，实测主线程上 8–15 ms
    * （1024² 的 4 MB 只要 0.5 ms——Chrome 的命令缓冲传输区放不下 16 MB，要走一次同步的大块共享内存，推测），
    * 巡航时每 7 s 左右就有一帧 30–47 ms。拆成每块 UPLOAD_ROWS 行（4 MB）直接调 GL，几块合计约 2 ms。
-   * 需要 WebGL 上下文（attachGl，main.ts 接入）和 three 分配好的纹理对象（three 第一次上传后的 onUpdate 里从绑定点取）；
-   * 两样都没有时退回 three 按层上传。为了不弄乱 three 的状态缓存：用完恢复当前纹理单元的绑定和 pixelStorei。
+   * G07：mip 链由 Worker 按层算好（mips.ts），这里按级 texSubImage3D，不再调 generateMipmap——后者作用于整个数组
+   * （7 层 × 12 级全部重算，6 层白做），G06 的 1× 巡航偶发 > 16.7 ms 帧就在这里（GPU 侧）。
+   * 需要 WebGL 上下文和 three 分配好的纹理对象：attachGl（main.ts 接入）里 renderer.initTexture 立即让 three 分配
+   * （texStorage3D 按 log2(RES)+1 级，并对全 0 的初始内容做唯一一次 generateMipmap），onUpdate 里从绑定点取句柄；
+   * 没接上时退回 three 按层上传（LayerStage，第 0 级 + three 整组 generateMipmap，功能正确，代价同 G06）。
+   * 为了不弄乱 three 的状态缓存：用完恢复当前纹理单元的绑定和 pixelStorei。
    */
   private gl: WebGL2RenderingContext | null = null;
   private readonly glTex = new Map<THREE.DataArrayTexture, WebGLTexture>();
-  attachGl(gl: WebGL2RenderingContext) {
+  /** 调试开关：true = G06 的做法（只传第 0 级、整个数组 generateMipmap），同页 A/B 对照用（`__voyage.ground.gpuMips = true` 后 `rebuildAll()`） */
+  gpuMips = false;
+  attachGl(renderer: THREE.WebGLRenderer) {
+    const gl = renderer.getContext() as WebGL2RenderingContext;
     this.gl = gl;
     for (const t of [this.albedo, this.water]) {
       t.onUpdate = () => {
@@ -536,12 +617,12 @@ export class GroundClipmap {
           if (h) this.glTex.set(t, h);
         }
       };
+      // 立即分配（不等第一次渲染用到它）：首载的几层常在窗外程序编译完之前就建好，那时还没有纹理对象、只能退回 three 整组生成 mip
+      renderer.initTexture(t);
     }
   }
-  private uploadDirect(tex: THREE.DataArrayTexture, layer: number, px: Uint8ClampedArray) {
-    const gl = this.gl;
-    const h = this.glTex.get(tex);
-    if (!gl || !h || gl.isContextLost()) return false;
+  /** 直传要的 GL 状态：换成我们要的、返回恢复函数（three 缓存了绑定和 pixelStorei，用完原样恢复，它的缓存就不乱） */
+  private glBegin(gl: WebGL2RenderingContext) {
     const prev = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY) as WebGLTexture | null;
     const flip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL) as boolean;
     const prem = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL) as boolean;
@@ -551,21 +632,46 @@ export class GroundClipmap {
     if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    return () => {
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, prev);
+      if (flip) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, align);
+      if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, rowLen);
+    };
+  }
+
+  private uploadDirect(tex: THREE.DataArrayTexture, layer: number, px: Uint8ClampedArray, mips: Uint8Array | null | undefined) {
+    const gl = this.gl;
+    const h = this.glTex.get(tex);
+    if (!gl || !h || gl.isContextLost()) return false;
+    const end = this.glBegin(gl);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, h);
     const u8 = new Uint8Array(px.buffer, px.byteOffset, px.byteLength);
-    for (let y = 0; y < RES; y += UPLOAD_ROWS) {
-      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, y, layer, RES, UPLOAD_ROWS, 1, gl.RGBA, gl.UNSIGNED_BYTE, u8, y * RES * 4);
+    const rows = Math.min(UPLOAD_ROWS, RES);
+    for (let y = 0; y < RES; y += rows) {
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, y, layer, RES, rows, 1, gl.RGBA, gl.UNSIGNED_BYTE, u8, y * RES * 4);
     }
-    gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
-    gl.bindTexture(gl.TEXTURE_2D_ARRAY, prev);
-    if (flip) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-    if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, align);
-    if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, rowLen);
+    if (mips && !this.gpuMips) {
+      // 第 1 级（2048 档是 1024² = 4 MB）起逐级传这一层
+      let off = 0;
+      for (let lv = 1, w = RES >> 1; lv < MIP_LEVELS; lv++, w >>= 1) {
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, lv, 0, 0, layer, w, w, 1, gl.RGBA, gl.UNSIGNED_BYTE, mips, off);
+        off += w * w * 4;
+      }
+    } else {
+      gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+    }
+    end();
     return true;
   }
 
-  private upload(tex: THREE.DataArrayTexture, layer: number, data: ArrayLike<number>, layerSize: number) {
+  /** 调试 / 对照：所有级别按当前设置原地重建一遍（位置不变；`gpuMips` 切换后同页 A/B 用） */
+  rebuildAll() {
+    for (const l of this.levels) l.stale = true;
+  }
+
+  private upload(tex: THREE.DataArrayTexture, layer: number, data: ArrayLike<number>, layerSize: number, mips?: Uint8Array | null) {
     if (tex === this.height) {
       this.heightCpu.set(data, layer * layerSize);
       if (!this.floatHeight) {
@@ -576,7 +682,7 @@ export class GroundClipmap {
     } else {
       const px = data as Uint8ClampedArray;
       if (tex === this.water) this.sampleNight(layer, px);
-      if (this.uploadDirect(tex, layer, px)) return;
+      if (this.uploadDirect(tex, layer, px, mips)) return;
       // G06：不拷进常驻数组，直接把这一层交给 three 上传（LayerStage），传完这份像素就没人引用了
       (tex.image.data as unknown as LayerStage).stage(layer, px);
     }
@@ -589,13 +695,101 @@ export class GroundClipmap {
     this.uploadQueue.push({ jobs, after });
   }
 
+  /**
+   * G07：暂存上传。PERF-8 起一批的三张纹理分三帧传、最后一帧才换中心 uniform——中间一两帧是「新影像 + 旧中心」，
+   * 整级影像错开 1/8 边长（第 4 级就是 16 km），每次重建闪一下（handoff/G07-recenter.mjs 实测 master 上 2 帧的尖峰）。
+   * 同一帧里直传三张（原子）又会把 2 × 21 MB 的 texSubImage3D 堆进一帧。所以先按帧把像素分块写进一个像素解包缓冲
+   * （PIXEL_UNPACK_BUFFER，每帧最多 STAGE_BYTES），全部写完后在同一帧里从缓冲拷进纹理（主线程只发命令）、
+   * 传高度、换中心。关掉（`stagedUpload = false`）退回 PERF-8 的每帧一张（对照用）。
+   */
+  stagedUpload = true;
+  private pbo: WebGLBuffer | null = null;
+  private pboBytes = 0;
+
+  private makePlan(batch: UploadBatch): StagePlan | null {
+    const gl = this.gl!;
+    const pieces: StagePlan["pieces"] = [];
+    const slots: StagePlan["slots"] = [];
+    let off = 0;
+    const push = (src: Uint8Array) => {
+      for (let o = 0; o < src.byteLength; o += STAGE_BYTES) pieces.push({ src: src.subarray(o, Math.min(o + STAGE_BYTES, src.byteLength)), dst: off + o });
+      off += src.byteLength;
+    };
+    for (const job of batch.jobs) {
+      if (job.tex === this.height) continue;
+      const px = job.data as Uint8ClampedArray;
+      const l0 = off;
+      push(new Uint8Array(px.buffer, px.byteOffset, px.byteLength));
+      let mips = -1;
+      if (job.mips && !this.gpuMips) {
+        mips = off;
+        push(job.mips);
+      }
+      slots.push({ job, l0, mips });
+    }
+    if (off > this.pboBytes) {
+      if (!this.pbo) this.pbo = gl.createBuffer();
+      if (!this.pbo) return null;
+      gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, this.pbo);
+      gl.bufferData(gl.PIXEL_UNPACK_BUFFER, off, gl.STREAM_DRAW);
+      gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+      this.pboBytes = off;
+    }
+    return { pieces, next: 0, slots };
+  }
+
+  /** 暂存上传的一步：没写完就再写一块；写完就在这一帧里拷进影像 / 水体（第 0 级 + mip）、传高度、换中心。返回 false = 暂存路径不可用 */
+  private drainStaged(batch: UploadBatch) {
+    const gl = this.gl;
+    if (!gl || gl.isContextLost() || !this.glTex.has(this.albedo) || !this.glTex.has(this.water)) return false;
+    const plan = (batch.plan ??= this.makePlan(batch) ?? undefined);
+    if (!plan) return false;
+    if (plan.next < plan.pieces.length) {
+      gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, this.pbo);
+      let bytes = 0;
+      while (plan.next < plan.pieces.length && bytes < STAGE_BYTES) {
+        const p = plan.pieces[plan.next++];
+        gl.bufferSubData(gl.PIXEL_UNPACK_BUFFER, p.dst, p.src);
+        bytes += p.src.byteLength;
+      }
+      gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+      return true;
+    }
+    const end = this.glBegin(gl);
+    gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, this.pbo);
+    for (const { job, l0, mips } of plan.slots) {
+      if (job.tex === this.water) this.sampleNight(job.layer, job.data as Uint8ClampedArray);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.glTex.get(job.tex)!);
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, job.layer, RES, RES, 1, gl.RGBA, gl.UNSIGNED_BYTE, l0);
+      if (mips >= 0) {
+        let off = mips;
+        for (let lv = 1, w = RES >> 1; lv < MIP_LEVELS; lv++, w >>= 1) {
+          gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, lv, 0, 0, job.layer, w, w, 1, gl.RGBA, gl.UNSIGNED_BYTE, off);
+          off += w * w * 4;
+        }
+      } else {
+        gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+      }
+    }
+    gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+    end();
+    // 高度（256² 浮点，0.25 MB）照旧交给 three：它在这一帧的渲染里上传，和上面的拷贝、after 里换中心同一帧生效
+    for (const job of batch.jobs) if (job.tex === this.height) this.upload(job.tex, job.layer, job.data, job.layerSize);
+    batch.jobs.length = 0;
+    this.uploadQueue.shift();
+    batch.after();
+    return true;
+  }
+
   /** PERF-8：每帧最多真正上传一张纹理（一层），把一次重建的 3 次 texSubImage3D 摊到几帧；
-   * 队首批次的 3 张都传完才触发它的 after（把这一级标记为 valid），见类头注释 */
+   * 队首批次的 3 张都传完才触发它的 after（把这一级标记为 valid），见类头注释。
+   * G07：默认走 drainStaged（按帧写暂存缓冲、最后一帧原子换上），这里只是它不可用时（没接 GL）的退路 */
   private drainUploads() {
     const batch = this.uploadQueue[0];
     if (!batch) return;
+    if (this.stagedUpload && this.drainStaged(batch)) return;
     const job = batch.jobs.shift();
-    if (job) this.upload(job.tex, job.layer, job.data, job.layerSize);
+    if (job) this.upload(job.tex, job.layer, job.data, job.layerSize, job.mips);
     if (batch.jobs.length === 0) {
       this.uploadQueue.shift();
       batch.after();
@@ -827,7 +1021,8 @@ function buildGroundLevelAsync(
         workerStats.lastMs = e.data.ms;
         const req = roadPending.get(e.data.id);
         roadPending.delete(e.data.id);
-        req?.resolve({ water: e.data.water, albedo: e.data.albedo, detailCoverage: e.data.detailCoverage });
+        const d = e.data;
+        req?.resolve({ water: d.water, albedo: d.albedo, detailCoverage: d.detailCoverage, albedoMips: d.albedoMips, waterMips: d.waterMips });
       };
       roadWorker.onerror = (e) => {
         console.warn("地面栅格化 Worker 出错，改在主线程计算", e.message);
