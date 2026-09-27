@@ -40,7 +40,8 @@ function srcOf(orig, vn) {
   const p = VARIANTS[vn.split("@")[0]];
   if (p === undefined) throw new Error("没有变体 " + vn);
   let s = orig;
-  for (const [find, rep] of p) {
+  for (const [find, rep, optional] of p) {
+    if (!s.includes(find) && optional) continue;
     if (!s.includes(find)) throw new Error(`变体 ${vn} 找不到片段 ${find.slice(0, 60)}`);
     s = s.split(find).join(rep);
   }

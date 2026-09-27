@@ -49,7 +49,12 @@ const bis = (nb, firstK, tmax = 60) => [
   ["      wasEmpty = true;\n", "      wasEmpty = true;\n      tPrevS = tS;\n"],
 ];
 
+// 交付版（src 已含二分 + 4.5）上的「改动前」：二分永不触发、倍率回 3.5，输出与 master 逐位等价（天气程序里没有二分，只回倍率）
+const OLD = [["(bis > 0 || (dens > 0.002 && wasEmpty && t < 60.0))", "(bis > 0)", true], ["return min(d * mix(4.5, 1.5, cir), 1.0) * uCloudDensity;", RET]];
+
 export const VARIANTS = {
+  old: OLD, old2: OLD, new: [], new2: [],
+  newK35: [["return min(d * mix(4.5, 1.5, cir), 1.0) * uCloudDensity;", RET]],
   base: [],
   base2: [],
   diag: diag(null),
