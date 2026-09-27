@@ -321,7 +321,7 @@ float fcFoot(vec2 v, vec2 aL, float fs, float fl) {
 }
 // 雾下的地面：街区的颗粒（一次纹理，按像素足迹选 mip，远处自然平均）+ 几条蜿蜒的高架干道，车流沿线流动
 // （亮度按足迹带限：远处平均成匀速流动的光带）。不画规则的街网——60 km 外斜看，棋盘格读成一张发光的地图
-vec3 fcGround(vec2 g, float fs, float fl, vec2 aL) {
+vec3 fcGround(vec2 g, float fs, float fl, vec2 aL, float tg) {
   vec4 n = fcCarpetN(g, 0.5);
   vec4 cp = fcCarpet(g, n, 0.0);
   if (cp.a <= 0.0) return vec3(0.0);
@@ -330,37 +330,49 @@ vec3 fcGround(vec2 g, float fs, float fl, vec2 aL) {
   float lod = clamp(log2(sqrt(fs * fl) / 0.055), 0.0, 6.0);
   float grain = textureLod(uShapeNoise, vec3(g / 7.0 + uWonderParams.z * 9.1, 0.13), lod).g;
   float base = 0.55 + 0.9 * smoothstep(0.3, 0.8, grain);
-  // 干道：三族平行的蜿蜒线，间距 6–9 km，线宽 80 m
+  // 车流光痕（协调者返工）：被雾吃掉，只在雾的疏处（与 fcMedium 的 holes 同一个通道 A）、城区里面露出来；
+  // 一段 1.4 km 左右、按段随机亮一半、两端软收，线形略弯，横向用 120 m 的软核（能量不变，只是边缘软）；
+  // 离得越远越淡（90 km 外基本没有），不画贯穿画面的长直线
+  float thin = 1.0 - smoothstep(0.3, 0.5, n.a);
+  float far = 1.0 - smoothstep(60.0, 95.0, tg);
+  float gate = thin * thin * smoothstep(0.35, 0.8, fcMask(g)) * far;
   float hw = 0.0;
-  for (int k = 0; k < 3 + min(uStormCount, 0); k++) {
-    float fk = float(k);
-    float a = 0.4 + 1.9 * fk + uWonderParams.z * 3.0;
-    vec2 nd = vec2(cos(a), sin(a));
-    vec2 td = vec2(-nd.y, nd.x);
-    float along = dot(g, td);
-    float sp = 6.0 + 1.5 * fk;
-    float u = dot(g, nd) + 0.9 * sin(along / 9.0 + fk * 2.1) + 0.25 * sin(along / 3.7 + fk);
-    float F = fcFoot(nd, aL, fs, fl);
-    float cov = fcLines(u, sp, F, 0.08);
-    // 不是每条干道每一段都亮（按段落 hash 断续）；车流：沿线的虚线图样随时间平移（约 70 km/h），足迹比周期长时振幅淡出
-    float seg = smoothstep(0.25, 0.45, fcHash(vec2(floor(u / sp + 0.5) + fk * 17.0, floor(along / 3.0))));
-    float fA = fcFoot(td, aL, fs, fl);
-    const float LAM = 0.35;
-    float flow = 1.0 + 0.85 * exp(-4.0 * (fA / LAM) * (fA / LAM)) * cos(6.2832 * (along - (fk == 1.0 ? -0.02 : 0.02) * t) / LAM);
-    hw += cov * seg * flow;
+  if (gate > 0.0) {
+    for (int k = 0; k < 3 + min(uStormCount, 0); k++) {
+      float fk = float(k);
+      float a = 0.4 + 1.9 * fk + uWonderParams.z * 3.0;
+      vec2 nd = vec2(cos(a), sin(a));
+      vec2 td = vec2(-nd.y, nd.x);
+      float along = dot(g, td);
+      float sp = 4.0 + 1.3 * fk;
+      float u = dot(g, nd) + 0.9 * sin(along / 9.0 + fk * 2.1) + 0.3 * sin(along / 1.9 + fk * 3.3);
+      float F = fcFoot(nd, aL, fs, fl);
+      float cov = fcLines(u, sp, max(F, 0.12), 0.06);
+      // 分段：每段约 1.4 km，一半亮，两端 0.3 段长软收；足迹比段长大时退回平均值（不闪）
+      const float SEGL = 1.4;
+      float sx = along / SEGL + fcHash(vec2(floor(u / sp + 0.5), fk)) * 7.0;
+      float si = floor(sx), sf = fract(sx);
+      float on = step(0.5, fcHash(vec2(si + fk * 31.0, floor(u / sp + 0.5))));
+      float fA = fcFoot(td, aL, fs, fl);
+      float segOn = mix(on * smoothstep(0.0, 0.3, sf) * smoothstep(1.0, 0.7, sf), 0.35, smoothstep(0.2, 0.6, fA / SEGL));
+      const float LAM = 0.35;
+      float flow = 1.0 + 0.85 * exp(-4.0 * (fA / LAM) * (fA / LAM)) * cos(6.2832 * (along - (fk == 1.0 ? -0.02 : 0.02) * t) / LAM);
+      hw += cov * segOn * flow;
+    }
   }
+  hw *= gate;
   return cp.rgb * (0.6 * base + 4.0 * hw);
 }
 // 光束 i：光源（城市坐标）与方向（缓慢扫动）
 void fcBeam(int i, out vec3 a, out vec3 b) {
   float fi = float(i);
   float t = uWonderParams.y;
-  a = i == 0 ? vec3(FC_P1.x + 2.9, 0.05, FC_P1.y - 1.2) : i == 1 ? vec3(FC_P2.x - 2.5, 0.05, FC_P2.y + 1.6) : vec3(-10.0, 0.05, 7.5);
+  a = i == 0 ? vec3(FC_P1.x, FC_P1.w * 0.95, FC_P1.y) : i == 1 ? vec3(FC_P2.x, FC_P2.w * 0.95, FC_P2.y) : vec3(-10.0, 0.05, 7.5);
   // 周期 60 / 90 / 120 s（整除 3600，时间回绕时不跳）
   float P = 60.0 + 30.0 * fi;
   float ph = fract(fi * 0.37 + uWonderParams.z * 7.0);
   float az = 6.2832 * ph + 0.9 * sin(6.2832 * (t / P + ph));
-  float tilt = 0.32 + 0.12 * sin(6.2832 * (t / (2.0 * P) + 0.3 * fi));
+  float tilt = 0.72 + 0.12 * sin(6.2832 * (t / (2.0 * P) + 0.3 * fi));
   b = vec3(sin(tilt) * cos(az), cos(tilt), sin(tilt) * sin(az));
 }
 // 点光：离视线最近处的高斯斑，半径按像素足迹展宽、总能量不变（远处变暗成一个像素的小点，不闪）
@@ -398,7 +410,7 @@ void fcRay(vec3 o, vec3 d, vec2 seg, float pixAng, out vec4 e0, out vec4 e1, out
       float fs = tg * pixAng;
       float fl = fs / max(-cd.y, 0.03);
       vec2 aL = normalize(cd.xz + vec2(1e-6));
-      e0 = vec4(fcGround(g, fs, fl, aL), tg);
+      e0 = vec4(fcGround(g, fs, fl, aL, tg), tg);
     }
   }
   // 2. 光穹：城市上空 0.6–4.5 km 的霾被灯海从下面照亮（光污染），沿视线取 3 个点。事件放在这段的前部，
@@ -435,20 +447,22 @@ void fcRay(vec3 o, vec3 d, vec2 seg, float pixAng, out vec4 e0, out vec4 e1, out
     if (sc < 0.0 || tc < seg.x || tc > seg.y) continue;
     vec3 p = a + b * sc;
     vec3 dv = co + cd * tc - p;
-    float R = 0.035 + 0.006 * sc;
-    float fp = 0.6 * tc * pixAng;
+    float R = 0.05 + 0.021 * sc;   // 锥形：半角约 1.2°
+    float fp = 1.5 * tc * pixAng;
     float Re = sqrt(R * R + fp * fp);
-    float sinA = max(sqrt(den), 0.12);
+    float sinA = max(sqrt(den), 0.4);
     float fogS = fcFogApprox(p);
     // 雾顶以上是城市的霾（消光约 0.07 /km，往上变稀），光束在霾里淡、在雾里亮
     float sig = fogS + 0.07 * exp(-p.y / 2.5) * smoothstep(48.0, 30.0, length(p.xz));
     // 相函数：雾滴前向散射强，横看时取一半各向同性
     float ct = dot(b, -cd);
-    float ph = 0.5 / (4.0 * M_PI) + 0.5 * fcHg(ct, 0.6);
+    float ph = 0.6 / (4.0 * M_PI) + 0.4 * fcHg(ct, 0.3);
     float tauB = 0.35 * 1.3 * 1.6 * (1.0 - exp(-min(p.y, 1.7) / 1.6)) * fcMask(p.xz);
-    float fade = smoothstep(6.8, 2.5, p.y);
+    // 水平方向上朝相机这一侧打的光束，在画面上是从塔往下的一根亮线（近处的点在画面更低处）：扫到这一侧时渐隐
+    float toCam = dot(normalize(b.xz + vec2(1e-6)), -normalize(cd.xz + vec2(1e-6)));
+    float fade = smoothstep(6.8, 2.5, p.y) * smoothstep(0.0, 0.4, sc) * (1.0 - smoothstep(0.35, 0.75, ct)) * (1.0 - smoothstep(0.0, 0.45, toCam));
     float Lb = (4.0 * FC_LG) * sig * ph * exp(-dot(dv, dv) / (Re * Re)) / (1.7725 * Re * sinA) * exp(-tauB) * fade;
-    vec3 cb = vec3(0.85, 0.93, 1.0) * Lb;
+    vec3 cb = vec3(0.92, 0.9, 0.84) * Lb;
     bsum += cb;
     bT += fcLum(cb) * tc;
     bL += fcLum(cb);
