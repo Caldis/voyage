@@ -226,11 +226,13 @@ vec2 seatSeams(vec3 q, float fr, float wz, float pix, float coverZone, out vec3 
   float xs = upper ? SEAT_HW - 0.03 : 0.11;
   float vOn = upper ? 1.0 : step(0.45, fr);
   vec4 v = leatherSeam(abs(wz) - xs, q.y, pix, upper ? 1.0 : 0.0) * vOn;
-  // 护翼的分片缝：头枕正面、离两侧 10 cm，双明线
-  vec4 vw = leatherSeam(abs(wz) - (SEAT_HW - 0.10), q.y, pix, 0.0) * (upper ? step(0.45, fr) * coverZone : 0.0);
-  // 顶缝：顶面平的那块两侧（离截面中心 半厚 − 倒圆），双明线；只在头枕顶上约 4 cm 的范围
   vec3 sec = seatSection(q.y, wz);
   float xc = q.x - sec.x;
+  // 护翼的分片缝：头枕正面、离两侧 10 cm，双明线。T47：只走正面和正面的圆棱，到顶面前沿那道顶缝为止（T 字接进去）；
+  // 原来一直走过顶面的前半，和顶缝交叉成「十」字（美术总监 wave6 第 8 条）
+  float onFace = smoothstep(-0.002, 0.002, xc - (sec.y - sec.z) + 0.001);
+  vec4 vw = leatherSeam(abs(wz) - (SEAT_HW - 0.10), q.y, pix, 0.0) * (upper ? step(0.45, fr) * coverZone * onFace : 0.0);
+  // 顶缝：顶面平的那块两侧（离截面中心 半厚 − 倒圆），双明线；只在头枕顶上约 4 cm 的范围
   vec4 c = leatherSeam(abs(xc) - (sec.y - sec.z), q.z, pix, 0.0) * smoothstep(SEAT_TOP - 0.05, SEAT_TOP - 0.035, q.y) * coverZone;
   vec3 up = seatDirToCabin(vec3(0.0, 1.0, 0.0));
   vec3 fwd = seatDirToCabin(vec3(1.0, 0.0, 0.0)) * (xc < 0.0 ? -1.0 : 1.0);
@@ -375,7 +377,7 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
     metal = 1.0 - smoothstep(0.007 - pix * 0.5, 0.007 + pix * 0.5, d2);
     float wb = abs(d2 - 0.03);
     wood = (1.0 - smoothstep(0.014 - pix * 0.5, 0.014 + pix * 0.5, wb)) * inner;
-    woodUV = vec2(u, d2 * 1.8);                        // 纹理顺着轮廓走；离得近，年轮收细一些，不成粗条纹
+    woodUV = vec2(u, d2);                              // 纹理顺着轮廓走（弯木贴皮）
     woodSeed = seatId * 5.0 + 9.0;
     metal = max(metal, lineCov(abs(wb - 0.0145), 0.0005, pix) * inner);
   } else if (shell > 0.5) {
@@ -419,6 +421,11 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
   }
 #endif
 
+  // T47：轮廓最后一两个像素里 n·v 从 0.3 掉到 0，窗光 / 阳光的掠射高光（1/(4·n·v)）和菲涅尔都在这里陡升，
+  // 每个像素取到的是陡坡上的一个点——头枕轮廓一圈比背景和皮面都亮、逐像素跳的 1 px 白色虚线（美术总监 wave6 第 6 条）。
+  // 着色法线往视线方向掰到 n·v ≥ 0.3：相当于按像素足迹里的平均朝向着色（同机翼边缘的做法），轮廓内侧的明暗不变
+  float ndv = dot(nn, v);
+  if (ndv < 0.3) nn = normalize(nn + v * (0.3 - ndv));
   float ao = seatAO(p, n);
   float nv = max(dot(nn, v), 1e-3);
   float sunVis = sunThroughWindow(p, cl.sunC, shadeBottom) * step(0.0, cl.sunC.z);
@@ -452,7 +459,10 @@ vec3 shadeSeat(vec3 ro, vec3 rd, SeatHit sh, float pixAng, CabinLights cl, float
   col += cabinMoodSpec(p, nn, v, max(a2, 0.08), 0.04, cl.moodI) * ao;
   // 胡桃木是开放漆面：掠射时漆膜的反射按菲涅尔涨得很快，会把木色冲成灰白（「看前方」时整条饰条发白）。
   // 真实的开放漆面有导管纹打散的微观起伏，掠射反射远弱于镜面清漆，这里在木饰条上把环境反射压掉一半多（T25）
-  float F = fresnelRough(nv, 0.04, rough) * (1.0 - 0.6 * wood);
+  // T47：轮廓上的菲涅尔按 n·v ≥ 0.3 算（同机翼边缘的做法）。n·v 在轮廓最后一两个像素里从 0.2 掉到 0，
+  // 菲涅尔跟着陡升，舱内环境被整片反进来，头枕轮廓外一圈比背景和皮面都亮的 1 px 白色虚线（美术总监 wave6 第 6 条）。
+  // 粗糙的皮面（α ≈ 0.16）在像素足迹里本来就是一片微表面的平均，掠射端的菲涅尔远没有单一镜面那么陡
+  float F = fresnelRough(max(nv, 0.3), 0.04, rough) * (1.0 - 0.6 * wood);
   // 光滑的面（漆面、木饰、屏幕玻璃）能照出窗户；皮面太粗，只取舱内环境
   float mirror = 1.0 - smoothstep(0.15, 0.35, rough);
   vec3 envR = cabinEnv(r, cl);

@@ -264,7 +264,12 @@ void main() {
     vec4 chroma = texture(uAdapted, vec2(0.75, 0.5));  // log2(R/G)、log2(B/G)：舱内 xy、窗外 zw（T28）
     ExpModel em = exposureModel(adapted);
     float eO = em.eO, eC = em.eC, aC = em.aC, o = adapted.x, dom = em.dom;
-    logExposure = mix(eC, eO, src.a);
+    // T47：交界像素（遮罩 0 < a < 1，窗板开口边、座椅 / 头枕压在窗前的轮廓）按「曝光的倒数」线性混合，不在 log 域混合。
+    // HDR 里这个像素 = a·窗外 + (1 − a)·舱内，窗外绝对亮度高、曝光低；log 域混合给出两者的几何平均曝光，
+    // 窗外那一份被多乘了 √(E舱内 / E窗外) 倍，显示出来比窗外本身还亮——头枕轮廓外、窗板边上一圈 1 px、逐像素跳的白线
+    // （美术总监 wave6 第 6 条）。按倒数混合时，显示值 = 窗外显示值与舱内显示值的加权平均（权重 a / E窗外 : (1 − a) / E舱内），
+    // 永远落在两者之间，不会过冲；代价只是交界往窗外一侧偏了零点几个像素
+    logExposure = -log2(mix(exp2(-eC), exp2(-eO), src.a));
     logAdapt = mix(aC, em.aO, src.a);
     logAdaptO = em.aO;
     // ⑥ 色适应（T28，只作用于舱内）：适应白点 = 舱内光源色与窗外平均色的对数混合，

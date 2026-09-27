@@ -753,9 +753,13 @@ WingSurface wingTipSurface(vec3 P, float pix) {
   float livEdge = 0.3 + 0.15 * clamp(q.xi, 0.0, 1.0);
   float liv = smoothstep(livEdge - lw, livEdge + lw, q.sig / q.arcLen);
   // 航司色的底漆层按哑光处理（0.35），光泽交给清漆层：底漆也按 0.18 算镜面时，两层高光叠起来又亮又宽，像金属
-  WingSurface m = wingPaint(mix(WING_PAINT * 0.97, WING_LIVERY, liv), mix(0.18, 0.35, liv));
-  // 航司色涂装的清漆不是镜面：粗糙度 0.15（旧版和翼面一样 0.06，天空倒影清清楚楚，读起来像镀铬）
-  m.coatRough = mix(0.06, 0.15, liv);
+  WingSurface m = wingPaint(mix(WING_PAINT * 0.97, WING_LIVERY, liv), mix(0.18, 0.45, liv));
+  // 航司色涂装的清漆不是镜面：粗糙度 0.15（旧版和翼面一样 0.06，天空倒影清清楚楚，读起来像镀铬）。
+  // T47（美术总监 wave6 第 11 条：小翼仍是一条从白到深蓝的镜面渐变，像镀铬件）：小翼是复合材料蒙皮上的涂装，
+  // 外场飞了几年的面漆光泽远不如新清漆——清漆粗糙度 0.15 → 0.3（wingEnv 按粗糙度把天空倒影摊成大片的平均，
+  // 地平线那道亮带不再清清楚楚地映在上面），清漆层强度减半（掠射时菲涅尔把整片天空反进来的那一路），底漆 0.35 → 0.45
+  m.coatRough = mix(0.06, 0.3, liv);
+  m.coat *= mix(1.0, 0.5, liv);
   // 小翼和翼尖的对接缝
   m.albedo *= 1.0 - 0.5 * wingSeam(q.sig - 0.12, 0.006, pix);
   // 航司色的漆层里有细小的金属颗粒（金属漆），光泽更「深」

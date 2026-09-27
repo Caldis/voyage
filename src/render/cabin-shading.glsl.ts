@@ -256,7 +256,8 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
     vec3 we = vnoiseD(vec2(p.x * 60.0 + seed, p.y * 540.0));
     vec3 wa = vnoiseD(vec2(p.x * 470.0, p.y * 70.0 + seed * 1.7) + 13.1);
     slope += vec2(we.y * 60.0, we.z * 540.0) * 0.00006 * fWeft + vec2(wa.y * 470.0, wa.z * 70.0) * 0.00004 * fWarp;
-    albedo *= 1.0 + 0.035 * ((we.x - 0.5) * fWeft + 0.7 * (wa.x - 0.5) * fWarp);
+    // T47：0.035 → 0.05。正对侧壁（默认坐姿）时压纹的明暗只剩反照率这一路（洗墙光不掠射），原来高通后的起伏只有 0.3%，读成光面白板
+    albedo *= 1.0 + 0.05 * ((we.x - 0.5) * fWeft + 0.7 * (wa.x - 0.5) * fWarp);
   }
   // 淡出的压纹折算成粗糙度（Toksvig 思路）：远处 / 掠射时高光变宽变柔，不闪
   rough += 0.05 * (1.0 - 0.5 * (fWeft + fWarp));
@@ -275,10 +276,22 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
     vec2 pr = mat2(0.8, 0.6, -0.6, 0.8) * p.xy;
     vec3 nA = vnoiseD(pr * 420.0);
     vec3 nB = vnoiseD(pr * 1100.0 + 3.1);
-    slope = mat2(0.8, -0.6, 0.6, 0.8) * (nA.yz * 420.0 * 0.00002 * fA + nB.yz * 1100.0 * 0.000007 * fB);
+    // T47：原来是 slope = …，把上面 1b 的亚麻压纹整个覆盖掉了（fA > 0 时总是如此），正对侧壁时压纹的起伏一点不剩
+    slope += mat2(0.8, -0.6, 0.6, 0.8) * (nA.yz * 420.0 * 0.00002 * fA + nB.yz * 1100.0 * 0.000007 * fB);
     albedo *= 1.0 + 0.02 * (nA.x - 0.5) * fA;
   }
 #endif
+
+  // 1c. 大尺度的起伏（T47，美术总监 wave6 第 12 条：默认坐姿正对侧壁，画面 60% 是一片均匀的白，读成光面白板）。
+  //     模压 / 覆膜的大板并不是绝对平的：几厘米到几十厘米尺度上有零点几毫米的缓起伏（板面的「枕感」），
+  //     在上方灯带和窗光下是 1–2% 的明暗；饰面本身有很淡的大块色差。网格转一个角度的值噪声，每块板（seed）不同；
+  //     尺度远大于像素，不需要按足迹淡出
+  {
+    // 只用一级噪声（约 15 cm），少一次 vnoiseD
+    vec3 u1 = vnoiseD(mat2(0.8, 0.6, -0.6, 0.8) * p.xy * 6.7 + seed * 0.37 + 5.3);
+    slope += mat2(0.8, -0.6, 0.6, 0.8) * u1.yz * 6.7 * 0.0022;
+    albedo *= 1.0 + 0.02 * (u1.x - 0.5);
+  }
 
   // 2. 装饰边：窗罩的翻边压在侧壁上，宽约 1.8 cm、高约 2 mm，外沿是圆角——窗框的「厚度」主要靠它
   const float FL = 0.018;

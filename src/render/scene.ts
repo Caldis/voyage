@@ -125,7 +125,8 @@ void main() {
   // 乘上飞机到主光源之间云的透射率（T31）：穿云时舱壁上不再有硬边光斑；被云挡掉的直射光变成白色的漫射光
   vec3 eKey0 = keyLight(uCamR, upW);
   vec3 eKeyUp = eKey0 * uKeyCloud.x;
-  vec3 eSunNormal = eKeyUp * PANE_TRANSMITTANCE;
+  // T47：斜射时按多层窗板的菲涅尔透射再打折（paneSunT，cabin.glsl.ts）
+  vec3 eSunNormal = eKeyUp * PANE_TRANSMITTANCE * paneSunT(sunC.z);
   vec3 eSkyH = skyIrradiance(uCamR, upW) * uKeyCloud.z + eKey0 * max(uKeyDir.y, 0.0) * uKeyCloud.y;
   // 下半球：海面或云海把天空光和阳光反射上来。云海的反照率远高于海面
   vec3 eDown = eSkyH + eKeyUp * max(uKeyDir.y, 0.0);
@@ -186,7 +187,15 @@ void main() {
   float hitZ = 1.0; // 打到内衬的深度，没打到就是 1（比窗板还深）
   vec3 roL = ro - vec3(wOff, 0.0);
   float shadeBottom = mix(NB_SHADE, uShadeBottom, isMain);
-  if (dBezel < 0.01 && marchFunnel(roL, rd, hit)) {
+  bool rvHit = dBezel < 0.01 && marchFunnel(roL, rd, hit);
+  // T47：窗板开口边上抗锯齿的那一圈（inPane 在 0..1 之间、dPane 在 (−wP, 0)），视线其实穿进了开口、步进没打到内衬，
+  // 原来 reveal 退回成侧壁的颜色混进来：夜里开灯时侧壁亮、窗外黑，窗板边缘一圈带台阶的 1 px 白线（美术总监 wave6 第 6 条）。
+  // 这一圈改成取开口边上的内衬（密封条），着色仍只调用一次 shadeReveal
+  if (!rvHit && dBezel < 0.01 && dPane > -wP) {
+    hit = vec3(pPane.xy - wOff, PANE_DEPTH);
+    rvHit = true;
+  }
+  if (rvHit) {
     hitZ = hit.z;
     vec3 n = funnelNormal(hit);
     reveal = shadeReveal(hit, n, rd, length(hit - roL), pixAng, cl, mix(cl.lGlow, lWin, isMain), isMain, shadeBottom, seed);
@@ -205,6 +214,7 @@ void main() {
 
   // 邻窗遮光板下沿以下（窗洞最深处）：只有一点暗光
   vec3 view = reveal * 0.3;
+  float logExpOC = 0.0;        // log2(窗外曝光 / 舱内曝光)，给交界像素的覆盖率重映射用（T47，见文末）
   if (inBezel > 0.0 && isMain > 0.5) {
   // 机翼和翼尖灯不在这里画：由单独的机翼 pass（wing-pass.ts）读这张结果、按 alpha（窗外遮罩）合成上去。
   // 窗外（天空、云、地面、海面、交通、闪电，已乘窗板透射率）由窗外 pass 算好（outside-pass.ts），这里按像素读回。
@@ -273,6 +283,8 @@ void main() {
   // 倒影不能跟着被拉亮到比它的来源（舱壁、灯带）还亮，超出「舱内曝光 + 余量」的部分在这里扣掉
   vec4 expState = texelFetch(uExposureState, ivec2(0, 0), 0);
   float reflGain = fr * 1.5 * exp2(expState.w);
+  ExpModel em = exposureModel(expState);
+  logExpOC = em.eO - em.eC;
   // 倒影的色适应：舱内按 T28 部分适应了舱灯的暖色（D ≈ 0.7，舱壁看上去接近中性），倒影是同一批表面、同一个框架，
   // 也按同样程度抵掉主灯的色温；曝光 pass 分不开倒影和窗外（窗外不做舱内色适应），所以在这里预先乘上。
   // 睡眠档的淡紫氛围灯不抵（T28 本来就只适应它一小部分）
@@ -285,7 +297,6 @@ void main() {
     // T34 面状倒影的硬上限（exposure.ts ⑧）：显示亮度不超过同屏舱内均值的 k 倍（睡眠 / 全关 k 使显示 Y ≤ 舱壁一半）。
     // 软限幅（4 次范数），低于上限的部分几乎不变，所以倒影内部的明暗结构（灯带的亮线、行李架的边）还在；
     // 光点是灯本身，开灯档不进上限（睡眠档见下，T41）
-    ExpModel em = exposureModel(expState);
     float capL = exp2(em.reflCapLog);
     // 窗外亮的时候（黄昏开着灯，窗外显示亮度 Y 过 100 左右），倒影不超过背后窗外的 15%：
     // 这时窗外才是主角，倒影只该是一层淡淡的「玻璃感」（美术总监第三次检查的建议）
@@ -317,6 +328,18 @@ void main() {
   // HDR 目标是 32 位浮点时可以原样存下太阳的辐亮度（约 1.8e6 kcd/m²），眩光的能量才对。
   // alpha 存「这个像素有多少是窗外」，曝光时窗外和舱内分开适应
   float outsideMask = isMain * inBezel * inPane * (1.0 - shaded) * (1.0 - seat.cov);
+  // T47：交界像素（窗板开口边、座椅 / 遮光板压在窗前的轮廓）的覆盖率重映射。曝光 pass 按遮罩给每个像素一个曝光
+  // （exposure.ts：按曝光的倒数混合），窗外和舱内曝光差好几档，直接按几何覆盖率 m 混合的像素，显示出来窗外那份的权重是
+  // m/E窗外 : (1 − m)/E舱内，不再是 m——夜里开灯时窗板边一圈几乎全取舱内色，边缘成了台阶；原来 log 域混合时更糟，
+  // 窗外那份被放大，轮廓上一圈 1 px 的白线（美术总监 wave6 第 6 条）。这里把窗外 / 舱内两份按 a' = m·E窗外 / (m·E窗外 + (1 − m)·E舱内)
+  // 重新混合，并把 a' 写进遮罩：曝光之后窗外、舱内的显示值正好按几何覆盖率 m 混合（与曝光差无关的正确抗锯齿）。
+  // 能拆开是因为窗外画面在 col 里的系数恰好就是 outsideMask（上面各级 mix 的乘积）；曝光比取上一帧的适应状态
+  if (outsideMask > 0.0 && outsideMask < 1.0) {
+    float r = exp2(clamp(logExpOC, -30.0, 30.0));
+    float a2 = outsideMask * r / (outsideMask * r + 1.0 - outsideMask);
+    col = a2 * view + (col - outsideMask * view) * ((1.0 - a2) / (1.0 - outsideMask));
+    outsideMask = a2;
+  }
   col = min(col, vec3(uHdrMax));
   gl_FragColor = vec4(col, packWingRef(outsideMask, max(col - outsideMask * paneK * viewPre, vec3(0.0))));
 }
