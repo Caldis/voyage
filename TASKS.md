@@ -10,7 +10,6 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | T12 | 第 6 波（主干） | 5212 | worktree | Opus（卷云纤维化、逆光银边、云底絮状；云程序冷编译增量 ≤ 5%） | — | 进行中 |
 | T47 | 第 6 波（美术总监 wave6 第 6–12 条） | 5251 | worktree | Opus（窗板 1 px 白线锯齿、窗洞内衬死白、侧壁白板、头枕十字缝、胡桃木、小翼镀铬） | — | 进行中 |
-| PERF-9 | 第 6 波（主干） | 5249 | worktree | Sonnet（地面瓦片管线 60–105 ms CPU 尖峰：剖析定位后修） | — | 进行中 |
 | W03 | 第 6 波（主干，奇观首批 3） | 5203 | worktree | Opus（浮空古城，致敬《天空之城》，用 W00 云间层） | — | 进行中 |
 | T48 | 第 6 波（W02 发现） | 5248 | worktree | Opus（夜间发光体颜色被曝光洗白：暗视觉按像素亮度、AgX 高亮去饱和） | — | 进行中 |
 
@@ -70,6 +69,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | PERF-6/8 | FullscreenPass 关 autoClear（gl.clear 115→0/帧，零回归）；clipmap 上传每帧最多一张、同级传完才 valid（60× 航程上传帧超 8 ms 65%→13%） | 2026-09-27 | Sonnet 实现，协调者合并。发现更大的 CPU 尖峰 60–105 ms（getImageData / Worker 往返 / GC，texBytes=0）→ PERF-9。坑：逐像素回归要排除翼尖频闪相位与瓦片未加载完（用同代码两次截图的噪声底作基准） |
 | W02 | 雾海灯城（致敬《银翼杀手》）：云间层发光雾（灯海自下照亮、光穹）、阶梯金字塔 / 退台高塔剪影、烟囱喷火、斜上锥形探照光束、雾疏处断续车流；白天黄褐霾团 + 淡剪影；W00 接口加 mediumSeg / ray | 2026-09-27 | Opus 实现，协调者退回一次（雾面直线网格、朝相机的探照光束成竖白线）后合并。开销约 +0.38 ms，不在场零开销，云间层变体冷编译 +8–10%。**遗留** → T48（夜里颜色被曝光洗成奶白、辉光不照云底、放置不看地面夜光）；95 km 城心近截白 |
 | DX-08 | `__voyage.freeze`（连续两帧逐像素一致，含频闪相位）、shots `--freeze` / `--settle`、`scripts/probe.mjs`、`dev-browser flicker`、`scripts/passes.mjs`、shader-budget `--keep-hlsl` / `--baseline --rounds`、compare `--diff`、路径按仓库根解析 | 2026-09-27 | Sonnet 实现，协调者解 README 冲突后合并。坑：云步进 `frame++` 只受调用次数控制，冻结要跳过云渲染。**遗留**：passes 里 bloom 各 pass 未归类 |
+| PERF-9 | 地面瓦片 CPU 尖峰：CDP 剖析定位主线程水体 / 河道 Path2D + getImageData 与夜光逐像素变换，搬进 road-raster Worker（OffscreenCanvas）；60× 航程 >16 ms 帧 2.6%→1.0%，50–105 ms 尖峰 17→1 | 2026-09-27 | Sonnet 实现，协调者截图核验后合并。**遗留**：buildImagery / buildNight 的 getImageData 仍在主线程（依赖 ImageBitmap LRU）。DX 待办：`scripts/cpu-profile.mjs`（CDP 剖析 + 帧级尖峰归因）收进 scripts |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
