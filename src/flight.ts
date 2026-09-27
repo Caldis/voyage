@@ -69,6 +69,12 @@ export interface TurbulenceInput {
   cloudOffset: THREE.Vector2;
 }
 
+/** 外界气温（°C）：国际标准大气（ISA），对流层每千米降 6.5°C，11 km 以上的平流层底恒为 −56.5°C。
+ *  真实大气随纬度、季节偏差 ±10–15°C（热带更暖），这里只用来判断窗上挂不挂得住液态水，够用 */
+export function outsideAirTempC(altitudeKm: number): number {
+  return 15 - 6.5 * THREE.MathUtils.clamp(altitudeKm, 0, 11);
+}
+
 /** 颠簸与窗上的水：按云密度、附近雷暴算颠簸强度，再从颠簸算滚转和上下颤动；顺带更新窗板外侧湿度。
  *  返回值 bump 是这一帧头部要叠加的垂直抖动（米），调用方自己加到 head.y 上。 */
 export function updateTurbulence(state: VoyageState, input: TurbulenceInput): number {
@@ -79,8 +85,12 @@ export function updateTurbulence(state: VoyageState, input: TurbulenceInput): nu
     if (state.altitudeKm < s.top + 1) turbTarget = Math.max(turbTarget, 1 - THREE.MathUtils.smoothstep(dist, s.radius * 1.2, s.radius * 6));
   }
   state.turbulence += (turbTarget - state.turbulence) * (1 - Math.exp(-dt * 1.5));
-  // 在云里变湿（~3 秒湿透），出来后被气流吹干（~20 秒）
-  const wetRate = inCloud > 0.03 ? 0.35 : -0.05;
+  // 在云里变湿（~3 秒湿透），出来后被气流吹干（~20 秒）。
+  // T29：只有外面够暖才挂得住液态水。过冷水滴撞到窗上会冻住、或者被气流吹走，−15°C 以下不再变湿
+  // （−10 到 −15°C 之间逐渐减少）；已有的水按升华 / 吹干消退，比常温下快一点。巡航高度（ISA 约 −50°C）窗外是干的
+  const tC = outsideAirTempC(state.altitudeKm);
+  const liquid = THREE.MathUtils.smoothstep(tC, -15, -10);
+  const wetRate = inCloud > 0.03 && liquid > 0 ? 0.35 * liquid : tC < -15 ? -0.08 : -0.05;
   state.wetness = THREE.MathUtils.clamp(state.wetness + wetRate * dt, 0, 1);
   const tb = state.turbulence;
   const tt = now / 1000;

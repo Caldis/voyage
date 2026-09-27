@@ -77,11 +77,10 @@ void main() {
     // 窗框 / 座椅部分覆盖的像素按 m 加权，交界处不再漏出一条天空色细线。
     // 窗板效果里和窗外亮度成正比的部分（油污、水珠暗边与透镜化、透气孔）按 scene.ts 的公式重算
     vec2 q = pPane0.xy;
-    vec2 wetCov = waterOnPane(q, pixPane, -uSeatSign, uTime, uWetness);
-    float wc = clamp(wetCov.x + wetCov.y, 0.0, 1.0);
-    float edge = clamp(4.0 * wc * (1.0 - wc) + 0.6 * wetCov.x, 0.0, 1.0);
+    // 水的折射在这里不重做（机翼上的水珠只保留暗边），偏折留给 scene.ts 里的窗外部分
+    float wetRim = waterOnPane(q, pixPane, -uSeatSign, uTime, uWetness).w;
     float dHole = length(q - vec2(0.0, -0.145));
-    float k = (1.0 - 0.1 * smudges(q)) * (1.0 - 0.3 * edge) * (1.0 - 0.12 * wc)
+    float k = (1.0 - 0.1 * smudges(q)) * (1.0 - WATER_RIM * wetRim)
       * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
     vec3 w = wing.rgb * WING_PANE_T;
     col = uHdrMax < 1e10 ? mix(col, w * k, wing.a * m) : (1.0 - wing.a) * col + wing.a * (o + m * k * w);
