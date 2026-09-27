@@ -80,6 +80,11 @@ async (page) => {
     // DX-07：专看月光的满月场景。scs 22:30 本地，2026-04-01 月亮相位 99.7%（近满月）、高度 58°、方位 133.8°，
     // 几乎正对左座窗外方位（heading 225 − 90 = 135°），月亮应该稳稳地挂在窗正中
     { name: "night-sea-fullmoon", p: { preset: "scs", seat: "left", date: "2026-04-01", time: 1350, coverage: 0.15, "cabin-light": "off", "wing-pos": "-4" } },
+    // W01b：奇观（天幕层，js 召唤：放在窗口正对方向、直接显形；召唤前等两帧，让奇观系统拿到新的座位 / 航向）。
+    // 天梯：左座朝东、日落后约 20 分钟（太阳约 −6.5°），下段已入地影，上段与高处的中继站仍被阳光照亮，缆上红色障碍灯同步慢闪
+    { name: "wonder-tether-dusk", p: { preset: "wpac", seat: "left", date: "2026-09-27", time: 1078, coverage: 0.3, "cabin-light": false, "wing-pos": "-4" }, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"tether\", { forwardOffsetDeg: 0, distKm: 370, reveal: 1 }); return v.wonders.describe();" },
+    // 建木，白天（下午）：缠着树干旋上去的云气是白天最先被注意到的东西，九欘（弯枝）在窗里的高处
+    { name: "wonder-jianmu-day", p: { preset: "wpac", date: "2026-09-27", time: 900, coverage: 0.3, "wing-pos": "-4" }, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 380, reveal: 1 }); return v.wonders.describe();" },
   ];
 
   await page.goto(`${origin}/?regression=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
@@ -143,12 +148,20 @@ async (page) => {
           if (v.ground.pending < 5 && i > 5) break;
         }
       }
+      // 奇观（W01b）：每个场景都从「没有奇观」出发（要奇观的场景在 js 里召唤），免得上一个场景的奇观带到下一个
+      if (v.wonders) {
+        v.wonders.clear();
+        v.wonders.enabled = false;
+      }
       // 舱等（T25）：没编过的变体在后台编译，画面切过去之前不截图（最多等 120 s）
       const wantClass = sc.p["cabin-class"] ?? "business";
       for (let i = 0; i < 480 && v.cabinClass && v.cabinClass.shown !== wantClass; i++) await new Promise((r) => setTimeout(r, 250));
+      // js（T17，W01b 同步到这里）：一段脚本，参数 v = window.__voyage，在 snapAll 与截图等待之前执行（例如召唤奇观）
+      const jsOut = sc.js ? await new (async () => {}).constructor("v", sc.js)(v) : undefined;
       v.snapAll();
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
-      return document.getElementById("info").textContent;
+      const info = document.getElementById("info").textContent;
+      return jsOut === undefined ? info : `${info}\njs: ${typeof jsOut === "string" ? jsOut : JSON.stringify(jsOut)}`;
     }, sc);
     const path = `${outDir}/${sc.name}.png`;
     await page.screenshot({ path, timeout: 60000 });
