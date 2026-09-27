@@ -76,6 +76,20 @@ vec3 windowIrradiance(vec3 x, vec3 n, vec3 lWin) {
   return lWin * max(0.5 * sum, 0.0);
 }
 
+// 直射光斜着穿过多层窗板的透射率，相对正射时（正射的 0.85 已算进 PANE_TRANSMITTANCE）。T47：
+// 三层亚克力（n ≈ 1.49）共 6 个界面，每个界面按 s / p 两个偏振分别算菲涅尔透射，6 次方后取平均（忽略层间的多次反射）。
+// 60° 入射还剩约 83%，80° 约 12%，83° 约 4%：太阳高高在上、几乎贴着窗面照进来时，大部分直射光在窗板上被反射掉了。
+// 原来按常数 0.85 算，贴着窗面照进来的阳光在窗洞下缘内衬上照出一大块死白（看后方时 30% 的像素顶到 255，美术总监 wave6 第 8 条）
+float paneSunT(float c) {
+  c = clamp(c, 1e-3, 1.0);
+  float ct = sqrt(1.0 - (1.0 - c * c) / 2.2201);            // 折射角的余弦（n² = 2.2201）
+  float rs = (c - 1.49 * ct) / (c + 1.49 * ct);
+  float rp = (1.49 * c - ct) / (1.49 * c + ct);
+  float ts = 1.0 - rs * rs, tp = 1.0 - rp * rp;
+  ts = ts * ts * ts; tp = tp * tp * tp;
+  return 0.5 * (ts * ts + tp * tp) / 0.78966;               // 正射时 (1 − 0.0387)^6
+}
+
 // 直射阳光能否从 x 穿过窗板开口（并且没被遮光板挡住），带一点点软边
 float sunThroughWindow(vec3 x, vec3 sunC, float shadeBottom) {
   if (sunC.z <= 1e-4) return 0.0;

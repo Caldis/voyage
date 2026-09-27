@@ -71,29 +71,37 @@ vec4 leatherSeam(float across, float along, float pix, float single) {
   return vec4(thread, dark, slopeA + slopeT, 0.0);
 }
 
-// 胡桃木饰条：纹理沿 u 方向走，年轮线被多尺度噪声扭曲（不规整），有细长的导管纹；开放漆面、缎光。
-// 返回反照率；rough 输出粗糙度
+// 胡桃木饰条（T47 重写，美术总监 wave6 第 8 条：原来 4.3 mm 一条、对比很强的同心年轮读成卡通木纹 / 印刷贴纸）。
+// 对标高端舱内的胡桃木饰面（薄木皮 + 清漆）：直纹为主——细密的深色纹线约 1.1–1.5 mm 一条、间距和深浅每条都不同，
+// 只在少数位置有一小段拱起的山纹；中尺度是顺纹理走的深浅条带（几毫米宽、几十厘米长），大尺度是整张木皮的色差；
+// 导管纹是顺纹理拉长的细暗点。整体对比低（纹线只比底色深一到两成），近看才看得出纹理，远处淡成有深浅条带的暖棕。
+// 纹理沿 u 走（uv.y 是横跨饰条的方向）；pix 是像素足迹（米）。返回反照率；rough 输出粗糙度（清漆面，比皮面光滑）
 vec3 leatherWalnut(vec2 uv, float pix, float seed, out float rough) {
-  // 扭曲：大尺度的波动让年轮互不平行（否则读成等距的格栅 / 出风口），小尺度的抖动，加一处节疤附近年轮绕开的鼓包
-  float warp = 0.55 * vnoise(vec2(uv.x * 7.0, uv.y * 55.0) + seed) + 0.3 * vnoise(vec2(uv.x * 23.0, uv.y * 140.0) + seed * 3.0);
-  float wave = vnoise(vec2(uv.x * 11.0, uv.y * 8.0) + seed * 1.3) + 0.5 * vnoise(vec2(uv.x * 31.0, uv.y * 20.0) + seed * 2.1);
-  vec2 kc = vec2(0.12 * (hash12(vec2(seed, 1.7)) - 0.5), 0.0);
-  vec2 kd = (uv - kc) * vec2(1.0, 2.5);
-  float knot = exp(-dot(kd, kd) / 0.0006);
-  float ph = uv.y * 230.0 + warp * 4.0 + wave * 9.0 + knot * 6.0 * sign(uv.y - kc.y + 1e-5);
-  float per = 1.0 / 230.0;                          // 约 4.3 mm 一条
-  float fl = 1.0 - smoothstep(per * 0.15, per * 0.4, pix);
-  float ring = smoothstep(0.1, 0.9, abs(fract(ph) - 0.5) * 2.0);
-  float rings = mix(0.5, ring, fl);
-  // 导管纹：沿纹理方向拉长的细暗点
+  // 纹线的相位：约 780 条 / 米，低频扭曲让间距时疏时密、互不平行
+  float warp = 0.6 * vnoise(vec2(uv.x * 5.0, uv.y * 45.0) + seed) + 0.3 * vnoise(vec2(uv.x * 17.0, uv.y * 130.0) + seed * 3.0);
+  // 山纹：只在少数位置（大尺度噪声过阈值的地方）纹线沿纹理方向拱起
+  float cath = smoothstep(0.6, 0.85, vnoise(vec2(uv.x * 4.0, uv.y * 12.0) + seed * 1.3));
+  float arch = vnoise(vec2(uv.x * 9.0, uv.y * 6.0) + seed * 2.1);
+  float ph = uv.y * 780.0 + warp * 7.0 + cath * arch * 16.0;
+  const float PER = 1.0 / 780.0;                     // 约 1.3 mm
+  // 纹线：每条周期里一道窄的深色晚材线（约占周期的 20%），每条的深浅不同；比像素细时淡成平均值
+  float d = abs(fract(ph) - 0.5) * 2.0;              // 1 = 纹线中心
+  float lineStr = 0.45 + 0.55 * hash12(vec2(floor(ph + 0.5), seed));
+  float fl = 1.0 - smoothstep(PER * 0.18, PER * 0.5, pix);
+  float line = mix(0.15, smoothstep(0.62, 0.96, d) * lineStr, fl);
+  // 中尺度：顺纹理的深浅条带（横跨方向约 3 mm 一变，沿纹理几十厘米），足迹大于约 2 mm 时淡成平均
+  float fs = 1.0 - smoothstep(0.0012, 0.003, pix);
+  float streak = mix(0.5, vnoise(vec2(uv.x * 3.0, uv.y * 300.0 + warp * 2.0) + seed * 2.3), fs);
+  // 大尺度：一整张薄木皮里颜色也不均匀
+  float blotch = vnoise(uv * vec2(6.0, 25.0) + seed * 2.0);
+  // 导管纹：顺纹理拉长的细暗点（约 0.4 mm × 1 cm）
   float fp = 1.0 - smoothstep(0.00015, 0.0004, pix);
-  float pores = smoothstep(0.62, 0.8, vnoise(vec2(uv.x * 90.0, uv.y * 2600.0) + seed * 7.0)) * fp;
-  // 大尺度的色块（一整张薄木皮里颜色也不均匀）
-  float blotch = vnoise(uv * vec2(9.0, 30.0) + seed * 2.0);
-  // T25（美术总监 wave3）：原来 (0.32,0.19,0.10)–(0.10,0.056,0.03) 在新曝光下读成深棕色块、不像木头，两端都提亮
-  vec3 dark = vec3(0.14, 0.08, 0.045), light = vec3(0.40, 0.25, 0.13);
-  vec3 col = mix(light, dark, rings * 0.35 + 0.2 * blotch + 0.25 * knot) * (1.0 - 0.3 * pores);
-  rough = 0.3 + 0.08 * pores; // 开放漆面、缎光（T25：0.2 → 0.3，掠射时漆面反射不再把木色冲成一片灰白）
+  float pores = smoothstep(0.66, 0.82, vnoise(vec2(uv.x * 90.0, uv.y * 2600.0) + seed * 7.0)) * fp;
+  // 颜色：中等巧克力棕，底色和最深处只差一倍左右（原来差三倍）
+  vec3 light = vec3(0.33, 0.205, 0.115), dark = vec3(0.17, 0.098, 0.052);
+  vec3 col = mix(light, dark, clamp(0.3 * line + 0.3 * streak + 0.2 * blotch, 0.0, 1.0)) * (1.0 - 0.18 * pores);
+  // 清漆面：缎光到半光，比原来的 0.3 光滑一些，窗户和灯带在上面有柔和的高光（掠射时的反射压暗在 shadeSeat 里）
+  rough = 0.2 + 0.06 * pores + 0.04 * (1.0 - fl);
   return col;
 }
 #endif
