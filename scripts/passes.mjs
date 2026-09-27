@@ -38,6 +38,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DEFAULTS, applyScene, pickScenes } from "./scenarios.mjs";
 import { launchBrowser as launchBrowserAngle, closeBrowserSafely, resolveRepoPath } from "./lib/chrome.mjs";
+import { sampleAndWarn, waitForQuiet } from "./lib/cpu-load.mjs";
+import { tryAcquire, readLock } from "./lib/measure-lock.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VOYAGE_ROOT = path.join(HERE, "..");
@@ -68,8 +70,9 @@ function parseArgs(argv) {
 function usage() {
   console.error(
     "用法：node scripts/passes.mjs --port <端口> [--only a,b] [--frames 30] [--rounds 3] [--baseline 端口]\n" +
-      "                              [--param k[=v]] [--angle d3d11|vulkan] [--out 路径]\n" +
-      "                              [--variants 文件.mjs [--material 点号路径] [--target 点号路径]]",
+      "                              [--param k[=v]] [--angle d3d11|vulkan] [--out 路径] [--wait-quiet]\n" +
+      "                              [--variants 文件.mjs [--material 点号路径] [--target 点号路径]]\n" +
+      "  --wait-quiet  测量前先等 CPU 占用降到 50% 以下再开始（DX-10，见 scripts/lib/cpu-load.mjs）",
   );
 }
 
@@ -98,21 +101,64 @@ async function openPage(browser, port, params) {
 }
 
 // ---------- 页面内：按 pass 的 GPU 计时器（猴子补丁 clouds.pass.render） ----------
+//
+// DX-10：按材质名识别并归类。之前全靠对象身份（=== v.xxxMat）一个个列，新增变体（PERF-10 的雷暴 / 台风
+// #define 变体、以后新的云间层奇观……）不会自动出现，只会落进「其他」，得回来改这个文件（DX-08 遗留，
+// research/PERF_REPORT_wave6.md 末尾开发体验反馈第 4 条：「passes.mjs 认不出 CLOUD_CIRRUS 变体，卷云步进
+// 算进了其他」）。现在优先看 `material.name`（three.js Material 自带的字段，目前仓库里还没有材质设置它，
+// 但一旦以后哪个任务照 DX-16 的建议给材质命名——例如 PERF-10 的 `marchStormMat.name = "cloud-march-storm"`——
+// 这里立刻就能用上，不用再改 passes.mjs）；其次仍按已知的 __voyage 字段做对象身份匹配（覆盖当前已确定
+// 会一直存在的核心 pass）；最后按 fragmentShader 里的特征文本兜底——`#define` 常量名（云 / 奇观 / 天气变体，
+// 和 PERF_REPORT_wave6.md §5 PERF-10 方案原话一致：`#ifdef CLOUD_STORM` / `#ifdef CLOUD_HURRICANE`）或
+// bloom.ts 独有的 uniform 名（bloom 的上 / 下采样材质没有存在 window.__voyage 上，对象身份够不着，
+// 但 DOWN_FRAG / UP_FRAG 各自有独一份的 uniform 名，可以当指纹）。
+// **注意**：installTimer 整个函数体会被 page.evaluate 序列化进浏览器执行（只序列化函数自身源码，不带外部
+// 闭包变量，和 scenarios.mjs 的 applyScene 是同一个限制），所以下面的 DEFINE_MARKERS / TEXT_SIGNATURES /
+// classifyByFragmentShader 都定义在 installTimer 内部，不能放到模块顶层。
 function installTimer() {
   const v = window.__voyage;
   const passObj = v.clouds.pass;
   const renderer = passObj.renderer;
   const gl = renderer.getContext();
   const ext = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+  const DEFINE_MARKERS = [
+    ["CLOUD_TYPHOON", "云(台风 #define 变体)"],
+    ["CLOUD_HURRICANE", "云(台风 #define 变体)"],
+    ["CLOUD_STORM", "云(雷暴 #define 变体)"],
+    ["WONDER_LAYER", "云(奇观层 #define 变体)"],
+    ["CLOUD_CIRRUS", "云(卷云 #define 变体)"],
+    ["GROUND_DETAIL", "窗外(地面细节 #define 变体)"],
+    ["CABIN_CLASS_ECONOMY", "舱内合成(经济舱 #define 变体)"],
+  ];
+  // bloom.ts 的 downMat / upMat 没有暴露在 window.__voyage 上（对象身份识别不到），且没有 #define 标记；
+  // 用各自独有的 uniform 名当文本指纹（见 src/render/bloom.ts 的 DOWN_FRAG / UP_FRAG）。
+  const TEXT_SIGNATURES = [
+    [/uSrcTexel/, "bloom-down"],
+    [/uFalloff/, "bloom-up"],
+  ];
+  const classifyByFragmentShader = (mat) => {
+    const src = mat && typeof mat.fragmentShader === "string" ? mat.fragmentShader : "";
+    if (!src) return null;
+    for (const [marker, label] of DEFINE_MARKERS) {
+      // 看 three 的 defines（运行时注入的宏），不看源码文本：源码里的 #ifdef 每个变体都有（PERF-10 后云程序全带 CLOUD_STORM 字样）
+      if (mat.defines && marker in mat.defines) return label;
+    }
+    for (const [re, label] of TEXT_SIGNATURES) {
+      if (re.test(src)) return label;
+    }
+    return null;
+  };
   const nameOf = (mat) => {
+    // PERF-10：云步进的变体材质名是 cloud-march / cloud-march-<键>（W 奇观 C 卷云 S 雷暴 T 台风）。雷暴 / 台风 / 卷云变体照旧算「云步进」，
+    // 和改动前的单一程序（没有名字，按对象身份认成「云步进」）可比；带奇观层的归「云步进(奇观变体)」
+    if (mat && typeof mat.name === "string" && (mat.name === "cloud-march" || mat.name.startsWith("cloud-march-"))) return mat.name.includes("W", 12) ? "云步进(奇观变体)" : "云步进";
+    if (mat && typeof mat.name === "string" && mat.name.length > 0) return mat.name;
     if (mat === v.outsideMat) return "窗外";
     if (mat === v.sceneMat) return "舱内合成";
     if (mat === v.wingMat) return "机翼";
     if (v.clouds.marchMat && mat === v.clouds.marchMat) return "云步进";
     if (v.clouds.marchWonderMat && mat === v.clouds.marchWonderMat) return "云步进(奇观变体)";
-    // PERF-10：雷暴 / 台风 / 卷云等步进变体（材质名 cloud-march-<键>）照旧算「云步进」，和改动前的单一程序可比；
-    // 带奇观层的（键含 W）归「云步进(奇观变体)」
-    if (typeof mat.name === "string" && mat.name.startsWith("cloud-march-")) return mat.name.includes("W", 12) ? "云步进(奇观变体)" : "云步进";
+    if (v.clouds.marchCirrusMat && mat === v.clouds.marchCirrusMat) return "云步进(卷云变体)";
     if (v.clouds.resolveMat && mat === v.clouds.resolveMat) return "云resolve";
     if (v.clouds.shadowMat && mat === v.clouds.shadowMat) return "云影图";
     if (v.clouds.shadowWeatherMat && mat === v.clouds.shadowWeatherMat) return "云影图";
@@ -126,6 +172,9 @@ function installTimer() {
     if (v.groundDetail && v.groundDetail.variants) {
       for (const k in v.groundDetail.variants) if (v.groundDetail.variants[k] === mat) return "窗外(地面细节)";
     }
+    // 兜底：identity 匹配不到的（新变体、bloom 内部材质……）按文本特征分类，仍然认不出的才归「其他」
+    const byText = classifyByFragmentShader(mat);
+    if (byText) return byText;
     return "其他";
   };
   const origRender = passObj.render.bind(passObj);
@@ -281,6 +330,16 @@ async function main() {
     if (baseline) console.warn("[passes] --variants 与 --baseline 是两个正交的对照维度，一次只用一个；这里忽略 --baseline");
   }
 
+  // DX-10：测量锁 + 负载感知。按 pass 的 GPU 计时也怕被别的代理的编译 / 截图抢 CPU/GPU
+  // （README 坑点「测帧时间…多个代理同时占 GPU 时任何计时都不可信」），持锁约定见 scripts/lib/measure-lock.mjs。
+  if (args["wait-quiet"]) await waitForQuiet({ log: (s) => console.log(`[passes] ${s}`) });
+  sampleAndWarn("passes 测量开始");
+  const releaseLock = tryAcquire(REPO_ROOT, `passes.mjs（端口 ${port}, pid ${process.pid}, ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}）`);
+  if (!releaseLock) {
+    const lock = readLock(REPO_ROOT);
+    console.warn(`[passes] 测量锁被占用（持有者：${lock ? lock.owner.split("\n")[0] : "未知"}），继续测量但结果可能被对方的负载污染（反之亦然）`);
+  }
+
   const ports = VARIANTS ? [port] : baseline ? [port, baseline] : [port];
   const browser = await launchBrowser(angle);
   const table = [];
@@ -297,6 +356,7 @@ async function main() {
 
     const scenes = pickScenes(only);
     for (const sc of scenes) {
+      sampleAndWarn(`passes 测量场景 ${sc.name} 之前`);
       if (VARIANTS) {
         const page = pages[port];
         for (const [name, pairs] of VARIANTS) {
@@ -339,6 +399,7 @@ async function main() {
     }
   } finally {
     await closeBrowserSafely(browser);
+    if (releaseLock) releaseLock();
   }
 }
 

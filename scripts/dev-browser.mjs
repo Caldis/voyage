@@ -72,6 +72,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULTS, applyScene, pickScenes } from "./scenarios.mjs";
 import { launchBrowser as launchBrowserAngle, closeBrowserSafely, resolveRepoPath } from "./lib/chrome.mjs";
+import { sampleAndWarn, waitForQuiet } from "./lib/cpu-load.mjs";
+import { tryAcquire, readLock, noticeIfLocked, waitForRelease } from "./lib/measure-lock.mjs";
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
@@ -206,6 +208,17 @@ function originFor(port) {
   return `http://127.0.0.1:${port}`;
 }
 
+// DX-10：check / shots 不持测量锁（它们本来就轻量，不是离线 FXC / 真冷启动 / 按 pass GPU 计时那种重负载），
+// 但发现锁存在时打印一句提示（别人可能正在测量，这里的浏览器会给它添负载）；--respect-lock 时改成先等锁释放。
+async function noticeOrRespectLock(args, context) {
+  if (args["respect-lock"]) {
+    const lock = readLock(REPO_ROOT);
+    if (lock) await waitForRelease(REPO_ROOT, { log: (s) => console.log(`[dev-browser] ${s}`) });
+  } else {
+    noticeIfLocked(REPO_ROOT, context);
+  }
+}
+
 // ---------- check：只开页面、等启动完成、收集 console error / pageerror ----------
 async function cmdCheck(args) {
   const port = args.port;
@@ -213,6 +226,7 @@ async function cmdCheck(args) {
   const angle = String(args.angle || "d3d11");
   const viewport = parseViewport(args);
   const dpr = parseDpr(args);
+  await noticeOrRespectLock(args, "check");
 
   const browser = await launchBrowser(angle);
   try {
@@ -284,6 +298,7 @@ async function cmdShots(args) {
   const allowFlash = Boolean(args["allow-flash"]);
   const freeze = Boolean(args.freeze);
   const settle = Boolean(args.settle);
+  await noticeOrRespectLock(args, "shots");
 
   const browser = await launchBrowser(angle);
   try {
@@ -341,6 +356,7 @@ async function cmdShots(args) {
 }
 
 // ---------- cold：真冷启动（nonce 破缓存 + 每次独立浏览器上下文） ----------
+// DX-10：真冷启动对机器负载敏感（编译在 CPU 上做），持测量锁 + 每轮前采样 CPU 占用；--wait-quiet 先等安静再测。
 async function cmdCold(args) {
   const port = args.port;
   if (!port) throw new Error("cold 需要 --port <端口>");
@@ -349,10 +365,19 @@ async function cmdCold(args) {
   const viewport = parseViewport(args);
   const dpr = parseDpr(args);
   const origin = originFor(port);
+
+  if (args["wait-quiet"]) await waitForQuiet({ log: (s) => console.log(`[dev-browser] ${s}`) });
+  const releaseLock = tryAcquire(REPO_ROOT, `dev-browser.mjs cold（端口 ${port}, pid ${process.pid}, ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}）`);
+  if (!releaseLock) {
+    const lock = readLock(REPO_ROOT);
+    console.warn(`[dev-browser] 测量锁被占用（持有者：${lock ? lock.owner.split("\n")[0] : "未知"}），继续测量但结果可能被对方的负载污染（反之亦然）`);
+  }
+
   const browser = await launchBrowser(angle);
   const results = [];
   try {
     for (let i = 0; i < repeat; i++) {
+      const cpuLoad = sampleAndWarn(`cold 第 ${i + 1}/${repeat} 轮之前`);
       // 每次独立浏览器上下文：非持久化 context 本身不共享磁盘 profile，加上 nonce 破缓存双重保险
       // （手法抄自 tmp/review-t02/cold.js，开发体验官已实测端到端跑通，见 DX_REPORT_wave2.md §1.2）
       const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
@@ -376,7 +401,7 @@ async function cmdCold(args) {
         await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 250 });
         const startup = await page.evaluate(() => window.__voyageStartup);
         const totalMs = Date.now() - t0;
-        const entry = { origin, angle, viewport, dpr, nonce, totalMs, startup, renderer };
+        const entry = { origin, angle, viewport, dpr, nonce, totalMs, startup, renderer, cpuLoadPercent: cpuLoad };
         results.push(entry);
         console.log(
           `[dev-browser] cold #${i + 1}/${repeat}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  totalMs=${totalMs}  renderer=${renderer}`,
@@ -393,6 +418,7 @@ async function cmdCold(args) {
     }
   } finally {
     await closeBrowserSafely(browser);
+    if (releaseLock) releaseLock();
   }
   if (args.out) fs.writeFileSync(resolveRepoPath(REPO_ROOT, args.out), JSON.stringify(results, null, 2));
   return results;
@@ -643,9 +669,11 @@ async function main() {
   else if (sub === "flicker") result = await cmdFlicker(args);
   else {
     console.error(
-      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--out 路径] [--allow-flash] [--freeze] [--settle] [--baseline 端口] [--frames N] [--rounds N] [--repeat N]",
+      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--out 路径] [--allow-flash] [--freeze] [--settle] [--baseline 端口] [--frames N] [--rounds N] [--repeat N] [--wait-quiet] [--respect-lock]",
     );
     console.error("  check           只开页面、等启动完成、收集 console error / pageerror，有错误就非 0 退出");
+    console.error("  --wait-quiet    仅 cold（DX-10）：测量前先等 CPU 占用降到 50% 以下再开始");
+    console.error("  --respect-lock  仅 check / shots（DX-10）：发现测量锁（tmp/measure.lock）时先等它释放，而不只是打印提示");
     console.error("  --viewport WxH  浏览器视口尺寸，默认 1600x1200（如 --viewport 2400x1800）");
     console.error("  --dpr N         deviceScaleFactor，默认 1（和 --viewport 组合模拟高分屏 / 弱 GPU）");
     console.error("  --scene '<JSON>'  仅 shots / flicker：临时场景，字段同 scenarios.mjs 的 SCENES 条目，可重复（shots 可与 --only 并用）");

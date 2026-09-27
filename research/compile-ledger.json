@@ -1,0 +1,153 @@
+{
+  "$note": "DX-10：编译预算账本的权威数据源。每一行是一次「离线 FXC /O1、--jobs 1、多轮交替取最小值」的测量：日期、提交、各程序的 min/median/mad（ms）。起点两行照抄 research/PERF_REPORT_wave6.md §3.1（性能工程师第 6 波收尾复测，2026-09-27 晚，硬件 RTX 5090，ANGLE d3d11），此后由 `node scripts/shader-budget.mjs --ledger` 或 `node scripts/compile-ledger.mjs --add` 追加。PERF 报告引用本文件而不是重复手抄表格；`node scripts/compile-ledger.mjs --emit-md` 可以渲染成 Markdown 贴回 PERF 报告或 README。",
+  "unit": "ms（fxc /O1 离线编译最小值，除非该行 quick=true 表示 /Od）",
+  "entries": [
+    {
+      "date": "2026-09-27",
+      "commit": "7436ba1",
+      "label": "第 6 波早晨基线（PERF_REPORT_wave6.md §3.1，今天 09:00 前最后一次提交，含 PERF-1/2）",
+      "quick": false,
+      "jobs": 1,
+      "rounds": 5,
+      "programs": {
+        "cloud-march": {
+          "min": 8216,
+          "median": 8277,
+          "mad": 13
+        },
+        "outside-default": {
+          "min": 4639,
+          "median": 4659,
+          "mad": 15
+        },
+        "scene-default": {
+          "min": 3376,
+          "median": 3382,
+          "mad": 6
+        },
+        "wing": {
+          "min": 6333,
+          "median": 6376,
+          "mad": 42
+        },
+        "cloud-occupancy": {
+          "min": 1601,
+          "median": 1603,
+          "mad": 2
+        },
+        "cloud-shadow-map": {
+          "min": 1496,
+          "median": 1511,
+          "mad": 12
+        },
+        "cloud-probe": {
+          "min": 422,
+          "median": 431,
+          "mad": 9
+        },
+        "cloud-resolve": {
+          "min": 42,
+          "median": 43,
+          "mad": 1
+        },
+        "exposure-final": {
+          "min": 68,
+          "median": 70,
+          "mad": 1
+        },
+        "exposure-meter": {
+          "min": 25535,
+          "median": 25683,
+          "mad": 93,
+          "note": "离线不可信"
+        }
+      }
+    },
+    {
+      "date": "2026-09-27",
+      "commit": "698da47",
+      "label": "第 6 波收尾复测主分支（PERF_REPORT_wave6.md §3.1，T38 合并后；本报告写完时 master 已前进到 bf527b1，未测）",
+      "quick": false,
+      "jobs": 1,
+      "rounds": 5,
+      "programs": {
+        "cloud-march": {
+          "min": 13382,
+          "median": 13457,
+          "mad": 75
+        },
+        "cloud-march-cirrus": {
+          "min": 14067,
+          "median": 14256,
+          "mad": 126
+        },
+        "cloud-march-wonder": {
+          "min": 14705,
+          "median": 14719,
+          "mad": 14
+        },
+        "outside-default": {
+          "min": 8591,
+          "median": 8691,
+          "mad": 92
+        },
+        "outside-ground-detail": {
+          "min": 11669,
+          "median": 11961,
+          "mad": 292
+        },
+        "scene-default": {
+          "min": 7347,
+          "median": 7427,
+          "mad": 59
+        },
+        "scene-economy": {
+          "min": 7589,
+          "median": 7993,
+          "mad": 282
+        },
+        "wing": {
+          "min": 7394,
+          "median": 7490,
+          "mad": 96
+        },
+        "wonder-layer": {
+          "min": 7466,
+          "median": 7514,
+          "mad": 38
+        },
+        "cloud-occupancy": {
+          "min": 2419,
+          "median": 2438,
+          "mad": 15
+        },
+        "cloud-shadow-map": {
+          "min": 2257,
+          "median": 2265,
+          "mad": 8
+        },
+        "cloud-probe": {
+          "min": 736,
+          "median": 738,
+          "mad": 2
+        },
+        "cloud-resolve": {
+          "min": 46,
+          "median": 49,
+          "mad": 2
+        },
+        "exposure-final": {
+          "min": 73,
+          "median": 73,
+          "mad": 0
+        },
+        "exposure-meter": {
+          "min": 25269,
+          "median": 26261,
+          "mad": 183,
+          "note": "离线不可信"
+        }
+      }
+    }
+  ]
+}

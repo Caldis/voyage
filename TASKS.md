@@ -8,6 +8,9 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| PERF-10/11 | 第 7 波（最高优先） | 5210 | worktree | Opus（云按天气拆变体 + resolve 回 0.05 ms；必审） | — | 进行中 |
+| TR03 | 第 7 波（主干，P8） | 5203 | worktree | Opus（火车远景 RAIL 变体、内陆水面 / 岸线锯齿、相机高度精度；必审） | — | 进行中 |
+| TR07 | 第 7 波（主干，P8） | — | worktree | Opus（火车声音：接缝节奏（定尺示例开关）、滚动 / 电机 / 轮缘、道口多普勒、停站与广播示意） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -73,6 +76,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | T38 | 富士山顶悬在云带上（含 T44 遗留台风近塔圆桶）：根因是云步进不知道地形、山后远云合成到山前；云缓冲加宽一倍右半存（深度×不透明度, 不透明度），真实地面按云深度 ÷ 地面距离 1.0–1.3 渐变去掉山后云；台风塔受光分界放宽、眼外风暴云环境光归一化、塔腰身 | 2026-09-27 | Opus 实现，**独立审查通过**（handoff/T38-review.md），协调者修两处注释后合并。云 resolve 冷编译 44→313 ms（不在关键路径）。**遗留**：山脊后近距离云半透明露出（门限改绝对 / 相对取小或存第二矩）；环境光改动实际作用于眼外所有风暴云（砧变亮）；近塔背光面规整圆斑、塔偏平；富士山轮廓台阶锯齿（地面，旧问题）。DX 待办：check:glsl 调不起 glslang 时打印错误（长路径 ENOENT 静默全 FAIL）、sampler 统计纳入机翼程序；审查临时 worktree 放 tmp/ 下 |
 | TR02 | 火车模式与列车运动：src/rail/*（线路加载、走廊坐标、速度曲线与弯道限速、超高侧倾按规范公式估算、悬挂振动、终点停站折返）、面板「交通工具」切换；飞机模式着色器逐字相同 | 2026-09-27 | Opus 实现，**独立审查返工一次**（B1：终点停站切换冲出终点永久卡住——审查读 diff 抓到，截图查不出），协调者核验（60 项单测、只改 rail / main / ui / index）后合并。**浏览器检查待性能复测结束后补**。DX 待办：shader-parity 收进 scripts 并支持提交号 + 打印首处差异（check:parity）、scenarios 默认 vehicle、ground/geo.ts 去参数属性便于 node 单测 |
 | DX-09 | README 顶部硬约束速查表（sampler 用量由 `lint-shaders --emit-table` 生成、check:glsl 比对防过时）、research/PARAMS.md、坑点按八个主题分节 | 2026-09-27 | Sonnet 实现，协调者合并；实测 sampler：舱内 5/16、窗外 14/16（旧 README 写 3/16、16/16 已过时）。Windows GBK 打印坑已写进根 AGENTS.md |
+| DX-10 | 测量可信度：shader-budget 最小值判定 + MAD、--baseline 容错、--chain 归因、--variants、--wait-quiet、--ledger；测量锁 tmp/measure.lock；passes 归类 bloom / 变体；compile-ledger.json 账本；applyScene 跨版本容错 | 2026-09-27 | Sonnet 实现，协调者合并。**合并后已通知在途代理** |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
@@ -89,7 +93,6 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | T30 | 夜间倒影与曝光自洽：倒影显示增益受舱内曝光牵制、开灯时窗外曝光上限、倒影按主灯色温预抵 | 2026-09-27 | Opus 实现，协调者核验。注意：睡眠档窗外比之前亮约 1.6 档（测光不再被亮倒影抬高） |
 | PERF-3 | 机翼边缘超采样降本 51–58%（机翼 pass 0.52–0.70 ms）；根因含子射线阴影段未跳过的 bug 与步数长尾 | 2026-09-27 | Opus 实现，协调者核验。留：uWingSteps 128→96 待核掠射轮廓 |
 | PERF-1/2 + T27 | 云步进单输出（消冷启动同步重编）；雷暴 / 台风占据网格跳空白（云步进 −51~69%）；窗外云影改查世界坐标云影图（耀斑边缘柔和） | 2026-09-27 | Opus 实现，协调者核验并接入 main.ts。**主分支 d3d11 真冷启动 13.2 s**（第 2 波前 84–117 s） |
-| DX-10 | 冷编译测量可信度：最小值 / 中位数 / 离散度、按最小值判定、负载 >50% 警告、静态指标（HLSL 大小 / 指令槽）、`--variants`、编译预算账本 | 高（下一波，性能工程师验收） | scripts | — | — |
 | DX-11 | compare 补输出：平均 RGB / 饱和度、≥250 / ≤5 比例、行 / 列曲线、遮罩、64 px 缩略图 | 中 | scripts | — | — |
 | DX-12 | shots 增强：`--scenes-file`、`--set` / `--uniform`、同页冻结 A/B（`--ab`）、截图附面板值 / 日月高度 JSON、默认固定日期 | 中 | scripts | — | — |
 | DX-13 | 常驻调试开关（舱内置黑、关倒影 / 日盘 / bloom / TAA、奇观介质 / 表面 / 事件单独开关），重程序用按需编译变体而非 uniform 分支 | 中（Opus，占 main.ts 热点名额） | main / 各 pass | 碰 main | — |

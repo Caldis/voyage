@@ -31,22 +31,54 @@
 //   node scripts/shader-budget.mjs --bisect "ocean-main,ocean-in-ground"          # 逗号 = 这几个一起换桩（同一个变体）
 //   node scripts/shader-budget.mjs --jobs 4 --out tmp/screenshot/shader-budget.json
 //   node scripts/shader-budget.mjs --keep-hlsl --only scene-default        # 编完不删临时目录，打印 HLSL 路径
+//   node scripts/shader-budget.mjs --rounds 5 --only cloud-march           # 默认流程也支持多轮，输出 min/med/MAD（DX-10）
 //   node scripts/shader-budget.mjs --baseline .claude/worktrees/agent-xxx/apps/voyage --rounds 5 --only scene-default
-//     # 与另一个 worktree 对照：GLSL→HLSL 翻译两侧各做一次（确定性，不重复），fxc 编译交替测 5 轮取中位数
+//     # 与另一个 worktree 对照：GLSL→HLSL 翻译两侧各做一次（确定性，不重复），fxc 编译交替测 5 轮，
+//     # 判定按最小值（DX-10）；基线树缺材质 / 程序时跳过并列出，不再整体崩溃
+//   node scripts/shader-budget.mjs --chain "1de0481,69b1aca,f8a06ba" --program cloud-march --rounds 3   # DX-10
+//     # 沿一串提交轮转测同一个程序，归因「哪次合并让它变慢了多少」（在 tmp/shader-budget-chain 建一次性对照 worktree）
+//   node scripts/shader-budget.mjs --variants tmp/dx10-variants.mjs --only scene-default --rounds 3      # DX-10
+//     # 补丁文件（查找/替换对）：按单项撤回做变体对照，交替测各变体，判定按最小值
+//   node scripts/shader-budget.mjs --wait-quiet --rounds 5                # 先等 CPU 降到 50% 以下再测（DX-10）
+//   node scripts/shader-budget.mjs --ledger                               # 测完追加一行到 research/compile-ledger.json（DX-10）
 //
 // --keep-hlsl（DX-08，T41 反馈）：默认编完就删临时目录；传了就保留并打印路径，方便直接改 HLSL 本身再用
 //   fxc 计时（比在 GLSL 层一轮轮 --bisect 更快定位「具体是哪几行贵」）。
-// --baseline <目录> --rounds N（DX-08，泛化自 handoff/T37.md 反馈「`tmp/perf-cloud/passes.mjs` 的
-//   `--variants` 很好用，建议收进 scripts/」同一批 DX 反馈）：只接受目录（另一个 voyage 应用根，或含
-//   apps/voyage 的仓库根）——shader-budget 不连接开发服务器，Windows 也没有 /proc/<pid>/cwd 那样的机制
+// --rounds N（DX-10，默认流程也支持，不只 --baseline）：重复测 N 轮，程序表输出「min/med/MAD」与
+//   `--out` JSON 里每轮原始值；**判定按最小值**——负载（其它代理占用 CPU）只会让计时变慢，噪声是单向的，
+//   见 research/PERF_REPORT_wave6.md 的验证结论（两侧交替测 MAD 只有基线的个位数百分比）。
+// --baseline <目录> --rounds N（DX-08，DX-10 加了 min/MAD 与跨版本容错）：只接受目录（另一个 voyage 应用根，
+//   或含 apps/voyage 的仓库根）——shader-budget 不连接开发服务器，Windows 也没有 /proc/<pid>/cwd 那样的机制
 //   能从端口反查目录，传端口号会报错并提示改传目录。两侧的 GLSL→HLSL 翻译各做一次（确定性），fxc 编译
-//   按「当前一轮、基线一轮」交替测 --rounds 轮，各程序取中位数，打印变化百分比。
+//   按「当前一轮、基线一轮」交替测 --rounds 轮，判定按最小值，同时打印中位数 / MAD。**基线树缺材质或程序**
+//   （对照更老的提交，奇观 / 卷云 / 经济舱这类后来加的功能还不存在）**时跳过并在结果里列出，不再让整棵树
+//   的枚举崩溃**（性能工程师第 6 波复测反馈踩过这个坑，见 research/PERF_REPORT_wave6.md 末尾）。
+// --chain <提交1,提交2,…> --program <id>[,<id>...] [--rounds N] [--jobs N] [--workdir 目录]（DX-10）：
+//   沿一串提交（通常是某个功能的合并链）轮转只测指定的一个或几个程序，每个状态相对上一状态的增量就是那次
+//   合并「贡献」了多少编译时间——收编性能工程师第 6 波手工做的归因（tmp/perf-w6/march-chain.sh，未进仓库）。
+//   在 tmp/shader-budget-chain（或 --workdir 指定的路径）建一次性对照 worktree（`git worktree add --detach`，
+//   首次用会跑一次 `pnpm install --filter voyage`），跑完保留下来给下次 --chain 复用；不需要了手工
+//   `git worktree remove` 清理。--program 指定的程序在某个提交里还不存在时跳过该提交（打印提示），不报错。
+// --variants <文件.mjs> --only <id>[,<id>...] [--rounds N]（DX-10）：补丁文件（查找 / 替换对），按单项撤回
+//   做变体对照——收编 T47（handoff/T47-fxc-bisect.py）、W01b（handoff/W01b-fxc.sh）、T41（手工改 HLSL）
+//   三份各写一次的需求。文件导出 `VARIANTS = [[name, [{file, find, replace}, ...]], ...]`（file 相对
+//   apps/voyage；空数组 = 不改、当基线），直接在磁盘上的源文件做替换、翻译、计时，然后立刻改回原样
+//   （无论成功失败都会恢复，不会把中间状态留在工作区）。和已有的 --bisect 不同：--bisect 只能撤 MODULE_STUBS
+//   里预先登记的几个大模块调用点，--variants 可以撤任意一行改动，更贴近实际排查时「撤掉这一行看掉多少」的用法。
+// --wait-quiet（DX-10）：测量前先等 CPU 占用降到 50% 以下再开始（超时也会继续，不无限等），见 scripts/lib/cpu-load.mjs。
+//   每轮开始前也会采样一次 CPU 占用，超过 50% 打印警告（不阻塞，只是提醒这一轮的数字可能不可信）。
+// --ledger（DX-10，仅默认流程）：测完把这次的程序 min/median/MAD 追加一行到 research/compile-ledger.json
+//   （编译预算账本，见 scripts/compile-ledger.mjs），带上当前 git 提交和日期。
 //
 // --bisect 的模块表（MODULE_STUBS）是人工按 scene.ts / terrain-shading.glsl.ts 当前的调用点文本维护的
 // 精确字符串替换（做法照抄开发体验官的 variants.py）。**代码演进后锚点会漂移**：找不到就跳过并在
 // 输出里注明「锚点对不上」，不会让整个工具报错退出——过一段时间锚点大批失效是正常的，
 // 照着当前 scene.ts 的调用点更新 MODULE_STUBS 就行（不是这个工具本身坏了）。只对 scene-*
 // 程序生效，其它程序会被自动跳过（有提示）。
+//
+// 已知「离线计时对这个程序不可信」的程序（DX-10，见 OFFLINE_UNRELIABLE）：exposure-meter 离线 fxc /O1
+// 约 25 秒，浏览器里整个「曝光与眩光」阶段只要 0.25 秒，偏差百倍（research/PERF_REPORT_wave6.md §3.1）；
+// 程序表里会标注【离线不可信】，数字仍然打印（不隐藏），只是不建议拿它做「贴线 / 超预算」判定。
 //
 // 验证记录（2026-09-27，本次交付时用真实浏览器交叉验证一次，见 handoff/SC-12.md）：
 // scene-default 真实冷编译（dev-browser.mjs cold，D3D11，当时 GPU 被其他代理占用）「场景着色器编译
@@ -62,13 +94,49 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchBrowser as launchBrowserAngle, closeBrowserSafely, resolveRepoPath } from "./lib/chrome.mjs";
 import { collectPrograms, resolveIncludes, FRAG_PREFIX } from "./lint-shaders.mjs";
+import { sampleAndWarn, waitForQuiet } from "./lib/cpu-load.mjs";
+import { tryAcquire, readLock } from "./lib/measure-lock.mjs";
+import { appendLedgerEntry } from "./compile-ledger.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const VOYAGE_ROOT = path.join(SCRIPT_DIR, "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
+
+// DX-10：已知「离线计时对这个程序不可信」的程序（README 坑点 + research/PERF_REPORT_wave6.md §3.1：
+// exposure-meter 离线 fxc /O1 约 25 秒，浏览器里整个「曝光与眩光」阶段只要 0.25 秒，偏差百倍——推测是
+// 32×32 常量循环在 fxc /O1 下被整段展开，ANGLE 实际用的编译配置不同，未查证）。程序表里遇到这些 id 就标注，
+// 不参与「贴线 / 超预算」这类判定的默认解读（数字仍然打印出来，只是加一句提醒，不隐藏）。
+const OFFLINE_UNRELIABLE = new Set(["exposure-meter"]);
+function unreliableNote(id) {
+  return OFFLINE_UNRELIABLE.has(id) ? "【离线不可信，浏览器实测远快，见 README 坑点】" : "";
+}
+
+// ---------- 统计：最小值 / 中位数 / MAD（判定按最小值——负载只会让计时变慢，噪声是单向的，
+// 见 research/PERF_REPORT_wave6.md 的验证结论） ----------
+function median(arr) {
+  if (arr.length === 0) return NaN;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+function mad(arr) {
+  if (arr.length === 0) return NaN;
+  const m = median(arr);
+  return median(arr.map((x) => Math.abs(x - m)));
+}
+function minOf(arr) {
+  return arr.length === 0 ? NaN : Math.min(...arr);
+}
+function statsOf(arr) {
+  return { min: minOf(arr), median: median(arr), mad: mad(arr), n: arr.length, raw: [...arr] };
+}
+function fmtStats(st) {
+  if (!st || st.n === 0) return "—";
+  return `min ${st.min.toFixed(0)} / med ${st.median.toFixed(0)} / MAD ${st.mad.toFixed(0)}（n=${st.n}，原始:[${st.raw.map((x) => x.toFixed(0)).join(",")}]）`;
+}
 
 // ---------- CLI 参数 ----------
 function parseArgs(argv) {
@@ -249,13 +317,22 @@ function countSamplers(hlsl) {
 }
 
 // ---------- 1. 枚举程序 + 收集 GLSL（vite ssrLoadModule，不开浏览器，复用 lint-shaders.mjs） ----------
-// root：voyage 应用根目录（含 scripts/lint-shaders.mjs），--baseline 对照模式下指向另一个 worktree 的
-// apps/voyage，其余情况都是当前的 VOYAGE_ROOT。
-async function loadPrograms(root, only) {
+// root：voyage 应用根目录（含 scripts/lint-shaders.mjs），--baseline / --chain 对照模式下指向另一棵（通常更老的）
+// 树，其余情况都是当前的 VOYAGE_ROOT。
+// opts.lenient（DX-10）：对照的树可能缺材质 / 程序（奇观、卷云、经济舱……在更老的提交里还不存在），lenient=true
+// 时跳过缺失的部分并通过 opts.onSkip 上报，而不是让 collectPrograms 直接抛错炸掉整棵树的枚举（性能工程师第 6 波
+// 复测反馈：「shader-budget --baseline 对不同时期的树直接失败」，见 research/PERF_REPORT_wave6.md 末尾）。
+// --only 在 lenient 模式下同理：指定的程序在这棵树里不存在就跳过并警告，不抛错。
+async function loadPrograms(root, only, { lenient = false } = {}) {
   const server = await createServer({ root, server: { middlewareMode: true }, appType: "custom", logLevel: "error" });
+  const skipped = [];
   let programs;
   try {
-    programs = await collectPrograms(server);
+    if (lenient) {
+      programs = await collectPrograms(server, { lenient: true, onSkip: (id, err) => skipped.push(`${id}: ${err.message}`) });
+    } else {
+      programs = await collectPrograms(server);
+    }
   } finally {
     await server.close();
   }
@@ -264,9 +341,17 @@ async function loadPrograms(root, only) {
     const known = new Set(programs.map((p) => p.id));
     const missing = [...wanted].filter((id) => !known.has(id));
     if (missing.length > 0) {
-      throw new Error(`--only 里有未知程序：${missing.join(", ")}\n已知程序：${[...known].join(", ")}`);
+      if (lenient) {
+        skipped.push(`--only 里这些程序在这棵树没找到，已跳过：${missing.join(", ")}`);
+      } else {
+        throw new Error(`--only 里有未知程序：${missing.join(", ")}\n已知程序：${[...known].join(", ")}`);
+      }
     }
     programs = programs.filter((p) => wanted.has(p.id));
+  }
+  if (lenient && skipped.length > 0) {
+    const label = path.relative(REPO_ROOT, root) || root;
+    console.warn(`[shader-budget] ${label}：以下程序缺失或跳过：\n${skipped.map((s) => `  - ${s}`).join("\n")}`);
   }
   return programs;
 }
@@ -384,16 +469,9 @@ function resolveBaselineRoot(value) {
   throw new Error(`--baseline "${value}" 不是一个存在的目录`);
 }
 
-function median(arr) {
-  if (arr.length === 0) return NaN;
-  const s = [...arr].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
 /** 枚举 + 翻译一侧（GLSL → HLSL 是确定性的翻译，噪声只来自后面 fxc 本身的编译计时，不需要重复做这一步） */
-async function translateSide(root, only, bisectGroups) {
-  const programs = await loadPrograms(root, only);
+async function translateSide(root, only, bisectGroups, { lenient = false } = {}) {
+  const programs = await loadPrograms(root, only, { lenient });
   const variants = buildVariants(programs, bisectGroups);
   return translateAll(variants);
 }
@@ -406,11 +484,15 @@ async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups 
   console.log("== SC-2 离线着色器编译预算：--baseline 对照模式 ==");
   console.log(`当前：${VOYAGE_ROOT}`);
   console.log(`基线：${baselineRoot}`);
-  console.log(`轮数：${rounds}（交替测两侧、取中位数）  模式：${quick ? "/Od" : "/O1"}\n`);
+  console.log(`轮数：${rounds}（交替测两侧，判定按最小值）  模式：${quick ? "/Od" : "/O1"}\n`);
 
-  console.log("[1/2] 枚举 + 翻译两侧（各一次）...");
-  const curTranslated = await translateSide(VOYAGE_ROOT, only, bisectGroups);
-  const baseTranslated = await translateSide(baselineRoot, only, bisectGroups);
+  if (args["wait-quiet"]) await waitForQuiet({ log: (s) => console.log(s) });
+
+  // DX-10：lenient=true——基线可能是更老的提交，缺材质 / 程序（奇观、卷云、经济舱……）不再让整棵树枚举失败，
+  // 缺的会被跳过并打印警告（见 loadPrograms / collectPrograms 的 lenient 模式）。
+  console.log("[1/2] 枚举 + 翻译两侧（各一次，lenient：缺材质跳过不崩）...");
+  const curTranslated = await translateSide(VOYAGE_ROOT, only, bisectGroups, { lenient: true });
+  const baseTranslated = await translateSide(baselineRoot, only, bisectGroups, { lenient: true });
   console.log(`  当前 ${curTranslated.length} 个变体，基线 ${baseTranslated.length} 个变体`);
 
   console.log(`\n[2/2] fxc.exe 交替计时 ${rounds} 轮...`);
@@ -419,6 +501,7 @@ async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups 
   let keptCurDir = null;
   let keptBaseDir = null;
   for (let r = 0; r < rounds; r++) {
+    const load = sampleAndWarn(`--baseline 第 ${r + 1}/${rounds} 轮之前`);
     const curDir = mkdtempSync(path.join(tmpdir(), "voyage-shader-budget-cur-"));
     const curTimed = await runFxc(curTranslated, { fxc, quick, jobsN, tmpDir: curDir });
     for (const t of curTimed) {
@@ -439,11 +522,12 @@ async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups 
     if (keepHlsl && r === rounds - 1) keptBaseDir = baseDir;
     else rmSync(baseDir, { recursive: true, force: true });
 
-    console.log(`  第 ${r + 1}/${rounds} 轮完成`);
+    console.log(`  第 ${r + 1}/${rounds} 轮完成${load != null ? `（CPU ${load.toFixed(0)}%）` : ""}`);
   }
 
-  console.log("\n== 结果（中位数，ms）==");
-  const header = `${"程序".padEnd(38)} ${"当前".padEnd(10)} ${"基线".padEnd(10)} 变化`;
+  // DX-10：输出最小值 / 中位数 / MAD 与每轮原始值，判定按最小值（负载只会让计时变慢，噪声是单向的）。
+  console.log("\n== 结果（ms，判定按最小值）==");
+  const header = `${"程序".padEnd(38)} ${"当前 min/med/MAD".padEnd(24)} ${"基线 min/med/MAD".padEnd(24)} Δmin`;
   console.log(header);
   console.log("-".repeat(header.length + 20));
   const ids = [...new Set([...curSamples.keys(), ...baseSamples.keys()])];
@@ -451,12 +535,20 @@ async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups 
   for (const id of ids) {
     const curArr = curSamples.get(id) || [];
     const baseArr = baseSamples.get(id) || [];
-    const curMed = median(curArr);
-    const baseMed = median(baseArr);
-    const delta = Number.isFinite(curMed) && Number.isFinite(baseMed) && baseMed > 0 ? ((curMed - baseMed) / baseMed) * 100 : NaN;
-    rows.push({ id, curMed, baseMed, delta, curSamples: curArr, baseSamples: baseArr });
-    const deltaStr = Number.isFinite(delta) ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%` : "—";
-    console.log(`${id.padEnd(38)} ${(Number.isFinite(curMed) ? curMed.toFixed(1) : "—").padEnd(10)} ${(Number.isFinite(baseMed) ? baseMed.toFixed(1) : "—").padEnd(10)} ${deltaStr}`);
+    const curSt = statsOf(curArr);
+    const baseSt = statsOf(baseArr);
+    const delta = Number.isFinite(curSt.min) && Number.isFinite(baseSt.min) && baseSt.min > 0 ? ((curSt.min - baseSt.min) / baseSt.min) * 100 : NaN;
+    rows.push({ id, cur: curSt, base: baseSt, deltaMinPct: delta, note: unreliableNote(id) || undefined });
+    const deltaStr = Number.isFinite(delta)
+      ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`
+      : curArr.length === 0
+        ? "—（仅基线，当前树没有）"
+        : baseArr.length === 0
+          ? "—（新增，基线树没有）"
+          : "—";
+    const curCell = curArr.length ? `${curSt.min.toFixed(0)}/${curSt.median.toFixed(0)}/${curSt.mad.toFixed(0)}` : "—";
+    const baseCell = baseArr.length ? `${baseSt.min.toFixed(0)}/${baseSt.median.toFixed(0)}/${baseSt.mad.toFixed(0)}` : "—";
+    console.log(`${id.padEnd(38)} ${curCell.padEnd(24)} ${baseCell.padEnd(24)} ${deltaStr}${unreliableNote(id) ? " " + unreliableNote(id) : ""}`);
   }
   if (keepHlsl) console.log(`\nHLSL 已保留：当前 ${keptCurDir}，基线 ${keptBaseDir}`);
 
@@ -467,6 +559,278 @@ async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups 
       outPath,
       JSON.stringify({ when: new Date().toISOString(), rounds, quick, current: VOYAGE_ROOT, baseline: baselineRoot, rows }, null, 2),
     );
+    console.log(`\n结果已写入 ${path.relative(REPO_ROOT, outPath).replace(/\\/g, "/")}`);
+  }
+}
+
+// ---------- --chain <提交1,提交2,…> --program <id>：沿合并链轮转测一个（或几个）程序（DX-10） ----------
+// 收编性能工程师第 6 波手工做的归因（tmp/perf-w6/march-chain.sh + w6_analyze.py，未进仓库）：沿一串提交
+// 逐个检出、只测指定程序，每个状态相对上一状态的增量就是那次合并「贡献」了多少编译时间
+// （research/PERF_REPORT_wave6.md §2.3 的表就是这样手工跑出来的）。为了不在当前 worktree 里 checkout
+// （会打断这里正在进行的工作，也会和别的代理抢), 单独建一个临时对照 worktree（默认
+// tmp/shader-budget-chain，复用同一份约定：临时工作区放仓库 tmp/ 下，见 README 坑点「对照基线放进
+// scratchpad 会让 check:glsl 静默全 FAIL」——这里不放 scratchpad 也是同一个理由）。
+// 这个 worktree 会保留下来供下次 --chain 复用（省去重新 pnpm install 的时间），不需要了可以手工
+// `git worktree remove <路径>` 清理。
+function ensureChainWorktree(workdir, firstCommit) {
+  fs.mkdirSync(path.dirname(workdir), { recursive: true });
+  if (fs.existsSync(workdir)) {
+    if (!fs.existsSync(path.join(workdir, ".git"))) {
+      throw new Error(
+        `--chain 的工作区 "${workdir}" 已存在，但看起来不是一个 git worktree（没有 .git）。` +
+          "可能是异常中断留下的半成品目录，请先手工清理（PowerShell Remove-Item -Recurse -Force 这个目录，" +
+          '再 "git worktree prune"），然后重跑。',
+      );
+    }
+    console.log(`[chain] 复用已存在的临时 worktree：${workdir}`);
+  } else {
+    console.log(`[chain] 创建临时对照 worktree：${workdir}`);
+    execFileSync("git", ["-C", REPO_ROOT, "worktree", "add", "--detach", workdir, firstCommit], { stdio: "inherit" });
+  }
+  const nodeModules = path.join(workdir, "apps", "voyage", "node_modules");
+  if (!fs.existsSync(nodeModules)) {
+    console.log('[chain] 首次使用，跑一次 "pnpm install --filter voyage"（后续复用这个 worktree 会跳过这一步）...');
+    try {
+      execFileSync("pnpm", ["install", "--filter", "voyage"], { cwd: workdir, stdio: "inherit", shell: process.platform === "win32" });
+    } catch (err) {
+      console.warn(`[chain] pnpm install 失败（${err.message}）——如果后面枚举程序失败，先手工在 ${workdir} 里跑一次 pnpm install`);
+    }
+  }
+}
+
+async function runChain(args, { fxc, quick }) {
+  const commits = String(args.chain).split(",").map((s) => s.trim()).filter(Boolean);
+  if (commits.length === 0) throw new Error("--chain 需要至少一个提交（逗号分隔）");
+  if (!args.program) throw new Error("--chain 要配合 --program <程序id>[,程序id...] 一起用（例如 --program cloud-march）");
+  const programIds = String(args.program).split(",").map((s) => s.trim()).filter(Boolean);
+  const rounds = Number(args.rounds || 3);
+  const jobsN = Number(args.jobs || 1); // 默认 --jobs 1：和性能工程师的 march-chain.sh 一致，避免同批内几个程序互相抢 CPU
+  const workdir = resolveRepoPath(REPO_ROOT, args.workdir || "tmp/shader-budget-chain");
+
+  console.log("== SC-2 离线着色器编译预算：--chain 合并链归因模式 ==");
+  console.log(`提交链（${commits.length} 个）：${commits.join(" -> ")}`);
+  console.log(`程序：${programIds.join(", ")}  轮数：${rounds}（判定按最小值）  模式：${quick ? "/Od" : "/O1"}  jobs：${jobsN}`);
+  console.log(`临时工作区：${path.relative(REPO_ROOT, workdir) || workdir}\n`);
+
+  ensureChainWorktree(workdir, commits[0]);
+  const voyageAtCommit = fs.existsSync(path.join(workdir, "apps", "voyage")) ? path.join(workdir, "apps", "voyage") : workdir;
+
+  if (args["wait-quiet"]) await waitForQuiet({ log: (s) => console.log(s) });
+
+  const commitMeta = new Map();
+  for (const c of commits) {
+    try {
+      commitMeta.set(c, {
+        short: execFileSync("git", ["-C", REPO_ROOT, "rev-parse", "--short", c], { encoding: "utf8" }).trim(),
+        subject: execFileSync("git", ["-C", REPO_ROOT, "log", "-1", "--format=%s", c], { encoding: "utf8" }).trim(),
+      });
+    } catch {
+      commitMeta.set(c, { short: c, subject: "(取不到提交信息，可能是无效的提交)" });
+    }
+  }
+
+  const samples = new Map(); // `${commit}::${programId}` -> ms[]
+  for (let r = 0; r < rounds; r++) {
+    const load = sampleAndWarn(`--chain 第 ${r + 1}/${rounds} 轮之前`);
+    console.log(`\n[第 ${r + 1}/${rounds} 轮]${load != null ? `（CPU ${load.toFixed(0)}%）` : ""}`);
+    for (const c of commits) {
+      const meta = commitMeta.get(c);
+      try {
+        execFileSync("git", ["-C", workdir, "checkout", "-q", "--detach", c], { stdio: ["ignore", "pipe", "pipe"] });
+      } catch (err) {
+        console.warn(`  [跳过] ${meta.short}：检出失败——${String(err.stderr || err.message).trim().split("\n").slice(-2).join(" / ")}`);
+        continue;
+      }
+      let translated;
+      try {
+        translated = await translateSide(voyageAtCommit, programIds, [], { lenient: true });
+      } catch (err) {
+        console.warn(`  [跳过] ${meta.short}：枚举程序失败——${err.message}`);
+        continue;
+      }
+      if (translated.length === 0) {
+        console.warn(`  [跳过] ${meta.short}：--program 指定的程序在这个提交里都不存在（还没加这个功能）`);
+        continue;
+      }
+      const tmpDir = mkdtempSync(path.join(tmpdir(), "voyage-shader-budget-chain-"));
+      let timed;
+      try {
+        timed = await runFxc(translated, { fxc, quick, jobsN, tmpDir });
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+      for (const t of timed) {
+        if (!t.fxcOk) continue;
+        const key = `${c}::${t.id}`;
+        if (!samples.has(key)) samples.set(key, []);
+        samples.get(key).push(t.fxcMs);
+      }
+      console.log(`  ${meta.short} ${meta.subject.slice(0, 40)}：完成`);
+    }
+  }
+
+  const outRows = [];
+  for (const id of programIds) {
+    console.log(`\n== ${id}（合并链归因，ms，判定按最小值，fxc ${quick ? "/Od" : "/O1"}） ==`);
+    const header = `${"提交".padEnd(9)} ${"说明".padEnd(34)} ${"min/med/MAD".padEnd(20)} 相对上一状态`;
+    console.log(header);
+    console.log("-".repeat(header.length + 10));
+    let prevMin = null;
+    for (const c of commits) {
+      const meta = commitMeta.get(c);
+      const st = statsOf(samples.get(`${c}::${id}`) || []);
+      if (st.n === 0) {
+        console.log(`${meta.short.padEnd(9)} ${meta.subject.slice(0, 34).padEnd(34)} ${"—".padEnd(20)} —（缺失/失败，见上面 [跳过]）`);
+        outRows.push({ commit: c, ...meta, programId: id, stats: null });
+        continue;
+      }
+      const rel = prevMin == null ? "—（起点）" : `${st.min - prevMin >= 0 ? "+" : ""}${(((st.min - prevMin) / prevMin) * 100).toFixed(1)}%`;
+      console.log(`${meta.short.padEnd(9)} ${meta.subject.slice(0, 34).padEnd(34)} ${`${st.min.toFixed(0)}/${st.median.toFixed(0)}/${st.mad.toFixed(0)}`.padEnd(20)} ${rel}`);
+      outRows.push({ commit: c, ...meta, programId: id, stats: st, deltaFromPrevPct: prevMin == null ? null : ((st.min - prevMin) / prevMin) * 100 });
+      prevMin = st.min;
+    }
+    if (unreliableNote(id)) console.log(`  ${unreliableNote(id)}`);
+  }
+
+  if (args.out) {
+    const outPath = resolveRepoPath(REPO_ROOT, args.out);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, JSON.stringify({ when: new Date().toISOString(), commits, programIds, rounds, quick, jobsN, rows: outRows }, null, 2));
+    console.log(`\n结果已写入 ${path.relative(REPO_ROOT, outPath).replace(/\\/g, "/")}`);
+  }
+
+  console.log(
+    `\n临时工作区保留在 ${path.relative(REPO_ROOT, workdir) || workdir}（下次 --chain 会复用，省去重新 pnpm install；` +
+      '不再需要时可以手工 "git worktree remove" + 删目录清理）',
+  );
+}
+
+// ---------- --variants <文件.mjs>：补丁文件（查找 / 替换对），按单项撤回做变体对照（DX-10） ----------
+// 收编 T47（handoff/T47-fxc-bisect.py）、W01b（handoff/W01b-fxc.sh）、T41（手工替换 HLSL）三份各写一次的
+// 「换掉单个改动、和 master／原版交替计时」需求。和已有的 --bisect 不同：--bisect 只能撤掉 MODULE_STUBS 里
+// 预先登记好的几个大模块调用点；--variants 直接在**磁盘上的源文件**做任意查找 / 替换（更贴近 T47 们的实际
+// 做法——撤掉某一行新加的代码，看编译时间掉多少），补丁应用 / 翻译 / 计时之后立刻把文件改回原样，不管成功
+// 失败都会恢复（下面的 try/finally），不会把中间状态留在工作区里。
+//
+// --variants 文件格式（ESM，import(pathToFileURL(...))）：
+//   export const VARIANTS = [
+//     ["base", []],                                                    // 空数组 = 不改，当基线
+//     ["noBend", [{ file: "src/render/seats.glsl.ts", find: "...", replace: "" }]],
+//     ["no1c", [{ file: "src/render/cabin-shading.glsl.ts", find: "...", replace: "..." }]],
+//   ];
+// file 是相对 apps/voyage 的路径；find 必须在文件里恰好出现一次（和 --bisect 的锚点检查一样，多次 / 零次
+// 都报错退出，不做「反正替换第一个」这种会读错文件的事）。必须配合 --only <程序>（先明确测哪个程序，变体
+// 对照才有意义，不然要把 buildVariants 的 --bisect 展开逻辑也套上，意义不大）。
+async function runVariants(args, { fxc, quick, jobsN, only }) {
+  if (!only || only.length === 0) {
+    throw new Error("--variants 要配合 --only <程序>[,程序...] 一起用（先明确测哪个 / 哪些程序）");
+  }
+  const variantsPath = path.resolve(String(args.variants));
+  const mod = await import(pathToFileURL(variantsPath).href);
+  const VARIANTS = mod.VARIANTS;
+  if (!VARIANTS || VARIANTS.length === 0) throw new Error(`${args.variants} 没有导出非空的 VARIANTS 数组`);
+  const rounds = Number(args.rounds || 3);
+
+  console.log("== SC-2 离线着色器编译预算：--variants 补丁对照模式 ==");
+  console.log(`补丁文件：${variantsPath}`);
+  console.log(`变体：${VARIANTS.map(([name]) => name).join(", ")}`);
+  console.log(`程序：${only.join(", ")}  轮数：${rounds}（判定按最小值）  模式：${quick ? "/Od" : "/O1"}\n`);
+
+  if (args["wait-quiet"]) await waitForQuiet({ log: (s) => console.log(s) });
+
+  // 备份涉及的全部文件的原始内容（所有变体的并集），保证无论中途在哪一步出错都能恢复
+  const originalByFile = new Map();
+  for (const [name, patches] of VARIANTS) {
+    for (const p of patches) {
+      const f = path.resolve(VOYAGE_ROOT, p.file);
+      if (!f.startsWith(VOYAGE_ROOT)) throw new Error(`变体 "${name}"：file "${p.file}" 解析到了 apps/voyage 以外，拒绝`);
+      if (!fs.existsSync(f)) throw new Error(`变体 "${name}"：文件不存在——${p.file}`);
+      if (!originalByFile.has(f)) originalByFile.set(f, fs.readFileSync(f, "utf8"));
+    }
+  }
+
+  const samples = new Map(); // `${variantName}::${programId}` -> ms[]
+  try {
+    for (let r = 0; r < rounds; r++) {
+      const load = sampleAndWarn(`--variants 第 ${r + 1}/${rounds} 轮之前`);
+      console.log(`\n[第 ${r + 1}/${rounds} 轮]${load != null ? `（CPU ${load.toFixed(0)}%）` : ""}`);
+      for (const [name, patches] of VARIANTS) {
+        const touched = [];
+        try {
+          for (const p of patches) {
+            const f = path.resolve(VOYAGE_ROOT, p.file);
+            const cur = fs.readFileSync(f, "utf8");
+            const count = cur.split(p.find).length - 1;
+            if (count !== 1) {
+              throw new Error(
+                `变体 "${name}"：${p.file} 里查找文本出现 ${count} 次（应恰好 1 次），锚点可能已经过时——` +
+                  `${p.find.slice(0, 80)}${p.find.length > 80 ? "…" : ""}`,
+              );
+            }
+            fs.writeFileSync(f, cur.split(p.find).join(p.replace), "utf8");
+            touched.push(f);
+          }
+          const translated = await translateSide(VOYAGE_ROOT, only, [], { lenient: false });
+          const tmpDir = mkdtempSync(path.join(tmpdir(), "voyage-shader-budget-variant-"));
+          let timed;
+          try {
+            timed = await runFxc(translated, { fxc, quick, jobsN, tmpDir });
+          } finally {
+            rmSync(tmpDir, { recursive: true, force: true });
+          }
+          for (const t of timed) {
+            if (!t.fxcOk) continue;
+            const key = `${name}::${t.id}`;
+            if (!samples.has(key)) samples.set(key, []);
+            samples.get(key).push(t.fxcMs);
+          }
+          console.log(`  ${name}：完成`);
+        } finally {
+          // 不管成功失败都恢复这个变体动过的文件，下一个变体从干净的原文出发
+          for (const f of touched) fs.writeFileSync(f, originalByFile.get(f), "utf8");
+        }
+      }
+    }
+  } finally {
+    // 保险：万一某个文件的 touched 恢复没跑到（例如在 for 循环之外抛错），这里按并集再核对一次
+    for (const [f, content] of originalByFile) {
+      try {
+        if (fs.readFileSync(f, "utf8") !== content) {
+          fs.writeFileSync(f, content, "utf8");
+          console.warn(`[variants] 补充恢复：${path.relative(VOYAGE_ROOT, f)}`);
+        }
+      } catch {
+        /* 尽力而为 */
+      }
+    }
+  }
+
+  const outRows = [];
+  for (const id of only) {
+    console.log(`\n== ${id}（--variants 补丁对照，ms，判定按最小值） ==`);
+    const header = `${"变体".padEnd(14)} ${"min/med/MAD".padEnd(24)} 相对第一个变体(min)`;
+    console.log(header);
+    console.log("-".repeat(header.length + 10));
+    let baseMin = null;
+    for (const [name] of VARIANTS) {
+      const st = statsOf(samples.get(`${name}::${id}`) || []);
+      if (st.n === 0) {
+        console.log(`${name.padEnd(14)} ${"—".padEnd(24)} —`);
+        outRows.push({ variant: name, programId: id, stats: null });
+        continue;
+      }
+      if (baseMin === null) baseMin = st.min;
+      const rel = baseMin === st.min ? "—（基线）" : `${st.min - baseMin >= 0 ? "+" : ""}${(((st.min - baseMin) / baseMin) * 100).toFixed(1)}%`;
+      console.log(`${name.padEnd(14)} ${`${st.min.toFixed(0)}/${st.median.toFixed(0)}/${st.mad.toFixed(0)}`.padEnd(24)} ${rel}`);
+      outRows.push({ variant: name, programId: id, stats: st, deltaFromFirstPct: baseMin === st.min ? 0 : ((st.min - baseMin) / baseMin) * 100 });
+    }
+    if (unreliableNote(id)) console.log(`  ${unreliableNote(id)}`);
+  }
+
+  if (args.out) {
+    const outPath = resolveRepoPath(REPO_ROOT, args.out);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, JSON.stringify({ when: new Date().toISOString(), variantsFile: variantsPath, programIds: only, rounds, quick, rows: outRows }, null, 2));
     console.log(`\n结果已写入 ${path.relative(REPO_ROOT, outPath).replace(/\\/g, "/")}`);
   }
 }
@@ -492,90 +856,161 @@ async function main() {
   const jobsN = Number(args.jobs || Math.max(2, Math.min(8, os.cpus().length - 2)));
   const keepHlsl = !!args["keep-hlsl"];
 
-  // --baseline：和另一个 worktree 对照，交替多轮取中位数，走单独的流程（见 runBaselineCompare）
-  if (args.baseline) {
-    await runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups });
-    return;
+  // DX-10：测量锁——离线 FXC 计时（含下面的 --chain / --variants / --baseline 分支）整段算「测量」，
+  // 持锁到结束才释放，见 scripts/lib/measure-lock.mjs 与 README「调试与验证」的约定。
+  const lockOwner = `shader-budget.mjs（pid ${process.pid}, ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}）`;
+  const releaseLock = tryAcquire(REPO_ROOT, lockOwner);
+  if (!releaseLock) {
+    const lock = readLock(REPO_ROOT);
+    console.warn(`[shader-budget] 测量锁被占用（持有者：${lock ? lock.owner.split("\n")[0] : "未知"}），继续测量但结果可能被对方的负载污染（反之亦然）`);
   }
 
-  console.log("== SC-2 离线着色器编译预算 ==");
-  console.log(`fxc: ${fxc}`);
-  console.log(`模式: ${quick ? "/Od（快速，跳过优化）" : "/O1（完整优化，和浏览器实际使用的等级一致）"}  并行: ${jobsN}\n`);
-
-  console.log("[1/3] 枚举程序 + 收集 GLSL（vite ssrLoadModule，不开浏览器）...");
-  const programs = await loadPrograms(VOYAGE_ROOT, only);
-  console.log(`  枚举到 ${programs.length} 个程序：${programs.map((p) => p.id).join(", ")}`);
-  if (bisectGroups.length > 0) console.log(`  --bisect：${bisectGroups.map((g) => g.join("+")).join(" | ")}`);
-
-  const variants = buildVariants(programs, bisectGroups);
-
-  console.log(`\n[2/3] 私有 d3d11 headless 翻译 GLSL → HLSL（${variants.length} 个变体，只翻译不链接，不占 GPU）...`);
-  const t1 = Date.now();
-  const translated = await translateAll(variants);
-  console.log(`  完成，用时 ${Date.now() - t1} ms`);
-  for (const v of translated) {
-    if (!v.translateOk) console.log(`  [翻译失败] ${v.id}：${(v.translateLog || "").slice(0, 300)}`);
-    if (v.missing && v.missing.length > 0) console.log(`  [提示] ${v.id}：以下模块没能换桩——${v.missing.join("；")}`);
-  }
-
-  const tmpDir = mkdtempSync(path.join(tmpdir(), "voyage-shader-budget-"));
-  let timed;
   try {
-    console.log(`\n[3/3] fxc.exe 离线计时（${quick ? "/Od" : "/O1"}，并行 ${jobsN} 路）...`);
-    const t2 = Date.now();
-    timed = await runFxc(translated, { fxc, quick, jobsN, tmpDir });
-    console.log(`  完成，墙钟用时 ${Date.now() - t2} ms\n`);
-  } finally {
-    // --keep-hlsl（DX-08）：T41 反馈过——排查冷编译暴涨时想直接改翻译好的 HLSL、用 fxc 计时，
-    // 但这里编译完就删了临时目录，拿不到 HLSL。默认行为不变（删），传了才保留并打印路径。
-    if (keepHlsl) console.log(`HLSL 已保留：${tmpDir}`);
-    else rmSync(tmpDir, { recursive: true, force: true });
-  }
-
-  // ---- 结果表 ----
-  const baselineMs = new Map();
-  for (const r of timed) if (r.label === "baseline") baselineMs.set(r.baseId, r.fxcMs);
-
-  console.log("== 结果 ==");
-  const header = `${"程序".padEnd(38)} ${"sampler".padEnd(10)} ${"fxc ms".padEnd(10)} 备注`;
-  console.log(header);
-  console.log("-".repeat(header.length + 20));
-  for (const r of timed) {
-    const samplerStr = `${r.samplers.total}/16${r.samplers.total > 16 ? "!" : ""}`;
-    const msStr = r.fxcOk ? String(r.fxcMs) : "FAIL";
-    let note = "";
-    if (r.stubbed && r.stubbed.length > 0) note += `换桩:${r.stubbed.join("+")}`;
-    if (r.missing && r.missing.length > 0) note += `${note ? " " : ""}(未换桩:${r.missing.map((m) => m.split("（")[0]).join("+")})`;
-    if (r.label && r.label !== "baseline" && baselineMs.has(r.baseId) && r.fxcOk) {
-      // 贡献 = 基线 − 换桩后：正数表示这个模块让编译多花了这么多 ms（换桩后变快），
-      // 负数是异常（换桩后反而更慢，可能是噪声，同一批内比较仍然有效）
-      const base = baselineMs.get(r.baseId);
-      const contribution = base - r.fxcMs;
-      note += `${note ? " " : ""}贡献≈${contribution >= 0 ? "+" : ""}${contribution}ms（基线 ${base}ms）`;
+    // --chain <提交1,提交2,…> --program <id>：沿合并链轮转测一个程序，走单独的流程（见 runChain）
+    if (args.chain) {
+      await runChain(args, { fxc, quick });
+      return;
     }
-    if (!r.fxcOk) note += `${note ? " " : ""}错误:${r.fxcError}`;
-    console.log(`${r.id.padEnd(38)} ${samplerStr.padEnd(10)} ${msStr.padEnd(10)} ${note}`);
-  }
-  const skippedTranslate = translated.filter((v) => !v.translateOk);
-  if (skippedTranslate.length > 0) console.log(`\n（${skippedTranslate.length} 个程序翻译失败，没有 fxc 结果，见上面的 [翻译失败]）`);
 
-  if (args.out) {
-    const outPath = resolveRepoPath(REPO_ROOT, args.out);
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(
-      outPath,
-      JSON.stringify(
-        {
-          when: new Date().toISOString(),
-          quick,
-          jobsN,
-          results: timed.map(({ hlsl, translateLog, fragmentShader, ...rest }) => rest), // 原文太大，JSON 里不留
-        },
-        null,
-        2,
-      ),
+    // --variants <文件.mjs>：补丁文件对照，走单独的流程（见 runVariants）
+    if (args.variants) {
+      await runVariants(args, { fxc, quick, jobsN, only });
+      return;
+    }
+
+    // --baseline：和另一个 worktree 对照，交替多轮取最小值，走单独的流程（见 runBaselineCompare）
+    if (args.baseline) {
+      await runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups });
+      return;
+    }
+
+    if (args["wait-quiet"]) await waitForQuiet({ log: (s) => console.log(s) });
+    const rounds = Number(args.rounds || 1);
+
+    console.log("== SC-2 离线着色器编译预算 ==");
+    console.log(`fxc: ${fxc}`);
+    console.log(
+      `模式: ${quick ? "/Od（快速，跳过优化）" : "/O1（完整优化，和浏览器实际使用的等级一致）"}  并行: ${jobsN}  轮数: ${rounds}${rounds > 1 ? "（判定按最小值）" : ""}\n`,
     );
-    console.log(`\n结果已写入 ${path.relative(REPO_ROOT, outPath).replace(/\\/g, "/")}`);
+
+    console.log("[1/3] 枚举程序 + 收集 GLSL（vite ssrLoadModule，不开浏览器）...");
+    const programs = await loadPrograms(VOYAGE_ROOT, only);
+    console.log(`  枚举到 ${programs.length} 个程序：${programs.map((p) => p.id).join(", ")}`);
+    if (bisectGroups.length > 0) console.log(`  --bisect：${bisectGroups.map((g) => g.join("+")).join(" | ")}`);
+
+    const variants = buildVariants(programs, bisectGroups);
+
+    console.log(`\n[2/3] 私有 d3d11 headless 翻译 GLSL → HLSL（${variants.length} 个变体，只翻译不链接，不占 GPU）...`);
+    const t1 = Date.now();
+    const translated = await translateAll(variants);
+    console.log(`  完成，用时 ${Date.now() - t1} ms`);
+    for (const v of translated) {
+      if (!v.translateOk) console.log(`  [翻译失败] ${v.id}：${(v.translateLog || "").slice(0, 300)}`);
+      if (v.missing && v.missing.length > 0) console.log(`  [提示] ${v.id}：以下模块没能换桩——${v.missing.join("；")}`);
+    }
+
+    // DX-10：--rounds N（默认 1，向后兼容）重复计时，输出最小值 / 中位数 / MAD 与每轮原始值，判定按最小值
+    // （负载只会让计时变慢，噪声是单向的，见 research/PERF_REPORT_wave6.md 的验证结论）。
+    console.log(`\n[3/3] fxc.exe 离线计时（${quick ? "/Od" : "/O1"}，并行 ${jobsN} 路，共 ${rounds} 轮）...`);
+    const roundResults = [];
+    for (let r = 0; r < rounds; r++) {
+      const load = sampleAndWarn(`第 ${r + 1}/${rounds} 轮之前`);
+      const tmpDir = mkdtempSync(path.join(tmpdir(), "voyage-shader-budget-"));
+      let timed;
+      try {
+        const t2 = Date.now();
+        timed = await runFxc(translated, { fxc, quick, jobsN, tmpDir });
+        console.log(`  第 ${r + 1}/${rounds} 轮完成，墙钟用时 ${Date.now() - t2} ms${load != null ? `（CPU ${load.toFixed(0)}%）` : ""}`);
+      } finally {
+        // --keep-hlsl（DX-08）：T41 反馈过——排查冷编译暴涨时想直接改翻译好的 HLSL、用 fxc 计时，
+        // 但这里编译完就删了临时目录，拿不到 HLSL。默认行为不变（删），传了才保留最后一轮并打印路径。
+        if (keepHlsl && r === rounds - 1) console.log(`HLSL 已保留：${tmpDir}`);
+        else rmSync(tmpDir, { recursive: true, force: true });
+      }
+      roundResults.push(timed);
+    }
+
+    // ---- 汇总：每个变体 id 在各轮的 fxcMs，算 min/median/MAD；元数据（sampler、stub 信息）取最后一轮 ----
+    const msById = new Map();
+    for (const timed of roundResults) {
+      for (const r of timed) {
+        if (!r.fxcOk) continue;
+        if (!msById.has(r.id)) msById.set(r.id, []);
+        msById.get(r.id).push(r.fxcMs);
+      }
+    }
+    const lastRound = roundResults[roundResults.length - 1];
+    const baselineMinById = new Map(); // --bisect 的 [baseline] 变体，按 baseId 取最小值，用来算「贡献」
+    for (const r of lastRound) {
+      if (r.label === "baseline") baselineMinById.set(r.baseId, statsOf(msById.get(r.id) || []).min);
+    }
+
+    console.log(`\n== 结果（${rounds > 1 ? "min/med/MAD，判定按最小值" : "ms"}） ==`);
+    const valueColWidth = rounds > 1 ? 24 : 10;
+    const header = `${"程序".padEnd(38)} ${"sampler".padEnd(10)} ${(rounds > 1 ? "min/med/MAD" : "fxc ms").padEnd(valueColWidth)} 备注`;
+    console.log(header);
+    console.log("-".repeat(header.length + 20));
+    const programRows = [];
+    for (const r of lastRound) {
+      const samplerStr = `${r.samplers.total}/16${r.samplers.total > 16 ? "!" : ""}`;
+      const st = statsOf(msById.get(r.id) || []);
+      const msStr = r.fxcOk ? (rounds > 1 ? `${st.min.toFixed(0)}/${st.median.toFixed(0)}/${st.mad.toFixed(0)}` : String(r.fxcMs)) : "FAIL";
+      let note = "";
+      if (r.stubbed && r.stubbed.length > 0) note += `换桩:${r.stubbed.join("+")}`;
+      if (r.missing && r.missing.length > 0) note += `${note ? " " : ""}(未换桩:${r.missing.map((m) => m.split("（")[0]).join("+")})`;
+      if (r.label && r.label !== "baseline" && baselineMinById.has(r.baseId) && r.fxcOk) {
+        // 贡献 = 基线（最小值）− 换桩后（最小值）：正数表示这个模块让编译多花了这么多 ms（换桩后变快），
+        // 负数是异常（换桩后反而更慢，可能是噪声，同一批内比较仍然有效）
+        const base = baselineMinById.get(r.baseId);
+        const cur = rounds > 1 ? st.min : r.fxcMs;
+        const contribution = base - cur;
+        note += `${note ? " " : ""}贡献≈${contribution >= 0 ? "+" : ""}${contribution.toFixed(0)}ms（基线 ${base.toFixed(0)}ms）`;
+      }
+      if (!r.fxcOk) note += `${note ? " " : ""}错误:${r.fxcError}`;
+      if (unreliableNote(r.baseId)) note += `${note ? " " : ""}${unreliableNote(r.baseId)}`;
+      console.log(`${r.id.padEnd(38)} ${samplerStr.padEnd(10)} ${msStr.padEnd(valueColWidth)} ${note}`);
+      programRows.push({ id: r.id, baseId: r.baseId, label: r.label || null, samplers: r.samplers, fxcOk: r.fxcOk, stats: r.fxcOk ? st : null });
+    }
+    const skippedTranslate = translated.filter((v) => !v.translateOk);
+    if (skippedTranslate.length > 0) console.log(`\n（${skippedTranslate.length} 个程序翻译失败，没有 fxc 结果，见上面的 [翻译失败]）`);
+
+    if (args.out) {
+      const outPath = resolveRepoPath(REPO_ROOT, args.out);
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, JSON.stringify({ when: new Date().toISOString(), quick, jobsN, rounds, programs: programRows }, null, 2));
+      console.log(`\n结果已写入 ${path.relative(REPO_ROOT, outPath).replace(/\\/g, "/")}`);
+    }
+
+    // --ledger（DX-10）：追加一行到编译预算账本（research/compile-ledger.json）。--bisect 的换桩变体不进账本，
+    // 只记基线口径（未换桩）的程序，和账本原有几行的口径保持一致。
+    if (args.ledger) {
+      let commit = "unknown";
+      try {
+        commit = execFileSync("git", ["-C", REPO_ROOT, "rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
+      } catch {
+        /* 取不到就记 unknown，不影响追加本身 */
+      }
+      const programsForLedger = {};
+      for (const row of programRows) {
+        if (row.label && row.label !== "baseline") continue;
+        if (!row.fxcOk || !row.stats) continue;
+        const key = row.baseId || row.id;
+        programsForLedger[key] = { min: row.stats.min, median: row.stats.median, mad: row.stats.mad, ...(unreliableNote(key) ? { note: "离线不可信" } : {}) };
+      }
+      const entry = {
+        date: new Date().toISOString().slice(0, 10),
+        commit,
+        label: `shader-budget --ledger${only ? `（--only ${only.join(",")}）` : ""}`,
+        quick,
+        jobs: jobsN,
+        rounds,
+        programs: programsForLedger,
+      };
+      appendLedgerEntry(entry);
+      console.log(`\n[ledger] 已追加一行到 research/compile-ledger.json（提交 ${commit}，${Object.keys(programsForLedger).length} 个程序）`);
+    }
+  } finally {
+    if (releaseLock) releaseLock();
   }
 }
 

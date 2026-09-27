@@ -79,52 +79,92 @@ function capturingPass() {
 
 // ---------- 枚举全部程序 ----------
 
+// DX-10：`opts.lenient` 给 shader-budget.mjs 的 `--baseline` / `--chain` 用——对照的是另一个（通常更老的）
+// 提交，那棵树可能还没有某个材质 / 程序（奇观、卷云、经济舱……），过去 `collectPrograms` 遇到
+// `clouds.marchWonderMat.fragmentShader` 这类链式访问直接抛 `Cannot read properties of undefined`，
+// 一整棵树全部测不出来（性能工程师第 6 波复测反馈：「`shader-budget --baseline` 对不同时期的树直接失败」，
+// research/PERF_REPORT_wave6.md 末尾开发体验反馈第 1 条）。lenient=true 时缺失的材质 / 程序改成跳过
+// 并通过 `opts.onSkip(id, err)` 上报，不中断其余程序的收集；默认（check:glsl 自己用）仍然是抛错，
+// 因为当前树本来就应该什么都有，静默跳过反而会把真 bug 藏起来。
 export async function collectPrograms(server, opts = {}) {
+  const lenient = !!opts.lenient;
+  const onSkip = opts.onSkip || (() => {});
   const programs = [];
   const add = (id, mat) => {
-    if (!mat || typeof mat.fragmentShader !== "string") throw new Error(`${id}：拿到的不是一个 ShaderMaterial`);
+    if (!mat || typeof mat.fragmentShader !== "string") {
+      const err = new Error(`${id}：拿到的不是一个 ShaderMaterial`);
+      if (lenient) {
+        onSkip(id, err);
+        return;
+      }
+      throw err;
+    }
     programs.push({ id, fragmentShader: mat.fragmentShader, vertexShader: mat.vertexShader });
+  };
+  // addDerived：给「在另一个材质基础上手动拼 #define 变体」的程序用（scene-economy、outside-ground-detail、
+  // cloud-march-wonder、cloud-march-cirrus）。这些原来是内联的 `X.fragmentShader` 字符串拼接，X 在旧树上
+  // 可能是 undefined，属性访问会直接抛错——用这个helper 先判空再拼，lenient 模式下能挡住。
+  const addDerived = (id, baseMat, transform) => {
+    if (!baseMat || typeof baseMat.fragmentShader !== "string") {
+      const err = new Error(`${id}：依赖的源材质缺失或不是 ShaderMaterial（这棵树可能还没有这个功能）`);
+      if (lenient) {
+        onSkip(id, err);
+        return;
+      }
+      throw err;
+    }
+    const { fragmentShader, vertexShader } = transform(baseMat);
+    programs.push({ id, fragmentShader, vertexShader });
+  };
+  /** 包一整个「枚举一类程序」的代码块：lenient 模式下这一块本身抛错（例如整个模块在这棵树上都不存在）
+   * 也只跳过这一块，不影响其它块已经收集到的程序。 */
+  const section = async (label, fn) => {
+    try {
+      await fn();
+    } catch (err) {
+      if (lenient) onSkip(label, err);
+      else throw err;
+    }
   };
 
   // 场景（SC-5 起只剩舱内合成）+ 窗外 pass（默认变体）+ 窗外的 GROUND_DETAIL 变体（同一份 fragmentShader 源码，
   // GROUND_DETAIL 变体只是多一个 three 在编译期注入的 #define GROUND_DETAIL 1，这里手动补上，不走
   // GroundDetailVariant.prepare()——那个方法要真的调用 renderer.compileAsync，离线检查没有真实 GPU）
-  {
+  await section("scene/outside", async () => {
     const m = await server.ssrLoadModule("/src/render/scene.ts");
     const ground = { albedo: null, water: null, height: null, levelUniform: [] };
     const mat = m.createSceneMaterial(deepMock(), {}, ground);
     add("scene-default", mat);
     // T25：舱内合成的经济舱变体（CabinClassVariant 在运行时加 #define CABIN_CLASS_ECONOMY 1，这里手动补上）
-    programs.push({ id: "scene-economy", fragmentShader: "#define CABIN_CLASS_ECONOMY 1\n" + mat.fragmentShader, vertexShader: mat.vertexShader });
+    addDerived("scene-economy", mat, (m2) => ({ fragmentShader: "#define CABIN_CLASS_ECONOMY 1\n" + m2.fragmentShader, vertexShader: m2.vertexShader }));
     const o = await server.ssrLoadModule("/src/render/outside-pass.ts");
     const outside = o.createOutsideMaterial(mat.uniforms);
     add("outside-default", outside);
-    programs.push({
-      id: "outside-ground-detail",
-      fragmentShader: "#define GROUND_DETAIL 1\n" + outside.fragmentShader,
-      vertexShader: outside.vertexShader,
-    });
-  }
+    addDerived("outside-ground-detail", outside, (m2) => ({ fragmentShader: "#define GROUND_DETAIL 1\n" + m2.fragmentShader, vertexShader: m2.vertexShader }));
+  });
 
   // 机翼 pass
-  {
+  await section("wing", async () => {
     const m = await server.ssrLoadModule("/src/render/wing-pass.ts");
     add("wing", m.createWingMaterial({}));
-  }
+  });
 
   // 云：光线步进 / 密度探针 / 时间累积解析，三个都是构造函数里直接赋的实例字段（TS 的 private 只在编译期存在，
   // 运行时 vite/esbuild 已经抹掉，直接读字段就行，不用真的渲染）
-  {
+  await section("clouds", async () => {
     const m = await server.ssrLoadModule("/src/clouds/clouds.ts");
     const { pass } = capturingPass();
     const clouds = new m.Clouds(pass, deepMock(), {}, {});
     // 带 three defines 的材质（变体）：把 defines 补成源码开头的 #define（three 在运行时注入，这里没有 renderer）
-    const addDef = (id, mat) => {
-      const defs = Object.entries(mat.defines ?? {}).map(([k, v]) => `#define ${k} ${v}\n`).join("");
-      programs.push({ id, fragmentShader: defs + mat.fragmentShader, vertexShader: mat.vertexShader });
-    };
+    // lenient（DX-10，对照老树）时缺的材质照样跳过：走 addDerived
+    const addDef = (id, mat) =>
+      addDerived(id, mat, (m2) => ({
+        fragmentShader: Object.entries(m2.defines ?? {}).map(([k, v]) => `#define ${k} ${v}\n`).join("") + m2.fragmentShader,
+        vertexShader: m2.vertexShader,
+      }));
     // PERF-10：云步进按天气拆成变体（默认程序不含雷暴 / 台风代码）。键：W 奇观层、C 卷云、S 雷暴、T 台风（见 clouds.ts 的 MARCH_FEATURES）
-    const march = (key) => clouds.marchVariant(key).mat;
+    // 老树（PERF-10 之前）没有 marchVariant：返回 undefined，addDef 在 lenient 模式下跳过
+    const march = (key) => (typeof clouds.marchVariant === "function" ? clouds.marchVariant(key).mat : undefined);
     add("cloud-march", clouds.marchMat);
     addDef("cloud-march-storm", march("S"));
     addDef("cloud-march-typhoon", march("T"));
@@ -146,55 +186,55 @@ export async function collectPrograms(server, opts = {}) {
     }
     add("wonder-layer", clouds.wonderSurfMat);
     add("cloud-resolve", clouds.resolveMat);
-  }
+  });
 
   // 云噪声：generateCloudNoise 会真的调用 pass.render + renderer.readRenderTargetPixels 做读回，
   // 这里的 pass/renderer 都是空转的 mock，只借它的调用时机把材质对象截下来
-  {
+  await section("cloud-noise", async () => {
     const m = await server.ssrLoadModule("/src/clouds/noise.ts");
     const { pass, mats } = capturingPass();
     const renderer = { setScissorTest() {}, readRenderTargetPixels() {} };
     await m.generateCloudNoise(renderer, pass);
     mats.forEach((mat, i) => add(`cloud-noise-${i}`, mat));
-  }
+  });
 
   // 海浪 FFT：三个 pass 材质也是实例字段，构造函数不会调用 pass.render（要 .update() 才会），直接读字段
-  {
+  await section("ocean-waves", async () => {
     const m = await server.ssrLoadModule("/src/ocean/waves.ts");
     const renderer = { capabilities: { getMaxAnisotropy: () => 1 }, initRenderTarget() {} };
     const waves = new m.OceanWaves(renderer);
     add("ocean-evolve", waves.evolve);
     add("ocean-butterfly", waves.butterfly);
     add("ocean-finalize", waves.finalize);
-  }
+  });
 
   // 眩光（下采样 / 上采样累加）
-  {
+  await section("bloom", async () => {
     const m = await server.ssrLoadModule("/src/render/bloom.ts");
     const bloom = new m.Bloom({ render() {} }, THREE.HalfFloatType);
     add("bloom-down", bloom.downMat);
     add("bloom-up", bloom.upMat);
-  }
+  });
 
   // 曝光 / 人眼式自动曝光 / AgX 色调映射
-  {
+  await section("exposure", async () => {
     const m = await server.ssrLoadModule("/src/render/exposure.ts");
     const exposure = new m.Exposure({ render() {} });
     add("exposure-meter", exposure.meterMat);
     add("exposure-adapt", exposure.adaptMat);
     add("exposure-final", exposure.finalMat);
-  }
+  });
 
   // 大气 LUT：transmittance / multi-scattering / irradiance 是构造函数里的匿名材质，从没存成字段，
   // 只能靠拦截 pass.render 截下来；skyView / aerial 是实例字段，直接读
-  {
+  await section("atmosphere-luts", async () => {
     const m = await server.ssrLoadModule("/src/atmosphere/luts.ts");
     const { pass, mats } = capturingPass();
     const atmosphere = new m.Atmosphere(pass);
     mats.forEach((mat, i) => add(`atmosphere-lut-${i}`, mat));
     add("atmosphere-sky-view", atmosphere.skyViewMaterial);
     add("atmosphere-aerial", atmosphere.aerialMaterial);
-  }
+  });
 
   return programs;
 }

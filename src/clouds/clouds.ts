@@ -1155,6 +1155,10 @@ export class Clouds {
       uniforms: { ...viewUniforms, ...this.uniforms, uProbeDir: { value: new THREE.Vector3(1, 0, 0) } },
     });
     this.probeWeatherMat = new THREE.ShaderMaterial({ ...common, fragmentShader: PROBE_FRAG, defines: WEATHER_DEFINES, uniforms: this.probeMat.uniforms });
+    // 名字给按 pass 计时用（passes.mjs 先按 material.name 归类）
+    this.occMat.name = "cloud-occupancy";
+    this.probeMat.name = "cloud-probe";
+    this.probeWeatherMat.name = "cloud-probe-weather";
     this.resolveMat = new THREE.ShaderMaterial({
       ...common,
       fragmentShader: RESOLVE_FRAG,
