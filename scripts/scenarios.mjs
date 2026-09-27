@@ -187,6 +187,10 @@ export async function applyScene(arg) {
   // 云步进变体（PERF-10）：雷暴 / 台风 / 卷云 / 奇观及其组合第一次需要时在后台编译，编好之前画的是替代的变体（天气系统暂时不画）；
   // 等它编好再截图（最多 120 s；老版本没有 cloudVariantPending 就不等）。放在 js 之后：奇观是在 js 里召唤的
   for (let i = 0; i < 480 && v.clouds && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250));
+  // 窗外变体（PERF-13）：罕见光学 / 天幕层奇观第一次需要时在后台编译，编好之前这些效果不画。先让主循环跑两帧、按新场景选出想要的变体，
+  // 再等它编好（最多 120 s；老版本没有 pending 就不等）
+  for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r));
+  for (let i = 0; i < 480 && v.groundDetail && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250));
   v.snapAll();
   await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
   const info = document.getElementById("info")?.textContent ?? "";

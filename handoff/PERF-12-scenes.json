@@ -1,0 +1,15 @@
+[
+  { "name": "night-city-on", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 4, "coverage": 0.15, "cabin-light": true }, "offset": [0, -25], "ground": true, "head": -0.25 },
+  { "name": "night-city-on-econ", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 4, "coverage": 0.15, "cabin-light": true, "cabin-class": "economy" }, "offset": [0, -25], "ground": true, "head": -0.25 },
+  { "name": "night-city-sleep", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 4, "coverage": 0.15, "cabin-light": false, "cabin-class": "business" }, "offset": [0, -25], "ground": true, "head": -0.25 },
+  { "name": "night-city-off", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 4, "coverage": 0.15, "cabin-light": "off" }, "offset": [0, -25], "ground": true, "head": -0.25 },
+  { "name": "night-sea-milkyway", "p": { "preset": "scs", "seat": "left", "date": "2026-05-15", "time": 1350, "coverage": 0.15, "cabin-light": "off", "wing-pos": "-4" } },
+  { "name": "sunset-wing", "p": { "preset": "wpac", "time": 1040, "wing-pos": "8" } },
+  { "name": "dusk-earthshadow", "p": { "preset": "wpac", "seat": "left", "date": "2026-02-16", "time": 1068, "wing-pos": "-4" } },
+  { "name": "noon-cumulus", "p": { "preset": "wpac", "time": 720, "wing-pos": "8" } },
+  { "name": "biz-ahead", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business" }, "head": [-0.42, 0.1, -0.5] },
+  { "name": "biz-behind", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business" }, "head": [0.42, 0.1, -0.5] },
+  { "name": "biz-seated-night-on", "p": { "preset": "scs", "seat": "left", "date": "2026-05-15", "time": 1350, "coverage": 0.15, "cabin-light": true, "wing-pos": "-4", "cabin-class": "business" }, "head": [0, 0.02, -0.42] },
+  { "name": "econ-ahead", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "economy" }, "head": [-0.42, 0.1, -0.5] },
+  { "name": "econ-behind", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "economy" }, "head": [0.42, 0.1, -0.5] }
+]

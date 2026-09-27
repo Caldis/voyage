@@ -21,6 +21,7 @@
 | 精度 | 大气 LUT（天空视图）、云缓冲（raw / history）都要用**32 位浮点**（有 `OES_texture_float_linear` 时）：半精度最小次正规数 5.96e-8，暗场景 / 无月夜会下溢成阶梯或纯黑 | [大气与曝光](#pit-atmos)、[云](#pit-cloud) |
 | 云缓冲格式 | 云的 history 缓冲是**两倍宽**（`2×w`）：左半是颜色，右半存 `(深度 × 不透明度, 不透明度)`（T38），读它一律走 `cloudBufferColor` / `cloudBufferDepth`，不要直接 `texture(uClouds, uv)`；右半**只在附近有高出海面的真实地形、或相机低于 1 km（火车 / 起降）时才写**（PERF-11，`uCloudDepthOn`，不写时 `cloudBufferDepth` 返回 0），别的用途要深度先改这个条件 | [云](#pit-cloud) |
 | 云的天气变体 | 雷暴 / 台风密度只在 `#ifdef CLOUD_STORM` / `CLOUD_TYPHOON`（共用部分 `CLOUD_WEATHER`）里，默认云步进 / 云影图 / 探针预处理后不含它们（PERF-10）；**新的天气代码一律写进这些宏里**，新的「平时不走」的功能照样做成变体，并在 `lint-shaders.mjs` 登记 | [着色器编译](#pit-shader)、[云](#pit-cloud) |
+| 窗外程序的变体 | 罕见光学（宝光 / 本机影子 / 幻日 / 晕）只在 `#ifdef OUTSIDE_OPTICS`、天幕层奇观只在 `#ifdef OUTSIDE_WONDER` 里，窗外默认程序（冷启动关键路径）预处理后不含它们（PERF-13，`check:glsl` 断言）；只有 `""` / `OW` / `DOW` / `DROW` 四个组合，选哪个只由 `outside-pass.ts` 的 `wantedOutsideKey` 决定；新的「平时不出现」的窗外效果照样写进宏，并让 `opticsWanted` / `wantedOutsideKey` 认得它 | [着色器编译](#pit-shader) |
 | 窗外输出 alpha 语义 | 窗外 pass 输出的 alpha 不是占位不透明度，是 `1 + 能看到多少点星`（T41）；改窗外输出时**别把它写回 1** | [舱内与倒影](#pit-cabin) |
 | 影像 A 通道语义 | 影像纹理的 A 通道**兼存道路照亮宽度**（T08）：< 0.5 表示「缺影像比例 / 2」，≥ 0.5 表示有影像、其余 7 位是宽度；判断缺瓦片一律用 `min(A·2, 1)`（`sampleGroundAlbedo`），不能直接读 A。G03 的高清细节合成只改 RGB、且必须在 `packRoads` 之前做 | [地面与数据](#pit-ground) |
 | 影像源与请求 | 影像源都走 `tiles.ts` 的 `ImagerySource` + `loadImageryTile`（按站点令牌桶 / 并发，`HOST_LIMITS`）；404 / 410 / 占位图负缓存，429 / 5xx / 网络错误**不**缓存；换源或混源不能改变 EOX 的低频色调（`landClasses`、城市灯点、路灯聚落地毯的阈值都按它定）；`__voyage.ground.imageryStats` 看各站点请求 | [地面与数据](#pit-ground) |
@@ -36,6 +37,7 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 | `scene-default` | 16 | 5 / 8 |
 | `scene-economy` | 16 | 5 / 8 |
 | `outside-default` | 16 | 14 / 18 |
+| `outside-extras` | 16 | 14 / 18 |
 | `outside-ground-detail` | 16 | 14 / 18 |
 | `outside-rail` | 16 | 14 / 18 |
 <!-- DX-09:sampler-table:end -->
@@ -90,7 +92,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/ground/imagery-blend.ts` | 高清细节合成（G03，在地面栅格化 Worker 里跑）：国土地理院航拍的高频 × 局部反差匹配 + EOX 的低频色调，挡水面 / 云 / 耀斑等异常 |
 | `src/ground/road-raster.ts` / `road-raster.worker.ts` | 夜间道路灯带（T08）：OSM 道路栅格成有向距离场 + 照亮宽度，在 Web Worker 里算；着色见 `ground.glsl.ts` 的 `groundRoadCoverage`、`terrain-shading.glsl.ts` 的 `groundRoadLights` |
 | `src/render/scene.ts` | 场景（舱内合成）着色器：舱内 uniform 声明、主函数（舱壁 / 内衬 / 遮光板 / 座椅 / 窗板效果、alpha 打包）、`createSceneMaterial`（持有所有 pass 共用的 uniforms） |
-| `src/render/outside-pass.ts` | 窗外着色器（SC-5）：`outsideRadiance`（地面 / 海面 / 天空的唯一调用点）、交通、闪电；`createOutsideMaterial` / `createOutsideTarget`；低空细节变体 `GroundDetailVariant` |
+| `src/render/outside-pass.ts` | 窗外着色器（SC-5）：`outsideRadiance`（地面 / 海面 / 天空的唯一调用点）、交通、闪电；`createOutsideMaterial` / `createOutsideTarget`；窗外变体（PERF-13：`""` / `OW` 罕见光学 + 天幕层奇观 / `DOW` 低空细节 / `DROW` 火车）由 `GroundDetailVariant` 管，选择只在 `wantedOutsideKey` |
 | `src/render/noise.glsl.ts` | 窗外与舱内共用的小噪声（hash12 / vnoise / hash22 / fbm2）和 `uLoopGuard`；改它两个程序都重编 |
 | `src/render/ocean.glsl.ts` | 海面：菲涅尔、12 波斜率场、风痕、`oceanRadiance` |
 | `src/render/terrain-shading.glsl.ts` | 真实地面着色 `groundRadiance` |
@@ -267,6 +269,21 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   坑一：`check:glsl` 的「同名函数」检查不展开条件编译，`#ifdef A` / `#else` 里各写一份同名函数会被报重名——在**函数体里**分 `#ifdef`（见 `cloudStormsOn`）。
   坑二：`lint-shaders` 的条件展开器（sampler 统计用）只认单个 `defined(X)`，不认 `#if defined(A) || defined(B)`；需要「任一」时由 JS 端多加一个宏（本任务的 `CLOUD_WEATHER`）。
   识别：`node handoff/PERF-10-preproc.mjs` 用 glslangValidator `-E` 真预处理，逐程序列出雷暴 / 台风标识符出现次数，默认程序应只剩 uniform 声明。
+- **舱内程序的离线 FXC 时间不跟指令数、也不跟调用点数成正比**（PERF-12）：`shader-budget --variants` 消融 scene-default，
+  整个 `shadeSeat` 换成常数 −42%（7.8 → 4.5 s），可它里面任何一块（皮纹、缝线、胡桃木、高光、法线、AO、光照）单独去掉都在 ±10% 噪声里；
+  去掉 `shadeWall` / `shadeReveal` 反而**更慢**（+10–17%）。把座椅部件、四点法线、四道缝线、三路高光都改成「常数 + uLoopGuard」循环
+  （每个调用点只内联一份），fxc 指令槽 7899 → 约 6900，编译时间只 −5%（经济舱 −16%）；把 `shadeSeat` 挪到窗板分支之后调用也没用。
+  结论：这个程序的 FXC 时间主要由 `shadeSeat` 这一整块和主函数其余部分「叠在一起」决定，零碎的循环化只能拿回几个百分点，
+  要大幅下降得把座椅着色搬出这个程序（单独一个 pass），或者把各层表面的光照收成一个调用点（按层循环）。
+  识别 / 工具：`fxc /O1 /Fc` 输出的 `Approximately N instruction slots used` 与 `dcl_temps` 是确定性的（不受负载影响），
+  可以先拿它判断「常量循环有没有被展开」，编译时间仍要在安静时交替测。本次顺手找到三处还在被展开的常量循环：
+  倒影光点（`RF_NPT`，20 份 `rfPoint`）、窗上水线（`dk = −2..2`，5 份含 4 次 vnoise 的循环体）、内衬二分（7 份 `sdFunnel`），都改成了 `+ uLoopGuard`。
+- **窗外程序的罕见光学 / 天幕层奇观拆成按需变体后，真冷启动 13.4 → 11.1 s**（PERF-13）：两者平时不出现，却一直编在窗外默认程序里（离线 FXC 消融：去掉宝光 / 影子 / 晕 −15%、去掉天梯 / 建木 −20%、两者一起 −34~38%；太阳圆盘 + 绿闪只有 −2%，留在默认程序）。拆成 `OUTSIDE_OPTICS` / `OUTSIDE_WONDER` 后默认程序离线 FXC 约 5.8 s（同轮 master 8.8–11 s），组合只留 `""`、`OW`（巡航，首帧后后台预编，冷缓存约 10–12 s 编好）、`DOW`（低空，和原低空细节变体同一程序）、`DROW`（火车，同原火车变体），三个变体预处理后与改动前的对应程序逐字相同（`node handoff/PERF-13-parity.mjs <master 的 apps/voyage>`）。
+  坑一：**本机影子是纯物理的，只要下面有云、太阳在上面就开着**——白天在云上几乎总要 `OW`，所以 `OW` 必须预编而不是等「稀有」时才编；判断「看不看得出」按着色器覆盖公式取上界（`optics.ts` 的 `opticsWanted`：压暗 ≤ 0.4 × 360 m² / 半影半径² × 0.7，< 0.2% 当看不出），日落时半影大，默认程序就够。
+  坑二：**关掉真实地理数据时 main.ts 原来直接画 `outsideMat`**，拆变体后这条路会丢掉光学与奇观——现在一律走 `groundDetail.pick`（高度传 Infinity）。
+  坑三：挪 uniform 声明的顺序会让「预处理后逐字相同」失败（常量缓冲布局也跟着变）：包 `#ifdef` 时保持原来的声明顺序。
+  坑四：零回归截图里，夜景偶尔整窗发白是**翼尖频闪**被冻结在亮相（与窗外 pass 无关）；逐像素对比夜景前设 `__voyage.wingDebug.strobe = 0`（`handoff/PERF-13-shots.mjs` 已带）。
+  识别：`check:glsl` 的「窗外默认程序不含罕见光学 / 天幕层奇观代码」一节；`__voyage.groundDetail.variantStatus` 看想要 / 实际画的变体与各变体编译状态。
 
 <a id="pit-cloud"></a>
 ### 云
@@ -444,6 +461,16 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **窗板开口边抗锯齿的那一圈不能退回侧壁色**（T47）：`inPane` 在 0..1 之间的像素，视线其实穿进了开口、`marchFunnel` 没打到内衬，`reveal` 的默认值是侧壁色；夜里开灯时侧壁亮、窗外黑，窗板边一圈带台阶的白线（和上一条叠在一起）。现在这一圈取开口边上的密封条（仍只调用一次 `shadeReveal`）。识别：白线贴着窗板开口内侧，开灯的夜景最明显。
 - **直射光穿过窗板要按入射角打折**（T47）：原来 `eSunNormal` 只乘常数 0.85，太阳高、几乎贴着窗面照进来（入射角 80° 以上）时，窗洞下缘的内衬被照成死白（看后方约 30% 的像素到 255）。三层亚克力 6 个界面的菲涅尔透射在 83° 只剩正射的约 4%。现在乘 `paneSunT(sunC.z)`（cabin.glsl.ts）。
 - **shadeWall 的细颗粒曾把亚麻压纹的斜率整个覆盖**（T47）：`slope = …` 写在 `slope += 亚麻` 之后，fA > 0（几乎总是）时压纹的法线扰动一点不剩，默认坐姿正对侧壁读成光面白板。累加量一律用 `+=`；加新的一层扰动时 grep 一下同一变量有没有别处用 `=` 赋值。
+- **舱内合成的 GPU 大头是「算完再乘 0」**（PERF-12）：窗板开口里的像素约占画面三分之一，原来侧壁（`shadeWall`）、内衬
+  （`marchFunnel` 穿过开口时一路走满 24 步）、遮光板（`shadeShade`）都照算一遍再按 0 权重混掉；座椅完全挡住的像素也照算窗板效果。
+  现在 `scene.ts` 先算合成权重（inBezel / inPane / shaded / seat.cov），权重为 0 的层不着色，调试 1–4 仍全算。GPU 消融里「去掉某一层省 0.03–0.05 ms」
+  其实大半是这种白算。以后往舱内加层：**先想清楚它的权重什么时候为 0，在分支里跳过**；新加的判断要保证跳过时结果逐像素不变
+  （`node handoff/PERF-12-ab.mjs --base <对照端口>` 同页冻结换着色器，`handoff/PERF-12-abdiff.sh` 求差，噪声底应为 0）。
+- **倒影白天也在付钱**（PERF-12）：倒影的跳过条件「上界 < 窗外 0.3%」里含对面舷窗的亮度（≈ 本窗窗外的一半），白天永远不成立，
+  正午也要算完整个倒影（约 0.11 ms）。实测正午关掉倒影，差异是对面舷窗的两团淡影（≤ 2–4/255），看得出一点「玻璃感」，所以没改跳过条件，
+  改成倒影内部省：座位列由近到远做前后合成（被近列挡满就不算远列和整个背景），视线高过这一列能画的最高处就跳过，光点只在朝上的射线上算。
+- **点星在白天也会查 3×3 星表格**（PERF-12）：窗外 pass 只要是天空就在 alpha 里标「看得见星」，正午整扇窗每个像素都在算 `starPoints`。
+  现在舱内按「窗外亮度 × 像素张角² < 6e-7」门限（天狼星峰值的 200 倍）才算，白天和黄昏亮的那半边跳过，夜景逐像素不变。
 
 <a id="pit-wonder"></a>
 ### 奇观
@@ -549,3 +576,9 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   很容易被误判成「这一批改动全炸了」。
   修法：对照 / 临时工作区一律建在仓库的 `tmp/` 下（例如 `tmp/<任务>-rev-merge`），不要放 scratchpad。
   识别：`check:glsl` 里全部程序一起失败、且看不到具体的语法错误内容时，先怀疑路径长度，不要先怀疑代码本身。
+- **测量锁按「脚本所在 worktree 的根」取路径，跨 worktree 不互斥**（PERF-12）：`scripts/lib/measure-lock.mjs` 的锁目录是
+  `path.join(脚本所在仓库根, "tmp/measure.lock")`，在 worktree 里跑就落在该 worktree 自己的 `tmp/` 下，别的代理（另一个 worktree 或主仓库）看不到，
+  等于没锁。识别：`ls D:/Code/opus-test/.claude/worktrees/*/tmp/measure.lock` 能看到好几把。临时做法：测量前手工把各 worktree 和主仓库的
+  `tmp/measure.lock` 都查一遍；根治要让锁落到 `git rev-parse --git-common-dir` 所在的主仓库（留给 DX 任务）。
+- **GPU 计时也会被别的代理污染**（PERF-12）：`passes.mjs` 同一份代码两次测舱内合成 0.317 / 0.350 ms（`nvidia-smi` 显示别的进程占 GPU 75%）。
+  判 0.01–0.03 ms 量级的差异要 `--frames 60 --rounds 4` 以上、变体表首尾各放一次 base 看漂移，或 `--baseline` 同场景交替。
