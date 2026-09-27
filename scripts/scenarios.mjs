@@ -17,6 +17,9 @@
 //   ground  是否要等真实地面瓦片加载（最多等 40 秒，ground.pending < 5 才继续）
 //   head    头部位置：一个数字（只设 z，向后兼容旧场景）或 [x, y, z] 三元组（DX-03「headX」，
 //           用来表达邻座 / 前排座位这类横向偏移，参考 T06 复核脚本的 forward-seat / own-seat 场景）
+//   js      （T17）一段脚本，场景设好之后、snapAll 与截图等待之前执行，参数 v = window.__voyage；
+//           用来开调试开关，例如 "v.optics.force.glory = true" 或 "v.optics.pinGreenFlash(0.5)"；
+//           有返回值时附在输出 JSON 的 info 末尾（"js: …"），在截图等待之前求值
 
 export const DEFAULTS = {
   preset: "wpac",
@@ -106,9 +109,12 @@ export async function applyScene(arg) {
   // 舱等（T25）：没编过的变体在后台编译，画面切过去之前不截图（最多等 120 s）
   const wantClass = sc.p["cabin-class"] ?? "business";
   for (let i = 0; i < 480 && v.cabinClass && v.cabinClass.shown !== wantClass; i++) await new Promise((r) => setTimeout(r, 250));
+  const jsOut = sc.js ? await new (async () => {}).constructor("v", sc.js)(v) : undefined;
   v.snapAll();
   await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
-  return document.getElementById("info").textContent;
+  const info = document.getElementById("info").textContent;
+  return jsOut === undefined ? info : `${info}
+js: ${typeof jsOut === "string" ? jsOut : JSON.stringify(jsOut)}`;
 }
 
 /** 按名字过滤场景表；only 为空 / null 时返回全部 */
