@@ -11,7 +11,7 @@
 | C01+C02 | 第 7 波（最高优先，用户需求） | 5215 | worktree | Opus（云多次散射能量守恒少阶 + 以云为主的白天窗外抬曝光；必审） | — | 进行中 |
 | PERF-12 | 第 7 波（飞机性能） | 5212 | worktree | Opus（舱内合成 0.385→≤0.3 ms、scene-default 编译 7.3→≤5 s：消融归因后治理；碰 scene → 必审） | — | 进行中 |
 | G01-03 | 第 7 波（飞机地面） | 5214 | worktree | Opus（EOX 2024、影像源抽象与「确定没有」缓存 / 限速、日本近处混入国土地理院航空照片 + 色调迁移；不接 Esri） | — | 进行中 |
-| WX10 | 第 7 波（飞机天气） | — | worktree | Opus（天气场气候态校准：日本海雪云街、华东冬季层云、华北雨季、梅雨锋、台风年频数 / 季节；weather-stats.mts 断言验收；零着色器改动） | — | 进行中 |
+| WX10 | 第 7 波（飞机天气） | — | `worktree-agent-ae703daab37a25d50`（522bd90） | Opus | 审查中 | 已交付：29 条统计断言全过（改前 10/26）；独立审查中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
