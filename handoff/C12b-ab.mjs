@@ -149,8 +149,11 @@ try {
   await page.bringToFront();
   const e0start = errors.length;
   log("启动期间 console error：", e0start);
-  let master = await page.evaluate(() => window.__voyage.clouds.resolveMat.fragmentShader);
+  // 变体写 "current" = 页面当前代码的 resolve 原文；--base-resolve 给 master 原文文件（改了 src 以后对照用）
+  const current = await page.evaluate(() => window.__voyage.clouds.resolveMat.fragmentShader);
+  let master = current;
   if (baseResolveFile) master = fs.readFileSync(baseResolveFile, "utf-8");
+  fs.writeFileSync(path.join(OUT, "current-resolve.glsl"), current);
   fs.writeFileSync(path.join(OUT, "master-resolve.glsl"), master);
   await page.evaluate(PAGE_LIB);
   const truthSrc = resolveVariant(master, "truth");
@@ -172,7 +175,7 @@ try {
     fs.mkdirSync(jdir, { recursive: true });
     const truthDone = {};
     for (const [vn, defs] of Object.entries(VARS)) {
-      const src = resolveVariant(master, defs);
+      const src = defs === "current" ? current : resolveVariant(master, defs);
       const e0 = errors.length;
       const res = { errors: 0 };
       await page.evaluate(({ src }) => window.__c12b.setResolve(src), { src });
@@ -269,7 +272,7 @@ try {
       row.variants[vn] = res;
       log(j.name, key || "默认", vn, JSON.stringify(res.static ?? {}), "err", res.errors);
     }
-    await page.evaluate((src) => { window.__c12b.setResolve(src); window.__voyage.freeze(false); }, master);
+    await page.evaluate((src) => { window.__c12b.setResolve(src); window.__voyage.freeze(false); }, current);
     summary.push(row);
     fs.writeFileSync(path.join(OUT, "summary.json"), JSON.stringify({ variants: VARS, modes: MODES, speed: SPEED, rows: summary }, null, 2));
   }
