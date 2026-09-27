@@ -9,6 +9,8 @@
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 云 PERF-1 + PERF-2 + T27 | 第 4 波 | 5250 | worktree | Opus（MRT 改单输出消 4.7 s 冻结；雷暴 / 台风空白跳过；海面耀斑云影软化） | — | 进行中 |
+| T29 | 第 5 波（提前） | 5229 | worktree | Opus（窗上水：低温不湿、折射式水痕） | — | 进行中 |
+| T25 | 第 5 波（提前） | 5225 | worktree | Opus（舱等切换变体、商务舱胡桃木提亮） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
