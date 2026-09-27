@@ -92,7 +92,8 @@ function anchor(K) {
 
 const RND_OLD = "gDetailRnd = fract(jitter + float(i) * 0.6180339);";
 const RND_NEW = "gDetailRnd = fract(ign(gl_FragCoord.yx * 1.37 + vec2(float(i) * 5.3, 11.0)) + uFrame * 0.75487767);";
-const RND_D = "gDetailRnd = fract(ign(gl_FragCoord.xy) * 13.0 + uFrame * 0.75487767 + float(i) * 0.6180339);";
+const RND_FINAL = "gDetailRnd = fract(ign(gl_FragCoord.yx + vec2(19.0, 47.0)) + uFrame * 0.41421356 + float(i) * 0.6180339);";
+const RND_D ="gDetailRnd = fract(ign(gl_FragCoord.xy) * 13.0 + uFrame * 0.75487767 + float(i) * 0.6180339);";
 const RND_A ="gDetailRnd = fract(ign(gl_FragCoord.xy + vec2(19.0, 47.0)) + uFrame * 0.75487767 + float(i) * 0.6180339);";
 const RND_C ="gDetailRnd = fract(jitter * 13.0 + float(i) * 0.6180339);";
 const S_OLD = "vec3 S = sunLight + ambient;";
@@ -143,7 +144,7 @@ function blDec(fine, a, tGate, k) {
 export const VARIANTS = {
   // 源码改好以后（src 里已是 rndD）：old = 页面内改回原来的 fract(jitter + i·φ)
   new: {},
-  old: { march: [[RND_D, RND_OLD]] },
+  old: { march: [[RND_FINAL, RND_OLD]] },
   rndD: { march: [[RND_OLD, "gDetailRnd = fract(ign(gl_FragCoord.xy) * 13.0 + uFrame * 0.75487767 + float(i) * 0.6180339);"]] },
   bd50a3g9: { march: blDec(0.5, 0.3, 0.9, 7) },
   bd50a5g9: { march: blDec(0.5, 0.5, 0.9, 7) },
