@@ -45,7 +45,7 @@ for row in summ:
     vns = list(row["variants"].keys())
     for vn in vns:
         d = os.path.join(root, job, vn)
-        fs = sorted(f for f in os.listdir(d) if f.startswith("f") and f.endswith(".png"))
+        fs = sorted(f for f in os.listdir(d) if f.startswith("f") and f[1:3].isdigit() and f.endswith(".png"))
         Ls = [load(os.path.join(d, f)) @ W for f in fs]
         ms = np.array([frame_metrics(L) for L in Ls])
         S = np.stack(Ls, 0)
@@ -86,7 +86,7 @@ ic = [j for j in rows if j.startswith("ic_") and OLD in rows[j]]
 if ic:
     print(f"\n== in-cloud {len(ic)} 姿态：{NEW} / {OLD} 几何均值（最差 = 最大比）")
     for k in keys:
-        rs = [rows[j][NEW][k] / rows[j][OLD][k] for j in ic if rows[j][OLD][k] > 0]
+        rs = [rows[j][NEW][k] / rows[j][OLD][k] for j in ic if rows[j][OLD][k] > 0 and rows[j][NEW][k] > 0]
         if not rs:
             continue
         g = math.exp(sum(math.log(x) for x in rs) / len(rs))

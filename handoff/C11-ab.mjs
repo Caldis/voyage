@@ -70,7 +70,7 @@ try {
     // 没写 offset 的场景：取此刻的云偏移，所有变体都钉在这里
     const offFix = sc.offset ?? await A.page.evaluate(() => { const o = window.__voyage.cloudUniforms.uCloudOffset.value; return [o.x, o.y]; });
     for (const vn of VN) {
-      const src = vn === "old" ? oldSrc : newSrc;
+      const src = vn.startsWith("old") ? oldSrc : newSrc;
       // 每个变体前都把云偏移 / 头部钉回去（cloudLive 期间云偏移仍会被风带着走）
       await A.page.evaluate(pinGeometry, sc);
       await A.page.evaluate(() => window.__c11freeze({ cloudLive: true }));
