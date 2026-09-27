@@ -31,35 +31,30 @@ const vec3 OPTICS_AIR_DISPERSION = vec3(0.0, 0.00549, 0.0152);
 const float OPTICS_HORIZON_REFRACTION = 0.01745;
 
 // ---- 贝塞尔函数 J0 / J1（Abramowitz & Stegun 9.4.1–9.4.6 的多项式近似，误差 < 1e-7 量级，x ≥ 0） ----
-float opticsJ0(float x) {
-  if (x < 3.0) {
-    float y = x * x / 9.0;
-    return 1.0 + y * (-2.2499997 + y * (1.2656208 + y * (-0.3163866 + y * (0.0444479 + y * (-0.0039444 + y * 0.00021)))));
-  }
-  float z = 3.0 / x;
-  float f = 0.79788456 + z * (-0.00000077 + z * (-0.0055274 + z * (-0.00009512 + z * (0.00137237 + z * (-0.00072805 + z * 0.00014476)))));
-  float t = x - 0.78539816 + z * (-0.04166397 + z * (-0.00003954 + z * (0.00262573 + z * (-0.00054125 + z * (-0.00029333 + z * 0.00013558)))));
-  return f * cos(t) / sqrt(x);
+// 三个波长一起算（vec3），小宗量 / 大宗量两套式子都算完再按 x < 3 选：没有分支，FXC 只内联一份向量代码
+// （写成标量函数、每个波长调一次时，窗外程序的离线 FXC 编译时间多出三成多）
+vec3 opticsJ0(vec3 x) {
+  vec3 y = x * x / 9.0;
+  vec3 small = 1.0 + y * (-2.2499997 + y * (1.2656208 + y * (-0.3163866 + y * (0.0444479 + y * (-0.0039444 + y * 0.00021)))));
+  vec3 xl = max(x, vec3(3.0));
+  vec3 z = 3.0 / xl;
+  vec3 f = 0.79788456 + z * (-0.00000077 + z * (-0.0055274 + z * (-0.00009512 + z * (0.00137237 + z * (-0.00072805 + z * 0.00014476)))));
+  vec3 t = xl - 0.78539816 + z * (-0.04166397 + z * (-0.00003954 + z * (0.00262573 + z * (-0.00054125 + z * (-0.00029333 + z * 0.00013558)))));
+  return mix(small, f * cos(t) / sqrt(xl), step(3.0, x));
 }
-float opticsJ1(float x) {
-  if (x < 3.0) {
-    float y = x * x / 9.0;
-    return x * (0.5 + y * (-0.56249985 + y * (0.21093573 + y * (-0.03954289 + y * (0.00443319 + y * (-0.00031761 + y * 0.00001109))))));
-  }
-  float z = 3.0 / x;
-  float f = 0.79788456 + z * (0.00000156 + z * (0.01659667 + z * (0.00017105 + z * (-0.00249511 + z * (0.00113653 - z * 0.00020033)))));
-  float t = x - 2.35619449 + z * (0.12499612 + z * (0.0000565 + z * (-0.00637879 + z * (0.00074348 + z * (0.00079824 - z * 0.00029166)))));
-  return f * cos(t) / sqrt(x);
-}
-// 单一粒径、单一波长的宝光角分布（非偏振）：|S1|² + |S2|² ∝ J0²(u) + J2²(u)，u = k·a·θ（Nussenzveig 的后向 glory 近似）。
-// u = 0 处为 1；第一个亮环在 u ≈ 3.8（a = 10 µm 的红光约 2.3°），短波的环更靠里：内蓝外红
-float opticsGloryTerm(float u) {
-  float j0 = opticsJ0(u);
-  float j2 = u > 1e-3 ? 2.0 * opticsJ1(u) / u - j0 : 0.0;
-  return j0 * j0 + j2 * j2;
+vec3 opticsJ1(vec3 x) {
+  vec3 y = x * x / 9.0;
+  vec3 small = x * (0.5 + y * (-0.56249985 + y * (0.21093573 + y * (-0.03954289 + y * (0.00443319 + y * (-0.00031761 + y * 0.00001109))))));
+  vec3 xl = max(x, vec3(3.0));
+  vec3 z = 3.0 / xl;
+  vec3 f = 0.79788456 + z * (0.00000156 + z * (0.01659667 + z * (0.00017105 + z * (-0.00249511 + z * (0.00113653 - z * 0.00020033)))));
+  vec3 t = xl - 2.35619449 + z * (0.12499612 + z * (0.0000565 + z * (-0.00637879 + z * (0.00074348 + z * (0.00079824 - z * 0.00029166)))));
+  return mix(small, f * cos(t) / sqrt(xl), step(3.0, x));
 }
 
-// 宝光：粒径分布按 (1 − s, 1, 1 + s) 三点、权 (1, 2, 1) / 4 平均（离散度越大，外圈越糊，只剩一两圈）。
+// 宝光：单一粒径、单一波长的角分布（非偏振）|S1|² + |S2|² ∝ J0²(u) + J2²(u)，u = k·a·θ（Nussenzveig 的后向 glory 近似），
+// J2 = 2·J1/u − J0。u = 0 处为 1；第一个亮环在 u ≈ 3.8（a = 10 µm 的红光约 2.3°），短波的环更靠里：内蓝外红。
+// 粒径分布按 (1 − s, 1, 1 + s) 三点、权 (1, 2, 1) / 4 平均（离散度越大，外圈越糊，只剩一两圈）。
 // 循环上限「3 + uLoopGuard」：常量上限会被 FXC 展开成 3 份
 vec3 opticsGlory(float theta) {
   vec3 g = vec3(0.0);
@@ -67,46 +62,23 @@ vec3 opticsGlory(float theta) {
     float fi = float(i) - 1.0;
     float a = uOpticsGlory.y * (1.0 + uOpticsGlory.z * fi);
     float w = fi == 0.0 ? 0.5 : 0.25;
-    vec3 u = 6.2831853 * a * theta / OPTICS_LAMBDA_UM;
-    g += w * vec3(opticsGloryTerm(u.x), opticsGloryTerm(u.y), opticsGloryTerm(u.z));
+    vec3 u = max(6.2831853 * a * theta / OPTICS_LAMBDA_UM, vec3(1e-3));
+    vec3 j0 = opticsJ0(u);
+    vec3 j2 = 2.0 * opticsJ1(u) / u - j0;
+    g += w * (j0 * j0 + j2 * j2);
   }
   return g;
 }
 
 // ---- 本机影子 ----
-// 2D 多边形有向距离的一条边（Inigo Quilez 的 sdPolygon 拆成逐边）
-void opticsEdge(vec2 p, vec2 vi, vec2 vj, inout float d, inout float s) {
-  vec2 e = vj - vi;
-  vec2 w = p - vi;
-  vec2 b = w - e * clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0);
-  d = min(d, dot(b, b));
-  bvec3 c = bvec3(p.y >= vi.y, p.y < vj.y, e.x * w.y > e.y * w.x);
-  if (all(c) || all(not(c))) s = -s;
-}
-float opticsQuad(vec2 p, vec2 a, vec2 b, vec2 c, vec2 d) {
-  float dd = dot(p - a, p - a);
-  float s = 1.0;
-  opticsEdge(p, a, b, dd, s);
-  opticsEdge(p, b, c, dd, s);
-  opticsEdge(p, c, d, dd, s);
-  opticsEdge(p, d, a, dd, s);
-  return s * sqrt(dd);
-}
-// 圆盘里「坐标 < x」那一部分的面积比例（x 以圆盘半径为单位）：太阳圆盘被一条带子挡住多少
-float opticsDiskCdf(float x) {
-  x = clamp(x, -1.0, 1.0);
-  return 0.5 + (x * sqrt(1.0 - x * x) + asin(x)) / M_PI;
-}
-// 一个部件挡住太阳圆盘的比例：sd 有向距离（m），w 投影后的半厚度（m），len 投影后的长度（m），b 半影半径（m）
-float opticsPartCover(float sd, float w, float len, float b) {
-  float m = sd + w; // 到部件中线的距离
-  float cov = opticsDiskCdf((w - m) / b) - opticsDiskCdf((-w - m) / b);
-  return cov * min(1.0, len / (2.0 * b));
-}
-// 本机影子：从云上一点朝太阳看，机体挡住了太阳圆盘的多少（0..1）。
-// 在垂直于阳光的平面里做：影子点相对本机的横向偏移 = t·rd 去掉沿阳光的分量；机体（A320 量级的尺寸，估算）投影到同一平面。
-// 半影半径 b = 距离 × 太阳角半径：巡航 10 km、云顶 2 km、太阳高 20° 时 t ≈ 23 km、b ≈ 110 m，
-// 机身才 38 m——整架飞机只挡住太阳的 1% 左右，影子实际上看不见；云顶就在机腹下几百米时才是清楚的十字形
+// 从云上一点朝太阳看，机体挡住了太阳圆盘的多少（0..1）。
+// 在垂直于阳光的平面里做：影子点相对本机的横向偏移 = t·rd 去掉沿阳光的分量；机体投影到同一平面。
+// 机体（A320 量级的尺寸，估算）拆成 6 段「带厚度的线段」：机身、左右机翼、左右平尾、垂尾。平板（翼面）投影后的半厚度
+// = 平均弦长 / 2 × |阳光·板法线|（太阳低时翼面几乎侧对阳光，影子里的翼只剩细线）。
+// 每段挡住的比例：太阳圆盘（半影半径 b = 距离 × 太阳角半径）被一条宽 2w 的带子遮住的面积，带子比圆盘短时再按长度折算。
+// 巡航 10 km、云顶 2 km、太阳高 20° 时 t ≈ 23 km、b ≈ 110 m，机身才 38 m——整架飞机只挡住太阳的 1% 左右，影子实际上看不见；
+// 云顶就在机腹下几百米时才是清楚的十字形。
+// 写成一个循环（上限「6 + uLoopGuard」）而不是 6 份展开的多边形距离场：后者让窗外程序的离线 FXC 编译多出约 1 秒
 float opticsPlaneShadow(vec3 rd) {
   float t = uOpticsShadow.x / max(-rd.y, 0.02) * 1000.0; // m
   float b = t * SUN_ANGULAR_RADIUS;
@@ -119,32 +91,30 @@ float opticsPlaneShadow(vec3 rd) {
   vec3 fw = uCabinToWorld[0] * uSeatSign;
   vec3 up = uCabinToWorld[1];
   vec3 rt = uCabinToWorld[2] * uSeatSign;
-  vec2 F = vec2(dot(fw, e1), dot(fw, e2));
-  vec2 R = vec2(dot(rt, e1), dot(rt, e2));
-  vec2 U = vec2(dot(up, e1), dot(up, e2));
+  // 机体系（前、右、上）→ 投影平面
+  mat3x2 P = mat3x2(dot(fw, e1), dot(fw, e2), dot(rt, e1), dot(rt, e2), dot(up, e1), dot(up, e2));
   float sUp = abs(dot(s, up));
   float sRt = abs(dot(s, rt));
-  // 机身：长 38 m、半径 2 m 的胶囊
-  vec2 fa = F * 19.0;
-  vec2 pa = p + fa;
-  vec2 ba = -2.0 * fa;
-  float hh = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
-  float sdF = length(pa - ba * hh) - 2.0;
-  float cover = opticsPartCover(sdF, 2.0, length(ba) + 4.0, b);
-  // 机翼（后掠约 25°，翼展 34 m，根弦 7 m），平尾，垂尾：都是平板，投影后的半厚度 = 弦长 × |阳光·板法线| / 2
-  float wWing = max(2.2 * sUp, 0.25);
-  float wTail = max(1.1 * sUp, 0.2);
-  float wFin = max(1.6 * sRt, 0.2);
-  float keep = 1.0 - cover;
-  for (int k = 0; k < 2; k++) {
-    float y = k == 0 ? 1.0 : -1.0;
-    float sdW = opticsQuad(p, F * 3.0 + R * 2.0 * y, F * -5.5 + R * 17.0 * y, F * -7.0 + R * 17.0 * y, F * -4.0 + R * 2.0 * y);
-    keep *= 1.0 - opticsPartCover(sdW, wWing, 15.0 * length(R) + 1.0, b);
-    float sdT = opticsQuad(p, F * -14.5 + R * y, F * -18.0 + R * 6.3 * y, F * -19.3 + R * 6.3 * y, F * -18.5 + R * y);
-    keep *= 1.0 - opticsPartCover(sdT, wTail, 5.3 * length(R) + 1.0, b);
+  float keep = 1.0;
+  for (int k = 0; k < 6 + uLoopGuard; k++) {
+    // 端点（机体系，m）和半厚度（m）
+    vec3 A = vec3(19.0, 0.0, 0.0);
+    vec3 B = vec3(-19.0, 0.0, 0.0);
+    float w = 2.0; // 机身半径
+    float side = (k == 2 || k == 4) ? -1.0 : 1.0;
+    if (k == 1 || k == 2) { A = vec3(-0.5, 2.0 * side, 0.0); B = vec3(-6.2, 17.0 * side, 0.0); w = max(1.75 * sUp, 0.25); }      // 机翼：后掠约 25°，平均弦长 3.5 m
+    else if (k == 3 || k == 4) { A = vec3(-16.5, 1.0 * side, 0.0); B = vec3(-18.7, 6.3 * side, 0.0); w = max(0.9 * sUp, 0.2); } // 平尾
+    else if (k == 5) { A = vec3(-15.5, 0.0, 2.0); B = vec3(-18.2, 0.0, 8.0); w = max(1.2 * sRt, 0.2); }                        // 垂尾
+    vec2 a = P * A;
+    vec2 ba = P * B - a;
+    vec2 pa = p - a;
+    float len = length(ba);
+    float h = clamp(dot(pa, ba) / max(len * len, 1e-6), 0.0, 1.0);
+    float m = length(pa - ba * h); // 到这一段中线的距离
+    // 圆盘被带子 [−w, w] 挡住的面积比例：圆盘「坐标 < x」部分的面积比例用 smoothstep 近似（误差几个百分点）
+    float cov = smoothstep(-1.0, 1.0, (w - m) / b) - smoothstep(-1.0, 1.0, (-w - m) / b);
+    keep *= 1.0 - cov * min(1.0, (len + 2.0 * w) / (2.0 * b));
   }
-  float sdV = opticsQuad(p, F * -13.0 + U * 2.0, F * -17.5 + U * 8.0, F * -19.0 + U * 8.0, F * -18.5 + U * 2.0);
-  keep *= 1.0 - opticsPartCover(sdV, wFin, 6.0 * length(U) + 1.0, b);
   return 1.0 - keep;
 }
 
@@ -208,7 +178,7 @@ vec3 opticsSunDisk(vec3 rd, bool hitGround) {
   vec3 delta = OPTICS_AIR_DISPERSION * OPTICS_HORIZON_REFRACTION * uOpticsFlash.y / (1.0 + lift / 0.014);
   vec3 L = vec3(0.0);
   vec3 disk = uSunIlluminance / (M_PI * R * R);
-  for (int k = 0; k < 3; k++) {
+  for (int k = 0; k < 3 + uLoopGuard; k++) {
     float ec = eS + delta[k] - eH; // 这个颜色日像中心的真高度（相对海平线）
     float lo = max(max(ec - halfChord, 0.0), tLo);
     float hi = min(ec + halfChord, tHi);
@@ -248,6 +218,9 @@ vec3 opticsHaloRadiance(vec3 rd, float cloudT) {
   if (uOpticsHalo.z > 0.0) {
     float th = acos(clamp(cosToSun, -1.0, 1.0));
     vec3 D = 2.0 * asin(OPTICS_ICE_N * 0.5) - 1.0472;
+    // 三个通道各代表一段波长，真实的晕是连续光谱叠起来的，颜色远没有三原色阶梯那么纯：各通道的内缘往中间收一半（估算），
+    // 只剩红色内缘、往外发黄发白
+    D = mix(vec3(D.y), D, 0.5);
     vec3 x = th - D;
     vec3 ring = smoothstep(-edge, edge, x) * exp(-max(x, 0.0) / 0.035);
     L += uOpticsHalo.z * ring / (6.2832 * sin(th) * 0.035);
@@ -259,6 +232,7 @@ vec3 opticsHaloRadiance(vec3 rd, float cloudT) {
     vec3 np = sqrt(OPTICS_ICE_N * OPTICS_ICE_N - sh * sh) / max(cos(h), 0.05);
     vec3 arg = np * 0.5;
     vec3 D = 2.0 * asin(min(arg, vec3(0.999))) - 1.0472;
+    D = mix(vec3(D.y), D, 0.75); // 同上（幻日的颜色比晕更分明，只收四分之一）
     vec3 valid = step(arg, vec3(0.999));
     vec2 sd = normalize(s.xz + vec2(1e-9, 0.0));
     vec2 rh = normalize(rd.xz + vec2(1e-9, 0.0));
