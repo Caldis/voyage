@@ -1,6 +1,6 @@
 import { haversineKm } from "./flight";
 import type { CloudParams } from "./clouds/clouds";
-import type { CoverKind, Director, DirectorHost } from "./director";
+import type { CoverKind, Director, DirectorHost, SwitchRequest } from "./director";
 import { REGIME_FAMILY, REGIME_NAMES, WeatherField, WeatherSystem, type CloudRegime, type StormSystemSample, type TyphoonSample, type WeatherSample } from "./weather";
 
 /**
@@ -187,16 +187,18 @@ export class WeatherDirector {
     const land = this.host.landBelow();
     const s = this.field.sample(lat, lon, t, land ?? undefined);
     this.target = s;
-    if (this.snapNext) {
-      // 用户跳变之后：直接对齐
+    // 用户跳变（换预设）本身就是一次硬切：云型、雷暴、台风都直接对齐天气场，不再等遮挡（WX10：否则白天的台风几乎摆不出来，
+    // 它的卷云盖半径约 300 km，整组落在视野外的条件在巡航中很难满足）
+    const jump = this.snapNext;
+    if (jump) {
       this.snapNext = false;
       this.regime = s.regime;
       this.cur = pick(s);
       this.push(true);
       this.note(`对齐天气场：${REGIME_NAMES[s.regime]}`, "jump");
     } else this.planRegime(s, t);
-    this.planStorms(lat, lon, t);
-    this.planTyphoon(lat, lon, t);
+    this.planStorms(lat, lon, t, jump);
+    this.planTyphoon(lat, lon, t, jump);
   }
 
   // ---------- 云型 ----------
@@ -282,7 +284,7 @@ export class WeatherDirector {
 
   // ---------- 雷暴 ----------
 
-  private planStorms(lat: number, lon: number, t: number) {
+  private planStorms(lat: number, lon: number, t: number, now = false) {
     const w = this.host.weather;
     const near = this.field.stormsNear(lat, lon, t, STORM_DROP_KM);
     const keep = new Set(near.map((s) => s.id));
@@ -301,7 +303,7 @@ export class WeatherDirector {
       if (haversineKm(lat, lon, sys.lat, sys.lon) > STORM_RANGE_KM) continue;
       if (sys.cells.length > free) continue;
       free -= sys.cells.length;
-      this.requestStormPlacement(sys);
+      this.requestStormPlacement(sys, now);
     }
   }
 
@@ -310,13 +312,13 @@ export class WeatherDirector {
   }
   private readonly pendingCells = new Map<string, number>();
 
-  private requestStormPlacement(sys: StormSystemSample) {
+  private requestStormPlacement(sys: StormSystemSample, now = false) {
     const id = `storm+${sys.id}`;
     this.pendingCells.set(id, sys.cells.length);
     // 强度随生命周期：成熟期的单体更大更高
     const cellsGeo = sys.cells.map((c) => ({ ...c, radius: c.radius * (0.75 + 0.25 * sys.strength), top: c.top - 1.2 * (1 - sys.strength) }));
     const placement = () => this.nudgeOffTrack(this.composeForWindow(cellsGeo.map((c) => this.toLocalCell(c))), (c) => stormPassKm(c.radius));
-    this.d.request({
+    this.submit(now, {
       id,
       covers: ["cloud", "night"],
       minCoverS: 0.5,
@@ -329,7 +331,7 @@ export class WeatherDirector {
         for (const c of cells) w.addStorm(c);
         const dist = Math.round(haversineKm(this.lat, this.lon, sys.lat, sys.lon));
         const kind = { isolated: "孤立雷暴", cluster: "雷暴群", squall: "飑线" }[sys.kind];
-        this.note(`生成${kind}（${cells.length} 个单体，距 ${dist} km）`, how === "forced" ? "out-of-view" : how);
+        this.note(`生成${kind}（${cells.length} 个单体，距 ${dist} km）`, how === "forced" ? (this.jumpRun ? "jump" : "out-of-view") : how);
       },
     });
   }
@@ -353,7 +355,7 @@ export class WeatherDirector {
 
   // ---------- 台风 ----------
 
-  private planTyphoon(lat: number, lon: number, t: number) {
+  private planTyphoon(lat: number, lon: number, t: number, now = false) {
     const w = this.host.weather;
     const ty = this.field.typhoonNear(lat, lon, t, TY_DROP_KM);
     const h = w.hurricane;
@@ -374,12 +376,12 @@ export class WeatherDirector {
       return;
     }
     if (h || !ty || haversineKm(lat, lon, ty.lat, ty.lon) > TY_RANGE_KM || this.d.hasPending("typhoon+")) return;
-    this.requestTyphoon(ty);
+    this.requestTyphoon(ty, now);
   }
 
-  private requestTyphoon(ty: TyphoonSample) {
+  private requestTyphoon(ty: TyphoonSample, now = false) {
     const placement = () => this.nudgeOffTrack([this.toLocalCell({ id: ty.id, lat: ty.lat, lon: ty.lon, radius: ty.eye, top: 0 })], () => TY_PASS_KM)[0];
-    this.d.request({
+    this.submit(now, {
       id: "typhoon+",
       covers: ["cloud", "night"],
       minCoverS: 0.8,
@@ -392,9 +394,21 @@ export class WeatherDirector {
         const p = placement();
         this.host.weather.setHurricane({ id: ty.id, x: p.x, z: p.z, eye: ty.eye });
         const [px, pz] = this.host.localPos();
-        this.note(`生成台风 ${ty.id}（中心距 ${Math.round(Math.hypot(p.x - px, p.z - pz))} km）`, how === "forced" ? "out-of-view" : how);
+        this.note(`生成台风 ${ty.id}（中心距 ${Math.round(Math.hypot(p.x - px, p.z - pz))} km）`, how === "forced" ? (this.jumpRun ? "jump" : "out-of-view") : how);
       },
     });
+  }
+
+  /** 排一个切换请求；now = true（用户跳变之后）时立即执行，日志记作 jump */
+  private jumpRun = false;
+  private submit(now: boolean, req: SwitchRequest) {
+    if (!now) return this.d.request(req);
+    this.jumpRun = true;
+    try {
+      req.run("forced");
+    } finally {
+      this.jumpRun = false;
+    }
   }
 
   // ---------- 奇观之门（W01 挂钩） ----------

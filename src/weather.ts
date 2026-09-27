@@ -588,7 +588,9 @@ export class WeatherField {
     if (g <= 0) return 0;
     const ridge = seasonal(dayOfYear(t), FRONT_SCHEDULE, 1) - 8;
     const west = 128 - 10 * smooth(0.85, 1, summer);
-    return g * Math.exp(-(((lat - ridge) / 6) ** 2)) * smooth(west - 6, west + 4, lon) * smooth(178, 168, lon);
+    // 副高时强时弱、时进时退（几天的尺度），不是一块常年不变的晴空
+    const wobble = 0.55 + 0.45 * rank(vnoise(lon / 25, lat / 25, t / H / 96, this.seed + 71));
+    return g * wobble * Math.exp(-(((lat - ridge) / 6) ** 2)) * smooth(west - 6, west + 4, lon) * smooth(178, 168, lon);
   }
 
   /** 冬季风寒潮的地理项（只和位置有关，按 0.25° 缓存）：streets = 下风海面的雪云街 / 日本海一侧沿岸阴雪，lee = 越过脊梁山脉后的背风晴空 */
@@ -634,7 +636,7 @@ export class WeatherField {
     if (season <= 0) return { streets: 0, lee: 0 };
     const geo = this.surgeGeo(lat, lon, land);
     if (geo.streets <= 0 && geo.lee <= 0) return { streets: 0, lee: 0 };
-    const pulse = smooth(0.12, 0.32, rank(vnoise(lon / 30, lat / 30, t / H / 60, this.seed + 51)));
+    const pulse = smooth(0.22, 0.42, rank(vnoise(lon / 30, lat / 30, t / H / 60, this.seed + 51)));
     const k = season * pulse;
     return { streets: geo.streets * k, lee: geo.lee * k };
   }
@@ -670,7 +672,9 @@ export class WeatherField {
     const front = fr.strength;
     const trade = isLand ? 0 : smooth(28, 18, lat) * smooth(2, 8, lat);
     // WX10 气候态项：副高（晴空 / 信风积云）、冬季风寒潮（雪云街 / 背风晴空）、中国东部冷季层云
-    const sh = this.subtropicalHigh(lat, lon, t);
+    // 台风周围几百公里是外围雨带和卷云盖，不会是副高下的晴空
+    const tyI = this.typhoonInfluence(lat, lon, t);
+    const sh = this.subtropicalHigh(lat, lon, t) * (1 - tyI);
     const surge = this.coldSurge(lat, lon, t, isLand);
     const ecs = this.eastChinaStratus(lat, lon, t, isLand);
     const cl = fbm(lon / 5, lat / 5, hours / 18, this.seed + 31) * (1 - 0.5 * sh);
@@ -678,13 +682,13 @@ export class WeatherField {
     const nMid = fbm(lon / 6, lat / 6 + 2.3, hours / 20, this.seed + 43);
     const cool = !isLand && lat > 26 ? 1 - this.summer(t, lat) * 0.6 : 0;
     const scores: Record<CloudRegime, number> = {
-      clear: 0.78 - 0.95 * cl - 0.7 * front - 0.55 * conv + 0.15 * sh - 0.9 * surge.streets + 0.5 * surge.lee - 0.5 * ecs,
+      clear: 0.78 - 0.95 * cl - 0.7 * front - 0.55 * conv + 0.15 * sh - 0.9 * surge.streets + 0.5 * surge.lee - 0.5 * ecs - 0.8 * tyI,
       // 副高下是晴空或零散的淡积云（信风积云），所以副高同时给积云加分
-      cumulus: 0.08 + 0.45 * trade + 0.55 * Math.min(conv, 0.5) + 0.3 * (cl - 0.5) + 0.5 * sh + 1.2 * surge.streets,
+      cumulus: 0.08 + 0.45 * trade + 0.55 * Math.min(conv, 0.5) + 0.3 * (cl - 0.5) + 0.5 * sh + 1.2 * surge.streets + 0.3 * tyI,
       towering: -0.2 + 1.05 * conv + 0.15 * trade * conv,
       stratocumulus: -0.15 + 0.95 * front * (fr.north ? 0.55 : 1) + 0.9 * Math.max(0, cl - 0.5) * (isLand ? 0.5 : 1) + 0.25 * cool - 0.35 * sh + 1.0 * ecs,
       altocumulus: -0.25 + 0.9 * front * (fr.north ? 1 : 0.4) + 0.8 * Math.max(0, nMid - 0.5) - 0.35 * sh,
-      cirrus: -0.2 + 0.9 * Math.max(0, nHigh - 0.45) + 0.1 * cl,
+      cirrus: -0.2 + 0.9 * Math.max(0, nHigh - 0.45) + 0.1 * cl + 0.4 * tyI,
     };
     let regime: CloudRegime = "clear";
     for (const k of Object.keys(scores) as CloudRegime[]) if (scores[k] > scores[regime]) regime = k;
@@ -844,32 +848,59 @@ export class WeatherField {
     };
   }
 
-  /** 台风此刻的位置与强度：按 2 小时步长积分路径（只在调用时算）；登陆后按陆上时间衰减（e 折约 12 小时，[估算]），北上 34–40°N 变性消失 */
-  private typhoonAt(k: number, t: number): TyphoonSample | null {
+  /**
+   * 台风整条路径（按 2 小时步长积分，[纬度, 经度, 累计陆上小时] × 步数），只和生成窗口 k 有关，算一次缓存。
+   * 登陆后按陆上时间衰减（e 折约 12 小时，[估算]），北上 35–41°N 变性消失
+   */
+  private readonly tyTrackCache = new Map<number, { sd: NonNullable<ReturnType<WeatherField["typhoonSeed"]>>; track: Float64Array } | null>();
+  private typhoonTrack(k: number) {
+    if (this.tyTrackCache.has(k)) return this.tyTrackCache.get(k)!;
     const sd = this.typhoonSeed(k);
-    if (!sd) return null;
+    let out: { sd: NonNullable<typeof sd>; track: Float64Array } | null = null;
+    if (sd) {
+      const n = Math.floor(sd.life / H / 2) + 1;
+      const track = new Float64Array(n * 3);
+      let lat = sd.lat0, lon = sd.lon0, landH = 0;
+      for (let h = 0; h < n; h++) {
+        track[h * 3] = lat;
+        track[h * 3 + 1] = lon;
+        track[h * 3 + 2] = landH;
+        let east: number, north: number, spd: number;
+        if (sd.straight) {
+          // 西北偏西，约 20 km/h
+          east = -0.9;
+          north = 0.35;
+          spd = 20;
+        } else {
+          // 西北行 → 在转向纬度附近折向东北并加速（西风带）
+          const rc = smooth(sd.recurve - 2, sd.recurve + 4, lat);
+          east = -0.65 + 1.4 * rc;
+          north = 0.72;
+          spd = 21 + 24 * rc;
+        }
+        lon += (east * spd * 2) / (111.32 * Math.cos(lat * D2R));
+        lat += (north * spd * 2) / 110.57;
+        if (coarseLand(lat, lon)) landH += 2;
+      }
+      out = { sd, track };
+    }
+    if (this.tyTrackCache.size > 4000) this.tyTrackCache.clear();
+    this.tyTrackCache.set(k, out);
+    return out;
+  }
+
+  /** 台风此刻的位置与强度（路径按 2 小时一步，步与步之间线性插值） */
+  private typhoonAt(k: number, t: number): TyphoonSample | null {
+    const tr = this.typhoonTrack(k);
+    if (!tr) return null;
+    const { sd, track } = tr;
     const age = t - sd.tBirth;
     if (age < 0 || age > sd.life) return null;
-    let lat = sd.lat0, lon = sd.lon0, landH = 0;
-    const steps = Math.floor(age / H / 2);
-    for (let h = 0; h < steps; h++) {
-      let east: number, north: number, spd: number;
-      if (sd.straight) {
-        // 西北偏西，约 20 km/h
-        east = -0.9;
-        north = 0.35;
-        spd = 20;
-      } else {
-        // 西北行 → 在转向纬度附近折向东北并加速（西风带）
-        const rc = smooth(sd.recurve - 2, sd.recurve + 4, lat);
-        east = -0.65 + 1.4 * rc;
-        north = 0.72;
-        spd = 21 + 24 * rc;
-      }
-      lon += (east * spd * 2) / (111.32 * Math.cos(lat * D2R));
-      lat += (north * spd * 2) / 110.57;
-      if (coarseLand(lat, lon)) landH += 2;
-    }
+    const x = age / H / 2;
+    const i = Math.min(Math.floor(x), track.length / 3 - 2);
+    const f = clamp01(x - i);
+    const at = (c: number) => track[i * 3 + c] + (track[(i + 1) * 3 + c] - track[i * 3 + c]) * f;
+    const lat = at(0), lon = at(1), landH = at(2);
     const strength = Math.sin((Math.PI * age) / sd.life) ** 0.6 * Math.exp(-landH / 12) * smooth(41, 35, lat);
     if (strength < 0.35) return null; // 太弱、登陆减弱或已经北上变性
     return { id: sd.id, lat, lon, eye: sd.eye, strength };
@@ -887,6 +918,16 @@ export class WeatherField {
       }
     }
     return best;
+  }
+
+  /** 台风的影响 0..1：中心 400 km 内满、900 km 外为 0，乘强度。按 10 模拟分钟缓存台风列表（小地图一帧取样几百次） */
+  private tyCache: { key: number; list: TyphoonSample[] } = { key: NaN, list: [] };
+  typhoonInfluence(lat: number, lon: number, t: number) {
+    const key = Math.floor(t / (10 * 60e3));
+    if (key !== this.tyCache.key) this.tyCache = { key, list: this.activeTyphoons(key * 10 * 60e3) };
+    let v = 0;
+    for (const ty of this.tyCache.list) v = Math.max(v, ty.strength * smooth(900, 400, haversine(lat, lon, ty.lat, ty.lon)));
+    return v;
   }
 
   /** 此刻全海域活跃的台风（统计脚本 scripts/weather-stats.mts 也用它） */
