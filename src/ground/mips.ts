@@ -5,9 +5,9 @@
  * 2048² 时一次约 2 × 7 × 21 MB 的 GPU 活，G06 实测 1× 巡航 2 分钟有 7–11 帧 > 16.7 ms（主线程空闲、在 GPU 侧），集显上会成倍放大。
  * 现在 Worker 里只算这一层的 mip，主线程按层、按级 texSubImage3D（clipmap.ts 的 uploadDirect），不再调 generateMipmap。
  *
- * 滤波：2×2 盒滤波（和 D3D11 GenerateMips 对 2 的幂尺寸的做法一致），逐级从上一级的浮点结果往下算（不在每级量化后再平均，误差不累积）。
- * - 影像（SRGBColorSpace）：RGB 先解码到线性再平均、再编码回 sRGB（GPU 对 sRGB 纹理生成 mip 也是在线性空间做）。
- * - 水体（线性 RGBA8：R 水面、G 海洋、B 夜光）：RGB 直接平均。
+ * 滤波：2×2 盒滤波（和 D3D11 GenerateMips 对 2 的幂尺寸的做法一致）。
+ * - 影像（SRGBColorSpace）：RGB 先解码到线性再平均、再编码回 sRGB（GPU 对 sRGB 纹理生成 mip 也是在线性空间做），逐级从上一级的浮点结果往下算。
+ * - 水体（线性 RGBA8：R 水面、G 海洋、B 夜光）：RGB 逐级从上一级的 8 位结果平均（整数运算）。
  *
  * A 通道（两张纹理的 A 都是编码值，见 README 速查表「影像 A 通道语义」）：着色器里读 A 的编码（道路照亮宽度 / 有向距离）
  * 一律 textureLod(…, 0.0) 只读第 0 级；mip 级的 A 只需要「编码合法、且对唯一会读到 mip A 的地方有意义」：
@@ -50,63 +50,89 @@ export function mipChainBytes(res: number) {
  * kind：albedo（sRGB，A = 有影像比例）/ water（线性，A = 255）
  */
 export function buildMipChain(px: Uint8ClampedArray, res: number, kind: "albedo" | "water"): Uint8Array {
+  return kind === "albedo" ? albedoChain(px, res) : waterChain(px, res);
+}
+
+/**
+ * 影像：第 1 级直接从第 0 级的 8 位像素解码（线性 RGB + 覆盖比例）并平均，之后每级从上一级的浮点结果平均（误差不累积）。
+ * 不先把第 0 级整个转成浮点：2048² × 4 个 float 是 64 MB 的临时缓冲。热循环按级拆开写、不在逐像素里分支（2048² 一层影像约 35 ms、水体约 21 ms，拆开前 62 / 36 ms，handoff/G07-mipbench.mts）
+ */
+function albedoChain(px: Uint8ClampedArray, res: number): Uint8Array {
   const out = new Uint8Array(mipChainBytes(res));
-  const srgb = kind === "albedo";
-  const enc = srgb ? linToSrgbTable() : null;
-  // 第 1 级直接从第 0 级的 8 位像素解码（线性 RGB + 覆盖比例）并平均，之后每级从上一级的浮点结果平均。
-  // 不先把第 0 级整个转成浮点：2048² × 4 个 float 是 64 MB 的临时缓冲
-  const cov0 = (a: number) => (a >= 128 ? 1 : (a * 2) / 255);
+  const enc = linToSrgbTable();
+  const L = SRGB_TO_LIN;
+  // 第 0 级 A → 有影像比例（查表：A ≥ 128 为 1，否则 A·2/255）
+  const COV = new Float32Array(256).map((_, a) => (a >= 128 ? 1 : (a * 2) / 255));
   let w = res;
-  let cur: Float32Array | null = null;
+  let h = w >> 1;
+  let cur = new Float32Array(h * h * 4);
+  for (let y = 0; y < h; y++) {
+    const r0 = 2 * y * w, r1 = r0 + w;
+    let o = y * h * 4;
+    for (let x = 0; x < h; x++, o += 4) {
+      const a = (r0 + 2 * x) * 4, b = a + 4, c = (r1 + 2 * x) * 4, d = c + 4;
+      cur[o] = 0.25 * (L[px[a]] + L[px[b]] + L[px[c]] + L[px[d]]);
+      cur[o + 1] = 0.25 * (L[px[a + 1]] + L[px[b + 1]] + L[px[c + 1]] + L[px[d + 1]]);
+      cur[o + 2] = 0.25 * (L[px[a + 2]] + L[px[b + 2]] + L[px[c + 2]] + L[px[d + 2]]);
+      cur[o + 3] = 0.25 * (COV[px[a + 3]] + COV[px[b + 3]] + COV[px[c + 3]] + COV[px[d + 3]]);
+    }
+  }
   let off = 0;
-  while (w > 1) {
-    const h = w >> 1;
+  for (;;) {
+    // 量化写出这一级
+    const n4 = h * h * 4;
+    for (let i = 0; i < n4; i += 4) {
+      const q = off + i;
+      out[q] = enc[(cur[i] * LIN_STEPS + 0.5) | 0];
+      out[q + 1] = enc[(cur[i + 1] * LIN_STEPS + 0.5) | 0];
+      out[q + 2] = enc[(cur[i + 2] * LIN_STEPS + 0.5) | 0];
+      const cov = cur[i + 3];
+      out[q + 3] = cov >= 1 - 1e-6 ? 128 : Math.min(127, (cov * 127.5 + 0.5) | 0);
+    }
+    off += n4;
+    if (h === 1) break;
+    w = h;
+    h = w >> 1;
     const next = new Float32Array(h * h * 4);
     for (let y = 0; y < h; y++) {
       const r0 = 2 * y * w, r1 = r0 + w;
-      for (let x = 0; x < h; x++) {
+      let o = y * h * 4;
+      for (let x = 0; x < h; x++, o += 4) {
         const a = (r0 + 2 * x) * 4, b = a + 4, c = (r1 + 2 * x) * 4, d = c + 4;
-        const o = (y * h + x) * 4;
-        if (cur) {
-          next[o] = 0.25 * (cur[a] + cur[b] + cur[c] + cur[d]);
-          next[o + 1] = 0.25 * (cur[a + 1] + cur[b + 1] + cur[c + 1] + cur[d + 1]);
-          next[o + 2] = 0.25 * (cur[a + 2] + cur[b + 2] + cur[c + 2] + cur[d + 2]);
-          next[o + 3] = 0.25 * (cur[a + 3] + cur[b + 3] + cur[c + 3] + cur[d + 3]);
-        } else if (srgb) {
-          const L = SRGB_TO_LIN;
-          next[o] = 0.25 * (L[px[a]] + L[px[b]] + L[px[c]] + L[px[d]]);
-          next[o + 1] = 0.25 * (L[px[a + 1]] + L[px[b + 1]] + L[px[c + 1]] + L[px[d + 1]]);
-          next[o + 2] = 0.25 * (L[px[a + 2]] + L[px[b + 2]] + L[px[c + 2]] + L[px[d + 2]]);
-          next[o + 3] = 0.25 * (cov0(px[a + 3]) + cov0(px[b + 3]) + cov0(px[c + 3]) + cov0(px[d + 3]));
-        } else {
-          next[o] = 0.25 * (px[a] + px[b] + px[c] + px[d]);
-          next[o + 1] = 0.25 * (px[a + 1] + px[b + 1] + px[c + 1] + px[d + 1]);
-          next[o + 2] = 0.25 * (px[a + 2] + px[b + 2] + px[c + 2] + px[d + 2]);
-        }
+        next[o] = 0.25 * (cur[a] + cur[b] + cur[c] + cur[d]);
+        next[o + 1] = 0.25 * (cur[a + 1] + cur[b + 1] + cur[c + 1] + cur[d + 1]);
+        next[o + 2] = 0.25 * (cur[a + 2] + cur[b + 2] + cur[c + 2] + cur[d + 2]);
+        next[o + 3] = 0.25 * (cur[a + 3] + cur[b + 3] + cur[c + 3] + cur[d + 3]);
       }
     }
-    // 量化写出这一级
-    const n = h * h;
-    if (enc) {
-      for (let i = 0; i < n; i++) {
-        const i4 = i * 4, q = off + i4;
-        out[q] = enc[Math.round(next[i4] * LIN_STEPS)];
-        out[q + 1] = enc[Math.round(next[i4 + 1] * LIN_STEPS)];
-        out[q + 2] = enc[Math.round(next[i4 + 2] * LIN_STEPS)];
-        const cov = next[i4 + 3];
-        out[q + 3] = cov >= 1 - 1e-6 ? 128 : Math.min(127, Math.round(cov * 127.5));
-      }
-    } else {
-      for (let i = 0; i < n; i++) {
-        const i4 = i * 4, q = off + i4;
-        out[q] = Math.round(next[i4]);
-        out[q + 1] = Math.round(next[i4 + 1]);
-        out[q + 2] = Math.round(next[i4 + 2]);
+    cur = next;
+  }
+  return out;
+}
+
+/** 水体（线性 RGBA8）：逐级从上一级的 8 位结果做 2×2 平均（四舍五入，和 GPU 生成 mip 的做法一样），A 一律 255 */
+function waterChain(px: Uint8ClampedArray, res: number): Uint8Array {
+  const out = new Uint8Array(mipChainBytes(res));
+  let src: Uint8Array | Uint8ClampedArray = px;
+  let srcOff = 0;
+  let w = res;
+  let off = 0;
+  while (w > 1) {
+    const h = w >> 1;
+    for (let y = 0; y < h; y++) {
+      const r0 = srcOff + 2 * y * w * 4, r1 = r0 + w * 4;
+      let q = off + y * h * 4;
+      for (let x = 0; x < h; x++, q += 4) {
+        const a = r0 + 8 * x, c = r1 + 8 * x;
+        out[q] = (src[a] + src[a + 4] + src[c] + src[c + 4] + 2) >> 2;
+        out[q + 1] = (src[a + 1] + src[a + 5] + src[c + 1] + src[c + 5] + 2) >> 2;
+        out[q + 2] = (src[a + 2] + src[a + 6] + src[c + 2] + src[c + 6] + 2) >> 2;
         out[q + 3] = 255;
       }
     }
-    off += n * 4;
-    cur = next;
+    src = out;
+    srcOff = off;
+    off += h * h * 4;
     w = h;
   }
   return out;

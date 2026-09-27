@@ -52,6 +52,8 @@ try {
             frames: f.length,
             over16: spikes.length,
             over16WithUpload: spikes.filter(([a, b]) => withUp(a, b)).length,
+            // 尖峰帧之前 50 ms 内有上传（GPU 侧的活可能拖到后一两帧才显出来）
+            over16Near: spikes.filter(([a, b]) => withUp(a - 50, b)).length,
             over33: f.filter(([a, b]) => b - a > 33.4).length,
             uploads: s.ups.length,
             uploadFrameIntervalMax: +Math.max(0, ...upFrames.map(([a, b]) => b - a)).toFixed(1),
