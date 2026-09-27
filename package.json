@@ -16,7 +16,9 @@
     "flicker": "node scripts/dev-browser.mjs flicker",
     "probe": "node scripts/probe.mjs",
     "passes": "node scripts/passes.mjs",
-    "shader-budget": "node scripts/shader-budget.mjs"
+    "shader-budget": "node scripts/shader-budget.mjs",
+    "shader-parity": "node scripts/shader-parity.mjs",
+    "weather-stats": "node --experimental-transform-types --no-warnings scripts/weather-stats.mts"
   },
   "dependencies": {
     "@mapbox/vector-tile": "^3.0.0",
