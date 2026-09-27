@@ -33,13 +33,32 @@ try {
       st.mip++; st.mipMs += ms; st.mipMax = Math.max(st.mipMax, ms);
       return r;
     };
+    // 主线程上几个可疑调用的耗时（次数 / 总 / 最大，毫秒）
+    const prof = (window.__g06prof = {});
+    const wrap = (proto, name, label) => {
+      const o = proto[name];
+      if (!o) return;
+      proto[name] = function (...a) {
+        const t = performance.now();
+        const r = o.apply(this, a);
+        const ms = performance.now() - t;
+        const p = (prof[label] ??= { n: 0, ms: 0, max: 0 });
+        p.n++; p.ms += ms; p.max = Math.max(p.max, ms);
+        return r;
+      };
+    };
+    wrap(OffscreenCanvasRenderingContext2D.prototype, "drawImage", "osc.drawImage");
+    wrap(CanvasRenderingContext2D.prototype, "drawImage", "cv.drawImage");
+    wrap(CanvasRenderingContext2D.prototype, "getImageData", "cv.getImageData");
+    wrap(OffscreenCanvas.prototype, "transferToImageBitmap", "transferToImageBitmap");
+    wrap(Worker.prototype, "postMessage", "worker.postMessage");
     window.__g06lt = [];
     try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__g06lt.push(e.duration); }).observe({ type: "longtask", buffered: true }); } catch {}
   });
   const requests = {};
   let counting = false;
   page.on("request", (r) => { if (counting) { const h = new URL(r.url()).host; requests[h] = (requests[h] ?? 0) + 1; } });
-  await page.goto(`http://127.0.0.1:${port}/?g06=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
+  await page.goto(`http://127.0.0.1:${port}/?g06=${Date.now()}${process.env.G06_Q || ""}`, { waitUntil: "commit", timeout: 180000 });
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 500 });
   const t0 = Date.now();
@@ -55,7 +74,7 @@ try {
     const tick = (t) => { f.push(t - last); last = t; requestAnimationFrame(tick); };
     requestAnimationFrame(tick);
     window.__g06lt.length = 0;
-    Object.assign(window.__g06up, { sub3d: 0, sub3dMs: 0, sub3dMax: 0, bytes: 0, mip: 0, mipMs: 0, mipMax: 0 });
+    for (const k in window.__g06prof) delete window.__g06prof[k]; Object.assign(window.__g06up, { sub3d: 0, sub3dMs: 0, sub3dMax: 0, bytes: 0, mip: 0, mipMs: 0, mipMax: 0 });
   }, rate);
   counting = true;
   await page.waitForTimeout(secs * 1000);
@@ -69,7 +88,7 @@ try {
       frames: f.length, over16: n(16.7), over33: n(33.4), over50: n(50), over100: n(100), worst: s.slice(0, 6).map((x) => +x.toFixed(1)),
       longtasks: window.__g06lt.length, longtaskMax: Math.max(0, ...window.__g06lt).toFixed(0),
       upload: window.__g06up, worker: g.worker, fine: g.fine,
-      heapMB: performance.memory ? +(performance.memory.usedJSHeapSize / 1e6).toFixed(0) : null,
+      prof: window.__g06prof, heapMB: performance.memory ? +(performance.memory.usedJSHeapSize / 1e6).toFixed(0) : null,
     };
   });
   const perMin = Object.fromEntries(Object.entries(requests).map(([h, c]) => [h, Math.round((c * 60) / secs)]));
