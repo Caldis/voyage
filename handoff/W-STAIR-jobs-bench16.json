@@ -1,0 +1,13 @@
+[
+  { "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5], "bench": true,
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "nolb", "js": "__wsPatch([['lb = max(wingFullSectionDist(P, w), m);', '']]);" },
+      { "name": "nostarve", "js": "__wsPatch([['else if (marchSteps < uWingSteps / 4 && t <= tExit && i >= limit - 1 && (uWingDebug & 8192) == 0) { w.cov = 1.0; w.bumpVar = -1.0; }', '']]);" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "nolb", "js": "__wsPatch([['lb = max(wingFullSectionDist(P, w), m);', '']]);" },
+      { "name": "nostarve", "js": "__wsPatch([['else if (marchSteps < uWingSteps / 4 && t <= tExit && i >= limit - 1 && (uWingDebug & 8192) == 0) { w.cov = 1.0; w.bumpVar = -1.0; }', '']]);" }
+    ] }
+]

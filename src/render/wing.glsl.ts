@@ -108,40 +108,40 @@ float sdWingMain(vec3 P) {
   float yL = w.yMid - w.halfT;
   float xiA = 0.0;
   float xiB = 1.0;
-  // W-STAIR：襟翼段 / 缝翼段的截面和段外不同，段的两端是一道「台阶面」（例如副翼内端 s = 0.72：内侧只到整流罩末端，
-  // 外侧是完整的翼型）。旧写法按「P 在哪一段」只算那一段的截面，段外一两毫米处的点看不到隔壁更长的翼型，距离报大了——
-  // 球体追踪一步跨过副翼的内端面、落进翼型里面几个像素深，法线取的是翼内的梯度（常常朝下），
-  // 副翼内端、整流罩后面一片逐像素乱跳的点阵阴影（穿云、襟翼放下时最明显）。
-  // 现在按「隔壁可能更近」取下界：各段的截面（整流罩、D 形前缘）都是完整翼型的子集，离开自己这一段至少要走 m
-  // （到段边界的距离），段外的形状又都在完整翼型里面，所以 真实距离 ≥ min(本段截面的距离, max(完整翼型的距离, m))。
-  // 完整翼型的距离用 wingCoord 已经算好的中弧线 / 半厚度（wingFullSectionDist），几次加减。弦向那一项不能省：
-  // 只取竖直方向时，后缘后面、和翼型同高的点下界成了 m，射线在段边界平面上「打中」一面不存在的墙（云里约 1200 个像素）。
-  // lb 只在两个段内分支里赋值：襟翼、缝翼都收起时 lb = 1e3，min 之后与旧版逐位相同，巡航时每步只多一次 min
-  // （这里在球体追踪最内层，每条射线每步都走，多一点算术都看得出来）
-  float lb = 1e3;
   // 襟翼放下：主翼在襟翼段只到整流罩末端，下表面向上收成一片薄的整流罩（襟翼收起时就藏在它下面）
-  float m = 1e3;
   if (uFlap > 1e-3 && w.s > WING_FLAP_S0 && w.s < WING_FLAP_S1) {
     xiB = WING_SHROUD_TE;
     yL = mix(yL, yU - 0.04, smoothstep(0.52, WING_SHROUD_TE, w.xi));
-    m = min(P.z - (ROOT_Z + WING_FLAP_S0 * WING_SPAN), ROOT_Z + WING_FLAP_S1 * WING_SPAN - P.z);
-    lb = max(wingFullSectionDist(P, w), m);
   }
   // 缝翼伸出：主翼前缘退到缝翼后面，切口收圆（「D 形前缘」）
   if (uSlat > 1e-3 && w.s > WING_SLAT_S0 && w.s < WING_SLAT_S1) {
     xiA = WING_SLAT_XI - 0.03;
     float k = sqrt(clamp((w.xi - xiA) / 0.05, 0.0, 1.0));
-    float mid = 0.5 * (yU + yL);
+    float m = 0.5 * (yU + yL);
     float hh = 0.5 * (yU - yL) * k;
-    yU = mid + hh;
-    yL = mid - hh;
-    m = min(m, min(P.z - (ROOT_Z + WING_SLAT_S0 * WING_SPAN), ROOT_Z + WING_SLAT_S1 * WING_SPAN - P.z));
-    lb = max(wingFullSectionDist(P, w), m);
+    yU = m + hh;
+    yL = m - hh;
   }
   float dy = abs(P.y - 0.5 * (yU + yL)) - 0.5 * (yU - yL);
   float dx = max(xiA - w.xi, w.xi - xiB) * w.chord * cos(SWEEP);
+  float d = max(dy, dx);
+  // W-STAIR：襟翼段 / 缝翼段的截面和段外不同，段的两端是一道「台阶面」（例如副翼内端 s = 0.72：内侧只到整流罩末端，
+  // 外侧是完整的翼型）。上面只按「P 在哪一段」算那一段的截面，段内离副翼内端面一两毫米的点报出的是到整流罩的距离（几十厘米），
+  // 球体追踪一步跨过内端面、落进翼型里面几个像素深，法线取的是翼内的梯度（常常朝下），
+  // 副翼内端、整流罩后面一片逐像素乱跳的点阵阴影（穿云、襟翼放下时最明显）。
+  // 修法取下界：各段的截面（整流罩、D 形前缘）都是完整翼型的子集，离开自己这一段至少要走 m（到最近一道段边界平面的距离，
+  // 四道平面一起取最小，P 在哪一段都成立），段外的形状又都在完整翼型里面，所以 真实距离 ≥ min(d, max(完整翼型的距离, m))。
+  // 完整翼型的距离（wingFullSectionDist）弦向那一项不能省：只取竖直方向时，后缘后面、和翼型同高的点下界成了 m，
+  // 射线在段边界平面上「打中」一面不存在的墙（云里一千多个像素）。
+  // 这里在球体追踪最内层（每条射线每步都走）：放在 uniform 分支里，襟翼、缝翼都收起的巡航画面逐位不变、一条指令都不多走
+  if (uFlap > 1e-3 || uSlat > 1e-3) {
+    float z = P.z - ROOT_Z;
+    float m = min(min(abs(z - WING_FLAP_S0 * WING_SPAN), abs(z - WING_FLAP_S1 * WING_SPAN)),
+                  min(abs(z - WING_SLAT_S0 * WING_SPAN), abs(z - WING_SLAT_S1 * WING_SPAN)));
+    d = min(d, max(wingFullSectionDist(P, w), m));
+  }
   float dz = max(ROOT_Z - P.z, P.z - (WING_MAIN_END_Z + 0.04));
-  return max(min(max(dy, dx), lb), dz);
+  return max(d, dz);
 }
 
 // ---- 翼尖弯折 + 鲨鳍小翼 ----
