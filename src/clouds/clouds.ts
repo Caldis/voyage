@@ -4,6 +4,7 @@ import type { Atmosphere } from "../atmosphere/luts";
 import type { FullscreenPass } from "../render/pass";
 import { LIGHTS_COMMON } from "../render/lights.glsl";
 import { VIEW_COMMON } from "../render/view.glsl";
+import { createWonderCloudUniforms, wonderCloudGlsl } from "../wonders/wonder-cloud.glsl";
 import { CLOUD_COMMON, CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES, OCC_LAYERS, OCC_N, OCC_SPACING } from "./clouds.glsl";
 import type { CloudNoise } from "./noise";
 
@@ -22,6 +23,10 @@ ${VIEW_COMMON}
 #define CLOUD_OCC 1
 ${CLOUD_COMMON}
 ${LIGHTS_COMMON}
+#ifdef WONDER_LAYER
+${wonderCloudGlsl()}
+uniform sampler2D uWonderSurf;   // 奇观表面 pass 的结果（WONDER_SURF_FRAG）：rgb 预乘辐亮度，a = floor(tW·8) + 覆盖率
+#endif
 uniform sampler3D uAerialInscatter;
 uniform sampler3D uAerialTransmittance;
 uniform float uFrame;
@@ -151,24 +156,95 @@ void main() {
   vec3 rdC = cabinRay(fc);
   // 只算能穿出窗外的像素（留一点余量，避免上采样时窗边出现一圈空白）
   bool anyWeather = uCoverage > 0.0 || uStormCount > 0 || uHurricane.w > 0.5;
+#ifdef WONDER_LAYER
+  // 云间层奇观（W00，wonders/wonder-cloud.glsl.ts）：没有奇观时 wonderOn = false，下面每处 hasW 分支都不走
+  bool wonderOn = uWonderVol > 0.5;
+  if ((!anyWeather && !wonderOn) || paneDistance(uHead, rdC) > 0.02) return;
+#else
   if (!anyWeather || paneDistance(uHead, rdC) > 0.02) return;
+#endif
   vec3 rd = uCabinToWorld * rdC;
   vec3 ro = vec3(0.0, uCamR, 0.0);
+#ifdef WONDER_LAYER
+  // 奇观包围盒的区间：云没有、或视线够不着云时，只要穿过奇观包围盒照样步进
+  vec2 wSeg = vec2(1e9, -1e9);
+  if (wonderOn) {
+    wSeg = wonderInterval(ro, rd);
+    wSeg.y = min(wSeg.y, AERIAL_MAX_DISTANCE);
+  }
+  bool hasW = wSeg.y > wSeg.x;
+  const vec2 NO_SEG = vec2(1e9, -1e9);
+#endif
   vec2 seg = cloudShellInterval(ro, rd);
   seg.y = min(seg.y, AERIAL_MAX_DISTANCE);
+#ifdef WONDER_LAYER
+  bool cloudsHere = anyWeather && seg.y > seg.x;
+  if (!cloudsHere) {
+    if (!hasW) return;
+    seg = NO_SEG;
+  }
+#else
   if (seg.y <= seg.x) return;
+#endif
   // 这条视线够不着雷暴 / 台风：整条按普通云走（T33）。uWeatherCull = 0 时关掉（对照用）
+#ifdef WONDER_LAYER
+  bvec2 nearW = !cloudsHere ? bvec2(false) : uWeatherCull > 0.5 ? cloudRayNearWeather(rd, seg) : bvec2(uStormCount > 0 || uHurricane.w > 0.5, uHurricane.w > 0.5);
+#else
   bvec2 nearW = uWeatherCull > 0.5 ? cloudRayNearWeather(rd, seg) : bvec2(uStormCount > 0 || uHurricane.w > 0.5, uHurricane.w > 0.5);
+#endif
   gWeatherOn = nearW.x;
   bool nearHur = nearW.y;
   // 够不着时只走层状云自己的高度范围：有雷暴 / 台风时外壳被撑到 0–15 km（台风 0.5–20.5 km），巡航高度就在壳里，
   // 近水平的视线要空走几百公里（这是远处雷暴开销的大头）
+#ifdef WONDER_LAYER
+  if (!nearW.x && cloudsHere) {
+    if (uCoverage <= 0.0) {
+      if (!hasW) return;
+      seg = NO_SEG;
+    } else {
+      seg = cloudShellIntervalH(ro, rd, uCloudBottom, uCloudTop);
+      seg.y = min(seg.y, AERIAL_MAX_DISTANCE);
+      if (seg.y <= seg.x) {
+        if (!hasW) return;
+        seg = NO_SEG;
+      }
+    }
+#else
   if (!nearW.x) {
     if (uCoverage <= 0.0) return;
     seg = cloudShellIntervalH(ro, rd, uCloudBottom, uCloudTop);
     seg.y = min(seg.y, AERIAL_MAX_DISTANCE);
     if (seg.y <= seg.x) return;
+#endif
   }
+#ifdef WONDER_LAYER
+  // 云自己的区间 cSeg 和奇观包围盒的区间 wSeg 合起来步进；两段之间的空隙在循环里直接跳过（见循环开头）
+  vec2 cSeg = seg;
+  // 奇观的表面：先在包围盒里追踪一次，步进走到 tW 时插进去（前面的云挡它、它挡后面的云）
+  float tW = 1e9;
+  vec4 surfW = vec4(0.0);
+  bool hasWm = hasW && uWonderUse.y > 0.5;
+  float wStep = 1e9;
+  if (hasW) {
+    // 表面在单独的 pass 里追踪好了（同分辨率、同一像素），这里只读一个 texel：追踪代码放进步进程序的话，
+    // 就算这条视线穿不过包围盒（分支不走），整个步进也变慢约一倍（W00 实测，寄存器）
+    vec4 sw = texelFetch(uWonderSurf, ivec2(gl_FragCoord.xy), 0);
+    if (sw.a > 0.0) {
+      surfW = vec4(sw.rgb, max(fract(sw.a) / 0.998, 1e-3));
+      surfW.a = min(surfW.a, 1.0);
+      tW = floor(sw.a) / 8.0;
+    }
+    // 完全挡住：身后的云不用走了
+    if (surfW.a > 0.999) wSeg.y = min(wSeg.y, tW);
+    // 介质：包围盒里至少分 24 步，且不超过种类给的步长
+    wStep = max(min(uWonderStep, (wSeg.y - wSeg.x) / 24.0), 0.01);
+    seg = vec2(min(cSeg.x, wSeg.x), max(min(cSeg.y, surfW.a > 0.999 ? tW : 1e9), wSeg.y));
+  }
+  bool wPending = surfW.a > 0.0;
+  // 奇观投影：这条视线上落在影子柱里的区间（没有奇观时为空，循环里的判断不走）
+  vec3 shQ = vec3(0.0);
+  vec2 shSeg = wonderOn ? wonderCasterSegment(rd, shQ) : vec2(1e9, -1e9);
+#endif
 
   // 直射主光源：白天是太阳，夜里是月亮（月光照亮云海）
   float cosT = dot(rd, uKeyDir);
@@ -215,11 +291,26 @@ void main() {
   // 「纱窗点阵」半透明幽灵，步数用完处的边还连成直边的「透明方盒」（美术总监 wave5 第 2 处；和占据网格无关，
   // 关掉网格照旧）。只有用完预算的那些像素会多走，typhoon-outer 云步进 +0.2 ms（约 5%）
   for (int i = 0; i < 448; i++) {
+#ifdef WONDER_LAYER
+    // W00：云的区间和奇观包围盒的区间之间的空隙直接跳过
+    if (hasW) {
+      if (t > cSeg.y && t < wSeg.x) t = wSeg.x;
+      else if (t > wSeg.y && t < cSeg.x) t = cSeg.x;
+    }
+    // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）；视线穿过奇观包围盒时多给 96 步
+    if (t >= seg.y || T < 0.005 || (!refineOn && i >= (hasW ? 288 : 192))) break;
+#else
     // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）
     if (t >= seg.y || T < 0.005 || (!refineOn && i >= 192)) break;
+#endif
     // 步长随距离变长：近处 60 m，远处 2 km
     float dtBase = clamp(t * 0.008, 0.06, 2.0);
     float dt = fine > 0 ? fineDt : dtBase;
+#ifdef WONDER_LAYER
+    // 在奇观介质的包围盒里：步长不超过 wStep（介质可能比云细得多）
+    bool inWm = hasWm && t < wSeg.y && t + dt > wSeg.x;
+    if (inWm) dt = min(dt, wStep);
+#endif
     // 这一步代表的区间长度：空白处走 2 倍步长。抖动必须覆盖整个区间——旧版只抖动 dt、却走 2dt，
     // 每个区间的后一半永远采不到，远处的薄云被「同心球壳」切成一条条水平细纹（T13）
     float stepLen = (fine > 0 || (!wasEmpty && !wasThin)) ? dt : 2.0 * dt;
@@ -245,7 +336,25 @@ void main() {
       continue;
     }
     if (fine > 0) fine--;
+#ifdef WONDER_LAYER
+    // W00：奇观表面在这一步的采样点之前——先把它插进去（它前面的云已经累积过，这一步和之后的云在它后面）
+    if (wPending && t + stepLen * jitter >= tW) {
+      L += T * surfW.rgb;
+      depthSum += T * surfW.a * tW;
+      wSum += T * surfW.a;
+      T *= 1.0 - surfW.a;
+      wPending = false;
+      if (T < 0.005) break;
+    }
+    // W00：奇观介质（消光 σ、反照率、自发光）
+    float wSig = 0.0;
+    vec3 wAlb = vec3(0.0);
+    vec3 wEm = vec3(0.0);
+    if (inWm) wSig = wonderMedium(wonderLocal(p, ro), wAlb, wEm);
+    if (dens > 0.002 || wSig > 1e-4) {
+#else
     if (dens > 0.002) {
+#endif
       wasEmpty = false;
       wasThin = soft && dens * CLOUD_EXTINCTION * dt < SOFT_THIN_OD;
       float sigma = dens * CLOUD_EXTINCTION;
@@ -257,6 +366,11 @@ void main() {
       float ls = 0.06;
       float lt = 0.0;
       int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;
+#ifdef WONDER_LAYER
+      // 只有奇观介质、没有云的采样点：用层状云那条便宜的受光步进（雷暴 / 台风的受光步进每步都要算完整的天气密度，
+      // 台风里介质的小步长会让云步进翻倍，W00 实测）。代价：雷暴 / 台风投到奇观雾罩上的影子只剩层状云那部分
+      if (dens <= 0.002) lightSteps = 6;
+#endif
       // 受光步进的细节噪声只沿用上面那一点随机挑中的一个随机平铺格点（见 clouds.glsl.ts 的 gDetailLight，T32）
       gDetailLight = true;
       if (lightSteps == 6) {
@@ -292,6 +406,11 @@ void main() {
       // Beer-Powder：云团边缘朝向太阳的地方偏暗，看起来更有体积（Schneider 2015）
       float powder = 1.0 - exp(-2.0 * od - 0.5);
       vec3 sunLight = keyLight(r, up) * sunScatter * mix(1.0, powder, 0.5);
+#ifdef WONDER_LAYER
+      // W00：奇观的投影椭球挡住直射光（岛在云海上的影子）
+      float tp = t + stepLen * jitter;
+      if (tp > shSeg.x && tp < shSeg.y) sunLight *= wonderCasterVis(tp, shQ);
+#endif
       // 台风：对面眼壁投下的长影（几十公里，受光步进只走 15 km 够不着）。太阳不高时眼壁下半截和眼底都在影子里，
       // 上亮下暗，「体育场」的碗形靠这个读出来
       // 只在眼和眼壁附近算（外围雨带头顶的卷云盖由受光步进负责，这里再算一遍会重复压暗）
@@ -336,12 +455,38 @@ void main() {
         // 强度按观感标定：白天只在通道附近隐约可见，夜里通道周围几公里亮起来、十公里外的云只被照亮一点
         S += vec3(0.8, 0.85, 1.0) * flashI * 0.005 * exp(-fd / 1.5) / (1.0 + fd * fd) * mix(1.0, stormAO, 0.5);
       }
+#ifdef WONDER_LAYER
+      if (wSig <= 1e-4) {
+        float stepT = exp(-sigma * stepLen);
+        // 云的反照率接近 1：散射系数 ≈ 消光系数，积分式里 σ 被约掉
+        L += T * S * (1.0 - stepT);
+        depthSum += T * (1.0 - stepT) * t;
+        wSum += T * (1.0 - stepT);
+        T *= stepT;
+      } else {
+        // 云和奇观介质混在同一步里：源项 = σ云·S + σ奇观·反照率·S + 自发光，按总消光积分这一步
+        float sigmaAll = sigma + wSig;
+        float stepT = exp(-sigmaAll * stepLen);
+        vec3 src = sigma * S + wSig * wAlb * S + wEm;
+        L += T * src * ((1.0 - stepT) / sigmaAll);
+        depthSum += T * (1.0 - stepT) * t;
+        wSum += T * (1.0 - stepT);
+        T *= stepT;
+      }
+      t += stepLen;
+    } else if (inWm && max(wEm.r, max(wEm.g, wEm.b)) > 0.0) {
+      // 只有自发光、几乎不消光（光束、灯光的辉光）：直接按步长积分，不改透射率
+      L += T * wEm * stepLen;
+      wasEmpty = false;
+      wasThin = false;
+#else
       float stepT = exp(-sigma * stepLen);
       // 云的反照率接近 1：散射系数 ≈ 消光系数，积分式里 σ 被约掉
       L += T * S * (1.0 - stepT);
       depthSum += T * (1.0 - stepT) * t;
       wSum += T * (1.0 - stepT);
       T *= stepT;
+#endif
       t += stepLen;
     } else {
       // 空白区域大步走（细化时仍用小步）
@@ -351,7 +496,23 @@ void main() {
       t += stepLen;
     }
   }
+#ifdef WONDER_LAYER
+  // W00：奇观表面在云的区间之后（或步数用完、云已经走完）：在最后插进去
+  if (wPending) {
+    L += T * surfW.rgb;
+    depthSum += T * surfW.a * tW;
+    wSum += T * surfW.a;
+    T *= 1.0 - surfW.a;
+  }
+  if (wSum <= 0.0) {
+    // 只有不消光的自发光：深度取包围盒区间的中点（给时间累积的重投影用）
+    if (!hasW || max(L.r, max(L.g, L.b)) <= 0.0) return;
+    depthSum = 0.5 * (wSeg.x + wSeg.y);
+    wSum = 1.0;
+  }
+#else
   if (wSum <= 0.0) return;
+#endif
   float depth = depthSum / wSum;
   // 相机到云之间的空气透视：远处的云被大气染蓝、变淡，融进地平线
   vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, depth);
@@ -380,6 +541,33 @@ void main() {
 `;
 
 // 时间累积：把上一帧的结果按云的运动重投影过来，再和这一帧混合；用邻域夹取防止拖影
+// 云间层奇观的表面（W00）：在云分辨率上沿每条视线球面追踪一次奇观的距离场、着色，给云步进在 tW 处插进去。
+// 只在有云间层奇观在场时画（和步进的奇观变体一起后台编译，平时不编也不画）。
+// 输出 RGBA32F：rgb = 预乘覆盖率的辐亮度（不含空气透视），a = floor(tW·8) + 覆盖率·0.998（tW 精度 125 m，没命中 = 0）
+const WONDER_SURF_FRAG = /* glsl */ `
+${ATMOSPHERE_COMMON}
+${VIEW_COMMON}
+${CLOUD_COMMON}
+${LIGHTS_COMMON}
+${wonderCloudGlsl()}
+uniform vec2 uCloudResolution;
+varying vec2 vUv;
+void main() {
+  gl_FragColor = vec4(0.0);
+  vec3 rdC = cabinRay(gl_FragCoord.xy * (uResolution / uCloudResolution));
+  if (uWonderVol < 0.5 || paneDistance(uHead, rdC) > 0.02) return;
+  vec3 rd = uCabinToWorld * rdC;
+  vec3 ro = vec3(0.0, uCamR, 0.0);
+  vec2 wSeg = wonderInterval(ro, rd);
+  wSeg.y = min(wSeg.y, AERIAL_MAX_DISTANCE);
+  if (wSeg.y <= wSeg.x) return;
+  float tW;
+  vec4 s = wonderSurface(ro, rd, wSeg, 2.0 * uTanHalfFov / uCloudResolution.y, tW);
+  if (s.a <= 0.0) return;
+  gl_FragColor = vec4(min(s.rgb, vec3(60000.0)), floor(tW * 8.0) + min(s.a, 1.0) * 0.998);
+}
+`;
+
 const RESOLVE_FRAG = /* glsl */ `
 ${VIEW_COMMON}
 const float CLOUD_DEPTH_SCALE = ${AERIAL_MAX_DISTANCE_KM.toFixed(1)};  // 深度纹理里存的是 depth / 这个值（与步进程序的 AERIAL_MAX_DISTANCE 一致）
@@ -655,6 +843,14 @@ const OCC_LAYERS_PER_FRAME = 12;
 
 export class Clouds {
   private raw = rawTarget(1, 1);
+  /** 云间层奇观的表面（W00，WONDER_SURF_FRAG 的输出，和 raw 同尺寸） */
+  private wonderSurf = new THREE.WebGLRenderTarget(1, 1, {
+    type: THREE.FloatType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    depthBuffer: false,
+  });
   private history = [target(1, 1), target(1, 1)];
   private frame = 0;
   /** 云的渲染分辨率相对全屏的比例 */
@@ -664,6 +860,17 @@ export class Clouds {
   private readonly prevCabinToWorld = new THREE.Matrix3();
 
   private readonly marchMat: THREE.ShaderMaterial;
+  /**
+   * 云间层奇观（W00）的步进变体：同一份着色器加 #define WONDER_LAYER，和 marchMat 共用同一批 uniform 对象。
+   * 只在有云间层奇观在场（uWonderVol > 0）时用它画；平时画的 marchMat 预处理后与改动前逐字相同——
+   * 奇观代码就算分支不走也会让步进变慢（寄存器，W00 实测 noon-cumulus 云步进 0.35 → 0.44–0.73 ms），冷编译也不加。
+   * 第一次需要时在后台编译（d3d11 约 10–15 s，有磁盘缓存后不到 1 s），编好之前奇观不画（云照常）
+   */
+  private readonly marchWonderMat: THREE.ShaderMaterial;
+  private readonly wonderSurfMat: THREE.ShaderMaterial;
+  private wonderState: "idle" | "compiling" | "ready" | "failed" = "idle";
+  /** 预热：设成 true 后，下一次 probe() 就在后台编译奇观变体（奇观模式打开时由 main.ts 设，召唤时不用再等） */
+  wonderPrewarm = false;
   private readonly probeMat: THREE.ShaderMaterial;
   private readonly probeTarget = new THREE.WebGLRenderTarget(1, 1, { type: THREE.FloatType, depthBuffer: false });
   private readonly probePixel = new Float32Array(4);
@@ -720,6 +927,8 @@ export class Clouds {
       depthFunc: THREE.AlwaysDepth,
       fragmentShader: MARCH_FRAG,
       uniforms: {
+        // 云间层奇观（W00）：先铺默认值（奇观关）；main.ts 已把 WonderSystem 的同名 uniform 合进场景 uniforms，由下一行覆盖成共用的对象
+        ...createWonderCloudUniforms(),
         ...atmosphere.sharedUniforms,
         ...viewUniforms,
         ...this.uniforms,
@@ -733,6 +942,21 @@ export class Clouds {
         uOccAlt: { value: new THREE.Vector2(0, 1) },
         uOccValid: { value: 0 },
       },
+    });
+    this.marchWonderMat = new THREE.ShaderMaterial({
+      ...common,
+      depthTest: true,
+      depthWrite: true,
+      depthFunc: THREE.AlwaysDepth,
+      fragmentShader: MARCH_FRAG,
+      defines: { WONDER_LAYER: 1 },
+      uniforms: this.marchMat.uniforms,
+    });
+    this.marchMat.uniforms.uWonderSurf = { value: this.wonderSurf.texture };
+    this.wonderSurfMat = new THREE.ShaderMaterial({
+      ...common,
+      fragmentShader: WONDER_SURF_FRAG,
+      uniforms: this.marchMat.uniforms,
     });
     this.occMat = new THREE.ShaderMaterial({
       ...common,
@@ -802,22 +1026,46 @@ export class Clouds {
     if (this.occState !== "idle") return;
     this.occState = "compiling";
     this.shadowState = "compiling";
-    const compile = (mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget, done: () => void) => {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
-      geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
-      const scene = new THREE.Scene();
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.frustumCulled = false;
-      scene.add(mesh);
-      const prev = renderer.getRenderTarget();
-      renderer.setRenderTarget(target);
-      const job = renderer.compileAsync(scene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
-      renderer.setRenderTarget(prev);
-      job.then(done, done).finally(() => geo.dispose());
+    this.compileInBackground(renderer, this.occMat, this.occ[1], () => (this.occState = "ready"));
+    this.compileInBackground(renderer, this.shadowMat, this.shadow[1], () => (this.shadowState = "ready"));
+  }
+
+  private compileInBackground(renderer: THREE.WebGLRenderer, mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget, done: () => void) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+    geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
+    const scene = new THREE.Scene();
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    const prev = renderer.getRenderTarget();
+    renderer.setRenderTarget(target);
+    const job = renderer.compileAsync(scene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
+    renderer.setRenderTarget(prev);
+    job.then(done, done).finally(() => geo.dispose());
+  }
+
+  /** 云间层奇观变体的后台编译（W00）：有奇观在场或预热时开始；compileAsync 失败也会 resolve，要检查程序是否可用 */
+  private ensureWonderCompiled(renderer: THREE.WebGLRenderer) {
+    if (this.wonderState !== "idle") return;
+    if (!this.wonderPrewarm && !(this.marchMat.uniforms.uWonderVol.value > 0.5)) return;
+    this.wonderState = "compiling";
+    // 两个程序（步进变体、表面 pass）并行编译，都好了才用
+    let left = 2;
+    let ok = true;
+    const done = (mat: THREE.ShaderMaterial) => () => {
+      const program = (renderer.properties.get(mat) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
+      program?.getUniforms();
+      if (!program || program.diagnostics?.runnable === false) ok = false;
+      if (--left === 0) this.wonderState = ok ? "ready" : "failed";
     };
-    compile(this.occMat, this.occ[1], () => (this.occState = "ready"));
-    compile(this.shadowMat, this.shadow[1], () => (this.shadowState = "ready"));
+    this.compileInBackground(renderer, this.marchWonderMat, this.raw, done(this.marchWonderMat));
+    this.compileInBackground(renderer, this.wonderSurfMat, this.wonderSurf, done(this.wonderSurfMat));
+  }
+
+  /** 云间层奇观变体的状态（调试 / 面板用）：idle 没编过、compiling 后台编译中、ready 可用、failed 编译失败 */
+  get wonderLayerState() {
+    return this.wonderState;
   }
 
   /**
@@ -929,6 +1177,7 @@ export class Clouds {
   /** 每几帧调用一次：在 GPU 上算飞机位置的云密度，异步读回（不阻塞渲染） */
   probe(renderer: THREE.WebGLRenderer, heading: THREE.Vector3) {
     this.ensureAuxCompiled(renderer);
+    this.ensureWonderCompiled(renderer);
     if (this.probeBusy) return;
     this.probeMat.uniforms.uProbeDir.value.copy(heading);
     this.pass.render(this.probeMat, this.probeTarget);
@@ -1012,6 +1261,7 @@ export class Clouds {
     const w = Math.max(1, Math.round(fullWidth * this.resolutionScale));
     const h = Math.max(1, Math.round(fullHeight * this.resolutionScale));
     this.raw.setSize(w, h);
+    this.wonderSurf.setSize(w, h);
     for (const t of this.history) t.setSize(w, h);
     this.marchMat.uniforms.uCloudResolution.value.set(w, h);
     this.reset = true;
@@ -1025,7 +1275,10 @@ export class Clouds {
     this.updateOccupancy();
     this.updateShadow();
     this.marchMat.uniforms.uFrame.value = this.frame++ % 64;
-    this.pass.render(this.marchMat, this.raw);
+    // 有云间层奇观在场、且奇观变体已编好时用变体画（W00）；否则照旧（编好之前奇观不画）
+    const wonder = this.wonderState === "ready" && this.marchMat.uniforms.uWonderVol.value > 0.5;
+    if (wonder) this.pass.render(this.wonderSurfMat, this.wonderSurf);
+    this.pass.render(wonder ? this.marchWonderMat : this.marchMat, this.raw);
 
     const [prev, next] = this.history;
     const r = this.resolveMat.uniforms;
