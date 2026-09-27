@@ -253,6 +253,9 @@ function setPreset(id: string) {
 
 // ---------- 导演：连续航程 / 背景板模式（T19a，director.ts） ----------
 let lastSunAlt = 0;
+// DX-12：截图工具想在 JSON 里附一份太阳 / 月亮高度（README「调试与验证」的 shots 输出），复用这个已有的
+// 「每帧存一份供调试读」的写法，不额外算一遍天文位置
+let lastMoonAlt = 0;
 let groundMinLevel = 0;
 const director = new Director({
   state,
@@ -411,6 +414,7 @@ function renderFrame(now: number) {
   haze.update({ state, ground, x: offT18.x, z: offT18.y, lon: curLon, sunAltDeg: sun.altitude, coverage: cloudUniforms.uCoverage.value, dt });
 
   const moon = moonState(new Date(state.simTime), curLat, curLon, state.altitudeKm * 1000);
+  lastMoonAlt = moon.altitude;
   const moonDir = directionFromAzAlt(moon.azimuth, moon.altitude);
   atmosphere.updateSkyView(camR, sunDir[1], moonDir[1]);
   atmosphere.updateAerialPerspective(camR, sunDir[1]);
@@ -700,4 +704,6 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail };
+// DX-12：新增 sunAltDeg / moonAltDeg（截图 JSON 附太阳 / 月亮高度用，见 README「调试与验证」），
+// 复用已有的 lastSunAlt / lastMoonAlt（每帧更新，见上）——不重复算一遍天文位置
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };

@@ -11,12 +11,36 @@
 // 的 `tmp/browser.lock` 同一手法（那把锁给 Playwright MCP 共享浏览器用，这把锁给「测量期间机器要安静」用，
 // 两者正交，互不替代）。`owner.txt` 写持有者描述 + 开始时间。这不是严格的分布式互斥（两次读—写之间仍有极小的
 // 竞态窗口），目标是「大概率避免互相干扰」，不是绝对正确性。
+//
+// DX-11/12（PERF-12 / TR07 反馈）：**锁必须放在主仓库根，不能放在各自 worktree 根**——每个实现代理都在
+// 自己独立的 `.claude/worktrees/agent-xxx/` 里跑脚本，`repoRoot` 是各自worktree 的根，原来 `tmp/measure.lock`
+// 直接拼在这个 `repoRoot` 下，等于每个 worktree 各锁各的，锁完全起不到跨代理互斥的作用（PERF-12 与 TR07
+// 两个任务并行测量时互相看不到对方在跑）。`mainRepoRoot()` 用 `git rev-parse --path-format=absolute
+// --git-common-dir` 找主仓库的 `.git`（worktree 与主仓库共享同一个 `.git`，这是 git 官方支持的查法），
+// 取它的上一级就是主仓库根，所有 worktree 用同一把锁。取不到（不是 git 仓库、本机没有 git、旧版 git 不认
+// `--path-format`）时退回传入的 `repoRoot` 本身（退化成原来的行为，不阻塞脚本）。
 
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+/** 把任意 worktree 的仓库根换算成主仓库根（所有 worktree 共享的那个）；换算失败原样返回。 */
+export function mainRepoRoot(repoRoot) {
+  try {
+    const commonDir = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (commonDir) return path.dirname(commonDir);
+  } catch {
+    /* 不是 git 仓库 / 没有 git / 旧版本不认 --path-format：退回 repoRoot 本身，不阻塞脚本 */
+  }
+  return repoRoot;
+}
+
 export function lockDirFor(repoRoot) {
-  return path.join(repoRoot, "tmp", "measure.lock");
+  return path.join(mainRepoRoot(repoRoot), "tmp", "measure.lock");
 }
 
 function ownerFile(repoRoot) {

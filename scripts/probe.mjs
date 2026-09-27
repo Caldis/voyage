@@ -148,6 +148,13 @@ async function main() {
         },
         // 借 clouds.pass 内部共享的全屏三角形 scene/camera（FullscreenPass，见 render/pass.ts）：
         // 所有全屏材质本来就靠它渲染，用同一份几何体 + camera 发起 compileAsync 和真实使用完全一致。
+        //
+        // DX-11（C01 反馈：改坏的着色器不报错，静默画出一片点阵/乱码，得靠肉眼截图才发现）：
+        // `renderer.compileAsync` 只保证「编译到 KHR_parallel_shader_compile 认为完成」，不检查链接是否
+        // 成功——three.js 的链接错误检查（WebGLProgram.js 的 onFirstUse）要等这个材质真正被 render() 用过一次
+        // 才会触发（three 内部在 getUniforms()/getAttributes() 里才做这个检查，compileAsync 不会主动调用它们）。
+        // 这里补一次真正的 render() 调用，再读 `renderer.properties.get(material).currentProgram.diagnostics`——
+        // 链接失败时 `diagnostics.runnable === false`，直接在 Node 侧抛出，不再让脚本悄悄截一张坏图收场。
         async compileWait(entries) {
           const renderer = v.clouds.pass.renderer;
           const passObj = v.clouds.pass;
@@ -159,8 +166,19 @@ async function main() {
             passObj.mesh.material = m;
             renderer.setRenderTarget(tgt);
             await renderer.compileAsync(passObj.scene, passObj.camera);
+            // compileAsync 完成后再真正 render 一次，才会触发 three.js 的链接错误检查（见上）
+            passObj.render(m, tgt);
             passObj.mesh.material = prevMat;
             renderer.setRenderTarget(prevTarget);
+            const diagnostics = renderer.properties.get(m)?.currentProgram?.diagnostics;
+            if (diagnostics && diagnostics.runnable === false) {
+              throw new Error(
+                `--patch：材质 "${mat}" 编译 / 链接失败，不是「看起来没变化」而是根本没编过：\n` +
+                  `program: ${diagnostics.programLog || "(空)"}\n` +
+                  `vertex: ${diagnostics.vertexShader.log || "(空)"}\n` +
+                  `fragment: ${diagnostics.fragmentShader.log || "(空)"}`,
+              );
+            }
           }
         },
         readRegion(target, x, y, w, h) {

@@ -252,7 +252,14 @@ function installVariantPatcher() {
       const tgt = targetPath ? resolvePath(v, targetPath) : v.hdrOutside;
       const passObj = v.clouds.pass;
       const renderer = passObj.renderer;
-      const before = renderer.properties.get(m)?.programs?.size ?? 0;
+      // DX-12（PERF-12/TR07 反馈：「程序缓存数没增加」的警告常误报，实际已经切到新程序了）：
+      // materialProperties.programs 是按 three.js 内部 programCacheKey 去重的 Map，同一个材质换过几轮
+      // fragmentShader 之后这个 key 有时会撞上之前某一轮已经在这个 Map 里的旧条目（例如改了又改回去，
+      // 或者不同变体巧合生成同一个 cacheKey），Map 的 size 就不会再涨，但 `currentProgram`（这次
+      // getProgram() 真正绑定给这个材质用的 WebGLProgram 对象）其实已经换了。直接比对象身份更准确：
+      // three.js 自己在 WebGLRenderer 内部（setProgram）也是用 `materialProperties.currentProgram === program`
+      // 这个判断来决定「要不要走新程序这条路」的，语义上就是「这次用的是不是同一个程序对象」。
+      const beforeProgram = renderer.properties.get(m)?.currentProgram ?? null;
       const prevMat = passObj.mesh.material;
       const prevTarget = renderer.getRenderTarget();
       passObj.mesh.material = m;
@@ -263,8 +270,24 @@ function installVariantPatcher() {
       passObj.render(m, tgt);
       passObj.mesh.material = prevMat;
       renderer.setRenderTarget(prevTarget);
-      const after = renderer.properties.get(m)?.programs?.size ?? 0;
-      return { before, after, switched: after > before };
+      const afterProgram = renderer.properties.get(m)?.currentProgram ?? null;
+      // DX-11（C01 反馈：--variants 补丁编坏了不报错，量出来的是「静默画点阵」那一份坏程序的数字，
+      // 看着像正常的性能数据）：链接错误检查（three.js WebGLProgram.js 的 onFirstUse）在上面这次真正
+      // render 时已经触发，这里读 diagnostics.runnable，false 就直接抛错中断，不再把坏程序的计时结果
+      // 当正常数据用
+      const diagnostics = afterProgram?.diagnostics;
+      if (diagnostics && diagnostics.runnable === false) {
+        throw new Error(
+          `--variants：材质 "${matPath}" 编译 / 链接失败，不是量出来的数字不对，是这个变体根本没编过：\n` +
+            `program: ${diagnostics.programLog || "(空)"}\n` +
+            `vertex: ${diagnostics.vertexShader.log || "(空)"}\n` +
+            `fragment: ${diagnostics.fragmentShader.log || "(空)"}`,
+        );
+      }
+      // 注意：不能把 beforeProgram/afterProgram 这两个 WebGLProgram 对象本身通过 page.evaluate 的返回值
+      // 带回 Node 侧——它们不是结构化克隆能处理的普通数据，identity 比较必须留在页面里做完，只把结果
+      // （一个布尔值）带出来
+      return { switched: afterProgram !== beforeProgram };
     },
   };
 }
@@ -364,7 +387,9 @@ async function main() {
             await page.evaluate(({ material, pairs }) => window.__variant.apply(material, pairs), { material, pairs });
             const check = await page.evaluate(({ material, target }) => window.__variant.waitCompile(material, target), { material, target });
             if (!check.switched) {
-              console.warn(`[passes] ${sc.name}/${name}：材质 "${material}" 的程序缓存数没有增加（${check.before} -> ${check.after}），量到的可能还是旧程序`);
+              // DX-12（PERF-12/TR07 反馈）：按 currentProgram 对象身份判断，比原来按 programs 缓存 Map
+              // 的 size 判断更准（size 不涨不代表没切换，见 waitCompile 里的注释）
+              console.warn(`[passes] ${sc.name}/${name}：材质 "${material}" 换上新变体后 currentProgram 对象身份没变，量到的可能还是旧程序`);
             }
           }
           const res = await measurePasses(page, sc, frames, rounds);
