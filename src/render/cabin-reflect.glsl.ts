@@ -171,27 +171,17 @@ vec3 cabinReflectEnv(vec3 p, vec3 r, float d0, ReflLights L) {
   }
 
   // 自己：头（中心在眼睛后面约 8 cm）和肩膀 / 上身（T34 改）。
-  // 原来画成暗剪影（脸朝窗、灯在头顶偏后），倒影正中是一个上窄下宽的黑洞，把翼尖和航行灯罩在一团黑里。
-  // 开着舱灯时脸和头发被顶灯、侧壁回光照亮，倒影里是一个淡淡的、偏暖的头像，和背后的行李架差不多亮，只剩轮廓；
-  // 睡眠 / 全关时脸几乎不受光，本应是一块和背景一样暗的区域，画出来只会是个洞，所以不画头。
-  // 上身是深色衣服、侧对着窗，和背后的座椅差不多暗，开灯时略亮一点
+  // 原来画成深色剪影，倒影正中是一个上窄下宽的黑洞；T34 第一版画成被照亮的脸，又读成发亮的浅色椭圆「蛋」（T24 的老坑）。
+  // 实际上脸的反照率低、顶灯在头顶偏后被自己挡住，倒影里的头肩只是比背后略暗的一片，边缘很虚：
+  // 所以开灯时只把背后的倒影压暗 13%（与周围的亮度差 ≤ 15%），边缘按 3 倍大面虚化，不画椭圆轮廓、不画五官；
+  // 睡眠 / 全关不画头（那时它本来就和背景一样暗，画出来只会是洞），上身照旧是和座椅一样暗的一片（在暗处看不出）
   float tH, tB;
-  // 上身按肩宽（沿机身 ±0.21 m）：开灯时肩和胸口被顶灯照到，和头连成「头肩像」，头才不是一个悬空的蛋（T24 的坑）
-  float cBody = rfBlob(p, r, uHead + vec3(0.0, -0.42, -0.12), vec3(0.21, 0.30, 0.16), d0, max(RF_BLUR_SOFT, 1.5 * L.pixAng), L.pupil, tB);
-  col = mix(col, mix(0.07, 0.2, L.lit) / M_PI * (L.eAmb + L.eMain * mix(0.35, 0.6, L.lit) + L.moodI * 0.03), cBody);
-  vec3 cH = uHead + vec3(0.0, 0.01, -0.08);
-  vec3 radH = vec3(0.085, 0.11, 0.10);
-  float cHead = rfBlob(p, r, cH, radH, d0, max(RF_BLUR_SOFT, 1.5 * L.pixAng), L.pupil, tH);
-  // 脸：肤色，顶灯掠射 + 贴着的窗边侧壁与窗罩的回光（脸朝着被照亮的舱壁，竖直面照度不比行李架门低多少）；
-  // 头发框住脸的上沿和两侧，深色——有了这圈头发，才认得出是一个人的头而不是一个灰球
-  vec3 hq = (p + r * tH - cH) / radH;
-  float hair = clamp(smoothstep(0.15, 0.5, hq.y) + smoothstep(0.62, 0.9, abs(hq.x)) * smoothstep(-0.35, 0.0, hq.y), 0.0, 1.0);
-  // 头顶的头发正对顶灯（水平面），被照得比脸还亮一点，所以头发只比脸略暗，整颗头和背后的行李架、侧壁差不多亮——淡轮廓
-  // 脸的竖直面照度按主灯 1.5 倍算：脸正对着一臂之内被顶灯洗亮的窗边侧壁和窗罩，回光不比顶灯的掠射少
-  // 顶灯在上方：额头、颧骨亮，下巴一侧暗一点
-  float faceShade = mix(0.7, 1.1, smoothstep(-0.9, 0.2, hq.y));
-  vec3 faceL = mix(vec3(0.56, 0.42, 0.34) * 1.5 * faceShade, vec3(0.30, 0.24, 0.19), hair) / M_PI * (L.eAmb + L.eMain);
-  col = mix(col, faceL, cHead * L.lit);
+  float blurHB = max(3.0 * RF_BLUR_SOFT, 1.5 * L.pixAng);
+  float cBody = rfBlob(p, r, uHead + vec3(0.0, -0.42, -0.12), vec3(0.21, 0.30, 0.16), d0, blurHB, L.pupil, tB);
+  float cHead = rfBlob(p, r, uHead + vec3(0.0, 0.01, -0.08), vec3(0.085, 0.11, 0.10), d0, blurHB, L.pupil, tH);
+  vec3 bodyDark = 0.07 / M_PI * (L.eAmb + L.eMain * 0.35 + L.moodI * 0.03);
+  col = mix(col, bodyDark, cBody * (1.0 - L.lit));
+  col *= 1.0 - 0.13 * L.lit * max(cBody, cHead);
   #undef RF_WID
   #undef RF_WIDA
   return col;
