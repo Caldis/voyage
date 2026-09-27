@@ -3,21 +3,28 @@
 // DX-07：加 --measure，量一块区域的亮度（省得每次都要现写 Python + PIL 脚本，见
 // research/ART_REVIEW_wave6.md 末尾「开发体验反馈」）。
 // DX-08：加 --diff，输出两张图逐像素差的均值 / p99 / 超阈值像素比例，可选差异热图。
+// DX-11：--measure 补齐平均 RGB / 平均饱和度 / 相邻像素差（棋盘纹 / 锯齿指标）/ ≥250 与 ≤5 像素比例；
+//   加 --row / --col（像素曲线，找渐变色带 / 台阶）、--mask（排除区，两条命令共用）、--thumb（缩略图，
+//   剪影误读检查）。
 //
 // 用法：
 //   node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1.png> [<图2.png> ...]
-//   node scripts/compare.mjs --measure x,y,w,h [--measure x2,y2,w2,h2 ...] [--json] <图1.png> [<图2.png> ...]
-//   node scripts/compare.mjs --diff <图2.png> [--threshold 8] [--heatmap 差异.png] [--json] <图1.png>
-// 三组参数可以按需组合；--measure / --diff 时 --out 不再是必填。
+//   node scripts/compare.mjs --measure x,y,w,h [--measure x2,y2,w2,h2 ...] [--mask x,y,w,h ...] [--json] <图1.png> [<图2.png> ...]
+//   node scripts/compare.mjs --diff <图2.png> [--threshold 8] [--heatmap 差异.png] [--mask x,y,w,h ...] [--json] <图1.png>
+//   node scripts/compare.mjs --row 600 [--row 300 ...] [--col 800 ...] [--json] <图1.png> [<图2.png> ...]
+//   node scripts/compare.mjs --thumb 64 [--thumb-out tmp/screenshot/thumbs] [--json] <图1.png> [<图2.png> ...]
+// 几组参数可以按需组合（同一次调用给 --out 又给 --measure/--row/--thumb 都可以）；除了「至少要有一张图」，
+// --measure / --diff / --row / --col / --thumb 任一给了，--out 就不再是必填。
 //
 // --diff：<图1.png>（位置参数）与 --diff 的值（<图2.png>）必须尺寸相同，否则报错。每个像素按
 // |ΔR|+|ΔG|+|ΔB| 除以 3（0–255）算「差异幅度」，输出：
-//   mean          全图差异幅度的均值
+//   mean          全图差异幅度的均值（被 --mask 排除的像素不计入）
 //   p99           99 分位（排序后取 index = min(n-1, floor(0.99·n))，与 --measure 的口径一致）
 //   overThresholdPct / overThresholdPixels   差异幅度 > --threshold（默认 8）的像素占比 / 个数——
 //     8 这个默认值和 T08.md 验收表里「差 > 8 的像素 0.1%/0.3%」的口径一致，不是随手挑的
-//   --heatmap 路径  可选：写一张假彩色差异图（黑 = 无差异，经阈值处黄，超过 2 倍阈值封顶到红），
-//     找「差异到底在画面哪里」比读一堆数字直观
+//   maskedPixels  被 --mask 排除、没计入上面几项统计的像素数
+//   --heatmap 路径  可选：写一张假彩色差异图（黑 = 无差异，经阈值处黄，超过 2 倍阈值封顶到红，
+//     --mask 排除的像素画成灰色）——找「差异到底在画面哪里」比读一堆数字直观
 // **零回归判断的基准是「同一份代码跑两次」的噪声底，不是 0**：TAA、云的时间累积、海浪相位、翼尖颤动、
 // 随机闪电这些都会让同代码两次截图产生非零差异（README 坑点举过 low-sea-glint 平均差 7–9/255 的例子）。
 // 判断「这一版改动有没有引入真实差异」时，先跑一次「改动前 vs 改动前」（或 `__voyage.freeze` 冻结后的
@@ -30,10 +37,31 @@
 // 摩尔纹」这类像素级问题用的，模糊会把真正的问题糊掉。
 //
 // --measure x,y,w,h（可重复）：对每张输入图、每个区域，按原图像素（不受 --crop / --zoom 影响，
-// 那两个只管拼图输出）算 Rec.709 luma（Y = 0.2126R + 0.7152G + 0.0722B，0–255，公式与
-// handoff/T08-stats.py 一致，方便和历史数据对比）的均值与 p99（排序后取 index = min(n-1, floor(0.99·n))，
-// 同一套取法）。默认打印成人读的表格；--json 时改成打印一份 JSON（数组，每张图每个区域一条）到 stdout，
-// 不额外写文件。
+// 那两个只管拼图输出）算：
+//   mean / p99          Rec.709 luma（Y = 0.2126R + 0.7152G + 0.0722B，0–255）的均值与 p99（排序后取
+//                        index = min(n-1, floor(0.99·n))，与 handoff/T08-stats.py 的公式一致）
+//   meanR / meanG / meanB  三个通道各自的均值（0–255）——判断偏色 / 色相漂移比只看 luma 直接
+//   meanSaturation       HSL 饱和度（0–100）的均值——判断「灰蒙蒙」还是「过饱和」
+//   adjacentDiff         相邻像素 luma 绝对差的均值（水平 + 垂直各算一遍一起平均）：棋盘纹 / 锯齿的
+//                        指标——高频跳变多的地方这个数字会明显偏高，平滑渐变（天空、雾）应该接近 0
+//   pctBright / pctDark  luma ≥ 250 / ≤ 5 的像素占比（%）——判断「死白過曝」或「死黑欠曝」的面积
+//   maskedPixels         被 --mask 排除、没计入以上统计的像素数
+// 默认打印成人读的表格；--json 时改成打印一份 JSON（数组，每张图每个区域一条）到 stdout，不额外写文件。
+//
+// --mask x,y,w,h（可重复，原图像素坐标，和 --measure / --diff 同一套坐标系）：这个矩形内的像素从
+// --measure 与 --diff 的统计里排除（例如遮住调试面板残留的一角、水印、HUD 文字），不影响拼图 / 缩略图
+// / --row / --col 本身的像素内容，只影响「算不算进统计」。
+//
+// --row y（可重复）/ --col x（可重复）：对每张输入图，取第 y 行（或第 x 列）的整条像素曲线，人读模式
+// 只打印 min/max/mean（完整数组太长，终端读不动），--json 时打印完整的 { image, row, width, r, g, b,
+// luma } 数组——找地平线附近的色带台阶、天空渐变有没有断层用。y/x 超出图片范围时该条记录标 error，
+// 不影响其它条目。
+//
+// --thumb N：把每张输入图等比缩小到最长边 = N 像素（默认用双线性平滑，不是 --zoom 那种保留像素边界的
+// 最近邻——缩略图是为了看整体剪影，平滑掉高频细节才是目的），写一张 PNG，文件名
+// `<原文件名（不含扩展名）>.thumbN.png`，默认写在原图同目录，--thumb-out <目录> 改写到别处（相对仓库根
+// 解析）。剪影误读检查：远景的云团 / 岛屿 / 建筑轮廓缩到几十像素后还能一眼认出「这是什么」，才说明轮廓
+// 本身站得住，不是靠细节堆出来的（3A 铁律「宁可小，不要糊」的一个快速检验法）。
 //
 // 泛化自 handoff/T35-crop.py（Python + Pillow）。改用 Node + Canvas2D 是为了不依赖本机 Python
 // 环境（仓库里 apps/roadmap/scripts 已经因为要装 shapely 踩过 Python 环境的坑，见根 AGENTS.md；
@@ -41,7 +69,7 @@
 // lib/chrome.mjs 的 launchBrowser）做合成：不需要真实 GPU（只用 Canvas2D，不碰 WebGL），
 // 复用它只是为了共用「怎么找到本机 chrome.exe」这份逻辑，不用额外装 chrome-headless-shell。
 //
-// --out（拼图输出路径）相对**仓库根**解析，不是当前工作目录，和 dev-browser.mjs 的 --out 一致
+// --out / --heatmap / --thumb-out 相对**仓库根**解析，不是当前工作目录，和 dev-browser.mjs 的 --out 一致
 // （T08 开发体验反馈踩过这个坑：以为是相对当前目录，结果写到了仓库外面）。
 
 import { chromium } from "playwright-core";
@@ -53,9 +81,9 @@ import { launchBrowser, closeBrowserSafely, resolveRepoPath } from "./lib/chrome
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
 
-// 同名参数重复出现时合并成数组（--measure 要能传多次；写法与 dev-browser.mjs 的 parseArgs 一致）。
-// --json 是纯开关（没有值），特殊处理：不然「--json 图1.png」会把 图1.png 当成 --json 的值吃掉，
-// 剩下的位置参数（图片路径）就少了一个。
+// 同名参数重复出现时合并成数组（--measure / --mask / --row / --col 都要能传多次；写法与
+// dev-browser.mjs 的 parseArgs 一致）。--json 是纯开关（没有值），特殊处理：不然「--json 图1.png」
+// 会把 图1.png 当成 --json 的值吃掉，剩下的位置参数（图片路径）就少了一个。
 const BOOLEAN_ONLY_FLAGS = new Set(["json"]);
 function parseArgs(argv) {
   const out = { _: [] };
@@ -80,17 +108,28 @@ function parseArgs(argv) {
   return out;
 }
 
-/** --measure x,y,w,h（可重复）解析成 { x, y, w, h } 数组；不传返回 [] */
-function parseMeasureRegions(args) {
-  if (!args.measure) return [];
-  const list = Array.isArray(args.measure) ? args.measure : [args.measure];
+/** --measure / --mask 共用：x,y,w,h（可重复）解析成 { x, y, w, h } 数组；不传返回 [] */
+function parseRegions(args, key) {
+  if (!args[key]) return [];
+  const list = Array.isArray(args[key]) ? args[key] : [args[key]];
   return list.map((s) => {
     const nums = String(s).split(",").map(Number);
     if (nums.length !== 4 || nums.some((n) => !Number.isFinite(n))) {
-      throw new Error(`--measure 格式应为 x,y,w,h（如 --measure 400,300,200,150），收到 "${s}"`);
+      throw new Error(`--${key} 格式应为 x,y,w,h（如 --${key} 400,300,200,150），收到 "${s}"`);
     }
     const [x, y, w, h] = nums;
     return { x, y, w, h };
+  });
+}
+
+/** --row / --col 共用：一串数字（可重复），不传返回 [] */
+function parseLines(args, key) {
+  if (!args[key]) return [];
+  const list = Array.isArray(args[key]) ? args[key] : [args[key]];
+  return list.map((s) => {
+    const n = Number(s);
+    if (!Number.isFinite(n) || n < 0) throw new Error(`--${key} 应为非负整数，收到 "${s}"`);
+    return Math.round(n);
   });
 }
 
@@ -112,24 +151,41 @@ function labelFor(p) {
   return parts.slice(-2).join("/");
 }
 
+/** --thumb 输出路径：默认和原图同目录，--thumb-out 给了就改写到那个目录（相对仓库根解析） */
+function thumbPathFor(imgPath, size, outDirArg) {
+  const abs = path.isAbsolute(imgPath) ? imgPath : path.join(REPO_ROOT, imgPath);
+  const { name, dir } = path.parse(abs);
+  const targetDir = outDirArg ? resolveRepoPath(REPO_ROOT, outDirArg) : dir;
+  return path.join(targetDir, `${name}.thumb${size}.png`);
+}
+
+function usage() {
+  console.error("用法：node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]");
+  console.error("      node scripts/compare.mjs --measure x,y,w,h [--measure ...] [--mask x,y,w,h ...] [--json] <图1> [<图2> ...]");
+  console.error("      node scripts/compare.mjs --diff <图2> [--threshold 8] [--heatmap 差异.png] [--mask x,y,w,h ...] [--json] <图1>");
+  console.error("      node scripts/compare.mjs --row y [--row ...] [--col x ...] [--json] <图1> [<图2> ...]");
+  console.error("      node scripts/compare.mjs --thumb 64 [--thumb-out 目录] [--json] <图1> [<图2> ...]");
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const images = args._;
-  const regions = parseMeasureRegions(args);
+  const regions = parseRegions(args, "measure");
+  const masks = parseRegions(args, "mask");
+  const rows = parseLines(args, "row");
+  const cols = parseLines(args, "col");
+  const thumbSize = args.thumb !== undefined ? Number(args.thumb) : null;
+  if (thumbSize !== null && (!Number.isFinite(thumbSize) || thumbSize <= 0)) throw new Error(`--thumb 应为正数，收到 "${args.thumb}"`);
   // --diff 的值是第二张图，第一张图是位置参数（见文件头注释，和 --out 同一个位置参数列表）
   const diffPair = args.diff ? [images[0], String(args.diff)] : null;
   if (args.diff && !images[0]) throw new Error("--diff 需要两张图：一张是 --diff 的值，另一张作为位置参数给出");
-  // --measure / --diff 时 --out 不再是必填（可以只量数值、不出拼图）；三者都没给才是用法错误
   if (images.length === 0 && !diffPair) {
-    console.error("用法：node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]");
-    console.error("      node scripts/compare.mjs --measure x,y,w,h [--measure ...] [--json] <图1> [<图2> ...]");
-    console.error("      node scripts/compare.mjs --diff <图2> [--threshold 8] [--heatmap 差异.png] [--json] <图1>");
+    usage();
     process.exit(1);
   }
-  if (!args.out && regions.length === 0 && !diffPair) {
-    console.error("用法：node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]");
-    console.error("      node scripts/compare.mjs --measure x,y,w,h [--measure ...] [--json] <图1> [<图2> ...]");
-    console.error("      node scripts/compare.mjs --diff <图2> [--threshold 8] [--heatmap 差异.png] [--json] <图1>");
+  const hasAnyAction = args.out || regions.length > 0 || diffPair || rows.length > 0 || cols.length > 0 || thumbSize !== null;
+  if (!hasAnyAction) {
+    usage();
     process.exit(1);
   }
   const crop = parseCrop(args.crop);
@@ -158,8 +214,8 @@ async function main() {
   const browser = await launchBrowser(chromium, {});
   try {
     const page = await (await browser.newContext()).newPage();
-    const { outDataUrl, measurements, diffStats } = await page.evaluate(
-      async ({ tiles, crop, zoom, outPath, regions, diffTile, threshold, wantHeatmap }) => {
+    const { outDataUrl, measurements, diffStats, rowCurves, colCurves, thumbs } = await page.evaluate(
+      async ({ tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap }) => {
         const loadImg = (src) =>
           new Promise((resolve, reject) => {
             const img = new Image();
@@ -169,7 +225,11 @@ async function main() {
           });
         const imgs = await Promise.all(tiles.map((t) => loadImg(t.dataUrl)));
 
-        // --measure：按原图像素（不受 crop/zoom 影响）算每个区域的 Rec.709 luma 均值与 p99
+        // --mask：某个原图绝对像素坐标是否落在任意一个排除区里（DX-11，--measure / --diff 共用）
+        const inAnyMask = (ax, ay) => masks.some((m) => ax >= m.x && ax < m.x + m.w && ay >= m.y && ay < m.y + m.h);
+
+        // --measure（DX-07，DX-11 补齐平均 RGB / 饱和度 / 相邻像素差 / 亮暗像素比例）：按原图像素
+        // （不受 crop/zoom 影响）算每个区域的统计；--mask 命中的像素整体排除，不计入任何一项。
         const measurements = [];
         if (regions.length > 0) {
           for (let i = 0; i < imgs.length; i++) {
@@ -185,25 +245,129 @@ async function main() {
               const ctx = c.getContext("2d");
               ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
               const data = ctx.getImageData(0, 0, sw, sh).data;
-              const lum = new Array(sw * sh);
-              for (let p = 0, j = 0; p < data.length; p += 4, j++) {
-                lum[j] = 0.2126 * data[p] + 0.7152 * data[p + 1] + 0.0722 * data[p + 2];
+              const lum = new Float64Array(sw * sh);
+              const included = new Uint8Array(sw * sh);
+              let sumR = 0, sumG = 0, sumB = 0, sumSat = 0, nIncluded = 0, nBright = 0, nDark = 0;
+              for (let ly = 0, j = 0, p = 0; ly < sh; ly++) {
+                for (let lx = 0; lx < sw; lx++, j++, p += 4) {
+                  const rr = data[p];
+                  const gg = data[p + 1];
+                  const bb = data[p + 2];
+                  const l = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+                  lum[j] = l;
+                  if (masks.length > 0 && inAnyMask(sx + lx, sy + ly)) continue; // included[j] 保持 0
+                  included[j] = 1;
+                  nIncluded++;
+                  sumR += rr;
+                  sumG += gg;
+                  sumB += bb;
+                  const mx = Math.max(rr, gg, bb) / 255;
+                  const mn = Math.min(rr, gg, bb) / 255;
+                  const L = (mx + mn) / 2;
+                  sumSat += L === 0 || L === 1 ? 0 : (mx - mn) / (1 - Math.abs(2 * L - 1));
+                  if (l >= 250) nBright++;
+                  if (l <= 5) nDark++;
+                }
               }
-              lum.sort((a, b) => a - b);
-              const n = lum.length;
-              const mean = lum.reduce((a, b) => a + b, 0) / n;
-              const p99 = lum[Math.min(n - 1, Math.floor(0.99 * n))];
+              const n = Math.max(1, nIncluded);
+              const lumIncluded = [];
+              for (let j = 0; j < lum.length; j++) if (included[j]) lumIncluded.push(lum[j]);
+              lumIncluded.sort((a, b) => a - b);
+              const mean = lumIncluded.length ? lumIncluded.reduce((a, b) => a + b, 0) / lumIncluded.length : 0;
+              const p99 = lumIncluded.length ? lumIncluded[Math.min(lumIncluded.length - 1, Math.floor(0.99 * lumIncluded.length))] : 0;
+              // 相邻像素差（棋盘纹 / 锯齿指标）：水平 + 垂直相邻 luma 的绝对差均值；两端有一个被 mask
+              // 排除就跳过这一对（不让排除区边界人为拉高这个数字）
+              let sumAdjDiff = 0;
+              let nAdj = 0;
+              for (let ly = 0; ly < sh; ly++) {
+                for (let lx = 0; lx < sw; lx++) {
+                  const j = ly * sw + lx;
+                  if (!included[j]) continue;
+                  if (lx + 1 < sw && included[j + 1]) {
+                    sumAdjDiff += Math.abs(lum[j] - lum[j + 1]);
+                    nAdj++;
+                  }
+                  if (ly + 1 < sh && included[j + sw]) {
+                    sumAdjDiff += Math.abs(lum[j] - lum[j + sw]);
+                    nAdj++;
+                  }
+                }
+              }
               measurements.push({
                 image: tiles[i].label,
                 region: { x: r.x, y: r.y, w: r.w, h: r.h },
                 mean: +mean.toFixed(1),
                 p99: +p99.toFixed(1),
+                meanR: +(sumR / n).toFixed(1),
+                meanG: +(sumG / n).toFixed(1),
+                meanB: +(sumB / n).toFixed(1),
+                meanSaturation: +((sumSat / n) * 100).toFixed(1),
+                adjacentDiff: nAdj ? +(sumAdjDiff / nAdj).toFixed(2) : 0,
+                pctBright: +((nBright / n) * 100).toFixed(2),
+                pctDark: +((nDark / n) * 100).toFixed(2),
+                maskedPixels: lum.length - nIncluded,
               });
             }
           }
         }
 
-        // --diff：逐像素 |ΔR|+|ΔG|+|ΔB| / 3（0–255），输出均值 / p99 / 超阈值像素比例，可选差异热图
+        // --row / --col（DX-11）：整条像素曲线，找地平线 / 天空渐变的色带台阶
+        const rowCurves = [];
+        const colCurves = [];
+        const sampleLine = (img, fixed, isRow) => {
+          const w = img.naturalWidth;
+          const h = img.naturalHeight;
+          const inRange = isRow ? fixed >= 0 && fixed < h : fixed >= 0 && fixed < w;
+          if (!inRange) return { error: `超出范围（图片 ${w}x${h}）` };
+          const len = isRow ? w : h;
+          const c = document.createElement("canvas");
+          c.width = isRow ? w : 1;
+          c.height = isRow ? 1 : h;
+          const ctx = c.getContext("2d");
+          if (isRow) ctx.drawImage(img, 0, fixed, w, 1, 0, 0, w, 1);
+          else ctx.drawImage(img, fixed, 0, 1, h, 0, 0, 1, h);
+          const data = ctx.getImageData(0, 0, c.width, c.height).data;
+          const r = new Array(len);
+          const g = new Array(len);
+          const b = new Array(len);
+          const luma = new Array(len);
+          for (let k = 0, p = 0; k < len; k++, p += 4) {
+            r[k] = data[p];
+            g[k] = data[p + 1];
+            b[k] = data[p + 2];
+            luma[k] = +(0.2126 * data[p] + 0.7152 * data[p + 1] + 0.0722 * data[p + 2]).toFixed(1);
+          }
+          return { width: len, r, g, b, luma };
+        };
+        for (const y of rows) {
+          for (let i = 0; i < imgs.length; i++) rowCurves.push({ image: tiles[i].label, row: y, ...sampleLine(imgs[i], y, true) });
+        }
+        for (const x of cols) {
+          for (let i = 0; i < imgs.length; i++) colCurves.push({ image: tiles[i].label, col: x, ...sampleLine(imgs[i], x, false) });
+        }
+
+        // --thumb（DX-11）：等比缩小到最长边 = thumbSize，双线性平滑（和 --zoom 的最近邻相反——
+        // 这里就是要糊掉细节，只看剪影读不读得出来）
+        const thumbs = [];
+        if (thumbSize) {
+          for (let i = 0; i < imgs.length; i++) {
+            const img = imgs[i];
+            const scale = thumbSize / Math.max(img.naturalWidth, img.naturalHeight);
+            const tw = Math.max(1, Math.round(img.naturalWidth * scale));
+            const th = Math.max(1, Math.round(img.naturalHeight * scale));
+            const c = document.createElement("canvas");
+            c.width = tw;
+            c.height = th;
+            const ctx = c.getContext("2d");
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, 0, 0, tw, th);
+            thumbs.push({ image: tiles[i].label, width: tw, height: th, dataUrl: c.toDataURL("image/png") });
+          }
+        }
+
+        // --diff：逐像素 |ΔR|+|ΔG|+|ΔB| / 3（0–255），输出均值 / p99 / 超阈值像素比例，可选差异热图；
+        // --mask 命中的像素整体排除（DX-11），热图里画成灰色标出「这块不算」
         let diffStats = null;
         if (diffTile) {
           const [imgA, imgB] = await Promise.all([loadImg(tiles[0].dataUrl), loadImg(diffTile.dataUrl)]);
@@ -224,7 +388,9 @@ async function main() {
           const dataB = cB.getContext("2d").getImageData(0, 0, w, h).data;
           const n = w * h;
           const diffs = new Float64Array(n);
+          let m = 0; // 计入统计的像素数（排除 mask 命中的）
           let over = 0;
+          let masked = 0;
           let heatCtx = null;
           let heatImgData = null;
           if (wantHeatmap) {
@@ -235,23 +401,34 @@ async function main() {
             heatImgData = heatCtx.createImageData(w, h);
           }
           for (let i = 0, p = 0; i < n; i++, p += 4) {
+            const y = Math.floor(i / w);
+            const x = i - y * w;
+            const isMasked = masks.length > 0 && inAnyMask(x, y);
             const d = (Math.abs(dataA[p] - dataB[p]) + Math.abs(dataA[p + 1] - dataB[p + 1]) + Math.abs(dataA[p + 2] - dataB[p + 2])) / 3;
-            diffs[i] = d;
-            if (d > threshold) over++;
+            if (isMasked) masked++;
+            else {
+              diffs[m++] = d;
+              if (d > threshold) over++;
+            }
             if (wantHeatmap) {
-              // 假彩色：0 = 黑，阈值处过渡到黄，2 倍阈值封顶到红——超过阈值的差异比线性满量程灰度显眼得多
-              const t = threshold > 0 ? Math.min(1, d / threshold) : d > 0 ? 1 : 0;
-              const t2 = threshold > 0 ? Math.min(1, Math.max(0, (d - threshold) / threshold)) : 0;
-              heatImgData.data[p] = Math.round(255 * Math.min(1, t + t2));
-              heatImgData.data[p + 1] = Math.round(255 * Math.max(0, t - t2));
-              heatImgData.data[p + 2] = 0;
-              heatImgData.data[p + 3] = 255;
+              if (isMasked) {
+                heatImgData.data[p] = heatImgData.data[p + 1] = heatImgData.data[p + 2] = 96; // 灰：排除区
+                heatImgData.data[p + 3] = 255;
+              } else {
+                // 假彩色：0 = 黑，阈值处过渡到黄，2 倍阈值封顶到红——超过阈值的差异比线性满量程灰度显眼得多
+                const t = threshold > 0 ? Math.min(1, d / threshold) : d > 0 ? 1 : 0;
+                const t2 = threshold > 0 ? Math.min(1, Math.max(0, (d - threshold) / threshold)) : 0;
+                heatImgData.data[p] = Math.round(255 * Math.min(1, t + t2));
+                heatImgData.data[p + 1] = Math.round(255 * Math.max(0, t - t2));
+                heatImgData.data[p + 2] = 0;
+                heatImgData.data[p + 3] = 255;
+              }
             }
           }
-          const sorted = Float64Array.from(diffs).sort();
-          const mean = diffs.reduce((a, b) => a + b, 0) / n;
-          const p99 = sorted[Math.min(n - 1, Math.floor(0.99 * n))];
-          const max = sorted[n - 1];
+          const sorted = Float64Array.from(diffs.subarray(0, m)).sort();
+          const mean = m ? diffs.subarray(0, m).reduce((a, b) => a + b, 0) / m : 0;
+          const p99 = m ? sorted[Math.min(m - 1, Math.floor(0.99 * m))] : 0;
+          const max = m ? sorted[m - 1] : 0;
           let heatDataUrl = null;
           if (wantHeatmap) {
             heatCtx.putImageData(heatImgData, 0, 0);
@@ -265,12 +442,13 @@ async function main() {
             p99: +p99.toFixed(2),
             max: +max.toFixed(2),
             overThresholdPixels: over,
-            overThresholdPct: +((over / n) * 100).toFixed(3),
+            overThresholdPct: +((over / Math.max(1, m)) * 100).toFixed(3),
+            maskedPixels: masked,
             heatDataUrl,
           };
         }
 
-        if (!outPath) return { outDataUrl: null, measurements, diffStats };
+        if (!outPath) return { outDataUrl: null, measurements, diffStats, rowCurves, colCurves, thumbs };
 
         const tileCanvases = imgs.map((img, i) => {
           const sx = crop ? crop.x : 0;
@@ -310,9 +488,9 @@ async function main() {
           fctx.drawImage(c, cx, 0);
           cx += c.width + gap;
         }
-        return { outDataUrl: final.toDataURL("image/png"), measurements, diffStats };
+        return { outDataUrl: final.toDataURL("image/png"), measurements, diffStats, rowCurves, colCurves, thumbs };
       },
-      { tiles, crop, zoom, outPath, regions, diffTile, threshold, wantHeatmap: !!heatmapPath },
+      { tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap: !!heatmapPath },
     );
     if (outPath) {
       fs.writeFileSync(outPath, Buffer.from(outDataUrl.split(",")[1], "base64"));
@@ -323,9 +501,13 @@ async function main() {
       if (args.json) {
         console.log(JSON.stringify(measurements, null, 2));
       } else {
-        console.log(`[compare] 亮度（Rec.709 luma，0–255）：`);
+        console.log(`[compare] 亮度 / 色彩（0–255，饱和度 / 比例 0–100%）：`);
         for (const m of measurements) {
-          console.log(`  ${m.image}  region=${m.region.x},${m.region.y},${m.region.w},${m.region.h}  mean=${m.mean}  p99=${m.p99}`);
+          console.log(
+            `  ${m.image}  region=${m.region.x},${m.region.y},${m.region.w},${m.region.h}  luma mean=${m.mean} p99=${m.p99}  ` +
+              `RGB=(${m.meanR},${m.meanG},${m.meanB})  sat=${m.meanSaturation}  adjDiff=${m.adjacentDiff}  ` +
+              `bright≥250=${m.pctBright}%  dark≤5=${m.pctDark}%${m.maskedPixels ? `  masked=${m.maskedPixels}` : ""}`,
+          );
         }
       }
     }
@@ -339,9 +521,38 @@ async function main() {
       } else {
         console.log(`[compare] --diff ${labelFor(diffPair[0])} vs ${labelFor(diffPair[1])}（${printable.width}x${printable.height}，阈值 ${printable.threshold}）：`);
         console.log(`  平均绝对差 ${printable.mean} / 255，p99 ${printable.p99}，最大 ${printable.max}`);
-        console.log(`  超过阈值的像素：${printable.overThresholdPixels}（${printable.overThresholdPct}%）`);
+        console.log(`  超过阈值的像素：${printable.overThresholdPixels}（${printable.overThresholdPct}%）${printable.maskedPixels ? `，排除区 ${printable.maskedPixels} 像素` : ""}`);
         if (heatmapPath) console.log(`  差异热图：${path.relative(REPO_ROOT, heatmapPath).replace(/\\/g, "/")}`);
       }
+    }
+    if (rowCurves.length > 0 || colCurves.length > 0) {
+      if (args.json) {
+        console.log(JSON.stringify({ rows: rowCurves, cols: colCurves }, null, 2));
+      } else {
+        console.log(`[compare] 像素曲线（完整数据用 --json）：`);
+        for (const c of [...rowCurves, ...colCurves]) {
+          const label = "row" in c ? `row=${c.row}` : `col=${c.col}`;
+          if (c.error) {
+            console.log(`  ${c.image}  ${label}  ${c.error}`);
+            continue;
+          }
+          const min = Math.min(...c.luma);
+          const max = Math.max(...c.luma);
+          const mean = c.luma.reduce((a, b) => a + b, 0) / c.luma.length;
+          console.log(`  ${c.image}  ${label}  宽 ${c.width}  luma min=${min.toFixed(1)} max=${max.toFixed(1)} mean=${mean.toFixed(1)}`);
+        }
+      }
+    }
+    if (thumbs && thumbs.length > 0) {
+      const thumbResults = thumbs.map((t, i) => {
+        const outP = thumbPathFor(images[i], thumbSize, args["thumb-out"]);
+        fs.mkdirSync(path.dirname(outP), { recursive: true });
+        fs.writeFileSync(outP, Buffer.from(t.dataUrl.split(",")[1], "base64"));
+        const rel = path.relative(REPO_ROOT, outP).replace(/\\/g, "/");
+        console.log(`[compare] 缩略图 ${rel}（${t.width}x${t.height}）`);
+        return { image: t.image, width: t.width, height: t.height, path: rel };
+      });
+      if (args.json) console.log(JSON.stringify(thumbResults, null, 2));
     }
   } finally {
     await closeBrowserSafely(browser);
