@@ -238,6 +238,9 @@ uniform vec2 uOffLocusAdapt; // 适应白点偏离普朗克轨迹的那部分人
 uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度限幅（log2 色度向量的长度）
 uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 x→y、像素亮度 log10 cd/m² z→w 之间由 0 过渡到 1（只在窗外）
 uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
+uniform vec4 uT48bDbg; // 临时调试
+uniform vec3 uT48bFade; // 临时调试
+uniform vec3 uT48bLoc; // 临时调试
 uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
 uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透明度 x→y 之间由 0 过渡到 1，z = 1 开 / 0 不看云（整窗都给）
 uniform float uDayHiSatRoll;  // TM01 返工：收回段按饱和度前移的倍数（见 dayHighlightGain）
@@ -389,6 +392,7 @@ void main() {
   float satIn = 1.0 - min(min(c.r, c.g), c.b) / max(max(max(c.r, c.g), c.b), 1e-12);
   float logPix = log2(max(dot(c, vec3(0.2126, 0.7152, 0.0722)) * 1000.0, 1e-6)) * 0.30103; // log10 cd/m²
   float nightChroma = 0.0; // T48 夜里饱和发光体的色度保持权重（窗外），色调映射之后用
+  float nightLoc = 0.0;
   if (uAuto) {
     float cdAdapt = exp2(logAdapt) * 1000.0;
     float scotopic = 1.0 - smoothstep(-2.0, 0.5, log(max(cdAdapt, 1e-6)) / log(10.0));
@@ -403,17 +407,26 @@ void main() {
     float keep = satKeep * smoothstep(uMesopicKeep.z, uMesopicKeep.w, logPix);
     float rod = dot(c, vec3(0.05, 0.62, 0.33));
     vec3 cs = mix(c, rod * vec3(0.66, 0.82, 1.0), scotopic * 0.8);
-    c = mix(cs, c * (dot(cs, vec3(0.2126, 0.7152, 0.0722)) / max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12)), keep);
+    float ycIn = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12);
+    float ycs = dot(cs, vec3(0.2126, 0.7152, 0.0722));
+    float lumPh = uT48bDbg.y * smoothstep(uT48bDbg.z, uT48bDbg.w, logPix);
+    c = mix(cs, c * (mix(ycs, ycIn, lumPh) / ycIn), keep);
     // 窗外适应在暗视 / 低中间视（夜里）时才做色调映射后的色度保持，黄昏、白天一律不动
     float nightO = 1.0 - smoothstep(uNightChroma.y, uNightChroma.z, (logAdaptO + 9.965784) * 0.30103);
     //    只按饱和度门控、不再乘像素亮度门限：暗处 AgX 本来就几乎不压色度（目标 ≈ AgX 自己），叠两道门限会让雾边缘的色相变化太陡
     nightChroma = uNightChroma.x * nightO * satKeep;
+    nightLoc = nightO * src.a;
   }
   gl_FragColor = vec4(c * exposure, 1.0);
   if (uDebugMask) { gl_FragColor = vec4(vec3(src.a), 1.0); return; }
   #ifdef TONE_MAPPING
   {
     vec3 x = gl_FragColor.rgb;
+    {
+      float lb = log2(max(dot(glare * exposure, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18) - uT48bLoc.x;
+      float kq = clamp(lb + 0.5, 0.0, 1.0);
+      x *= exp2(-uT48bLoc.y * (0.5 * kq * kq + max(lb - 0.5, 0.0)) * nightLoc * uT48bLoc.z);
+    }
     // TM01：白天窗外的受光云在 AgX 肩部保留对比（见 dayHighlightGain）；夜里、黄昏、舱内、云里 hiGate = 0，逐位不变
     //    TM02：低通取眩光（uBloom 的 mip 链，各级加权平均，已经读过），按同一个曝光换算
     vec3 a = toneMapping(x * exp2(dayHighlightGain(x, glare * exposure) * hiGate));
@@ -422,8 +435,13 @@ void main() {
     //    的颜色拉一部分：钠灯读成橙黄、LED（饱和度低，不进这条）仍是白。中性色的目标就是 AgX 自己，不受影响
     //    （不写分支：shader-budget 实测带 if 的版本 exposure-final 编译 +7–10%，无分支 +3–6%，约 +4 ms）
     float yx = max(dot(x, vec3(0.2126, 0.7152, 0.0722)), 1e-9);
-    vec3 hue = x * min(dot(a, vec3(0.2126, 0.7152, 0.0722)) / yx, 1.0 / max(max(max(x.r, x.g), x.b), 1e-9));
-    gl_FragColor.rgb = mix(a, hue, nightChroma);
+    float ya = dot(a, vec3(0.2126, 0.7152, 0.0722));
+    vec3 hueOld = x * min(ya / yx, 1.0 / max(max(max(x.r, x.g), x.b), 1e-9));
+    vec3 hue = x * (ya / yx);
+    float mh = max(max(hue.r, hue.g), hue.b);
+    hue = mix(hue, vec3(ya), clamp((mh - 1.0) / max(mh - ya, 1e-6), 0.0, 1.0));
+    hue = mix(hueOld, hue, uT48bDbg.x);
+    gl_FragColor.rgb = mix(a, hue, nightChroma * mix(1.0, 1.0 - smoothstep(uT48bFade.x, uT48bFade.y, max(max(x.r, x.g), x.b)), uT48bFade.z));
   }
   #endif
   #include <colorspace_fragment>
@@ -583,6 +601,9 @@ export class Exposure {
       uWinChromaMax: { value: 0.6 },
       uMesopicKeep: { value: new THREE.Vector4(0.5, 0.85, -2.0, -0.8) },
       uNightChroma: { value: new THREE.Vector3(0.45, -1.5, 0.0) }, // 协调者合并时 0.6 → 0.45：雾芯留一点明暗层次
+      uT48bDbg: { value: new THREE.Vector4(0, 0, -1, 0) },
+      uT48bFade: { value: new THREE.Vector3(1, 4, 0) },
+      uT48bLoc: { value: new THREE.Vector3(2, 0.5, 0) },
       // TM01：膝点中灰 +0.5 档（显示约 144）、顶点 +2.5（约 203）、收回到 +5.0，段内斜率 1.4；w = 1 即关（见 handoff/TM01.md 的方案对比）
       // 返工：收回终点 4.0 → 5.0（+2.5→+4 档的局部对比从 0.39 回到 0.54；最亮的云边 / 砧顶细节要留住）
       uDayHiLook: { value: new THREE.Vector4(0.5, 2.5, 5.0, 1.3) }, // 协调者合并时斜率 1.4 → 1.3：云芯对比 ×1.59–1.71，最亮段（边缘高光所在）细节保到 0.94–0.95（TM01 返工取舍表）
