@@ -21,6 +21,7 @@ import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo 
 import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets";
 import { BootProgress } from "./boot/progress";
 import { Director } from "./director";
+import { WonderSystem } from "./wonders/system";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
@@ -57,6 +58,9 @@ const sceneMat = createSceneMaterial(atmosphere, cloudUniforms, ground);
 // 低空障眼法（T18）：边界层霾进大气 LUT，谷地雾的 uniform 进场景 / 窗外共用的 uniforms（只有窗外程序用到）
 const haze = new HazeModel(atmosphere);
 Object.assign(sceneMat.uniforms, haze.sceneUniforms);
+// 奇观（W01，wonders/system.ts）：天幕层奇观的 uniform 进场景 / 窗外共用的 uniforms（只有窗外程序用到）
+const wonders = new WonderSystem();
+Object.assign(sceneMat.uniforms, wonders.uniforms);
 // 机翼增升装置的 uniform（声明在 wing.glsl.ts）。在首次渲染前加进材质即可生效；以后可以挪进 createSceneMaterial
 // uWingSteps / uWingShadowSteps 是机翼光线步进和自阴影的最大步数：用 uniform 而不是常量，FXC 就不会把循环展开，冷编译不会翻倍
 Object.assign(sceneMat.uniforms, {
@@ -282,7 +286,9 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-setupUi({ state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director });
+setupUi({ state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders });
+// 奇观之门（W01 预留、T19b 接入）：遮挡开始时通知奇观系统；只有 wonders.preferGate = true 时才会借遮挡出现
+director.onCover((kind) => wonders.onCover(kind));
 
 // ---------- 主循环 ----------
 setPreset(state.preset.id);
@@ -340,6 +346,18 @@ function renderFrame(now: number) {
   const flightResult = stepFlight(simDt, curLat, curLon);
   director.update(dt, simDt, flightResult.speedKms);
   if (flightResult.climbing) syncAltitudeUi(state);
+  // 奇观（W01）：触发、编排、摆放（固定在地面的经纬度上），写 uWonder*；奇观模式关时只把 uWonderOn 置 0
+  wonders.update(dt, simDt, {
+    lat: curLat,
+    lon: curLon,
+    heading: state.heading,
+    seat: state.seat,
+    sunAltDeg: sun.altitude,
+    altitudeKm: state.altitudeKm,
+    inCloud,
+    coverage: cloudUniforms.uCoverage.value,
+    flightKey: `${state.preset.id}|${localParts(state.simTime, state.preset.tz).date}`,
+  });
   updateHighLift(state, simDt);
   traffic.update(simDt, flightResult.ownDir, flightResult.speedKms, flightResult.outwardW);
   weather.update(dt);
@@ -571,4 +589,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders };

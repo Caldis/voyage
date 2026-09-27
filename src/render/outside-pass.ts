@@ -14,6 +14,7 @@ import { TERRAIN_SHADING_COMMON } from "./terrain-shading.glsl";
 import { TRAFFIC_COMMON } from "./traffic.glsl";
 import { VIEW_COMMON } from "./view.glsl";
 import { HAZE_COMMON } from "./haze.glsl";
+import { WONDER_SKY_COMMON } from "./wonder-sky.glsl";
 
 /**
  * 窗外 pass（SC-5）：只算「穿过本窗窗板看出去」的 HDR 辐亮度（天空、太阳月亮星星、云的合成、真实地面、海面、
@@ -60,6 +61,7 @@ ${GROUND_DETAIL_COMMON}
 ${INLAND_WATER_COMMON}
 ${TERRAIN_SHADING_COMMON}
 ${HAZE_COMMON}
+${WONDER_SKY_COMMON}
 
 // 窗外辐亮度。重函数在这里各只有一个调用点（SC-3）：真实地面上的海洋和开阔海面共用同一个 oceanRadiance，
 // 命中点的云影、水面照度、闪光照度也只算一次，陆地、湖河、海面共用。FXC 会把每个调用点整份内联，
@@ -160,6 +162,9 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   // T18 的边界层霾不在这里叠：它是大气里的一层气溶胶，已经进了透射率 / 天空视图 / 空气透视 LUT（atmosphere/haze.ts），
   // 上面三条路径取 LUT 时就带上了，不需要逐像素步进；谷地雾贴着地形，在上面 groundFinish 之前合成。
   // 所有路径（真实地面、开阔海面、天空）都会经过这一行，调试 21–23 的提前返回除外。
+  // 天幕层奇观（W01 天梯 / 建木，render/wonder-sky.glsl.ts）：画在背景上、云之前合成，所以会被云挡住；
+  // 线在地面 / 海面之前才可见（下半截沉到地平线以下时由 tGround 截掉）。奇观模式关时第一行就返回
+  L = wonderSky(L, rd, hitGround ? tGround : 1e9);
   // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光
   return L * cloud.a + cloud.rgb;
 }
