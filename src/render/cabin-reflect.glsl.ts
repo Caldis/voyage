@@ -200,7 +200,7 @@ float rfPoint(vec3 p, vec3 r, vec3 c, float rad, float d0, ReflLights L) {
 
 // 服务面板上的阅读灯（T34）：过道对面行李架下沿、中间行李架下沿，每排一盏。示例布局，不是某机型实测。
 // 从过道对面只看得到灯罩发亮的那一小圈（灯头朝下），是倒影里最先认得出的东西。
-// 开着的盏数随档位：开灯时约一半、睡眠档少几盏（有人在看书）、全关时只剩两三盏；开关按位置固定，不闪
+// 开着的盏数随档位：开灯时约一半、睡眠档少几盏（有人在看书，且在 scene.ts 限到极弱）、全关不画（T41）；开关按位置固定，不闪
 const int RF_NPT = 10;
 const vec4 RF_PTS[RF_NPT] = vec4[RF_NPT](
   // xyz = 位置（座舱系，米），w = 「开着」的门限（档位的开灯比例高过它才亮）
@@ -214,8 +214,12 @@ const vec4 RF_PTS[RF_NPT] = vec4[RF_NPT](
 // 双层窗板的第二次反射（内层窗板与主窗板不严格平行，错开约 0.8°）：整层重影开销翻倍（T24 试过），
 // 只对光点做，强度 0.3，在亮点旁边多一个淡的错位像——夜航时窗上灯的倒影常见这种成对的点
 vec3 cabinReflectPoints(vec3 p, vec3 r, float d0, ReflLights L) {
-  vec3 rg = normalize(r + vec3(0.009 * uSeatSign, -0.011, 0.0));
   float moodOn = step(1e-5, dot(L.moodI, vec3(1.0))); // 睡眠档氛围灯亮着，全关档是 0
+  // T41：全关档（主灯、氛围灯都关）不画光点。原来全关档还留两盏 + 邻座那盏，连同重影在所有夜景的同一屏幕位置
+  // 读成一对「双亮星」（窗外怎么换它都在）；全关的意义是贴窗暗适应看星，零星的阅读灯按用手挡住计 0（和 stars.glsl.ts 的光幕一致）。
+  // 睡眠档的光点在 scene.ts 按面状倒影的同一上限软限幅（极弱），开灯档照旧
+  if (max(moodOn, L.lit) <= 0.0) return vec3(0.0);
+  vec3 rg = normalize(r + vec3(0.009 * uSeatSign, -0.011, 0.0));
   float frac = mix(mix(0.18, 0.35, moodOn), 0.56, L.lit);
   float acc = 0.0;
   for (int i = 0; i < RF_NPT; i++) {
