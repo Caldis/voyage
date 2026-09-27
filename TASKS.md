@@ -8,7 +8,6 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| T08 | 第 6 波（主干） | 5208 | worktree | Opus（夜间道路灯带） | — | 进行中 |
 | W00 | 第 6 波（主干） | 5200 | worktree | Opus（云步进奇观层接口，W02 / W03 前提） | — | 进行中 |
 | T41 | 第 6 波（协调者发现，锯齿优先） | 5241 | worktree | Opus（夜景：方块星点改亚像素圆点、窗中央双亮星查因、夜间黑色块状低云只查因） | — | 进行中 |
 | T17 | 第 6 波（主干） | 5217 | worktree | Opus（宝光 / 绿闪 / 幻日，罕见随机，新 optics 模块） | — | 进行中 |
@@ -26,7 +25,6 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | SC-4 | 云程序与场景并行编译 | 最高 | main.ts 启动段、boot/* | 碰 main | 冷启动 −约 6 s，无 ≥1 s 冻结 |
 | SC-6 | （可选）`?dev=` 特性隔离 | 低 | scene.ts、main.ts | 碰 | dev=cabin 场景编译 ≤8 s |
 | T07 | 光学细节：太阳附近的眼睛衍射星芒；窗板边缘色散；高空低温时内层窗板透气孔周围的冰晶 | 中 | `src/render/bloom.ts`、`src/render/exposure.ts`、`src/render/cabin.glsl.ts`（窗板部分） | 否 | sunset-wing、noon-cumulus |
-| T08 | 道路灯带：OSM transportation 图层，夜里的主干道与高速公路成为连续的灯带 | 中 | `src/ground/tiles.ts`、`src/ground/clipmap.ts`、地面着色模块 | 否（T01 后） | night-city、route-hnd-cts 夜间版（新增） |
 | T10 | （并入 T19）天气自然变化：飞行途中天气场随位置变化（晴空 → 积云 → 雷暴区），不必手动选预设 | 低 | `src/weather.ts`、`src/clouds/clouds.glsl.ts`（天气场部分） | 否 | 沿航线飞 10 分钟（600× 时间流速之外另做加速）观察 |
 | T12 | 云的打磨：卷云仍偏团状；强逆光下的银边；云底的絮状细节 | 低 | `src/clouds/clouds.glsl.ts`（层状云部分）、`src/clouds/clouds.ts` | 否 | sunset-wing、clouds-variety、卷云场景（新增） |
 | （奇观通用约束） | 所有奇观都按「飞机不低飞、低处有霾」设计：奇观的下半截沉进霾层 / 云海，本身就是朦胧与神秘感的来源；不做需要贴近地面才能看清的奇观 | — | — | — | — |
@@ -60,6 +58,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | T09 | 银河：NASA SVS Deep Star Maps 2020（署名 NASA/GSFC SVS；Gaia 数据 ESA/Gaia/DPAC CC BY-SA 3.0 IGO），星图 A 通道不增 sampler；物理面亮度定标 + 月光 / 城市天光 / 舱灯光幕按对比度阈值压制；新场景 night-sea-milkyway、场景支持 date | 2026-09-27 | Opus 实现，协调者接入 main.ts 片段并核验（check 无 error，冷编译不变）。**遗留**：6.5–11.5 等星空缺；城市光穹未画进天空；定标为估算（调 `MILKY_WAY_UNIT`）。DX 待办：dev-browser probe / 截图前覆盖 uniform、`--out` 相对仓库根写进用法、天文辅助脚本（窗里看得到哪些天体） |
 | T40 | 远处飞机不露馅（用户反馈）：平行相邻航路（交叉角 ≤ 3°），全程距本机 ≥ 18 km（机体 ≤ 3 px 反推），两机分车道不交叉；着色器机体像素封顶 + 航迹云按最近点淡出 | 2026-09-27 | Sonnet 实现，协调者合并；离线抽样 50 万次最近距离 ≥ 19.65 km、交叉 0 次。**遗留**：车道区间按当前 FOV / 分辨率硬编码。DX 待办：「世界坐标点是否落在舷窗孔径内」小工具 |
 | DX-06 | 调试小地图（用户需求）：N 键 / 面板开关；航迹、航线、雷达回波式云图、远处飞机、奇观；纯 Canvas 2D | 2026-09-27 | Sonnet 实现，协调者解 main.ts 冲突后合并；开 / 关帧时间差在噪声内。**遗留**：雷达格子偏粗、台风螺旋是近似图形。坑：`Uint8ClampedArray<ArrayBuffer>` 类型标注 |
+| T08 | 夜间道路灯带：OpenFreeMap 道路图层 → 有向距离场（Web Worker 栅格化），像素覆盖抗锯齿 ~1 px、斜看多点平均防闪；按 NASA 夜光定亮灯范围，三尺度起伏、钠灯 / LED 片区、黄昏分片亮灯；新场景 route-hnd-cts-night | 2026-09-27 | Opus 实现，协调者看图合并（check 无 error，冷编译持平，GPU +0.15 ms）。注意：影像 A 通道兼存道路宽度，判缺瓦片用 `min(A·2,1)`。**遗留**：城市灯点斜看横向短划 / 远处变暗（旧问题，单开）；郊区路网亮度偏均匀像地图（美术总监看）；4 km 近处路口缺口毛刺；一次未复现的直边黑块（疑夜光瓦片请求失败）。DX 待办：`dev-browser flicker` 子命令、冻结飞行开关、shots 默认关频闪并打印 error |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
