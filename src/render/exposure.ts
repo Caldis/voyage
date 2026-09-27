@@ -142,7 +142,8 @@ uniform vec2 uDominanceRange; // 「舱内主导」判据：舱内与窗外适�
 uniform vec3 uCabinRefAlbedo; // 舱内饰面的平均反照率（只用色度）：舱内平均色 ÷ 它 = 舱内光源色
 uniform vec2 uCabinLitRange;  // 「舱灯开着」判据：舱内适应亮度 log10(cd/m²) 在此区间内由 0 过渡到 1
 uniform float uCabinLitWhiteEv; // 舱内主导（开灯）时的明度恒常补偿（EV）
-uniform float uChromaDarkScale; // 舱内很暗时色适应程度的折扣（1 = 不打折）
+uniform vec2 uOffLocusAdapt; // 适应白点偏离普朗克轨迹的那部分人眼只适应这个比例：x = 偏绿一侧，y = 偏品红 / 紫一侧（1 = 和轨迹方向一样）
+uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度限幅（log2 色度向量的长度）
 #include <common>
 #include <dithering_pars_fragment>
 varying vec2 vUv;
@@ -159,6 +160,21 @@ const mat3 LMS2RGB = mat3(2.858311, -0.210435, -0.041890,
                           -0.024819, 0.000320, 1.068887);
 
 // 部分 von Kries 色适应（CAT02 空间）：把适应白点 w（线性 sRGB）往 D65 白 (1,1,1) 拉 D 的比例，返回 LMS 三通道的增益
+// 普朗克轨迹（2200–10000 K，CIE 1931 xy 的 Kim 近似换到线性 sRGB）在 (log2 R/G, log2 B/G) 平面上的折线，
+// 返回 w 相对轨迹的竖直偏差：> 0 偏品红 / 紫，< 0 偏绿（x 超出折线范围时按端点算）
+float planckDev(vec2 w) {
+  const vec2 P0 = vec2(1.716, -3.421), P1 = vec2(1.261, -2.061), P2 = vec2(0.809, -1.140), P3 = vec2(0.335, -0.333),
+             P4 = vec2(0.084, 0.073), P5 = vec2(-0.066, 0.319), P6 = vec2(-0.189, 0.525);
+  float x = clamp(w.x, P6.x, P0.x);
+  float y = x > P1.x ? mix(P1.y, P0.y, (x - P1.x) / (P0.x - P1.x))
+          : x > P2.x ? mix(P2.y, P1.y, (x - P2.x) / (P1.x - P2.x))
+          : x > P3.x ? mix(P3.y, P2.y, (x - P3.x) / (P2.x - P3.x))
+          : x > P4.x ? mix(P4.y, P3.y, (x - P4.x) / (P3.x - P4.x))
+          : x > P5.x ? mix(P5.y, P4.y, (x - P5.x) / (P4.x - P5.x))
+          : mix(P6.y, P5.y, (x - P6.x) / (P5.x - P6.x));
+  return w.y - y;
+}
+
 vec3 vonKries(vec3 w, float D) {
   vec3 lw = RGB2LMS * (w / max(dot(w, vec3(0.2126, 0.7152, 0.0722)), 1e-6));
   vec3 lr = RGB2LMS * vec3(1.0);
@@ -208,11 +224,14 @@ void main() {
     logAdapt = mix(aC, o, src.a);
     // ⑥ 色适应（T28，只作用于舱内）：适应白点 = 舱内光源色与窗外平均色的对数混合，
     //    舱内越主导（舱内比窗外亮得多：夜里开灯），越以舱内光源为准、适应得越完全。
-    //    舱内很暗（睡眠 / 全关，中间视到暗视）时颜色恒常变弱，适应程度按 uChromaDarkScale 打折
-    float cdC = (c + LOG2_1000) * L2_10;
-    float dimD = mix(uChromaDarkScale, 1.0, smoothstep(uCabinLitRange.x - 1.5, uCabinLitRange.x, cdC));
-    vec2 wLog = mix(chroma.zw, chroma.xy - log2(uCabinRefAlbedo.rb / uCabinRefAlbedo.g), mix(uChromaCabinW.x, uChromaCabinW.y, dom));
-    catGain = vonKries(exp2(vec3(wLog.x, 0.0, wLog.y)), mix(uChromaD.x, uChromaD.y, dom) * dimD);
+    //    窗外平均色先限幅：很蓝的天空不是灰色表面，照单全收会把舱内的红补过头（fuji-day 偏粉）
+    vec2 wo = chroma.zw * min(1.0, uWinChromaMax / max(length(chroma.zw), 1e-6));
+    vec2 wLog = mix(wo, chroma.xy - log2(uCabinRefAlbedo.rb / uCabinRefAlbedo.g), mix(uChromaCabinW.x, uChromaCabinW.y, dom));
+    //    人眼沿普朗克轨迹（暖 ↔ 冷）适应得充分，对离开轨迹的那部分（紫色睡眠氛围灯、偏绿的天光混色）只适应一小部分：
+    //    睡眠光保留淡紫，fuji-day 的白点不因偏绿而把舱壁补成粉色；暖阅读灯、日光几乎在轨迹上，不受影响
+    float dev = planckDev(wLog);
+    wLog.y -= (1.0 - (dev > 0.0 ? uOffLocusAdapt.y : uOffLocusAdapt.x)) * dev;
+    catGain = vonKries(exp2(vec3(wLog.x, 0.0, wLog.y)), mix(uChromaD.x, uChromaD.y, dom));
   } else {
     // EV100 曝光：H = L(cd/m²) / (1.2 · 2^EV)
     logExposure = log2(1000.0 / (1.2 * exp2(uManualEv)));
@@ -292,8 +311,11 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  *   ⑥ 色适应（只作用于舱内像素，按遮罩 alpha 过渡）：
  *      测光：舱内（按面积）/ 窗外（中心加权）各通道的对数均值，排除比上一帧适应亮度亮 2–4 档的高光和暗 3–6 档的近黑样本；
  *      舱内光源色 = 舱内平均色 ÷ 饰面平均反照率 (0.75, 0.72, 0.665)（否则暖白饰面会被当成暖光抵消掉，白天就还是冷灰）；
+ *      窗外平均色先把 log2 色度向量限幅到长度 0.6（很蓝的天空不是灰色表面）；
  *      适应白点 W = 窗外平均色^(1−k) · 舱内光源色^k，k = mix(0.7, 1.0, dom)；
- *      CAT02 LMS 里的部分 von Kries：g = mix(1, LMS(D65) / LMS(W), D)，D = mix(0.65, 0.72, dom)；
+ *      普朗克轨迹：W 相对轨迹（2200–10000 K 折线，log2 色度平面）的竖直偏差 dev，偏品红 / 紫的一侧只适应 40%，
+ *      偏绿一侧照常（人眼沿暖 ↔ 冷适应得充分，对紫色氛围灯不会完全适应：睡眠档保留淡紫）；
+ *      CAT02 LMS 里的部分 von Kries：g = mix(1, LMS(D65) / LMS(W), D)，D = mix(0.7, 0.72, dom)；
  *      结果再按原亮度归一（只改色度，不碰 T23 标定的亮度）。色度测光与亮度同速做时间适应。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
  * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
@@ -332,13 +354,14 @@ export class Exposure {
       uSnowEv: { value: 2.0 },
       uUniformRange: { value: new THREE.Vector2(0.05, 0.12) },
       uPhotopicRange: { value: new THREE.Vector2(1.5, 3.0) },
-      uChromaD: { value: new THREE.Vector2(0.65, 0.72) },
+      uChromaD: { value: new THREE.Vector2(0.7, 0.72) },
       uChromaCabinW: { value: new THREE.Vector2(0.7, 1.0) },
       uDominanceRange: { value: new THREE.Vector2(-1.0, 2.0) },
       uCabinRefAlbedo: { value: new THREE.Vector3(0.75, 0.72, 0.665) },
       uCabinLitRange: { value: new THREE.Vector2(0.5, 1.2) },
       uCabinLitWhiteEv: { value: 0.35 },
-      uChromaDarkScale: { value: 1.0 },
+      uOffLocusAdapt: { value: new THREE.Vector2(1.0, 0.4) },
+      uWinChromaMax: { value: 0.6 },
     },
     true,
   );
