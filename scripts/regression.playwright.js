@@ -92,6 +92,11 @@ async (page) => {
     // wpac 22:00 本地、2026-01-16 无月夜（月亮 −88°、太阳 −64°），右座朝西，城心在 95 km 外正对窗口：
     // 被灯海染橙的雾、雾里的阶梯金字塔剪影、火炬、探照光束、雾下的车流灯带
     { name: "wonder-fogcity-night", p: { preset: "wpac", date: "2026-01-16", time: 1320, coverage: 0.15, "cabin-light": false, "wing-pos": "-4" }, wait: 4000, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"fogcity\", { forwardOffsetDeg: 0, distKm: 95, reveal: 1, seed: 0.37 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe() + \" · \" + v.clouds.wonderLayerState;" },
+    // W03：浮空古城（致敬《天空之城》，云间层，js 召唤，种子写死 0.23；召唤后等云间层变体编好再截图）。城心 80 km、正对窗口，层积云云海 0.6。
+    // day：右座朝西、16:15（2026-09-27 太阳高 16°、方位 259°，在城左上方约 11°）：侧逆光，墨绿树冠 + 层层台地的剪影、树冠边缘透光、底座下的云团被照亮、垂根
+    { name: "wonder-floatcity-day", p: { preset: "wpac", seat: "right", date: "2026-09-27", time: 975, "cloud-preset": "stratocumulus", coverage: 0.6, "wing-pos": "-4" }, wait: 4000, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"floatcity\", { forwardOffsetDeg: 0, distKm: 80, reveal: 1, seed: 0.23 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe() + \" · \" + v.clouds.wonderLayerState;" },
+    // dusk：左座朝东、17:20（太阳约 1°，在身后）：台地与树冠被低日镀成暖色，身后是暗下去的东天
+    { name: "wonder-floatcity-dusk", p: { preset: "wpac", seat: "left", date: "2026-09-27", time: 1040, "cloud-preset": "stratocumulus", coverage: 0.6, "cabin-light": false, "wing-pos": "-4" }, wait: 4000, js: "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"floatcity\", { forwardOffsetDeg: 0, distKm: 80, reveal: 1, seed: 0.23 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe() + \" · \" + v.clouds.wonderLayerState;" },
   ];
 
   await page.goto(`${origin}/?regression=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });

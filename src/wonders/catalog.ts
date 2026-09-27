@@ -6,7 +6,7 @@
  * 命名约定（研究文档 §2.1）：面板名写成「名字（致敬《作品》）」或注明典籍出处；id 用描述性英文。
  */
 
-import { FOGCITY_KIND, W00_PROBE_KIND, WONDER_CLOUD_KINDS } from "./wonder-cloud.glsl";
+import { FLOATCITY_KIND, FOGCITY_KIND, W00_PROBE_KIND, WONDER_CLOUD_KINDS } from "./wonder-cloud.glsl";
 
 /** 奇观所在的层：sky = 天幕层（在所有云之外，云的遮挡是现成的）；cloud = 云间层（插进云的步进，W00，见 wonder-cloud.glsl.ts） */
 export type WonderLayer = "sky" | "cloud";
@@ -80,7 +80,7 @@ export interface WonderVolume {
   /** 介质里的最大步长（km）；包围盒另外保证至少分 48 步 */
   stepKm: number;
   /** 投影椭球（挡住云受到的直射光）：中心、三个半轴（km，局部坐标） */
-  caster?: { center: [number, number, number]; radii: [number, number, number] };
+  caster?: { center: [number, number, number]; radii: [number, number, number]; strength?: number };
   /** 给着色器的自定义参数（uWonderParams.w = params[0]；uWonderParams.z 是每次出现的随机种子，W02 起） */
   params?: [number];
 }
@@ -147,6 +147,34 @@ export const WONDERS: WonderDef[] = [
     fadeS: 120,
     // 包围盒：城区 ±36 km（城区椭圆外缘 ≈ 32 km）、高 7 km（光束渐隐到 6.8 km；雾只在 2.2 km 以下，介质另外收窄）
     volume: { kind: FOGCITY_KIND, baseKm: 0, box: [[-36, 0, -36], [36, 7, 36]], surface: true, medium: true, stepKm: 0.3 },
+  },
+  {
+    id: "floatcity",
+    // 致敬宫崎骏《天空之城》（1986）：原创造型（巨树树冠、层层台地、倒扣的岩石底座与垂根、化雾的瀑布都是程序生成），不用任何官方资产
+    name: "浮空古城（致敬《天空之城》）",
+    layer: "cloud",
+    // 直径约 6 km、连根须高约 8 km：80 km 处宽约 4.3°（约 100 像素），远而朦胧，剪影仍认得出
+    distanceKm: [75, 130],
+    forwardOffsetDeg: [5, 25],
+    minAltitudeKm: 6,
+    // 白天到黄昏（研究文档 A1：太阳 5–25° 的侧逆光最好）；太阳落下后只剩剪影，入夜（< −5°）不自动出现
+    sunWeight: (a) => (a < -5 ? 0 : a < 5 ? 2 : a <= 25 ? 3 : 1.5),
+    // 浮现 90 s：先是一团「形状不太对劲的云」，雾散开后城显出来；停留约 5–8 模拟分钟；退场再被雾吞没
+    riseS: 90,
+    holdSimS: [300, 480],
+    fadeS: 90,
+    // 局部原点 = 台地底面（岩石半球上沿），海拔 7.5 km：根须尖约 3.3 km，树冠顶约 11.7 km，底下是云海（层积云顶 2.2 km）。
+    // 包围盒装下雾罩椭球（半径 6.2 / 5.6 km，浮现时那团「云」要把整座城裹住）；投影椭球近似整座城（挡住下方云海的阳光）
+    volume: {
+      kind: FLOATCITY_KIND,
+      baseKm: 7.5,
+      box: [[-6.25, -5.7, -6.25], [6.25, 5.5, 6.25]],
+      surface: true,
+      medium: true,
+      stepKm: 0.12,
+      // 影子浓度 0.6：椭球只是整座城的粗近似（树冠有缝、根须透光），不该投出一个实心的坑
+      caster: { center: [0, 0.5, 0], radii: [3.0, 3.0, 3.0], strength: 0.6 },
+    },
   },
 ];
 
