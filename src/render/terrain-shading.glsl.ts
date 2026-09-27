@@ -148,7 +148,7 @@ vec4 groundLand(GroundHit gh, float cs, vec3 eFlash) {
 }
 
 // 道路灯带（T08）：夜里的主干道与高速公路。只在 groundFinish 里调用一次（它内含取样循环，FXC 会在每个调用点整份内联）。
-// 线来自 OSM 道路的有向距离栅格（clipmap.ts 的 RoadRaster，照亮宽度已按夜光决定亮不亮），像素覆盖率由 groundRoadCoverage
+// 线来自 OSM 道路的有向距离栅格（clipmap.ts 的 RoadRaster，照亮宽度已按聚落地毯 / 互通 / 断续段决定亮不亮，T43），像素覆盖率由 groundRoadCoverage
 // 解析算出（含沿视线方向的各向异性过滤）。这里只做：近处一盏盏路灯的光斑、沿线的明暗起伏与钠灯 / LED 的色温混合、黄昏时各片区先后亮灯。
 // 返回地面处的辐亮度（kcd/m²），调用处乘空气透视的透射率
 const float ROAD_LUMINANCE = 3.2e-3;           // 满覆盖、强度 1 的路面亮度（cd/m² × 1e-3）。T08 取 1.6（道路照明标准里高速路面 1.5–2 cd/m²）；

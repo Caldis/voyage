@@ -345,7 +345,7 @@ const HWY_SEG_MEAN = 0.25;
 /** 聚落「地毯」的摊平半径（km） */
 const CARPET_REACH_KM = 0.4;
 /** 地毯亮度（夜光² × 建成区比例的片区平均）到这个值时道路满亮（市中心约 0.3–0.5） */
-const CARPET_FULL = 0.6;
+const CARPET_FULL = 0.7;
 
 /**
  * 路灯亮不亮（T43 重做；T08 的版本只看夜光，见 git 历史）。数据里没有「有没有路灯」这一项，不去编，
