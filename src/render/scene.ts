@@ -211,15 +211,30 @@ void main() {
   float wm = wipeMarks(q, pixPane);
   view += min(M_PI * lWin * (0.015 * sc.y + 0.006 * sm + 0.02 * wm) + eCabinRefl / M_PI * 0.1 * (sc.y + wm), viewRef * 0.03);
   view += min(sunLit * eSunNormal * 0.006 * wm * fwdLobe, viewRef * 0.3);
-  // 窗板外侧的水：水线和水珠像小透镜，把周围一大片的光折射进来——亮度被「平均」成窗外的平均亮度，
-  // 边缘因为全反射偏暗；迎着阳光时会闪亮
-  vec2 wetCov = waterOnPane(q, pixPane, -uSeatSign, uTime, uWetness);
-  float wc = clamp(wetCov.x + wetCov.y, 0.0, 1.0);
-  // 均匀的雾里水珠几乎看不见，主要靠边缘的全反射暗边；外面有明暗对比时才折射出亮光
-  vec3 lensed = M_PI * lWin * 0.9 + eSunNormal * 0.004 * sunLit * fwdLobe;
-  float edge = clamp(4.0 * wc * (1.0 - wc) + 0.6 * wetCov.x, 0.0, 1.0);
-  view *= 1.0 - 0.3 * edge;
-  view += wc * 0.12 * max(lensed - view, vec3(0.0));
+  // 窗板外侧的水（T29）：水珠、水线是小透镜——视线穿过倾斜的水面偏折 (n−1)·坡度，
+  // 直接读偏折后方向上的窗外像素（uOutside 是全分辨率的窗外结果），所以水里看到的是偏移、放大或倒转的窗外；
+  // 陡的边缘全反射、映出暗的舱内，压暗一点。均匀的雾里折射前后一样，只剩很淡的暗边；
+  // 背后是太阳或明暗交界时，水里会自然出现亮点和倒像
+  vec4 wat = waterOnPane(q, pixPane, -uSeatSign, uTime, uWetness);
+  if (wat.z > 0.002) {
+    vec2 defl = WATER_DEFLECT * wat.xy / wat.z;
+    // 视线方向对像素坐标的雅可比（解析求，不用屏幕导数：这里在分支里）
+    vec2 jx = cabinRay(gl_FragCoord.xy + vec2(1.0, 0.0)).xy - rd.xy;
+    vec2 jy = cabinRay(gl_FragCoord.xy + vec2(0.0, 1.0)).xy - rd.xy;
+    float det = jx.x * jy.y - jx.y * jy.x;
+    vec2 dpx = abs(det) > 1e-12 ? vec2(jy.y * defl.x - jy.x * defl.y, -jx.y * defl.x + jx.x * defl.y) / det : vec2(0.0);
+    // 保险：截到 64 像素（WATER_DEFLECT 已经把偏折缩小，正常只有几到几十像素）
+    dpx *= min(1.0, 64.0 / max(length(dpx), 1e-6));
+    // 两个抽头（偏折的 100% 与 80%）取平均：缩小的倒像不至于逐像素跳
+    ivec2 rmax = ivec2(uResolution) - 1;
+    vec4 refr = 0.5 * (texelFetch(uOutside, clamp(ivec2(gl_FragCoord.xy + dpx), ivec2(0), rmax), 0)
+                     + texelFetch(uOutside, clamp(ivec2(gl_FragCoord.xy + 0.8 * dpx), ivec2(0), rmax), 0));
+    // 窗外 pass 只在窗板开口以内写 alpha = 1，开口以外读到的是 0：退回不偏折
+    vec3 bent = refr.a > 0.99 ? refr.rgb : viewPre;
+    view += wat.z * (bent - viewPre);
+    viewPre = mix(viewPre, bent, wat.z);
+    view *= 1.0 - WATER_RIM * wat.w;
+  }
   // 内层窗板底部的透气孔（直径约 3 mm），孔边一圈暗环
   float dHole = length(q - vec2(0.0, -0.145));
   view *= 1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole));
@@ -240,7 +255,7 @@ void main() {
   if (rl.readOn > 0.0 || reflMax > 0.003 * dot(view, vec3(0.2126, 0.7152, 0.0722))) {
     view += reflGain * reflWB * cabinReflection(pPane, rr, length(pPane - ro), rl);
   }
-  paneK = (1.0 - 0.1 * sm) * (1.0 - 0.3 * edge) * (1.0 - 0.12 * wc)
+  paneK = (1.0 - 0.1 * sm) * (1.0 - WATER_RIM * wat.w)
     * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
   }
   vec3 col = mix(wall, mix(mix(reveal, view, inPane), shade, shaded), inBezel);

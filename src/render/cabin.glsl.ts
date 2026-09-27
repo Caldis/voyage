@@ -174,43 +174,164 @@ float smudges(vec2 q) {
   return smoothstep(0.55, 0.85, fbm2(q * 18.0)) * 0.25;
 }
 
-// 窗板外侧的水：巡航速度下水不会往下流，而是被气流沿水平方向往机尾拖成细长、弯曲、粗细不均的水线；
-// 另有少量没被吹走、微微颤动的圆水珠。水主要是在折射背景，所以返回的是「扰动强度」而不是白线。
-// aftSign：座舱 x 轴上机尾的方向（右座 −1，左座 +1）。返回 x = 水线覆盖率，y = 水珠覆盖率（已按像素宽度摊薄）
-vec2 waterOnPane(vec2 q, float pix, float aftSign, float t, float wet) {
-  if (wet <= 0.001) return vec2(0.0);
-  vec2 result = vec2(0.0);
-  // 两层不同间距的行，错开，避免整齐的横纹
-  for (int layer = 0; layer < 2; layer++) {
-    float ROW = layer == 0 ? 0.011 : 0.017;
-    float qy = q.y + float(layer) * 0.0043;
-    float row = floor(qy / ROW);
-    float h = hash12(vec2(row, 7.3 + float(layer)));
-    float h2 = hash12(vec2(row, 1.9 + float(layer)));
-    if (h > 0.18 + 0.35 * wet) continue; // 大多数行是空的
-    float u = q.x * aftSign - t * mix(0.01, 0.05, h) + h * 13.0; // 水线整体慢慢往后爬
-    float segLen = mix(0.04, 0.12, h2);
-    float seg = fract(u / segLen);
-    float segId = floor(u / segLen);
-    float present = step(hash12(vec2(segId, row)), 0.55 * wet);
-    // 沿长度方向弯曲（阵风把水拨来拨去），往后略微下垂
-    float wob = (vnoise(vec2(u * 60.0, row)) - 0.5) * 0.0025;
-    float y0 = (row + 0.2 + 0.6 * h2) * ROW - float(layer) * 0.0043 + wob - seg * segLen * 0.06;
-    float dy = abs(q.y - y0);
-    // 粗细：水珠拖出的尾巴越往后越细
-    float w = mix(0.0007, 0.0002, seg) * mix(0.7, 1.3, h);
-    float line = (w / max(w, pix)) * (1.0 - smoothstep(0.0, max(w, pix), dy)) * step(seg, 0.85);
-    float head = (1.0 - smoothstep(0.0, max(0.0011, pix), length(vec2(seg * segLen, dy)))) * (0.0011 / max(0.0011, pix));
-    result.x = max(result.x, max(line, head) * present);
+// ---- 窗板外侧的水（T29 重写）----
+// 水在窗上是一片片小透镜，不是画上去的线：这里只算「水面的形状」——表面坡度、覆盖率、暗边，
+// 合成时（scene.ts / wing-pass.ts）按坡度把视线偏折，读偏移后的窗外画面，所以透过水看到的是轻微偏移、
+// 放大或倒转的窗外；均匀的雾里整片水几乎隐形，只剩很淡的暗边。
+// 形态：低空爬升 / 下降时，水被气流推着斜向后下方流（水线），粗细、行距、长度、角度都随机，会分叉、会并在一起，
+// 一段一段地停顿再往前挪；另有大小呈长尾分布（小的多、大的少）、形状不规则的水珠。
+// 所有边缘都按像素足迹做盒式滤波，细到不足一个像素的水线 / 水珠按面积摊薄，不闪。
+// 返回 xy = 水面坡度 ∇h（已按覆盖率加权，座舱 xy 平面），z = 覆盖率 0..1，w = 暗边（全反射）强度 0..1
+
+// 暗边（水面陡处的全反射，映出的是暗的舱内）最多压暗多少；scene.ts 与 wing-pass.ts 共用
+const float WATER_RIM = 0.22;
+// 视线穿过倾斜的水面偏折的角度 ≈ (n − 1)·坡度，n = 1.33。真实的偏折能到几十度（水珠里是整片天地的倒像），
+// 但按像素点采样会把那么大的视场压进几个像素，出现放射状的条纹、还读到窗板开口以外；
+// 这里把偏折缩到约 1/10：水珠里仍是倒转、缩小的窗外，只是取自周围几十个像素
+const float WATER_DEFLECT = 0.033;
+
+// 一维盒式滤波：像素足迹 [x − pix/2, x + pix/2] 落在 [−w, w] 里的比例
+float waterBox(float x, float w, float pix) {
+  return clamp(min(x + 0.5 * pix, w) - max(x - 0.5 * pix, -w), 0.0, pix) / pix;
+}
+
+// 横截面是一段圆柱冠的水带：dv 到中线的距离，w 半宽，nrm 水带的法向（朝 dv 增大方向）
+void waterBand(float dv, float w, vec2 nrm, float pix, inout vec4 acc) {
+  if (w <= 0.0) return;
+  float cov = waterBox(dv, w, pix);
+  if (cov <= 0.0) return;
+  float r = clamp(dv / w, -1.0, 1.0);
+  // 分辨得出的程度：宽度不足约 1.5 像素时坡度在一个像素里正负抵消，暗边也只剩平均值
+  float res = smoothstep(0.6 * pix, 2.0 * pix, w);
+  // 冠高 / 半宽 ≈ 0.45（贴着玻璃被吹扁的水膜，接触角约 25°）
+  float slope = -0.45 * r / sqrt(max(1.0 - r * r, 0.0) + 0.06);
+  // 暗边只在下沿明显（下沿全反射映的是更暗的舱内下半部），上沿很淡——免得读成一对平行的描边
+  float rim = mix(0.2, smoothstep(0.6, 1.0, abs(r)) * (r < 0.0 ? 1.0 : 0.3), res);
+  acc.xy += nrm * slope * res * cov;
+  acc.z = max(acc.z, cov);
+  acc.w = max(acc.w, rim * cov);
+}
+
+// 不规则水珠：c 中心，r 名义半径，fu 气流方向（水珠沿气流略拉长），ph 形状随机相位
+void waterDrop(vec2 q, vec2 c, float r, vec2 fu, vec2 fv, vec2 ph, float pix, inout vec4 acc) {
+  vec2 d = q - c;
+  vec2 dl = vec2(dot(d, fu) / 1.18, dot(d, fv));
+  float dist = length(dl);
+  if (dist > r * 1.3 + pix) return;
+  float ang = atan(dl.y, dl.x);
+  float rr = r * (1.0 + 0.13 * sin(2.0 * ang + ph.x * 6.283) + 0.07 * sin(3.0 * ang + ph.y * 6.283));
+  // 半径方向的盒式滤波；比像素小的水珠按面积摊薄
+  float cov = clamp((rr - dist) / pix + 0.5, 0.0, 1.0) * min(1.0, 3.14159 * rr * rr / (pix * pix));
+  if (cov <= 0.0) return;
+  float rho = min(dist / rr, 1.0);
+  float res = smoothstep(0.8 * pix, 2.5 * pix, rr);
+  // 球冠：接触角约 45°，中心平、边缘陡；坡度指向中心（∇h 朝外为负）
+  vec2 dir = d / max(length(d), 1e-7);
+  float slope = -0.9 * rho / sqrt(max(1.0 - rho * rho, 0.0) + 0.15);
+  acc.xy += dir * slope * res * cov;
+  acc.z = max(acc.z, cov);
+  // 暗边是下缘的一弯月牙，上缘几乎没有——整圈的暗环会读成空心圆圈
+  float cres = 0.2 + 0.8 * smoothstep(-0.1, 0.7, -dir.y);
+  acc.w = max(acc.w, mix(0.2, smoothstep(0.62, 1.0, rho) * cres, res) * cov);
+}
+
+vec4 waterOnPane(vec2 q, float pix, float aftSign, float t, float wet) {
+  vec4 acc = vec4(0.0);
+  if (wet <= 0.001) return acc;
+  // 气流方向：往机尾、向下约 12°（水线各自再偏 ±10°）。fv 垂直于气流、朝上
+  vec2 fu = normalize(vec2(aftSign, -0.21));
+  vec2 fv = vec2(-fu.y, fu.x) * aftSign;
+  float u = dot(q, fu);
+  float v = dot(q, fv);
+
+  // ---- 水线：出云后先被吹走（比水珠消失得早）----
+  float sLine = smoothstep(0.15, 0.85, wet);
+  if (sLine > 0.0) {
+    const float ROW = 0.0085;
+    float k0 = floor(v / ROW);
+    for (int dk = -2; dk <= 2; dk++) {
+      float k = k0 + float(dk);
+      float hr = hash12(vec2(k, 3.17));
+      // 停一停、挪一步：每行自己的节奏，挪动的距离几毫米到一厘米
+      float p = t * mix(0.25, 0.7, hr) + hr * 17.0;
+      float stepped = floor(p) + smoothstep(0.35, 0.95, fract(p));
+      float uu = u - stepped * mix(0.003, 0.011, hash12(vec2(k, 5.53)));
+      float L = mix(0.03, 0.085, hash12(vec2(k, 8.81)));
+      float sid = floor(uu / L);
+      vec2 hs = hash22(vec2(sid, k) + 0.37);
+      if (hs.x > 0.6 * sLine) continue;
+      vec2 hs2 = hash22(vec2(k, sid) + 17.1);
+      vec2 hs3 = hash22(vec2(sid * 1.31 + 4.7, k * 0.77));
+      // 这一段水线占格子的 [a, b]，其余是空隙
+      float a = 0.04 + 0.3 * hs2.x;
+      float len = mix(0.35, 0.92 - a, hs2.y) * L;
+      float x = (fract(uu / L) - a) * L;       // 从水线的上游端（尾巴）量起
+      if (x < -0.002 || x > len + 0.003) continue;
+      float ang = (hs.y - 0.5) * 0.5;           // 相对基准方向 ±14°
+      float v0 = (k + 0.5 + (hs3.x - 0.5) * 0.95) * ROW;
+      // 低频弯折（阵风把水拨来拨去）+ 高频细抖
+      float wob = (vnoise(vec2(x * 22.0 + sid * 3.7, k * 1.3)) - 0.5) * 0.009
+                + (vnoise(vec2(x * 60.0 + sid, k * 2.1)) - 0.5) * 0.0025
+                + (vnoise(vec2(x * 140.0, k + sid)) - 0.5) * 0.0005;
+      float vc = v0 - ang * x + wob;
+      // 粗细：半宽 0.15–0.6 mm，长尾（细的多）；沿长度方向时粗时细（串珠）；尾端渐细
+      float w0 = mix(0.00015, 0.0006, hs3.y * hs3.y);
+      float bead = 0.7 + 0.6 * vnoise(vec2(x * 380.0 + k, sid));
+      float taper = smoothstep(-0.002, 0.35 * len, x) * (1.0 - smoothstep(len - 0.0005, len + 0.0015, x));
+      waterBand(v - vc, w0 * bead * taper, fv, pix, acc);
+      // 约 30% 的水线头上顶着一颗被拉长的水滴（比线宽大 1.5–2 倍）
+      if (fract(hs3.x * 37.0) < 0.3) {
+        float hR = w0 * mix(1.5, 2.0, fract(hs3.y * 23.0));
+        vec2 dl = vec2((x - len + hR) / 1.7, v - vc);
+        float dd = length(dl);
+        float covH = clamp((hR - dd) / pix + 0.5, 0.0, 1.0) * min(1.0, 3.14159 * hR * hR / (pix * pix));
+        if (covH > 0.0) {
+          float rho = min(dd / hR, 1.0);
+          float res = smoothstep(0.8 * pix, 2.5 * pix, hR);
+          vec2 dir = (fu * dl.x + fv * dl.y) / max(dd, 1e-7);
+          acc.xy += dir * (-0.7 * rho / sqrt(max(1.0 - rho * rho, 0.0) + 0.05)) * res * covH;
+          acc.z = max(acc.z, covH);
+          acc.w = max(acc.w, mix(0.2, smoothstep(0.62, 1.0, rho) * (0.2 + 0.8 * smoothstep(-0.1, 0.7, -dir.y)), res) * covH);
+        }
+      }
+      // 约 30% 的水线在中段分出一条更陡、更细的支流
+      if (hs2.x < 0.3) {
+        float xb = len * mix(0.35, 0.6, hs3.x);
+        float lb = len * mix(0.25, 0.5, fract(hs2.y * 13.0));
+        float xr = x - xb;
+        if (xr > 0.0 && xr < lb + 0.002) {
+          float vcb = v0 - ang * xb + wob - (ang + 0.18) * xr;
+          float wb = w0 * 0.65 * bead * (1.0 - smoothstep(lb - 0.0005, lb + 0.0015, xr)) * smoothstep(0.0, 0.004, xr + 0.001);
+          waterBand(v - vcb, wb, fv, pix, acc);
+        }
+      }
+    }
   }
-  // 零星的圆水珠，大小不一，在气流里微微颤动
-  vec2 cell = floor(q / 0.009);
-  vec2 hc = hash22(cell * 3.7 + 1.1);
-  if (hc.x < 0.06 * wet) {
-    vec2 c = (cell + 0.2 + 0.6 * hash22(cell + 9.2)) * 0.009 + vec2(sin(t * 9.0 + hc.y * 20.0), cos(t * 7.0 + hc.x * 11.0)) * 0.00015;
-    float r = mix(0.0005, 0.0018, hc.y * hc.y);
-    result.y = 1.0 - smoothstep(r - pix, r + pix, length(q - c));
+
+  // ---- 水珠：两层网格，细密的小水珠 + 稀疏的大水珠，半径长尾分布 ----
+  float sDrop = smoothstep(0.0, 0.45, wet);
+  {
+    const float C1 = 0.0048;
+    vec2 cell = floor(q / C1);
+    vec2 h = hash22(cell * 1.7 + 3.1);
+    if (h.x < 0.4 * sDrop) {
+      vec2 h2 = hash22(cell + 11.3);
+      float r = min(0.00018 * pow(max(1.0 - h.y, 0.02), -0.5), 0.0008);
+      vec2 c = (cell + 0.5 + (h2 - 0.5) * (1.0 - 2.0 * (r + 0.0003) / C1)) * C1;
+      waterDrop(q, c, r, fu, fv, hash22(cell + 5.9), pix, acc);
+    }
   }
-  return result;
+  {
+    const float C2 = 0.013;
+    vec2 cell = floor(q / C2);
+    vec2 h = hash22(cell * 2.3 + 7.7);
+    if (h.x < 0.3 * sDrop) {
+      vec2 h2 = hash22(cell + 21.9);
+      float r = min(0.0007 * pow(max(1.0 - h.y, 0.02), -0.6), 0.0022);
+      vec2 c = (cell + 0.5 + (h2 - 0.5) * (1.0 - 2.0 * (r * 1.3 + 0.0004) / C2)) * C2;
+      waterDrop(q, c, r, fu, fv, hash22(cell + 2.2), pix, acc);
+    }
+  }
+  return acc;
 }
 `;
