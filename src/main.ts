@@ -27,6 +27,7 @@ import { createQualityController, DEFAULT_DPR_CAP } from "./quality";
 import { CabinAudio, audioInputFrom } from "./audio";
 import { LightPollution } from "./light-pollution";
 import { DebugMinimap } from "./debug/minimap";
+import { RAIL_WING_ROOT_LE, RailMode } from "./rail/mode";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
@@ -234,6 +235,7 @@ function snapAll() {
 }
 
 function setPreset(id: string) {
+  if (rail.active) rail.exit(); // TR02：火车模式下选地点 = 回到飞机（先恢复飞机的状态，再照常换地点）
   state.preset = PRESETS.find((p) => p.id === id) ?? PRESETS[0];
   state.heading = state.preset.dest
     ? greatCircleBearing(state.preset.lat, state.preset.lon, state.preset.dest[0], state.preset.dest[1])
@@ -283,6 +285,21 @@ weather.onFlash = (a, b, cg) => {
   audio.lightning(Math.min(dist(a), dist(b)), cg);
 };
 
+// ---------- 火车模式（TR02，rail/mode.ts）：面板「交通工具」切换；开着时 renderFrame 用列车代替 stepFlight ----------
+const rail = new RailMode({
+  state,
+  ground,
+  cloudOffset: cloudUniforms.uCloudOffset.value,
+  snapAll: () => snapAll(),
+  syncTimeUi: () => syncTimeUi(state),
+  setSeat: (seat) => {
+    const sel = $<HTMLSelectElement>("seat");
+    if (sel.value === seat) return;
+    sel.value = seat;
+    sel.dispatchEvent(new Event("change"));
+  },
+});
+
 // 奇观之门演示开关（T19b）：URL 带 ?gateDemo 时，连续航程每 2 模拟小时在航线前方放一道云墙
 if (new URLSearchParams(location.search).has("gateDemo")) director.weather.gateDemo = true;
 
@@ -315,7 +332,7 @@ resize();
 // 重新应用一次分辨率 / DPR——上面的初始 renderer.setPixelRatio + resize() 已经把状态摆对了
 const quality = createQualityController({ renderer, clouds, resize });
 
-setupUi({ state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, quality, audio, minimap });
+setupUi({ state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, quality, audio, minimap, vehicle: rail });
 // 奇观之门（W01 预留、T19b 接入）：遮挡开始时通知奇观系统；只有 wonders.preferGate = true 时才会借遮挡出现
 director.onCover((kind) => wonders.onCover(kind));
 
@@ -383,7 +400,7 @@ function renderFrame(now: number) {
 
   // 高度下限与霾（T18）：都要在大气 LUT 更新之前
   const offT18 = cloudUniforms.uCloudOffset.value;
-  updateAltitudeFloor(state, ground, offT18.x, offT18.y);
+  if (!rail.active) updateAltitudeFloor(state, ground, offT18.x, offT18.y); // 火车贴着地面走，没有高度下限（TR02）
   haze.update({ state, ground, x: offT18.x, z: offT18.y, lon: curLon, sunAltDeg: sun.altitude, coverage: cloudUniforms.uCoverage.value, dt });
 
   const moon = moonState(new Date(state.simTime), curLat, curLon, state.altitudeKm * 1000);
@@ -392,8 +409,9 @@ function renderFrame(now: number) {
   atmosphere.updateAerialPerspective(camR, sunDir[1]);
 
   // 加速时拆成不超过 0.5 模拟秒的小步：航向控制器（按角度差的 0.3 倍转）步长太大会来回过冲
-  const flightResult = stepFlight(simDt, curLat, curLon);
-  director.update(dt, simDt, flightResult.speedKms);
+  // 火车模式（TR02）：列车沿线路推进，写 state 的航向 / 俯仰 / 滚转 / 高度和 uCloudOffset；导演（航段、天气场）不接管
+  const flightResult = rail.active ? rail.step(simDt) : stepFlight(simDt, curLat, curLon);
+  if (!rail.active) director.update(dt, simDt, flightResult.speedKms);
   if (flightResult.climbing) syncAltitudeUi(state);
   // 奇观（W01）：触发、编排、摆放（固定在地面的经纬度上），写 uWonder*；奇观模式关时只把 uWonderOn 置 0
   wonders.update(dt, simDt, {
@@ -450,7 +468,7 @@ function renderFrame(now: number) {
   const [ce, cu, cs] = localToEquatorialColumns(new Date(state.simTime), curLat, curLon, state.altitudeKm * 1000);
   u.uLocalToEquatorial.value.set(ce[0], cu[0], cs[0], ce[1], cu[1], cs[1], ce[2], cu[2], cs[2]);
   u.uCamR.value = camR;
-  u.uHead.value.set(head.x, head.y + bump, head.z);
+  u.uHead.value.set(head.x, head.y + (rail.active ? rail.headBump : bump), head.z);
   u.uWetness.value = state.wetness;
   u.uCameraFog.value = clouds.cameraDensity * 60; // 与云着色器的 CLOUD_EXTINCTION 一致
   clouds.keyVisibility(dt, u.uKeyCloud.value); // 飞机周围的云对舱内 / 机翼光照的影响（T31）
@@ -476,7 +494,7 @@ function renderFrame(now: number) {
   if (state.groundOn) ground.update(cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y);
   lightPollution.update(ground, cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y, state.altitudeKm, state.groundOn, now);
   u.uTerrainMax.value = ground.maxHeightKm;
-  u.uWingRootLE.value = state.wingRootLE;
+  u.uWingRootLE.value = rail.active ? RAIL_WING_ROOT_LE : state.wingRootLE; // 火车模式：机翼挪到身后 10 km（不改着色器）
   // 巡航时翼尖静弯约 0.5 m，湍流里再叠几厘米的颤动
   const ts = now / 1000;
   // 颠簸越强，翼尖上下颤得越厉害（强颠簸时可达十几厘米）
@@ -515,7 +533,7 @@ function renderFrame(now: number) {
   const qualityText = quality.describe();
   if (qualityText !== qualityUi) $("quality-status").textContent = qualityUi = qualityText;
 
-  updateInfo(now, sun, moon, state, curLat, curLon, ground.pending, director.describe());
+  updateInfo(now, sun, moon, state, curLat, curLon, ground.pending, rail.active ? rail.describe() : director.describe());
 
   // 调试小地图（DX-06）：关着时 update() 第一行就返回。天气用当前实际渲染中的 storms / hurricane（而不是
   // 只查天气场），这样不论天气是导演按天气场摆的、还是面板手选的，雷达图都和窗外看到的一致
@@ -673,4 +691,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail };

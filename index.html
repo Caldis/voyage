@@ -35,6 +35,13 @@
     </div>
     <aside id="panel">
       <h1>航行伴侣 <small>按 H 隐藏</small></h1>
+      <!-- 交通工具（TR02）：火车沿 JR 大糸线松本—信濃大町行驶；近景 / 中景还没做（TR03–TR05），窗外暂时只有远景 -->
+      <label>交通工具 <output id="vehicle-status"></output>
+        <select id="vehicle">
+          <option value="plane" selected>飞机</option>
+          <option value="train">火车（大糸线，示例）</option>
+        </select>
+      </label>
       <label>地点<select id="preset"></select></label>
       <div class="row">
         <label>日期<input id="date" type="date" /></label>
