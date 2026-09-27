@@ -415,6 +415,8 @@ struct WingTraceResult {
   float shadow;  // 机翼自身的软阴影（小翼、短舱、扰流板、整流罩投到翼面上），1 = 不挡
   int part;      // 部件编号（见 gWingPart）
   bool inner;    // 打中之前先擦过另一处轮廓（内轮廓）
+  float tGraze;  // 内轮廓：第一次擦过别的部件时离它最近的那一步的距离（边缘超采样的子射线从这里附近出发）
+  int steps;     // 求交用了几步（边缘超采样的子射线共用一份步数预算）
   float bumpVar; // 按像素足迹滤掉的油罐鼓包斜率方差（并入粗糙度）
   bool edge;     // 打中之前先擦过另一处轮廓（襟翼压在主翼上、小翼压在翼面上这类「内轮廓」），或者打中的是几乎侧对视线的薄边
 };
@@ -429,8 +431,9 @@ vec3 wingTetraDir(int i) {
 // 循环次数都依赖 uniform，FXC 也不会展开循环。
 // 求交的命中阈值取亚像素（旧版取 0.002·t，约两个像素，擦边的射线命中与否取决于步进落点，轮廓成了阶梯）。
 // marchSteps：求交最多走几步；shadowSteps：自阴影步数。边缘超采样的子射线从中心射线命中点附近出发，
-// 传较少的步数、不算阴影（沿用中心射线的）——一个 warp 里只要有一个边缘像素，整个 warp 都得等它走完
-WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int shadowSteps) {
+// 传较少的步数、不算阴影（沿用中心射线的）——一个 warp 里只要有一个边缘像素，整个 warp 都得等它走完。
+// tJump：内轮廓像素的子射线擦过前面的部件以后直接跳到这个距离（中心射线已经确认前面是空的）；−1 = 不跳
+WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchSteps, int shadowSteps, float tJump) {
   WingTraceResult w;
   w.t = -1.0;
   w.cov = 0.0;
@@ -440,6 +443,8 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
   w.part = 0;
   w.edge = false;
   w.inner = false;
+  w.tGraze = -1.0;
+  w.steps = 0;
   w.bumpVar = 0.0;
   float pa = wingPixelAngle();
   vec3 oA = wingCabinToAircraft(ro);
@@ -459,6 +464,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
   float tBest = -1.0;
   int partBest = 0;
   float rPrev = 1e9;
+  float tPrev = 0.0;
   bool grazed = false;
   float dHit = 0.0;     // 命中点的距离场值（算曲率用）
   float sumD = 0.0;     // 四面体四个采样的和  // 走过一个「离表面不到一个像素、然后又远离」的地方
@@ -488,11 +494,24 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
       } else {
         float r = d / fp;
         if (r < best) { best = r; tBest = t; partBest = gWingPart; }
-        if (rPrev < 1.0 && r > rPrev) grazed = true;
+        if (rPrev < 1.0 && r > rPrev) {
+          if (!grazed) w.tGraze = tPrev;
+          grazed = true;
+        }
         rPrev = r;
+        tPrev = t;
         // 距离场只是近似（盒子式组合 + 翼型前缘陡），近处步长打六折保险；离得远（> 0.3 m）时相对误差小，打八五折省步数。
         // 最小步长取亚像素，免得穿过毫米级的后缘
         t += max(d * (d > 0.3 ? 0.85 : 0.6), max(0.3 * fp, 0.002));
+        // 内轮廓像素的子射线（tJump > 0）：已经擦过前面的部件（离它最近不到 3 个像素、现在远离了 1 个像素以上），
+        // 直接跳到中心射线命中后面那个部件之前几个像素的地方（中心射线已经确认这段是空的）。
+        // 否则它要贴着前面部件的下表面一步步远离，几十步才走到后面的短舱 / 整流罩（PERF-3）
+        if (tJump > t && best < 3.0 && r > best + 1.0) {
+          t = tJump;
+          tJump = -1.0;
+          best = 1e9;
+          rPrev = 1e9;
+        }
         // 掠射：还在包围盒里、离表面不到 3 个像素、还没过最近点（r 没比最近时大出一个像素）
         bool approaching = t <= tExit && best < 3.0 && r < best + 1.0;
         bool nearGraze = approaching && marchSteps == uWingSteps;
@@ -512,13 +531,13 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
           // 法线取的是后缘端面，夕阳下后缘成了一串白点（审查返工第 1 项的根因）
           // 已经过了最近点、正在远离表面的射线是擦边而过，不提升（T22）
           if (nearGraze) w.cov = 1.0;
-          if (w.cov <= 0.0) return w;
+          if (w.cov <= 0.0) { w.steps = i + 1; return w; }
           w.t = tBest;
           w.part = partBest;
           done = true;
         }
       }
-      if (done) { P = oA + dA * w.t; phase = 1; }
+      if (done) { P = oA + dA * w.t; phase = 1; w.steps = i + 1; }
     } else if (phase == 1) {
       n += wingTetraDir(j) * d;
       sumD += d;
@@ -565,6 +584,10 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         w.nGeo = nFlat;
         phase = 2;
         gWingSkip = w.part <= 1 ? 0 : w.part;
+        // 不要自阴影的调用（边缘超采样的子射线，沿用中心射线的阴影）到这里就结束。
+        // 以前 shadowSteps = 0 只是少算了循环总数，阴影段照样走到循环用完（子射线 64·3+4 次里剩下的一百多次），
+        // 结果又被中心射线的阴影覆盖——夜景里边缘超采样约四成的迭代白花了（PERF-3）
+        if (shadowSteps <= 0) break;
         // 背光面不用算阴影
         if (dot(n, lA) <= 0.0 || wingFuselageShadow(P, lA) <= 0.0) break;
         // 襟翼不算自阴影：它贴在整流罩下面，近似的距离场在那条缝里给出一片片硬边的「迷彩」暗斑（穿云时最明显）；

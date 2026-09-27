@@ -151,9 +151,14 @@ vec2 wingRgss(int k) {
 // - 打中了、按曲率估计离外轮廓不到 1.5 个像素：外轮廓内侧、薄的后缘、小翼的边；
 // - 打中之前先擦过另一处轮廓：内轮廓（襟翼压在主翼上、小翼和翼面、短舱和机翼）。
 // 后两种是「边缘像素」：
-// 边缘像素改成 4 条旋转网格（RGSS）子射线各自求交、着色再平均，每条子射线自己的覆盖率按半个像素的斜坡算。
+// 边缘像素改成 4 条旋转网格（RGSS）子射线各自求交再平均，每条子射线只按「打中 / 没打中」计覆盖率。
 // 只用中心射线的解析覆盖率时，轮廓只有外侧半个像素有过渡、内侧是硬的，距离场又常高估距离，斜边上还是一级级的台阶。
-// 开销只落在边缘像素上（回归场景里约占 1% 以下）。
+// 开销只落在边缘像素上（回归场景里约 3% 的机翼像素），但它们散在 13–15% 的 warp 里、同一 warp 的其余像素都陪着等，
+// 所以子射线的活要压到最少（PERF-3）：
+// - 从中心射线的命中点（内轮廓：第一次擦过前面部件的地方）前 4 个像素宽处出发，不算自阴影；
+// - 四条共用 uWingSteps/2 步的预算；内轮廓的子射线擦过前面的部件以后直接跳到中心射线的命中点附近；
+// - 子射线打中的部件和法线跟中心射线相同（同一块表面）时，直接沿用中心射线的颜色，不再着色。
+// 贵的是求交步数而不是着色：warp 的耗时取决于里面最慢的那条子射线，所以压的是步数的上限，而不只是平均。
 // 求交和着色都放在同一个循环里、各只有一处调用，FXC 不会把它们内联成五份（冷编译时间不涨）。
 // refL：这个像素背后窗外的亮度（场景 pass 的结果），给子样本去亮点用
 vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, float belowAlbedo, vec4 cloud, float refL) {
@@ -166,43 +171,73 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
   int n = 1;
   float single = 1.0;  // 1 = 只有中心射线（解析覆盖率），0 = 超采样
   float t0 = tStart;
-  float sh0 = 1.0;
+  float tJ = -1.0;
+  const int SUB_MIN = 8;
+  int pool = uWingSteps / 2;   // 四条子射线共用的求交步数
+  // 边缘像素的中心射线：部件、法线、自阴影、颜色（子样本打在同一块表面上时沿用它的颜色）
+  int partC = -1;
+  vec3 nC = vec3(0.0);
+  float shC = 1.0;
+  vec3 colC = vec3(0.0);
   vec3 subCol[4];
   float subCov[4];
   for (int i = 0; i < 4; i++) { subCol[i] = vec3(0.0); subCov[i] = 0.0; }
   for (int k = min(uWingSteps, 0); k < 5; k++) {
     if (k >= n) break;
     vec3 rdk = k == 0 ? rd : normalize(rd + (right * wingRgss(k).x + up * wingRgss(k).y) * pa);
-    // 子射线：从中心射线命中点前一段开始走（挡在前面的部件一般在几米之内），不带自阴影（沿用中心射线的）
-    WingTraceResult w = wingTrace(ro, rdk, t0, lA, k == 0 ? uWingSteps : uWingSteps / 2, k == 0 ? uWingShadowSteps : 0);
-    if (k > 0) w.shadow = sh0;
+    // 子射线：从中心射线命中点前几个像素开始，不带自阴影（沿用中心射线的）。
+    // 求交步数四条共用一份预算（uWingSteps/2），每条至少给后面的留 SUB_MIN 步：大多数子射线几步就打中，
+    // 偶尔一条要多走的可以用掉别人省下的。一个边缘像素最多走 uWingSteps/2 步（以前每条各 uWingSteps/2，
+    // 再加上白走的阴影段），warp 的尾巴有了上限。调试位 1024：每条各给 uWingSteps/2 步（旧预算，对照用）
+    int lim = k == 0 ? uWingSteps : ((uWingDebug & 1024) != 0 ? uWingSteps / 2 : max(pool - SUB_MIN * (4 - k), SUB_MIN));
+    WingTraceResult w = wingTrace(ro, rdk, t0, lA, lim, k == 0 ? uWingShadowSteps : 0, k == 0 ? -1.0 : tJ);
+    if (k > 0) pool -= w.steps;
     if (k == 0 && uWingEdgeAA > 0 && w.cov >= 1.0 && w.edge) {
       n = uWingEdgeAA == 3 ? 1 : 5;   // 3：只判断不超采样（测开销用）
       single = 0.0;
-      // 内轮廓（中心射线打中之前先擦过别的部件）：子射线从中心命中点的一半距离出发，更近的遮挡（邻近部件）也能打到。
-      // 外轮廓附近（按曲率判断的边缘）前面没有别的东西，子射线从命中点前 16 个像素宽的地方出发：
-      // 贴着翼面掠射的子射线从半路出发要走几百步才挪到前缘，步数不够时四条都算「没打中」，前缘外轮廓成了硬台阶（T22）
-      t0 = max(tStart, w.inner || (uWingDebug & 128) != 0 ? w.t * 0.5 : w.t - 16.0 * pa * w.t);
-      sh0 = w.shadow;
-      continue;
+      partC = w.part;
+      nC = w.nA;
+      shC = w.shadow;
+      // 子射线从「最前面的那处轮廓」前 4 个像素宽的地方出发：外轮廓附近（按曲率判断的边缘）是中心命中点，
+      // 内轮廓（中心射线打中之前先擦过别的部件）是擦过的那一处，前面那个部件也能打到。
+      // 子射线离中心射线不到半个像素，比中心射线更早碰到表面的，出发点就在表面里面，第一步就算打中（覆盖率照样对）。
+      // 以前外轮廓从 16 个像素前、内轮廓从命中距离的一半出发，贴着表面一步只挪零点几个像素，四条一共要走一百多步（PERF-3）。
+      // 调试位 128：一律从一半出发（T22 之前的做法）
+      float tFront = w.inner && w.tGraze > 0.0 ? w.tGraze : w.t;
+      t0 = max(tStart, (uWingDebug & 128) != 0 ? w.t * 0.5 : tFront - 4.0 * pa * tFront);
+      // 内轮廓：子射线擦过前面的部件以后，直接跳到中心射线命中后面那个部件之前 4 个像素处（见 wingTrace 的 tJump）。
+      // 不跳的话它要贴着前面部件（前缘）的下表面慢慢远离，共用的步数不够走到后面的短舱 / 整流罩，
+      // 这条子样本就露出背后的天空，前缘上一条亮线（route-hnd-cts 最明显）。调试位 4096：不跳
+      tJ = w.inner && w.tGraze > 0.0 && (uWingDebug & 4096) == 0 ? w.t - 4.0 * pa * w.t : -1.0;
     }
     // 中心射线用解析覆盖率；子射线只算真正打中的（擦边没打中的算窗外）。
     // 之前子射线也按擦边的斜坡计入，着色点落在薄后缘外侧几毫米的空中，那里的距离场法线指向后缘端面，
     // 夕阳下每隔几个像素就冒一个亮点（一串亮珠）
     float c = single > 0.5 ? w.cov : step(1.0, w.cov);
     if (c <= 0.0) continue;
-    vec3 col = shadeWing(ro + rdk * w.t, rdk, w, sunC, eSky, eDown, belowAlbedo);
-    // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度
-    if (uCameraFog > 0.0) {
-      float tFog = exp(-uCameraFog * w.t * 0.001);
-      vec3 fogColor = cloud.rgb / max(1.0 - cloud.a, 0.05);
-      col = mix(fogColor, col, tFog);
+    // 颜色从哪来（PERF-3）：边缘像素上中心射线照常着色，但它的颜色只给子样本沿用、不直接计入；
+    // 子样本和中心射线打在同一块表面上（同一部件、法线差 < 18°）就沿用中心的颜色，
+    // 否则（换了部件、跨过薄后缘的上下表面、圆前缘上法线转得快）自己着色。
+    // 丢掉的只是像素内的纹理 / 高光变化。调试位 256：每条子样本都自己着色（旧做法，对照用）
+    bool useC = k > 0 && (uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95;
+    vec3 col = colC;
+    if (!useC) {
+      if (k > 0) w.shadow = shC;
+      col = shadeWing(ro + rdk * w.t, rdk, w, sunC, eSky, eDown, belowAlbedo);
+      // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度
+      if (uCameraFog > 0.0) {
+        float tFog = exp(-uCameraFog * w.t * 0.001);
+        vec3 fogColor = cloud.rgb / max(1.0 - cloud.a, 0.05);
+        col = mix(fogColor, col, tFog);
+      }
+      // 调试：超采样的像素染成品红（亮度不变，不影响自动曝光）
+      if (uWingEdgeAA > 1 && single < 0.5) col = vec3(1.0, 0.0, 1.0) * dot(col, vec3(0.2126, 0.7152, 0.0722)) * 1.4;
     }
-    // 调试：超采样的像素染成品红（亮度不变，不影响自动曝光）
-    if (uWingEdgeAA > 1 && single < 0.5) col = vec3(1.0, 0.0, 1.0) * dot(col, vec3(0.2126, 0.7152, 0.0722)) * 1.4;
     if (single > 0.5) {
       acc += col * c;
       covSum += c;
+    } else if (k == 0) {
+      colC = col;
     } else {
       subCol[k - 1] = col;
       subCov[k - 1] = c;
