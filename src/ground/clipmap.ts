@@ -36,6 +36,8 @@ const FINE_MAX_RATE = 2;
 const NIGHT_RES = 1024;
 /** 一级影像最多取多少张瓦片：2048² 时一边约 8–12 张（缩放级按四舍五入选，瓦片像素 / 纹素在 0.7–1.4 之间） */
 const IMAGERY_MAX_TILES = 169;
+/** 分块直传时每块的行数：2048 × 512 × 4 B = 4 MB（和 1024² 一整层一样大，实测一次 0.5 ms 以内） */
+const UPLOAD_ROWS = 512;
 
 /**
  * 高清细节层（G03）：只进最细的这几级（第 0 级 8 km、第 1 级 16 km）。研究结论（research/IMAGERY.md §1、§4.1）：
@@ -126,6 +128,32 @@ interface UploadJob {
   layerSize: number;
 }
 
+/**
+ * 影像 / 水体纹理的 image.data（G06）：不在 CPU 上常驻整个数组（2048² × 4 × 7 层 = 117 MB 一张，两张 235 MB，JS 堆翻倍），
+ * 只在上传那一刻把这一层的像素交给 three。three r186 的 DataArrayTexture 按层上传（layerUpdates）时只调
+ * `image.data.subarray(层起点, 层终点)` 和 `BYTES_PER_ELEMENT`（WebGLTextures.js），这里让 subarray 直接返回待传的那一层。
+ * 前提：这两张纹理的每一次上传都走按层路径——构造时 source.dataReady = false（只分配、不传整块），之后只有 upload() 触发更新。
+ * 代价：WebGL 上下文丢失后 three 会整块重传，这里给的是空数组（GL 报一条 INVALID_OPERATION，纹理内容丢失、不会崩）；
+ * 本项目本来就不处理上下文恢复（着色器程序要重编几十秒）。CPU 端要读像素的只有 light-pollution（夜光），改走 nightSample
+ */
+class LayerStage extends Uint8Array {
+  /** 层号 → 待传的像素（几帧都没渲染到这张纹理时可能攒好几层，按 subarray 的起点认层） */
+  private pending = new Map<number, Uint8Array | Uint8ClampedArray>();
+  layerLength = 1;
+  stage(layer: number, layerData: Uint8Array | Uint8ClampedArray) {
+    this.pending.set(layer, layerData);
+  }
+  override subarray(begin?: number): Uint8Array<ArrayBuffer> {
+    const layer = Math.round((begin ?? 0) / this.layerLength);
+    const p = this.pending.get(layer);
+    this.pending.delete(layer);
+    return (p ?? new Uint8Array(0)) as Uint8Array<ArrayBuffer>;
+  }
+}
+
+/** light-pollution 用的夜光采样网格边长（每级 NIGHT_GRID² 个点，取水体纹理 B 通道在格心的值） */
+export const NIGHT_GRID = 64;
+
 function makeCanvas(w: number, h: number) {
   const c = document.createElement("canvas");
   c.width = w;
@@ -200,9 +228,10 @@ export class GroundClipmap {
       t.needsUpdate = true;
       return t;
     };
-    this.albedo = tex(new Uint8Array(RES * RES * 4 * GROUND_LEVELS), RES, THREE.RGBAFormat, THREE.UnsignedByteType, true);
+    const stage = () => Object.assign(new LayerStage(0), { layerLength: RES * RES * 4 });
+    this.albedo = tex(stage(), RES, THREE.RGBAFormat, THREE.UnsignedByteType, true);
     this.albedo.colorSpace = THREE.SRGBColorSpace;
-    this.water = tex(new Uint8Array(RES * RES * 4 * GROUND_LEVELS), RES, THREE.RGBAFormat, THREE.UnsignedByteType, true);
+    this.water = tex(stage(), RES, THREE.RGBAFormat, THREE.UnsignedByteType, true);
     // 高度用 32 位浮点（TR03）：半精度在 0.5–1 km 海拔上只有约 0.5 m 一级（1–2 km 约 1 m），飞机上看不出来；
     // 火车眼高 2.5 m 掠射时，平原被量化成一级级半米高的台地，远处地平线成了阶梯状的锯齿。
     // R32F 的线性过滤要 OES_texture_float_linear——three 只在设备支持时才启用，不支持时 R32F 线性采样读出 0、地形全丢，
@@ -476,6 +505,66 @@ export class GroundClipmap {
     }
   }
 
+  /** 每级夜光的粗采样（NIGHT_GRID² 个格心的水体 B 通道），light-pollution 用；和纹理同一时刻更新 */
+  private readonly nightGrid = Array.from({ length: GROUND_LEVELS }, () => new Uint8Array(NIGHT_GRID * NIGHT_GRID));
+  private sampleNight(layer: number, water: Uint8ClampedArray) {
+    const g = this.nightGrid[layer];
+    const stride = RES / NIGHT_GRID;
+    for (let j = 0; j < NIGHT_GRID; j++)
+      for (let i = 0; i < NIGHT_GRID; i++) g[j * NIGHT_GRID + i] = water[((j * stride + stride / 2) * RES + i * stride + stride / 2) * 4 + 2];
+  }
+  /** 第 layer 级、格 (i, j) 的夜光（0..255，格心取样；light-pollution 用，G06 起纹理像素不在 CPU 常驻） */
+  nightSample(layer: number, i: number, j: number) {
+    return this.nightGrid[layer][j * NIGHT_GRID + i];
+  }
+
+  /**
+   * 分块直传（G06）：2048² 一层 16 MB，交给 three 按层上传是一次 texSubImage3D，实测主线程上 8–15 ms
+   * （1024² 的 4 MB 只要 0.5 ms——Chrome 的命令缓冲传输区放不下 16 MB，要走一次同步的大块共享内存，推测），
+   * 巡航时每 7 s 左右就有一帧 30–47 ms。拆成每块 UPLOAD_ROWS 行（4 MB）直接调 GL，几块合计约 2 ms。
+   * 需要 WebGL 上下文（attachGl，main.ts 接入）和 three 分配好的纹理对象（three 第一次上传后的 onUpdate 里从绑定点取）；
+   * 两样都没有时退回 three 按层上传。为了不弄乱 three 的状态缓存：用完恢复当前纹理单元的绑定和 pixelStorei。
+   */
+  private gl: WebGL2RenderingContext | null = null;
+  private readonly glTex = new Map<THREE.DataArrayTexture, WebGLTexture>();
+  attachGl(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    for (const t of [this.albedo, this.water]) {
+      t.onUpdate = () => {
+        if (!this.glTex.has(t)) {
+          const h = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY) as WebGLTexture | null;
+          if (h) this.glTex.set(t, h);
+        }
+      };
+    }
+  }
+  private uploadDirect(tex: THREE.DataArrayTexture, layer: number, px: Uint8ClampedArray) {
+    const gl = this.gl;
+    const h = this.glTex.get(tex);
+    if (!gl || !h || gl.isContextLost()) return false;
+    const prev = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY) as WebGLTexture | null;
+    const flip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL) as boolean;
+    const prem = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL) as boolean;
+    const align = gl.getParameter(gl.UNPACK_ALIGNMENT) as number;
+    const rowLen = gl.getParameter(gl.UNPACK_ROW_LENGTH) as number;
+    if (flip) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, h);
+    const u8 = new Uint8Array(px.buffer, px.byteOffset, px.byteLength);
+    for (let y = 0; y < RES; y += UPLOAD_ROWS) {
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, y, layer, RES, UPLOAD_ROWS, 1, gl.RGBA, gl.UNSIGNED_BYTE, u8, y * RES * 4);
+    }
+    gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, prev);
+    if (flip) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, align);
+    if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, rowLen);
+    return true;
+  }
+
   private upload(tex: THREE.DataArrayTexture, layer: number, data: ArrayLike<number>, layerSize: number) {
     if (tex === this.height) {
       this.heightCpu.set(data, layer * layerSize);
@@ -485,7 +574,11 @@ export class GroundClipmap {
         for (let k = 0; k < layerSize; k++) half[o + k] = THREE.DataUtils.toHalfFloat(this.heightCpu[o + k]);
       }
     } else {
-      (tex.image.data as unknown as { set(a: ArrayLike<number>, o: number): void }).set(data, layer * layerSize);
+      const px = data as Uint8ClampedArray;
+      if (tex === this.water) this.sampleNight(layer, px);
+      if (this.uploadDirect(tex, layer, px)) return;
+      // G06：不拷进常驻数组，直接把这一层交给 three 上传（LayerStage），传完这份像素就没人引用了
+      (tex.image.data as unknown as LayerStage).stage(layer, px);
     }
     tex.source.dataReady = true;
     tex.addLayerUpdate(layer);

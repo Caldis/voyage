@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { GroundClipmap } from "./ground/clipmap";
+import { NIGHT_GRID, type GroundClipmap } from "./ground/clipmap";
 
 /**
  * 城市光污染的天空背景（T09）：只用来压银河的可见度（stars.glsl.ts 的对比度阈值），**不画进天空**。
@@ -12,7 +12,7 @@ import type { GroundClipmap } from "./ground/clipmap";
  *   × (0.5·e^(−h/8) + 0.5·e^(−h/1.5))。巡航 10.7 km 约剩 13%，4 km 约剩 34%。
  * 这些系数都是**估算**（没有实测可对），只决定「靠近城市时银河变淡多少」，改它们不影响任何别的画面。
  *
- * 没开真实地理数据（纯海面预设）时为 0。每 2 秒重算一次（只扫一级 1024² 里的 64² 个样本，约 0.2 ms）。
+ * 没开真实地理数据（纯海面预设）时为 0。每 2 秒重算一次（只扫一级的 64² 个样本——clipmap 在上传时留下的夜光采样网格，约 0.2 ms）。
  */
 
 /** 自然夜天光的亮度（kcd/m²，和 lights.glsl.ts 的 nightglow 天顶值一致） */
@@ -20,7 +20,7 @@ const NATURAL_SKY_KCD = 1.6e-7;
 /** 大城市中心地面上的人工天光 ÷ 自然夜天光（估算） */
 const CITY_CENTRE_RATIO = 60;
 const SEARCH_RADIUS_KM = 150;
-const SAMPLES = 64;
+const SAMPLES = NIGHT_GRID; // clipmap 每级留在 CPU 上的夜光采样网格（G06 起纹理像素不在 CPU 常驻）
 
 export class LightPollution {
   readonly uniforms = {
@@ -28,7 +28,6 @@ export class LightPollution {
     uSkyGlow: { value: 0 },
   };
   private lastT = -Infinity;
-  private res = 1024;
   /** 最近一次算出的城市灯光强度 S（调试用） */
   strength = 0;
 
@@ -41,26 +40,21 @@ export class LightPollution {
     if (nowMs - this.lastT < 2000) return;
     this.lastT = nowMs;
     // 从粗到细找第一级能盖住搜索圆的（512 km 级优先，建好之前退到 256 km 级）
-    const data = ground.water.image.data as unknown as Uint8Array;
-    this.res = ground.water.image.width;
     let s = -1;
     for (let i = ground.levelUniform.length - 1; i >= 0 && s < 0; i--) {
       const lv = ground.levelUniform[i];
       if (lv.w < 0.5 || lv.z < SEARCH_RADIUS_KM) continue;
-      s = this.sampleLevel(data, i, lv, x, z, altitudeKm);
+      s = this.sampleLevel(ground, i, lv, x, z, altitudeKm);
     }
     this.strength = Math.max(s, 0);
     const above = 0.5 * Math.exp(-altitudeKm / 8) + 0.5 * Math.exp(-altitudeKm / 1.5);
     this.uniforms.uSkyGlow.value = NATURAL_SKY_KCD * CITY_CENTRE_RATIO * this.strength * above;
   }
 
-  private sampleLevel(data: Uint8Array, layer: number, lv: THREE.Vector4, x: number, z: number, altitudeKm: number) {
+  private sampleLevel(ground: GroundClipmap, layer: number, lv: THREE.Vector4, x: number, z: number, altitudeKm: number) {
     const size = lv.z;
     const x0 = lv.x - size / 2;
     const z0 = lv.y - size / 2;
-    const RES = this.res; // 水体纹理边长（G06 起 2048，跟着 clipmap 走）
-    const base = layer * RES * RES * 4;
-    const stride = RES / SAMPLES;
     const d0 = Math.max(altitudeKm, 3); // 正下方的距离下限，免得 d^−2.5 在正下方发散
     let sum = 0;
     let wSum = 0;
@@ -71,8 +65,7 @@ export class LightPollution {
         const d2 = (px - x) ** 2 + (pz - z) ** 2;
         if (d2 > SEARCH_RADIUS_KM * SEARCH_RADIUS_KM) continue;
         const w = Math.pow(d2 + d0 * d0, -1.25);
-        const k = base + ((j * stride + stride / 2) * RES + i * stride + stride / 2) * 4 + 2;
-        const n = data[k] / 255;
+        const n = ground.nightSample(layer, i, j) / 255;
         sum += n * n * w; // 着色器里夜光的发光量也是 night²（terrain-shading.glsl.ts）
         wSum += w;
       }
