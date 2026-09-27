@@ -302,6 +302,8 @@ export class WeatherDirector {
       if (placedSystems.has(sys.id) || this.d.hasPending(`storm+${sys.id}`)) continue;
       if (haversineKm(lat, lon, sys.lat, sys.lon) > STORM_RANGE_KM) continue;
       if (sys.cells.length > free) continue;
+      // 预告（PERF-10）：雷暴变体还没编好就先不摆（同时触发后台编译），下一次规划再来
+      if (this.host.weatherReady && !this.host.weatherReady("storm")) continue;
       free -= sys.cells.length;
       this.requestStormPlacement(sys, now);
     }
@@ -376,6 +378,8 @@ export class WeatherDirector {
       return;
     }
     if (h || !ty || haversineKm(lat, lon, ty.lat, ty.lon) > TY_RANGE_KM || this.d.hasPending("typhoon+")) return;
+    // 预告（PERF-10）：台风变体还没编好就先不摆（同时触发后台编译）。WX10：jump 时也要过这道门，否则会摆出画不出来的台风
+    if (this.host.weatherReady && !this.host.weatherReady("typhoon")) return;
     this.requestTyphoon(ty, now);
   }
 

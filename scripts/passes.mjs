@@ -122,6 +122,7 @@ function installTimer() {
   const gl = renderer.getContext();
   const ext = gl.getExtension("EXT_disjoint_timer_query_webgl2");
   const DEFINE_MARKERS = [
+    ["CLOUD_TYPHOON", "云(台风 #define 变体)"],
     ["CLOUD_HURRICANE", "云(台风 #define 变体)"],
     ["CLOUD_STORM", "云(雷暴 #define 变体)"],
     ["WONDER_LAYER", "云(奇观层 #define 变体)"],
@@ -139,7 +140,8 @@ function installTimer() {
     const src = mat && typeof mat.fragmentShader === "string" ? mat.fragmentShader : "";
     if (!src) return null;
     for (const [marker, label] of DEFINE_MARKERS) {
-      if (new RegExp(`\\b${marker}\\b`).test(src)) return label;
+      // 看 three 的 defines（运行时注入的宏），不看源码文本：源码里的 #ifdef 每个变体都有（PERF-10 后云程序全带 CLOUD_STORM 字样）
+      if (mat.defines && marker in mat.defines) return label;
     }
     for (const [re, label] of TEXT_SIGNATURES) {
       if (re.test(src)) return label;
@@ -147,6 +149,9 @@ function installTimer() {
     return null;
   };
   const nameOf = (mat) => {
+    // PERF-10：云步进的变体材质名是 cloud-march / cloud-march-<键>（W 奇观 C 卷云 S 雷暴 T 台风）。雷暴 / 台风 / 卷云变体照旧算「云步进」，
+    // 和改动前的单一程序（没有名字，按对象身份认成「云步进」）可比；带奇观层的归「云步进(奇观变体)」
+    if (mat && typeof mat.name === "string" && (mat.name === "cloud-march" || mat.name.startsWith("cloud-march-"))) return mat.name.includes("W", 12) ? "云步进(奇观变体)" : mat.name === "cloud-march-C" ? "云步进(卷云变体)" : "云步进";
     if (mat && typeof mat.name === "string" && mat.name.length > 0) return mat.name;
     if (mat === v.outsideMat) return "窗外";
     if (mat === v.sceneMat) return "舱内合成";
@@ -156,6 +161,7 @@ function installTimer() {
     if (v.clouds.marchCirrusMat && mat === v.clouds.marchCirrusMat) return "云步进(卷云变体)";
     if (v.clouds.resolveMat && mat === v.clouds.resolveMat) return "云resolve";
     if (v.clouds.shadowMat && mat === v.clouds.shadowMat) return "云影图";
+    if (v.clouds.shadowWeatherMat && mat === v.clouds.shadowWeatherMat) return "云影图";
     if (v.clouds.wonderSurfMat && mat === v.clouds.wonderSurfMat) return "奇观表面";
     if (v.exposure.meterMat && mat === v.exposure.meterMat) return "测光";
     if (v.exposure.adaptMat && mat === v.exposure.adaptMat) return "曝光适应";
