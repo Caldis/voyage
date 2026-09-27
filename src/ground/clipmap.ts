@@ -41,6 +41,8 @@ const NIGHT_RES = 1024;
 const IMAGERY_MAX_TILES = 169;
 /** 分块直传时每块的行数：2048 × 512 × 4 B = 4 MB（和 1024² 一整层一样大，实测一次 0.5 ms 以内） */
 const UPLOAD_ROWS = 512;
+/** 暂存上传每帧最多写进像素解包缓冲的字节数（G07，见 drainStaged）：和直传分块一样 4 MB，实测一次 0.5 ms 上下 */
+const STAGE_BYTES = 4 * 1024 * 1024;
 /** 纹理的 mip 级数（texStorage3D 按 log2(RES) + 1 分配，three 的 getMipLevels） */
 const MIP_LEVELS = Math.log2(RES) + 1;
 
@@ -138,6 +140,24 @@ interface UploadJob {
 }
 
 /**
+ * 一次重建要上传的一批（同一级的影像 / 水体 / 高度），after 在全部传完的那一帧把这一级换成新的中心（PERF-8）。
+ * plan：G07 暂存上传的进度（见 GroundClipmap.drainStaged）
+ */
+interface UploadBatch {
+  jobs: UploadJob[];
+  after: () => void;
+  plan?: StagePlan;
+}
+
+/** G07：一批的暂存计划——影像 / 水体（第 0 级 + mip 链）在暂存缓冲里的位置，和按帧写入的分块 */
+interface StagePlan {
+  pieces: { src: Uint8Array; dst: number }[];
+  next: number;
+  /** 每张 RGBA 纹理：第 0 级、mip 链（没有时为 -1，退回 generateMipmap）在缓冲里的偏移 */
+  slots: { job: UploadJob; l0: number; mips: number }[];
+}
+
+/**
  * 影像 / 水体纹理的 image.data（G06）：不在 CPU 上常驻整个数组（2048² × 4 × 7 层 = 117 MB 一张，两张 235 MB，JS 堆翻倍），
  * 只在上传那一刻把这一层的像素交给 three。three r186 的 DataArrayTexture 按层上传（layerUpdates）时只调
  * `image.data.subarray(层起点, 层终点)` 和 `BYTES_PER_ELEMENT`（WebGLTextures.js），这里让 subarray 直接返回待传的那一层。
@@ -220,7 +240,7 @@ export class GroundClipmap {
    * 全部上传完才把这一级标记为 valid（`l.building` 也要撑到那时候才清，见 `build()`），
    * 避免着色器读到「影像已经是新的、地形还是旧的」这种半新半旧的一级。
    */
-  private uploadQueue: { jobs: UploadJob[]; after: () => void }[] = [];
+  private uploadQueue: UploadBatch[] = [];
 
   /** CPU 端的高度（km），始终 32 位；GPU 纹理在不支持浮点线性过滤时存半精度（TR03 审查 B1） */
   private readonly heightCpu: Float32Array;
@@ -379,10 +399,11 @@ export class GroundClipmap {
     }
   }
 
-  /** 首载粗版全部就位（最细可用级以上都 valid、没有在建的）→ 放开 fine；再记一下全部升级完的时刻 */
+  /** 首载粗版全部就位（最细可用级以上都 valid）→ 放开 fine；再记一下全部升级完的时刻。
+   * 不等「没有在建的」：低空日本时最细两级会因高清细节没取齐（DETAIL_WAIT_MS）反复重建，等它会把升级拖后十几秒 */
   private updateWarm() {
     const settled = () => {
-      for (let i = this.minLevel; i < GROUND_LEVELS; i++) if (!this.levels[i].valid || this.levels[i].building) return false;
+      for (let i = this.minLevel; i < GROUND_LEVELS; i++) if (!this.levels[i].valid) return false;
       return true;
     };
     if (this.warmMs.fine >= 0 || !settled()) return;
@@ -593,10 +614,8 @@ export class GroundClipmap {
       renderer.initTexture(t);
     }
   }
-  private uploadDirect(tex: THREE.DataArrayTexture, layer: number, px: Uint8ClampedArray, mips: Uint8Array | null | undefined) {
-    const gl = this.gl;
-    const h = this.glTex.get(tex);
-    if (!gl || !h || gl.isContextLost()) return false;
+  /** 直传要的 GL 状态：换成我们要的、返回恢复函数（three 缓存了绑定和 pixelStorei，用完原样恢复，它的缓存就不乱） */
+  private glBegin(gl: WebGL2RenderingContext) {
     const prev = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY) as WebGLTexture | null;
     const flip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL) as boolean;
     const prem = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL) as boolean;
@@ -606,6 +625,20 @@ export class GroundClipmap {
     if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    return () => {
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, prev);
+      if (flip) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, align);
+      if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, rowLen);
+    };
+  }
+
+  private uploadDirect(tex: THREE.DataArrayTexture, layer: number, px: Uint8ClampedArray, mips: Uint8Array | null | undefined) {
+    const gl = this.gl;
+    const h = this.glTex.get(tex);
+    if (!gl || !h || gl.isContextLost()) return false;
+    const end = this.glBegin(gl);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, h);
     const u8 = new Uint8Array(px.buffer, px.byteOffset, px.byteLength);
     const rows = Math.min(UPLOAD_ROWS, RES);
@@ -622,11 +655,7 @@ export class GroundClipmap {
     } else {
       gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
     }
-    gl.bindTexture(gl.TEXTURE_2D_ARRAY, prev);
-    if (flip) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    if (prem) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-    if (align !== 4) gl.pixelStorei(gl.UNPACK_ALIGNMENT, align);
-    if (rowLen !== 0) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, rowLen);
+    end();
     return true;
   }
 
@@ -659,11 +688,99 @@ export class GroundClipmap {
     this.uploadQueue.push({ jobs, after });
   }
 
+  /**
+   * G07：暂存上传。PERF-8 起一批的三张纹理分三帧传、最后一帧才换中心 uniform——中间一两帧是「新影像 + 旧中心」，
+   * 整级影像错开 1/8 边长（第 4 级就是 16 km），每次重建闪一下（handoff/G07-recenter.mjs 实测 master 上 2 帧的尖峰）。
+   * 同一帧里直传三张（原子）又会把 2 × 21 MB 的 texSubImage3D 堆进一帧。所以先按帧把像素分块写进一个像素解包缓冲
+   * （PIXEL_UNPACK_BUFFER，每帧最多 STAGE_BYTES），全部写完后在同一帧里从缓冲拷进纹理（主线程只发命令）、
+   * 传高度、换中心。关掉（`stagedUpload = false`）退回 PERF-8 的每帧一张（对照用）。
+   */
+  stagedUpload = true;
+  private pbo: WebGLBuffer | null = null;
+  private pboBytes = 0;
+
+  private makePlan(batch: UploadBatch): StagePlan | null {
+    const gl = this.gl!;
+    const pieces: StagePlan["pieces"] = [];
+    const slots: StagePlan["slots"] = [];
+    let off = 0;
+    const push = (src: Uint8Array) => {
+      for (let o = 0; o < src.byteLength; o += STAGE_BYTES) pieces.push({ src: src.subarray(o, Math.min(o + STAGE_BYTES, src.byteLength)), dst: off + o });
+      off += src.byteLength;
+    };
+    for (const job of batch.jobs) {
+      if (job.tex === this.height) continue;
+      const px = job.data as Uint8ClampedArray;
+      const l0 = off;
+      push(new Uint8Array(px.buffer, px.byteOffset, px.byteLength));
+      let mips = -1;
+      if (job.mips && !this.gpuMips) {
+        mips = off;
+        push(job.mips);
+      }
+      slots.push({ job, l0, mips });
+    }
+    if (off > this.pboBytes) {
+      if (!this.pbo) this.pbo = gl.createBuffer();
+      if (!this.pbo) return null;
+      gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, this.pbo);
+      gl.bufferData(gl.PIXEL_UNPACK_BUFFER, off, gl.STREAM_DRAW);
+      gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+      this.pboBytes = off;
+    }
+    return { pieces, next: 0, slots };
+  }
+
+  /** 暂存上传的一步：没写完就再写一块；写完就在这一帧里拷进影像 / 水体（第 0 级 + mip）、传高度、换中心。返回 false = 暂存路径不可用 */
+  private drainStaged(batch: UploadBatch) {
+    const gl = this.gl;
+    if (!gl || gl.isContextLost() || !this.glTex.has(this.albedo) || !this.glTex.has(this.water)) return false;
+    const plan = (batch.plan ??= this.makePlan(batch) ?? undefined);
+    if (!plan) return false;
+    if (plan.next < plan.pieces.length) {
+      gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, this.pbo);
+      let bytes = 0;
+      while (plan.next < plan.pieces.length && bytes < STAGE_BYTES) {
+        const p = plan.pieces[plan.next++];
+        gl.bufferSubData(gl.PIXEL_UNPACK_BUFFER, p.dst, p.src);
+        bytes += p.src.byteLength;
+      }
+      gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+      return true;
+    }
+    const end = this.glBegin(gl);
+    gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, this.pbo);
+    for (const { job, l0, mips } of plan.slots) {
+      if (job.tex === this.water) this.sampleNight(job.layer, job.data as Uint8ClampedArray);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.glTex.get(job.tex)!);
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, job.layer, RES, RES, 1, gl.RGBA, gl.UNSIGNED_BYTE, l0);
+      if (mips >= 0) {
+        let off = mips;
+        for (let lv = 1, w = RES >> 1; lv < MIP_LEVELS; lv++, w >>= 1) {
+          gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, lv, 0, 0, job.layer, w, w, 1, gl.RGBA, gl.UNSIGNED_BYTE, off);
+          off += w * w * 4;
+        }
+      } else {
+        gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+      }
+    }
+    gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+    end();
+    // 高度（256² 浮点，0.25 MB）照旧交给 three：它在这一帧的渲染里上传，和上面的拷贝、after 里换中心同一帧生效
+    for (const job of batch.jobs) if (job.tex === this.height) this.upload(job.tex, job.layer, job.data, job.layerSize);
+    batch.jobs.length = 0;
+    this.uploadQueue.shift();
+    batch.after();
+    return true;
+  }
+
   /** PERF-8：每帧最多真正上传一张纹理（一层），把一次重建的 3 次 texSubImage3D 摊到几帧；
-   * 队首批次的 3 张都传完才触发它的 after（把这一级标记为 valid），见类头注释 */
+   * 队首批次的 3 张都传完才触发它的 after（把这一级标记为 valid），见类头注释。
+   * G07：默认走 drainStaged（按帧写暂存缓冲、最后一帧原子换上），这里只是它不可用时（没接 GL）的退路 */
   private drainUploads() {
     const batch = this.uploadQueue[0];
     if (!batch) return;
+    if (this.stagedUpload && this.drainStaged(batch)) return;
     const job = batch.jobs.shift();
     if (job) this.upload(job.tex, job.layer, job.data, job.layerSize, job.mips);
     if (batch.jobs.length === 0) {
