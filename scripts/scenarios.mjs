@@ -20,6 +20,13 @@
 //   js      （T17）一段脚本，场景设好之后、snapAll 与截图等待之前执行，参数 v = window.__voyage；
 //           用来开调试开关，例如 "v.optics.force.glory = true" 或 "v.optics.pinGreenFlash(0.5)"；
 //           有返回值时附在输出 JSON 的 info 末尾（"js: …"），在截图等待之前求值
+//
+// DX-07：依赖月相 / 星空的夜景、黄昏场景全部写死 date（不写就用「打开页面当天」，月相每天都在变，
+// 跨波对比会误判——第 6 波美术总监报告 ART_REVIEW_wave6.md 撞上过一次）。选日期原则：
+//   - 「城市夜景」类用无月夜（月亮在地平线下，越低越保险，避免临界折射 / 大气模型误差把它顶到地平线附近）；
+//   - 另留一个专门看月光的满月场景（night-sea-fullmoon）。
+// 月亮高度 / 方位都用仓库自带的 astronomy-engine 算的（T09 的 moonState 同一套天文库），下面每条场景注释里的
+// 数值是 `node -e` 临时脚本跑出来的（对应 preset 的 lat/lon/tz，local time = 面板 time 字段换算）。
 
 export const DEFAULTS = {
   preset: "wpac",
@@ -38,7 +45,9 @@ export const DEFAULTS = {
 export const SCENES = [
   { name: "noon-cumulus", p: { preset: "wpac", time: 720, "wing-pos": "8" } },
   { name: "sunset-wing", p: { preset: "wpac", time: 1040, "wing-pos": "8" } },
-  { name: "dusk-earthshadow", p: { preset: "wpac", seat: "left", time: 1068, "wing-pos": "-4" } },
+  // DX-07：wpac 17:48 本地，2026-02-16 太阳高度 −4.7°（与旧行为的「当天」量级一致，地影拱仍在合适位置），
+  // 月亮高度 −19.3°（新月相位 1%，在地平线下），不会露头
+  { name: "dusk-earthshadow", p: { preset: "wpac", seat: "left", date: "2026-02-16", time: 1068, "wing-pos": "-4" } },
   { name: "clouds-variety", p: { preset: "wpac", time: 900, coverage: 0.62, altitude: 5, "wing-pos": "-4" }, offset: [37, -12] },
   { name: "low-sea-glint", p: { preset: "wpac", time: 980, coverage: 0, altitude: 0.6, "wing-pos": "-4" } },
   { name: "in-cloud", p: { preset: "wpac", time: 840, "cloud-preset": "stratocumulus", coverage: 0.95, altitude: 1.35, "wing-pos": "8" }, wait: 6000 },
@@ -47,14 +56,19 @@ export const SCENES = [
   { name: "typhoon-bands", p: { preset: "wpac", time: 900, coverage: 0.2, weather: "typhoon-bands", "wing-pos": "-4" } },
   { name: "typhoon-outer", p: { preset: "wpac", time: 900, coverage: 0.2, altitude: 13, weather: "typhoon-outer", "wing-pos": "-4" } },
   { name: "fuji-day", p: { preset: "fuji", time: 930, altitude: 6, coverage: 0.1, "wing-pos": "-4" }, offset: [-20, 0.2], ground: true },
-  { name: "night-city", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": false }, offset: [0, -25], ground: true, head: -0.25 },
-  { name: "night-city-on", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": true }, offset: [0, -25], ground: true, head: -0.25 },
-  { name: "night-city-off", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": "off" }, offset: [0, -25], ground: true, head: -0.25 },
+  // DX-07：fuji 21:00 本地，2026-01-16 月亮高度 −75.6°（新月相位 5%），全城市夜景系列都是无月夜
+  { name: "night-city", p: { preset: "fuji", date: "2026-01-16", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": false }, offset: [0, -25], ground: true, head: -0.25 },
+  { name: "night-city-on", p: { preset: "fuji", date: "2026-01-16", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": true }, offset: [0, -25], ground: true, head: -0.25 },
+  { name: "night-city-off", p: { preset: "fuji", date: "2026-01-16", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": "off" }, offset: [0, -25], ground: true, head: -0.25 },
   { name: "route-hnd-cts", p: { preset: "hnd-cts", time: 990, coverage: 0.25, "wing-pos": "8" }, ground: true },
-  { name: "route-hnd-cts-night", p: { preset: "hnd-cts", time: 1290, coverage: 0.1, seat: "left", "cabin-light": false, "wing-pos": "8" }, ground: true },
+  // DX-07：hnd-cts 21:30 本地，同一个 2026-01-16 月亮高度 −80.4°，同样是无月夜
+  { name: "route-hnd-cts-night", p: { preset: "hnd-cts", date: "2026-01-16", time: 1290, coverage: 0.1, seat: "left", "cabin-light": false, "wing-pos": "8" }, ground: true },
   { name: "economy-ahead", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "economy" }, head: [-0.42, 0.1, -0.5] },
   // T09：夜间无月（2026-05-15 22:30，残月在地平线下 53°）、关舱灯（全关）、南海上空、左座朝东南：人马座大星云低低地在窗正中
   { name: "night-sea-milkyway", p: { preset: "scs", seat: "left", date: "2026-05-15", time: 1350, coverage: 0.15, "cabin-light": "off", "wing-pos": "-4" } },
+  // DX-07：专看月光的满月场景。scs 22:30 本地，2026-04-01 月亮相位 99.7%（近满月）、高度 58°、方位 133.8°，
+  // 几乎正对左座窗外方位（heading 225 − 90 = 135°），月亮应该稳稳地挂在窗正中
+  { name: "night-sea-fullmoon", p: { preset: "scs", seat: "left", date: "2026-04-01", time: 1350, coverage: 0.15, "cabin-light": "off", "wing-pos": "-4" } },
 ];
 
 /**
