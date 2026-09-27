@@ -31,6 +31,7 @@ uniform float uTime;
 uniform float uWetness;
 uniform sampler2D uClouds;       // 半分辨率云层（雾色用）
 uniform float uCameraFog;
+uniform vec3 uKeyCloud;          // 飞机周围云对光照的影响（T31，见 scene.ts）
 uniform float uHdrMax;
 varying vec2 vUv;
 const float WING_PANE_T = 0.85;  // 窗板透射率，和 scene.ts 的 PANE_TRANSMITTANCE 一致
@@ -65,8 +66,9 @@ void main() {
   // 窗外来的光（和 scene.ts 里的算法一致）
   vec3 sunC = transpose(uCabinToWorld) * uKeyDir;
   vec3 upW = vec3(0.0, 1.0, 0.0);
-  vec3 eSkyH = skyIrradiance(uCamR, upW);
-  vec3 eDown = eSkyH + keyLight(uCamR, upW) * max(uKeyDir.y, 0.0);
+  vec3 eKey0 = keyLight(uCamR, upW);
+  vec3 eSkyH = skyIrradiance(uCamR, upW) * uKeyCloud.z + eKey0 * max(uKeyDir.y, 0.0) * uKeyCloud.y;
+  vec3 eDown = eSkyH + eKey0 * uKeyCloud.x * max(uKeyDir.y, 0.0);
   float belowAlbedo = mix(0.06, 0.7, clamp(uCoverage * 0.9, 0.0, 1.0));
 
   float refL = dot(sc.rgb, vec3(0.2126, 0.7152, 0.0722)) / WING_PANE_T;

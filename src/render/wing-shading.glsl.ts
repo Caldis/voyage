@@ -65,7 +65,7 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 e
   vec3 lA = vec3(uSeatSign * sunC.x, sunC.y, sunC.z);
   float nl = dot(n, sunC);
   float shadow = wingFuselageShadow(P, lA) * step(0.0, nl) * w.shadow;
-  vec3 eSun = keyLight(uCamR, vec3(0.0, 1.0, 0.0)) * shadow;
+  vec3 eSun = keyLight(uCamR, vec3(0.0, 1.0, 0.0)) * shadow * uKeyCloud.x;   // 穿云时机翼也没有直射光（T31）
   float nv = max(dot(n, v), 1e-3);
   nl = max(nl, 0.0);
 

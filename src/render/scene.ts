@@ -45,6 +45,7 @@ uniform float uMoodLight;       // 氛围洗墙灯开关 0..1（T20；颜色随�
 uniform float uTime;            // 秒，窗板上水珠的颤动用
 uniform float uWetness;         // 窗板外侧的湿度 0..1
 uniform float uCameraFog;       // 飞机所在位置云的消光系数（1/km），机翼要隔着这层雾看
+uniform vec3 uKeyCloud;         // 飞机周围云对光照的影响（clouds.keyVisibility，T31）：x 直射透射率，y 云散射出的漫射光（占主光源水平照度），z 天空光乘子
 uniform float uHdrMax;          // HDR 目标能存的最大值（半精度时是 6e4）
 uniform sampler2D uExposureState; // 上一帧的曝光适应结果（exposure.ts 的 EXPOSURE_STATE）：左像素 w = 倒影的显示增益（log2，T30）
 // 调试可视化：0 关，1 内衬命中深度，2 亮度（伪彩），3 内衬受到的窗光，4 内衬法线（1–4 在这里），
@@ -116,9 +117,11 @@ void main() {
   vec3 sunC = transpose(uCabinToWorld) * uKeyDir;   // 座舱系里的主光源方向
   vec3 upW = vec3(0.0, 1.0, 0.0);
   // 头顶处的主光源照度只算一次（原来 eSunNormal 和 eDown 各调一次 keyLight，SC-3b）
-  vec3 eKeyUp = keyLight(uCamR, upW);
+  // 乘上飞机到主光源之间云的透射率（T31）：穿云时舱壁上不再有硬边光斑；被云挡掉的直射光变成白色的漫射光
+  vec3 eKey0 = keyLight(uCamR, upW);
+  vec3 eKeyUp = eKey0 * uKeyCloud.x;
   vec3 eSunNormal = eKeyUp * PANE_TRANSMITTANCE;
-  vec3 eSkyH = skyIrradiance(uCamR, upW);
+  vec3 eSkyH = skyIrradiance(uCamR, upW) * uKeyCloud.z + eKey0 * max(uKeyDir.y, 0.0) * uKeyCloud.y;
   // 下半球：海面或云海把天空光和阳光反射上来。云海的反照率远高于海面
   vec3 eDown = eSkyH + eKeyUp * max(uKeyDir.y, 0.0);
   float belowAlbedo = mix(0.06, 0.7, clamp(uCoverage * 0.9, 0.0, 1.0));
@@ -318,6 +321,7 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uTime: { value: 0 },
       uWetness: { value: 0 },
       uCameraFog: { value: 0 },
+      uKeyCloud: { value: new THREE.Vector3(1, 0, 1) },
       uSeatSign: { value: 1 },
       uWingRootLE: { value: 8 },
       uWingFlex: { value: 0.5 },
