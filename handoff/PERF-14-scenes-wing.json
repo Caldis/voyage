@@ -1,0 +1,6 @@
+[
+ {"name": "sunset-wing", "p": {"preset": "wpac", "time": 1040, "wing-pos": "8", "cabin-class": "business"}},
+ {"name": "noon-wing", "p": {"preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business", "view-preset": "wing"}},
+ {"name": "night-wing-lights", "p": {"preset": "wpac", "time": 1320, "wing-pos": "8", "cabin-light": "off", "cabin-class": "business", "view-preset": "wing"}},
+ {"name": "in-cloud", "p": {"preset": "wpac", "time": 720, "weather": "overcast", "altitude": 2.0, "cabin-class": "business"}}
+]

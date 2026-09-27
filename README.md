@@ -59,9 +59,10 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   → 云：光线步进（层状云 + 雷暴 + 台风）→ 时间累积（带重投影）；每 4 帧一次云密度探针（异步读回）
   → 窗外 pass（outside-pass.ts，全屏但只算本窗窗板以内）：地形求交或海面、天空、太阳、月亮、星星 + 云合成
       + 远处飞机与航迹云 + 云地闪通道，× 窗板透射率 → hdrOutside（全分辨率 32F）
+  → 座椅 pass（seat-pass.ts，PERF-14）：本排 / 前排座椅 → hdrSeat（颜色 + 覆盖率）
   → 场景 pass（scene.ts，舱内合成）：舷窗几何（舱壁 / 内衬 / 遮光板 / 座椅）+ 读 hdrOutside + 窗板细节（划痕、油污、水痕）
       → HDR（kcd/m²，alpha 打包窗外遮罩与机翼参考，见 scene.ts 的 packWingRef）
-  → 机翼 pass（wing-pass.ts）：读场景 HDR，把机翼与翼尖灯合成进窗外部分
+  → 机翼 pass（wing-pass.ts）：读场景 HDR，把机翼与翼尖灯合成进窗外部分（窗上有水时用 WING_WET 变体）
   → 眩光 mip 链 → 测光（窗外 / 舱内分开，亮度 + 色度）→ 适应 → 曝光 + 舱内色适应 + 浦肯野 + AgX + 抖动 → 屏幕
 ```
 启动时一次性计算：透射率 / 多次散射 / 天空辐照度 LUT、云噪声（GPU 生成后读回）、星图（CPU 上排星表格子 + 解码银河）。
@@ -96,6 +97,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/render/noise.glsl.ts` | 窗外与舱内共用的小噪声（hash12 / vnoise / hash22 / fbm2）和 `uLoopGuard`；改它两个程序都重编 |
 | `src/render/ocean.glsl.ts` | 海面：菲涅尔、12 波斜率场、风痕、`oceanRadiance` |
 | `src/render/terrain-shading.glsl.ts` | 真实地面着色 `groundRadiance` |
+| `src/render/seat-pass.ts` | 座椅 pass（PERF-14）：座椅的追踪与着色从舱内合成里拆出来，画到 `hdrSeat`（rgb 颜色、a 覆盖率），舱内合成按像素读回；灯光与舱内合成共用 `scene.ts` 的 `cabinLightsSetup` |
 | `src/render/wing-shading.glsl.ts` | 机翼着色 `shadeWing` 与航行灯 / 频闪 `wingLights` |
 | `src/render/optics.ts` / `optics.glsl.ts` | 罕见光学现象（T17）：宝光与本机影子（乘在云的辐亮度上）、幻日与 22° 晕（卷云单次散射）、太阳圆盘与绿闪（地平线亚像素裁切 + 三色色散 + 蜃景放大）；CPU 端按条件 + 分段随机决定出不出现、多强 |
 | `src/render/lightning.glsl.ts` | 闪电照度 `flashIlluminance` 与云地闪通道 `boltRadiance` |
@@ -299,6 +301,16 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   坑三：挪 uniform 声明的顺序会让「预处理后逐字相同」失败（常量缓冲布局也跟着变）：包 `#ifdef` 时保持原来的声明顺序。
   坑四：零回归截图里，夜景偶尔整窗发白是**翼尖频闪**被冻结在亮相（与窗外 pass 无关）；逐像素对比夜景前设 `__voyage.wingDebug.strobe = 0`（`handoff/PERF-13-shots.mjs` 已带）。
   识别：`check:glsl` 的「窗外默认程序不含罕见光学 / 天幕层奇观代码」一节；`__voyage.groundDetail.variantStatus` 看想要 / 实际画的变体与各变体编译状态。
+- **座椅拆成单独 pass、机翼水珠暗边进湿窗变体后，真冷启动 12.0 → 9.1 s（最小值，中位 12.7 → 10.1 s）**（PERF-14）：PERF-13 之后启动批次的关键路径是舱内程序。
+  按 PERF-12 留下的两个结构方案先做最小原型量离线 FXC：(a) 座椅追踪 + 着色搬出舱内程序（舱内只读一张纹理）−31%；(b) 座椅这一层的光照全换常数、只留材质（「光照收成一个调用点」的上界）+12%（噪声内，没有收益）——选 (a)。
+  实装后 scene-default 7.3 → 3.9 s（−46%），新的座椅程序只要 1.5 s（两者之和 5.4 s 远小于原来的 7.3 s：FXC 时间随单个程序规模超线性增长，拆开就省）。
+  机翼程序消融（`shader-budget --variants`）：材质整体 −43%（小翼 −22%、蒙皮 −23%、短舱 −15%）、窗板水珠 `waterOnPane` −18%、航行灯 + 灯照 −16%、两处 `wingEnv` 只留一处 −4%。
+  材质和灯平时就看得见，只拆了「窗干时结果恒为 0」的水珠暗边（`WING_WET` 变体，干窗逐位相同）和 `wingEnv` 单调用点，机翼 7.3 → 6.5 s。
+  现在批次里各程序编好的时刻（`__voyageStartup["批次各程序编好（ms）"]`，`dev-browser cold` 会打印）：座椅 1.6 s、舱内 4.4 s、机翼 6.5–7.8 s、窗外 6.8–8.5 s——**关键路径是窗外程序，机翼紧跟其后（差 0.2–0.7 s）**；窗外再压的话机翼会重新变成关键路径，下一刀见 `handoff/PERF-14.md`「还能怎么压」。
+  坑一：座椅 pass 的目标必须是 32 位浮点（和 hdrOutside 同一判断）：半精度装不下屏幕玻璃上的太阳高光（可到 5e4 kcd/m² 以上，超过 65504 写成 inf），夜里全关灯时座椅亮度又落进半精度的非规格数。
+  坑二：舱内合成和座椅 pass 的灯光必须是同一份代码（`scene.ts` 的 `CABIN_LIGHTS_SETUP` / `cabinLightsSetup`），不然座椅与侧壁的明暗会悄悄分家。舱等切换由 `CabinClassVariant` 同时编两个程序、都编好才切。
+  坑三：`WingWetVariant` 按 `uWetness > 0.001` 选变体，和 `waterOnPane` 开头的 `wet <= 0.001` 返回 0 同一个门限；改其中一个要一起改。变体首帧后 120 帧后台预编（约 8 s 编好），启动就在雨里时前几秒机翼像素上少一圈水珠暗边。
+  识别：`check:glsl` 的 1d 一节（舱内合成不调用 `shadeSeat` / `traceSeats`，机翼默认程序不调用 `waterOnPane`）；帧时间里多一行「座椅」（中位约 0.016 ms 的固定开销，满屏座椅的经济舱看前方舱内 + 座椅合计比原来 +0.02 ms）。
 
 <a id="pit-cloud"></a>
 ### 云
@@ -598,3 +610,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   取上一级就是主仓库根，锁统一落在那里，所有 worktree 共用同一把；找不到（不是 git 仓库 / 没装 git）时退回原来的行为，不阻塞脚本。
 - **GPU 计时也会被别的代理污染**（PERF-12）：`passes.mjs` 同一份代码两次测舱内合成 0.317 / 0.350 ms（`nvidia-smi` 显示别的进程占 GPU 75%）。
   判 0.01–0.03 ms 量级的差异要 `--frames 60 --rounds 4` 以上、变体表首尾各放一次 base 看漂移，或 `--baseline` 同场景交替。
+- **`shots --pair` / `--base-shader` 的噪声底不是 0：每拍一张后 `shootOne` 都跑一次 `benchFrame(30)`，而 benchFrame 不经过冻结**（PERF-14 发现，工具未改）：
+  它按 16 ms 一帧推进 30 帧的模拟时间与曝光适应，a、b、a2 三张其实是三个不同时刻——自己换自己（master 着色器换 master 着色器）也有 5–48% 的像素差 > 8，夕阳场景连太阳眩光都不一样。
+  绕法：`--pair` 的预设置 js 里写 `v.benchFrame = () => 0;`（截图 JSON 里的 frameMs 变成 0），噪声底立刻变成逐像素 0。另一个坑：`--base-shader` 不带 `--pair` 时整段被静默忽略，只拍普通截图。
+  识别：a−a2 不是 0 就先别看 a−b。
