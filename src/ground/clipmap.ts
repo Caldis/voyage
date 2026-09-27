@@ -22,8 +22,12 @@ const HRES = 256; // 地形高度
  * 这两级 EOX 是放大后用的（z14 以上没有新信息），高清源收益最大；更粗的级别 EOX 不输航拍，而且巡航时标准视角只看得到第 3–6 级。
  */
 const DETAIL_LEVELS = 2;
-/** GSI 从 z14 起才是航拍（z13 及更粗由卫星影像拼成、偏蓝白，实测），两级都取 z14：第 1 级是 2:1 缩小，顺带抗锯齿 */
-const DETAIL_ZOOM = 14;
+/**
+ * 每级取 GSI 的哪一级瓦片。GSI 从 z14 起才是航拍（z13 及更粗由卫星影像拼成、偏蓝白，实测）。
+ * 第 0 级（7.8 m 纹素）取 z15 再 2:1 缩小：z14 的 JPEG 本身已经是缩小过的发灰图，z15 缩小后边缘明显更干净（顺带抗锯齿）；
+ * 第 1 级（15.6 m）取 z14 缩小 2:1。都是「源比纹素细一级」
+ */
+const DETAIL_ZOOMS = [15, 14];
 /** 一级最多取多少张高清瓦片（第 1 级 16 km 在 z14 上约 9×9 张；北海道纬度高、瓦片窄，到 10×10） */
 const DETAIL_MAX_TILES = 121;
 /** 离地高度的开关门限（km，带回差，免得在 6 km 附近来回切换、反复重建）：研究建议「离地低于约 6 km」 */
@@ -381,7 +385,7 @@ export class GroundClipmap {
         heightP,
         this.buildNight(l.size, cx, cz),
         // 高清细节等地形先到：用 DEM 筛掉整张是海的瓦片（GSI 海上 404，见 tiles.ts 的 seaMissing）
-        detail ? heightP.then((h) => this.buildDetail(l.size, cx, cz, h.data)) : Promise.resolve(null),
+        detail ? heightP.then((h) => this.buildDetail(l.size, cx, cz, h.data, DETAIL_ZOOMS[i])) : Promise.resolve(null),
       ]);
       if (gen !== this.generation || i < this.minLevel) return;
       // 水体/河道栅格化、夜光的逐像素变换、道路灯带（T08）叠加：都在 Worker 里做（road-raster.ts 的
@@ -502,23 +506,23 @@ export class GroundClipmap {
    * 高清细节层（G03）：国土地理院航拍画到这一级的 RES² 上，没取到的地方留透明（A = 覆盖率）。一张都没取到返回 null
    * （出了日本 / 海上是 404，tiles.ts 负缓存后不再请求）。合成在 Worker 里做（imagery-blend.ts）
    */
-  private async buildDetail(size: number, cx: number, cz: number, heightKm: Float32Array) {
-    const all = this.tileCover(size, cx, cz, DETAIL_ZOOM, RES);
+  private async buildDetail(size: number, cx: number, cz: number, heightKm: Float32Array, zoom: number) {
+    const all = this.tileCover(size, cx, cz, zoom, RES);
     if (all.tiles.length > DETAIL_MAX_TILES) return null;
-    const cover = { ...all, tiles: all.tiles.filter((t) => this.detailTileWanted(all.toPx, t.x, t.y, heightKm)) };
+    const cover = { ...all, tiles: all.tiles.filter((t) => this.detailTileWanted(all.toPx, zoom, t.x, t.y, heightKm)) };
     const ctx = makeCanvas(RES, RES);
     ctx.clearRect(0, 0, RES, RES);
-    ctx.imageSmoothingQuality = "high"; // 第 1 级是 2:1 缩小
+    ctx.imageSmoothingQuality = "high"; // 2:1 缩小
     let got = 0;
     this.pending += cover.tiles.length;
     await Promise.all(
       cover.tiles.map(async (t) => {
-        const bmp = await loadImageryTile(GSI_PHOTO, DETAIL_ZOOM, t.x, t.y);
+        const bmp = await loadImageryTile(GSI_PHOTO, zoom, t.x, t.y);
         this.pending--;
         if (!bmp) return;
         got++;
-        const [ax, ay] = cover.toPx(tileYToLat(t.y, DETAIL_ZOOM), tileXToLon(t.x, DETAIL_ZOOM));
-        const [bx, by] = cover.toPx(tileYToLat(t.y + 1, DETAIL_ZOOM), tileXToLon(t.x + 1, DETAIL_ZOOM));
+        const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
+        const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
         ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
       }),
     );
@@ -530,8 +534,7 @@ export class GroundClipmap {
    * 不能只按「海底 < −5 m」判海：近岸的 DEM 来自 SRTM，海面是 0 m 而不是负值（骏河湾北岸实测整排 z14 瓦片被当成陆地、全部 404）；
    * 整张 2 km 瓦片都 ≤ 0.5 m 的陆地极少，误筛了也只是那里没有细节（照常显示 EOX）
    */
-  private detailTileWanted(toPx: (lat: number, lon: number) => [number, number], x: number, y: number, heightKm: Float32Array) {
-    const z = DETAIL_ZOOM;
+  private detailTileWanted(toPx: (lat: number, lon: number) => [number, number], z: number, x: number, y: number, heightKm: Float32Array) {
     if (!inBounds(GSI_PHOTO, tileYToLat(y + 0.5, z), tileXToLon(x + 0.5, z))) return false;
     if (!GSI_PHOTO.seaMissing) return true;
     const [ax, ay] = toPx(tileYToLat(y, z), tileXToLon(x, z));

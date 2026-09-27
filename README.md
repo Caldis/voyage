@@ -21,7 +21,8 @@
 | 精度 | 大气 LUT（天空视图）、云缓冲（raw / history）都要用**32 位浮点**（有 `OES_texture_float_linear` 时）：半精度最小次正规数 5.96e-8，暗场景 / 无月夜会下溢成阶梯或纯黑 | [大气与曝光](#pit-atmos)、[云](#pit-cloud) |
 | 云缓冲格式 | 云的 history 缓冲是**两倍宽**（`2×w`）：左半是颜色，右半存 `(深度 × 不透明度, 不透明度)`（T38），读它一律走 `cloudBufferColor` / `cloudBufferDepth`，不要直接 `texture(uClouds, uv)` | [云](#pit-cloud) |
 | 窗外输出 alpha 语义 | 窗外 pass 输出的 alpha 不是占位不透明度，是 `1 + 能看到多少点星`（T41）；改窗外输出时**别把它写回 1** | [舱内与倒影](#pit-cabin) |
-| 影像 A 通道语义 | 影像纹理的 A 通道**兼存道路照亮宽度**（T08）：< 0.5 表示「缺影像比例 / 2」，≥ 0.5 表示有影像、其余 7 位是宽度；判断缺瓦片一律用 `min(A·2, 1)`（`sampleGroundAlbedo`），不能直接读 A | [地面与数据](#pit-ground) |
+| 影像 A 通道语义 | 影像纹理的 A 通道**兼存道路照亮宽度**（T08）：< 0.5 表示「缺影像比例 / 2」，≥ 0.5 表示有影像、其余 7 位是宽度；判断缺瓦片一律用 `min(A·2, 1)`（`sampleGroundAlbedo`），不能直接读 A。G03 的高清细节合成只改 RGB、且必须在 `packRoads` 之前做 | [地面与数据](#pit-ground) |
+| 影像源与请求 | 影像源都走 `tiles.ts` 的 `ImagerySource` + `loadImageryTile`（按站点令牌桶 / 并发，`HOST_LIMITS`）；404 / 410 / 占位图负缓存，429 / 5xx / 网络错误**不**缓存；换源或混源不能改变 EOX 的低频色调（`landClasses`、城市灯点、路灯聚落地毯的阈值都按它定）；`__voyage.ground.imageryStats` 看各站点请求 | [地面与数据](#pit-ground) |
 | 数据真实性与许可 | 通告 / 路段 / 地理数据逐字摘录并注明来源；匹配不上的写进报告，不猜、不补全；示例数据要标「示例」 | [数据来源与许可](#数据来源与许可) |
 | 外部请求不带个人信息 | 请求头（User-Agent 等）不放邮箱 / 姓名 | 根 [AGENTS.md](../../AGENTS.md)、[工具与环境](#pit-tools) |
 | OSM 数据用离线包 | 全线 / 大范围的 OSM 数据不走公共 Overpass（504 / 429 常客），用 Geofabrik 离线包 + 提取脚本（`scripts/rail/extract_osm.py`） | 根 [AGENTS.md](../../AGENTS.md) |
@@ -83,7 +84,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/clouds/noise.ts` | 云的形状 / 细节噪声、天气图（GPU 生成） |
 | `src/clouds/clouds.glsl.ts` | 云密度：层状云（天气场驱动）、雷暴（`towerShape`）、台风；云影 |
 | `src/clouds/clouds.ts` | 云的光线步进、时间累积、云预设、密度探针 |
-| `src/ground/geo.ts` / `tiles.ts` / `clipmap.ts` | 经纬度换算；瓦片加载（影像、地形、水体、道路、夜光）；7 级 clipmap |
+| `src/ground/geo.ts` / `tiles.ts` / `clipmap.ts` | 经纬度换算；瓦片加载（影像源抽象 `ImagerySource`、按站点限速、负缓存；地形、水体、道路、夜光）；7 级 clipmap（`setDetailContext` 决定最细两级要不要高清细节） |
+| `src/ground/imagery-blend.ts` | 高清细节合成（G03，在地面栅格化 Worker 里跑）：国土地理院航拍的高频 × 局部反差匹配 + EOX 的低频色调，挡水面 / 云 / 耀斑等异常 |
 | `src/ground/road-raster.ts` / `road-raster.worker.ts` | 夜间道路灯带（T08）：OSM 道路栅格成有向距离场 + 照亮宽度，在 Web Worker 里算；着色见 `ground.glsl.ts` 的 `groundRoadCoverage`、`terrain-shading.glsl.ts` 的 `groundRoadLights` |
 | `src/render/scene.ts` | 场景（舱内合成）着色器：舱内 uniform 声明、主函数（舱壁 / 内衬 / 遮光板 / 座椅 / 窗板效果、alpha 打包）、`createSceneMaterial`（持有所有 pass 共用的 uniforms） |
 | `src/render/outside-pass.ts` | 窗外着色器（SC-5）：`outsideRadiance`（地面 / 海面 / 天空的唯一调用点）、交通、闪电；`createOutsideMaterial` / `createOutsideTarget`；低空细节变体 `GroundDetailVariant` |
@@ -209,7 +211,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `public/data/bsc5.json` | 耶鲁亮星表第 5 版，CDS VizieR V/50，`scripts/build_stars.py` 生成 | 公有领域 |
 | `public/data/moon_2k.jpg` | Solar System Scope「2k_moon」（基于 NASA LRO 数据） | CC BY 4.0，需署名：Solar System Scope |
 | `public/data/milkyway_4k.jpg` | NASA SVS「Deep Star Maps 2020」（ID 4851）的 `milkyway_2020_4k.exr`（4096×2048，J2000 等距柱状），`scripts/build_milkyway.py` 转成 8 位对数编码灰度 JPEG（3.3 MB） | NASA 作品可自由使用，需署名：NASA/Goddard Space Flight Center Scientific Visualization Studio；其中 Gaia DR2 数据署名 ESA/Gaia/DPAC（CC BY-SA 3.0 IGO） |
-| 卫星影像（运行时拉取） | EOX Sentinel-2 cloudless 2020（`tiles.maps.eox.at`） | CC BY-NC-SA 4.0，需署名；仅限非商业 |
+| 卫星影像（运行时拉取） | EOX Sentinel-2 cloudless 2025（`tiles.maps.eox.at` 图层 `s2cloudless-2025_3857`；G01 从 2020 换来，选 2025 不选 2024 的理由见 `handoff/G01-03.md`）。WMTS GetCapabilities 里该图层 Abstract 原文：「EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025) released under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License. For commercial usage please see https://cloudless.eox.at」；服务的 AccessConstraints 要求按 maps.eox.at 的写法署名并带链接 | CC BY-NC-SA 4.0，需署名（面板署名区）；仅限非商业 |
+| 日本低空近景的高清细节（运行时拉取，G03） | 国土地理院「全国最新写真（シームレス）」`seamlessphoto`（`cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg`，z14 / z15）；只在日本、离地 < 约 6 km 或看机翼视角、航程流速 ≤ 2×、白天时进 clipmap 最细两级，并且只取它的高频细节、色调仍用 EOX（`src/ground/imagery-blend.ts`）。利用条件原文（[地理院タイル一覧](https://maps.gsi.go.jp/development/ichiran.html)）：「地理院タイルをウェブサイトやソフトウェア、アプリケーション上でリアルタイムに読み込んで利用する場合、地理院タイルは出典の明示のみで申請不要でご利用いただけます」「出典は、『国土地理院』または『地理院タイル』等と記載していただき、地理院タイル一覧ページへのリンクを付けてください」 | [国土地理院コンテンツ利用規約](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（Public Data License 1.0，与 CC BY 4.0 兼容，可商用）；加工过要写明，署名写作「国土地理院（地理院タイル・全国最新写真（シームレス））を加工して作成」+ 一览页链接（面板署名区） |
 | 地形（运行时拉取） | AWS Terrain Tiles，Terrarium 编码（`elevation-tiles-prod`） | 开放数据，各来源署名见其说明 |
 | 水体、道路（运行时拉取） | OpenFreeMap 矢量瓦片的 water / waterway / transportation 图层（同一张瓦片、同一次请求） | © OpenStreetMap contributors，ODbL |
 | `public/data/rail/oito-matsumoto-shinanoomachi.{json,bin}`（火车线路走廊：中心线、车站、道口、桥、建筑、土地利用、道路、水系、电力线） | OpenStreetMap，Geofabrik 中部包离线提取（`scripts/rail/extract_osm.py`，不走公共 Overpass），`scripts/rail/bake.py` 烘焙 | © OpenStreetMap contributors，ODbL 1.0；本文件属于衍生数据库，对外发布同样按 ODbL 提供 |
@@ -371,6 +374,11 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **地面瓦片重建的 CPU 尖峰不在纹理上传里，在 `getImageData` + 逐顶点投影 + 逐像素变换**（PERF-9，接续 PERF-8）：route-hnd-cts 60× 加速航程下，PERF-8 把 `texSubImage3D` 的尖峰压下去后，仍有 60–105 ms 的主线程长任务、`texBytes=0`。CDP CPU 剖析（`Profiler.start/stop`，方法见 `handoff/PERF-9.md`）定位到主因是 `clipmap.ts` 的 `buildWater`（Path2D 画水体/河道 + `getImageData` 读回 + 逐顶点 `tileYToLat`/`tileXToLon` 投影）和 `buildNight`（读回夜光瓦片后逐像素做「亮度减蓝色底」变换），这些都在主线程同步跑，`coarseGrid`（PERF-6-8 当时怀疑的对象）实测占比很小。
   修法：把水体/河道的栅格化和夜光变换都搬进已有的 `road-raster.worker.ts`（用 `OffscreenCanvas`——主线程和 Worker 都能创建，同一份代码两边通用；水体几何改存扁平数组 `WaterTileData`，格式对齐已有的 `RoadTileData`，见 `road-raster.ts` 的 `WaterTileBuilder`），和道路 SDF 叠加一起做，只留 `getImageData` 返回后传两个 Transferable 数组回主线程。`buildImagery`/`buildNight` 的取瓦片 + `getImageData` 仍在主线程（它们的画布内容来自 `ImageBitmap`，缓存在主线程 `tiles.ts` 的 LRU 里给下次重建复用，转移会 detach 破坏复用，要挪得把整条 fetch/decode/缓存链路搬进 Worker，改动更大，留给后续）。
   实测（route-hnd-cts 60×，25 秒窗口）：`dt > 16 ms` 的帧从 95/3622（2.62%）降到 38/3893（0.98%），落在「50–105 ms」这个尖峰区间的帧从 17 个降到 1 个（压线在 100 ms）。识别：`buildWater`/`buildNight` 的 `getImageData` 或 `tileYToLat` 在 CPU 剖析的 self time 排行里名列前茅，且集中在 `dt > 16 ms` 的帧里；复现方法见 `handoff/PERF-9.md`「剖析方法」。
+- **每个 404 都会在控制台记一条 error，JS 拦不住**（G02 / G03）：国土地理院在日本以外、海上返回 404（带 CORS 头，状态码读得到），`fetch` 被 `catch` 住也没用，Chrome 仍在控制台打「Failed to load resource: the server responded with a status of 404」，验收的「控制台无 error」就过不了。负缓存只能让每张瓦片只出一次。
+  修法：请求前先筛——覆盖框按日本各地分成几块（`GSI_PHOTO.bounds`，避开朝鲜半岛），再用同一级的 DEM 筛掉整张都是海的瓦片（`clipmap.detailTileWanted`）。坑中坑：**不能按「海底 < −5 m」判海**，近岸 DEM 来自 SRTM，海面是 0 m 而不是负值（骏河湾北岸一整排 z14 瓦片被当成陆地、全部 404）；改成「有像素 > 0.5 m 才算有陆地」后 fuji / kanto 低空实测 0 个 404。识别：`__voyage.ground.imageryStats.hosts[…].recentMissing` 列最近「确定没有」的地址。以后接 Esri：它缺数据是 200 + 占位图（research/IMAGERY.md §2.1），走 `isPlaceholder`，不会刷 404。
+- **高清源不能直接换 EOX，要做频率分离 + 反差匹配**（G03）：GSI 在 z14 比 EOX 亮约 1.6–2 倍、发灰，批次之间有拼接缝；直接贴上去，`landClasses` / 城市灯点 / 路灯聚落地毯的判据全变。只取 GSI 的「H / H_low」细节比乘到 EOX 的低频上可以保住色调，但**EOX 2025 本身在 10–30 m 已经有不少纹理，GSI 航拍发雾，细节比的幅度比 EOX 的还小**：第一版（不做反差匹配、GSI 用 z14）实测低空看机翼视角整片地面反而变「平」，高尔夫球场、田块的纹理消失。修法：按局部细节能量把 GSI 的细节放大到 EOX 的水平（增益 0.8–2.5），第 0 级改取 z15 再 2:1 缩小。识别：`__voyage.ground.detailEnabled = false` 做同机位 A/B（`handoff/G01-03.md`）。
+- **高清细节只在白天用**（G03）：夜里影像颜色看不见，混进来的细节只会扰动建成区判据（城市灯点 / 路灯亮不亮），所以太阳低于约 −3° 时最细两级按纯 EOX 重建（带回差）；夜景零回归靠的是这一条，不是合成本身。
+- **Worker 里的高清合成一级约 0.35–0.4 s**（G03，1024² 四通道两遍盒滤波 + 局部能量）：只在低空 / 看机翼、日本、≤ 2× 时的最细两级发生，但 Worker 是串行的，同一时刻别的级别的水体 / 道路合成会排在它后面。按列走的纵向滤波曾让它到 0.6 s（缓存不友好），已改成按整行累加。以后要再加东西先看 `blendDetail` 的分段耗时。
 
 <a id="pit-cabin"></a>
 ### 舱内与倒影

@@ -8,7 +8,7 @@
  *   色调一变，大片农田会被判成城区。
  * 做法（频率分离，只改 RGB，A 通道不碰——A 的缺影像比例 / 道路照亮宽度编码由之后的 packRoads 照旧写）：
  *   E_low、H_low = 两张图按覆盖率加权的低通（两遍盒滤波，σ ≈ 3.7 纹素，第 0 级约 30 m）；
- *   细节比 d = 1 + K·(H / H_low − 1)（逐通道，线性空间，夹到 [D_MIN, D_MAX]）；
+ *   细节比 d = 1 + K·g·(H / H_low − 1)（逐通道，线性空间，夹到 [D_MIN, D_MAX]；g 是局部反差匹配增益，见 G_MIN）；
  *   out = mix(E, E_low · d, m)。
  *   这样一片区域的平均色仍是 EOX 的（分类、灯点判据不变），30 m 以下的纹理来自航拍。
  * 权重 m（写成「这里用不用细节」，不改缺影像语义）：
@@ -19,7 +19,15 @@
  * - 最后把 m 羽化几个纹素，避免权重边界成一条硬边。
  */
 
-const K = 0.85; // 细节强度：航拍的阴影 / 反差比 EOX 强，稍收一点
+const K = 0.9; // 细节强度（在反差匹配之后再乘）
+/**
+ * 细节反差匹配的增益范围：g = √(EOX 局部细节能量 / GSI 局部细节能量)，夹到 [G_MIN, G_MAX]。
+ * 为什么要：GSI 航拍整体发灰、有雾（research §3.2），直接拿它的高频换掉 EOX 2025 的高频，实测一大片地面反而变「平」——
+ * 高尔夫球场、田块这些 EOX 本来看得见的 10–30 m 纹理没了（handoff/G01-03.md 的 A/B）。按局部能量把 GSI 的细节放大到 EOX 的水平，
+ * 形状来自航拍（更准、更锐），幅度不低于 EOX；GSI 本来就更强的地方（建筑轮廓）最多收 20%
+ */
+const G_MIN = 0.8;
+const G_MAX = 2.5;
 const D_MIN = 0.3;
 const D_MAX = 3.0;
 const EPS = 0.004; // 线性亮度，防止暗处比值炸开（约 sRGB 12）
@@ -41,40 +49,76 @@ const toSrgb = (lin: number) => LIN_SRGB[Math.min(LUT_N, Math.max(0, Math.round(
 let bufE: Float32Array | null = null;
 let bufH: Float32Array | null = null;
 let bufM: Float32Array | null = null;
+let bufV: Float32Array | null = null;
 let line: Float32Array | null = null;
+let tmpFull: Float32Array | null = null;
 
-/** 就地做可分离盒滤波（半径 r，边界外按 0 计——配合覆盖率加权，缺数据的地方不会把颜色拉黑），ch 个交错通道 */
+/** 就地做可分离盒滤波（半径 r，边界外按 0 计——配合覆盖率加权，缺数据的地方不会把颜色拉黑），ch 个交错通道。
+ * 横向逐行滑窗；纵向按整行累加 / 相减（连续内存，不按列跳着读——按列走的版本一级要 0.6 s，实测） */
 function boxBlur(buf: Float32Array, res: number, ch: number, r: number) {
-  if (!line || line.length < res * ch) line = new Float32Array(res * ch);
-  const tmp = line;
-  const acc = new Float64Array(ch);
+  const W = res * ch;
+  if (!line || line.length < W) line = new Float32Array(W);
+  if (!tmpFull || tmpFull.length < buf.length) tmpFull = new Float32Array(buf.length);
+  const row = line, out = tmpFull;
   const norm = 1 / (2 * r + 1);
-  // 横向
+  // 横向：每行一个滑窗（每个通道各自累加）
   for (let y = 0; y < res; y++) {
-    const row = y * res * ch;
-    acc.fill(0);
-    for (let x = 0; x < r && x < res; x++) for (let c = 0; c < ch; c++) acc[c] += buf[row + x * ch + c];
-    for (let x = 0; x < res; x++) {
-      const xa = x + r, xr = x - r - 1;
-      if (xa < res) for (let c = 0; c < ch; c++) acc[c] += buf[row + xa * ch + c];
-      if (xr >= 0) for (let c = 0; c < ch; c++) acc[c] -= buf[row + xr * ch + c];
-      for (let c = 0; c < ch; c++) tmp[x * ch + c] = acc[c] * norm;
+    const o = y * W;
+    if (ch === 4) {
+      // 四通道一起滑（影像 RGB + 覆盖率），比逐通道各滑一遍快一倍多
+      let a0 = 0, a1 = 0, a2 = 0, a3 = 0;
+      for (let x = 0; x < r && x < res; x++) {
+        const q = o + x * 4;
+        a0 += buf[q]; a1 += buf[q + 1]; a2 += buf[q + 2]; a3 += buf[q + 3];
+      }
+      for (let x = 0; x < res; x++) {
+        if (x + r < res) {
+          const q = o + (x + r) * 4;
+          a0 += buf[q]; a1 += buf[q + 1]; a2 += buf[q + 2]; a3 += buf[q + 3];
+        }
+        if (x - r - 1 >= 0) {
+          const q = o + (x - r - 1) * 4;
+          a0 -= buf[q]; a1 -= buf[q + 1]; a2 -= buf[q + 2]; a3 -= buf[q + 3];
+        }
+        const w = x * 4;
+        row[w] = a0 * norm; row[w + 1] = a1 * norm; row[w + 2] = a2 * norm; row[w + 3] = a3 * norm;
+      }
+      buf.set(row.subarray(0, W), o);
+      continue;
     }
-    buf.set(tmp.subarray(0, res * ch), row);
-  }
-  // 纵向
-  const stride = res * ch;
-  for (let x = 0; x < res; x++) {
-    acc.fill(0);
-    for (let y = 0; y < r && y < res; y++) for (let c = 0; c < ch; c++) acc[c] += buf[y * stride + x * ch + c];
-    for (let y = 0; y < res; y++) {
-      const ya = y + r, yr = y - r - 1;
-      if (ya < res) for (let c = 0; c < ch; c++) acc[c] += buf[ya * stride + x * ch + c];
-      if (yr >= 0) for (let c = 0; c < ch; c++) acc[c] -= buf[yr * stride + x * ch + c];
-      for (let c = 0; c < ch; c++) tmp[y * ch + c] = acc[c] * norm;
+    for (let c = 0; c < ch; c++) {
+      let acc = 0;
+      for (let x = 0; x < r && x < res; x++) acc += buf[o + x * ch + c];
+      for (let x = 0; x < res; x++) {
+        const xa = x + r, xr = x - r - 1;
+        if (xa < res) acc += buf[o + xa * ch + c];
+        if (xr >= 0) acc -= buf[o + xr * ch + c];
+        row[x * ch + c] = acc * norm;
+      }
     }
-    for (let y = 0; y < res; y++) for (let c = 0; c < ch; c++) buf[y * stride + x * ch + c] = tmp[y * ch + c];
+    buf.set(row.subarray(0, W), o);
   }
+  // 纵向：acc 是整行宽的累加器
+  const acc = row;
+  acc.fill(0, 0, W);
+  for (let y = 0; y < r && y < res; y++) {
+    const o = y * W;
+    for (let k = 0; k < W; k++) acc[k] += buf[o + k];
+  }
+  for (let y = 0; y < res; y++) {
+    const ya = y + r, yr = y - r - 1;
+    if (ya < res) {
+      const o = ya * W;
+      for (let k = 0; k < W; k++) acc[k] += buf[o + k];
+    }
+    if (yr >= 0) {
+      const o = yr * W;
+      for (let k = 0; k < W; k++) acc[k] -= buf[o + k];
+    }
+    const o = y * W;
+    for (let k = 0; k < W; k++) out[o + k] = acc[k] * norm;
+  }
+  buf.set(out.subarray(0, buf.length));
 }
 
 function smooth(e0: number, e1: number, x: number) {
@@ -99,8 +143,9 @@ export function blendDetail(albedo: Uint8ClampedArray, detail: Uint8ClampedArray
     bufE = new Float32Array(N * 4);
     bufH = new Float32Array(N * 4);
     bufM = new Float32Array(N);
+    bufV = new Float32Array(N * 2);
   }
-  const E = bufE, H = bufH!, M = bufM!;
+  const E = bufE, H = bufH!, M = bufM!, V = bufV!;
   // 预乘覆盖率的线性色 + 覆盖率
   let any = 0;
   for (let i = 0; i < N; i++) {
@@ -162,6 +207,23 @@ export function blendDetail(albedo: Uint8ClampedArray, detail: Uint8ClampedArray
     M[i] = m;
   }
   boxBlur(M, res, 1, FEATHER_R);
+  // 局部细节能量（亮度的相对高频的平方，和低通同一个窗口）：EOX 一份、GSI 一份
+  for (let i = 0; i < N; i++) {
+    const i4 = i * 4;
+    const we = E[i4 + 3], wh = H[i4 + 3];
+    if (M[i] <= 1e-3 || we < 1e-3 || wh < 1e-3) {
+      V[2 * i] = V[2 * i + 1] = 0;
+      continue;
+    }
+    const le = (0.2126 * E[i4] + 0.7152 * E[i4 + 1] + 0.0722 * E[i4 + 2]) / we;
+    const lh = (0.2126 * H[i4] + 0.7152 * H[i4 + 1] + 0.0722 * H[i4 + 2]) / wh;
+    const e = 0.2126 * SRGB_LIN[albedo[i4]] + 0.7152 * SRGB_LIN[albedo[i4 + 1]] + 0.0722 * SRGB_LIN[albedo[i4 + 2]];
+    const h = 0.2126 * SRGB_LIN[detail[i4]] + 0.7152 * SRGB_LIN[detail[i4 + 1]] + 0.0722 * SRGB_LIN[detail[i4 + 2]];
+    const re = (e + EPS) / (le + EPS) - 1, rh = (h + EPS) / (lh + EPS) - 1;
+    V[2 * i] = re * re;
+    V[2 * i + 1] = rh * rh;
+  }
+  boxBlur(V, res, 2, 6); // 能量只要个量级：一遍半径 6 的盒子（σ 与两遍半径 4 相当），省一半时间
   // 合成
   let used = 0;
   for (let i = 0; i < N; i++) {
@@ -172,11 +234,12 @@ export function blendDetail(albedo: Uint8ClampedArray, detail: Uint8ClampedArray
     const we = E[i4 + 3], wh = H[i4 + 3];
     if (we < 1e-3 || wh < 1e-3) continue;
     if (m > 0.5) used++;
+    const g = Math.min(G_MAX, Math.max(G_MIN, Math.sqrt((V[2 * i] + 1e-4) / (V[2 * i + 1] + 1e-4))));
     for (let c = 0; c < 3; c++) {
       const eLow = E[i4 + c] / we;
       const hLow = H[i4 + c] / wh;
       const h = SRGB_LIN[detail[i4 + c]];
-      let d = 1 + K * ((h + EPS) / (hLow + EPS) - 1);
+      let d = 1 + K * g * ((h + EPS) / (hLow + EPS) - 1);
       d = d < D_MIN ? D_MIN : d > D_MAX ? D_MAX : d;
       const e = SRGB_LIN[albedo[i4 + c]];
       albedo[i4 + c] = toSrgb(e + (eLow * d - e) * m);
