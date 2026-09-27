@@ -548,23 +548,28 @@ uniform vec3 uMotion;
 uniform bool uReset;
 uniform vec2 uCloudResolution;
 varying vec2 vUv;
+// 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半 R 是云的平均深度（km）——窗外程序要拿它判断云在山前还是山后
+// （clouds.glsl.ts 的 cloudBeforeGround），放进同一张纹理，窗外 / 机翼程序不多占 sampler。两半各自时间累积、各自邻域夹取
 void main() {
   vec2 texel = 1.0 / uCloudResolution;
-  vec2 uv = gl_FragCoord.xy * texel;
-  vec4 cur = texture(uCurrent, uv);
+  bool depthHalf = gl_FragCoord.x >= uCloudResolution.x;
+  vec2 fc = gl_FragCoord.xy - vec2(depthHalf ? uCloudResolution.x : 0.0, 0.0);
+  vec2 uv = fc * texel;
+  float dCur = texture(uCurrentDepth, uv).r * CLOUD_DEPTH_SCALE;
+  vec4 cur = depthHalf ? vec4(dCur, 0.0, 0.0, 1.0) : texture(uCurrent, uv);
   if (uReset) { gl_FragColor = cur; return; }
 
   vec4 mn = cur, mx = cur;
   for (int x = -1; x <= 1; x++)
   for (int y = -1; y <= 1; y++) {
-    vec4 s = texture(uCurrent, uv + vec2(x, y) * texel);
+    vec2 q = uv + vec2(x, y) * texel;
+    vec4 s = depthHalf ? vec4(texture(uCurrentDepth, q).r * CLOUD_DEPTH_SCALE, 0.0, 0.0, 1.0) : texture(uCurrent, q);
     mn = min(mn, s);
     mx = max(mx, s);
   }
 
-  float depth = texture(uCurrentDepth, uv).r * CLOUD_DEPTH_SCALE;
-  vec3 rd = uCabinToWorld * cabinRay(gl_FragCoord.xy * (uResolution / uCloudResolution));
-  vec3 prevDir = normalize(rd * depth + uMotion);
+  vec3 rd = uCabinToWorld * cabinRay(fc * (uResolution / uCloudResolution));
+  vec3 prevDir = normalize(rd * dCur + uMotion);
   vec3 v = transpose(uPrevCamBasis) * (transpose(uPrevCabinToWorld) * prevDir);
   float blend = 0.12;
   vec2 puv = vec2(-1.0);
@@ -574,7 +579,9 @@ void main() {
     puv = ndc * 0.5 + 0.5;
   }
   if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0)))) blend = 1.0;
-  vec4 hist = clamp(texture(uHistory, puv), mn, mx);
+  // 上一帧的缓冲也是两倍宽：取对应的半边，夹在半边以内半个纹素（线性过滤不串到另一半）
+  float hx = clamp(puv.x * uCloudResolution.x, 0.5, uCloudResolution.x - 0.5) + (depthHalf ? uCloudResolution.x : 0.0);
+  vec4 hist = clamp(texture(uHistory, vec2(hx / (2.0 * uCloudResolution.x), puv.y)), mn, mx);
   gl_FragColor = mix(hist, cur, blend);
 }
 `;
@@ -1283,7 +1290,8 @@ export class Clouds {
     const h = Math.max(1, Math.round(fullHeight * this.resolutionScale));
     this.raw.setSize(w, h);
     this.wonderSurf.setSize(w, h);
-    for (const t of this.history) t.setSize(w, h);
+    // 云缓冲两倍宽：右半是云的平均深度（T38，见 RESOLVE_FRAG）
+    for (const t of this.history) t.setSize(2 * w, h);
     this.marchMat.uniforms.uCloudResolution.value.set(w, h);
     this.reset = true;
   }

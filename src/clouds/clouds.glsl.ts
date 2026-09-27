@@ -1080,6 +1080,30 @@ vec2 cloudShellIntervalH(vec3 ro, vec3 rd, float hb, float ht) {
 }
 vec2 cloudShellInterval(vec3 ro, vec3 rd) { return cloudShellIntervalH(ro, rd, uShellBottom, uShellTop); }
 
+// 云缓冲（clouds.ts 的 history，T38 起两倍宽）：左半是云（RGB 预乘辐亮度 + A 透射率），右半 R 是云按不透明度加权的平均深度（km）。
+// 放进同一张纹理而不是另给一张深度图：窗外 / 机翼程序不多占 sampler（窗外程序 sampler 快满了）。
+// 取样夹在各自半边以内半个纹素，线性过滤不会串到另一半
+vec4 cloudBufferColor(sampler2D buf, vec2 uv) {
+  float w = float(textureSize(buf, 0).x) * 0.5;
+  return texture(buf, vec2(min(uv.x * w, w - 0.5) / (2.0 * w), uv.y));
+}
+float cloudBufferDepth(sampler2D buf, vec2 uv) {
+  float w = float(textureSize(buf, 0).x) * 0.5;
+  return textureLod(buf, vec2((w + clamp(uv.x * w, 0.5, w - 0.5)) / (2.0 * w), uv.y), 0.0).r;
+}
+
+// 地形挡住它后面的云（T38）。云步进不知道地形（只按球壳走），视线打到山上以后还一路走到几百公里外，
+// 山后面的云被合成到山体前面：清晨 4 km 看富士山，远处地平线上的层云（1.2–3.4 km）被画在山腰上，
+// 成了一条横切山体的云带，山顶像浮在带子上（美术总监 wave5 次要 2；读回云的平均深度 65–290 km，山只在 38 km）。
+// 云缓冲里只有整条视线的透射率、辐亮度和按不透明度加权的平均深度 D：D 不比地面远就是山前的云，整个保留；
+// D 比地面远 30% 以上就是山后的云，去掉；中间渐变。浓云挡在山前时它后面的云权重 ≈ 0，D 就是它自己的深度，山前的云带完整保留。
+// 已知误差：山前一层薄云、山后还有浓云时 D 被拉远，山前那层薄云也一起去掉（山体上少一层薄纱，比「山后的云画到山前」轻得多）。
+// 试过再按「视线在云壳里均匀」估计地面之前的份额 f、保留 1 − T^f：山后的浓云 T ≈ 0 时 T^f 也 ≈ 0，整条云带原样留在山前，已撤回
+vec4 cloudBeforeGround(vec4 cloud, float D, float tGround) {
+  float k = 1.0 - smoothstep(1.0, 1.3, D / max(tGround, 1e-3));
+  return vec4(cloud.rgb * k, 1.0 - k * (1.0 - cloud.a));
+}
+
 // 海面、地面的云影（T27）：查 clouds.ts 预先算好的云影图（见 CLOUD_SHADOW_*）。
 // 旧版在窗外程序里逐像素沿太阳方向取 5 个固定点（点距约 4 km、不抖动、每个点按 4 km 的弦长算光学厚度）：
 // 太阳低时相邻像素的采样点落在云的有 / 无两侧，影子是一刀切的二值边，被它剪出来的 HDR 耀斑成了带阶梯的硬边色块，

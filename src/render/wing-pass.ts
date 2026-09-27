@@ -29,7 +29,7 @@ ${LIGHTS_COMMON}
 uniform sampler2D uScene;        // 场景 pass 的 HDR 结果（alpha 里打包了窗外遮罩和窗外原色，见 scene.ts 的 packWingRef）
 uniform float uTime;
 uniform float uWetness;
-uniform sampler2D uClouds;       // 半分辨率云层（雾色用）
+uniform sampler2D uClouds;       // 云缓冲（雾色用；两倍宽，用 cloudBufferColor 取左半，T38）
 uniform float uCameraFog;
 uniform vec3 uKeyCloud;          // 飞机周围云对光照的影响（T31，见 scene.ts）
 uniform float uHdrMax;
@@ -57,7 +57,7 @@ void main() {
   vec3 rd0 = cabinRay(gl_FragCoord.xy);
   vec3 pPane0 = uHead + rd0 * ((PANE_DEPTH - uHead.z) / max(rd0.z, 1e-4));
   float pixPane = max(length(fwidth(pPane0.xy)), 1e-5);
-  vec4 cloud = texture(uClouds, gl_FragCoord.xy / uResolution);   // 隐式求导的采样放在分支之前
+  vec4 cloud = cloudBufferColor(uClouds, gl_FragCoord.xy / uResolution);   // 隐式求导的采样放在分支之前
   gl_FragColor = sc;
   vec3 rd = rd0;
   vec3 ro = uHead;
