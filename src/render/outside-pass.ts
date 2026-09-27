@@ -45,7 +45,7 @@ ${STAR_MAP_COMMON}
 ${STARS_COMMON}
 ${ISLANDS_COMMON}
 ${GROUND_COMMON}
-uniform sampler2D uClouds;       // 半分辨率云层：RGB 预乘辐亮度，A 透射率
+uniform sampler2D uClouds;       // 云缓冲：两倍宽，左半 RGB 预乘辐亮度 + A 透射率，右半 R 云的平均深度（用 cloudBufferColor / cloudBufferDepth 取，T38）
 uniform float uWind;
 uniform float uTime;            // 秒，给波浪和闪烁用
 uniform float uHdrMax;          // 窗外目标能存的最大值（半精度时是 6e4）
@@ -159,6 +159,8 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   L = wonderSky(L, rd, hitGround ? tGround : 1e9);
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
   L += opticsSunDisk(rd, hitGround);
+  // 地形挡住它后面的云（T38，clouds.glsl.ts 的 cloudBeforeGround）：云步进不知道地形，只去掉地面之后那一段的云
+  if (onGround) cloud = cloudBeforeGround(cloud, cloudBufferDepth(uClouds, gl_FragCoord.xy / uResolution), tGround);
   // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光（T17：云的光乘宝光 / 本机影子，再加卷云里的幻日和晕）
   return opticsComposite(L, cloud, rd);
 }
@@ -182,7 +184,7 @@ void main() {
     return;
   }
   vec3 rdW = uCabinToWorld * rd;
-  vec4 cloud = texture(uClouds, gl_FragCoord.xy / uResolution);
+  vec4 cloud = cloudBufferColor(uClouds, gl_FragCoord.xy / uResolution);
   vec3 view = outsideRadiance(rdW, cloud);
   float starVis = gStarVis * cloud.a;
   // 远处的飞机和航迹云在云层之上，挡在海面和云前面

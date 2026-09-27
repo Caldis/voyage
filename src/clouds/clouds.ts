@@ -344,11 +344,15 @@ void main() {
         // 雷暴 / 台风：上界依赖 uniform，FXC 不展开（展开成 8 份雷暴密度时冷编译很慢）
         for (int j = 0; j < lightSteps; j++) {
           lt += ls;
+          // 一步代表的长度交给雨带塔的精简密度（gLightLen，见 HUR_BANDS_LIGHT）：后几步一步就是几公里，
+          // 只按中点「在不在塔里」取 0 / 1 的话，塔身背光面在某个高度上亮度一跳（T38）
+          gLightLen = ls;
           od += cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3, true) * ls;
           ls *= 2.0;
         }
       }
       gDetailLight = false;
+      gLightLen = 0.0;
       od *= CLOUD_EXTINCTION;
       // 多次散射近似（Wrenninge 2013）：每一阶散射更弱、衰减更慢、相函数更平。
       // 原来只取 4 阶、权重每阶折半，顺光（背散射）时厚云的有效反照率只有 ~0.3，真实厚云是 0.7–0.8，
@@ -393,6 +397,15 @@ void main() {
       // 卷云（T12）：薄冰晶云光学厚度只有零点几到几，底下照样看得到大半个天，不按厚云的「云底只剩 12%」压暗
       if (stormW < 0.5) ambFloor = mix(0.12, 0.6, 1.0 - smoothstep(0.0, 0.2, uCloudType));
 #endif
+      if (nearHur && stormW > 0.5) {
+        // 台风眼外的雨带塔（T38，T44 遗留）：「按整个外壳高度（0–20 km）压暗、底部只剩 12%」是给眼壁下部（井底，只看得到头顶一块天）的。
+        // 雨带上一座 3 km 高处的塔身，周围是开阔的天和被照亮的裙边云，却被压到约 35%，再乘隆起遮蔽，
+        // 塔的下半截整片发暗（背光面只剩直射的百分之一），明暗只随高度变、不随形状变，读成一个深色的圆桶。
+        // 眼外改按 0–10 km 归一化、底部下限 0.4（塔侧面约看得到半个天）
+        float outK = smoothstep(uHurricane.z * 2.5, uHurricane.z * 4.0, length(p.xz + uCloudOffset - uHurricane.xy));
+        h01 = mix(h01, clamp((r - BOTTOM) / 10.0, 0.0, 1.0), outK);
+        ambFloor = mix(ambFloor, 0.4, outK);
+      }
       vec3 ambient = eSky / (2.0 * M_PI) * mix(ambFloor, 1.0, pow(h01, 0.7));
       // 夜天光（T46）：skyIrradiance 只有太阳、月亮两路 LUT，没有气辉和星光；海面却经 skyRadiance 反射了它，
       // 无月夜云（≈ 0）成了比海还暗的纯黑剪影（美术总监 wave6 第 5 条：云 Y 9–12、海约 33）。
@@ -548,23 +561,32 @@ uniform vec3 uMotion;
 uniform bool uReset;
 uniform vec2 uCloudResolution;
 varying vec2 vUv;
+// 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半是云的深度——窗外程序要拿它判断云在山前还是山后
+// （clouds.glsl.ts 的 cloudBeforeGround），放进同一张纹理，窗外 / 机翼程序不多占 sampler。两半各自时间累积、各自邻域夹取。
+// 右半存 (深度 × 不透明度, 不透明度)，用时再相除：直接累积深度的话，没有云的帧深度是 400 km（gl_FragDepth = 1），
+// 稀疏的小云、云边上逐帧抖动有云 / 没云，累积出来的「深度」是 150–360 km，海面上的云被当成在海面后面整片去掉（T38 踩过）
 void main() {
   vec2 texel = 1.0 / uCloudResolution;
-  vec2 uv = gl_FragCoord.xy * texel;
+  bool depthHalf = gl_FragCoord.x >= uCloudResolution.x;
+  vec2 fc = gl_FragCoord.xy - vec2(depthHalf ? uCloudResolution.x : 0.0, 0.0);
+  vec2 uv = fc * texel;
+  float dCur = texture(uCurrentDepth, uv).r * CLOUD_DEPTH_SCALE;
   vec4 cur = texture(uCurrent, uv);
+  if (depthHalf) cur = vec4(dCur * (1.0 - cur.a), 1.0 - cur.a, 0.0, 1.0);
   if (uReset) { gl_FragColor = cur; return; }
 
   vec4 mn = cur, mx = cur;
   for (int x = -1; x <= 1; x++)
   for (int y = -1; y <= 1; y++) {
-    vec4 s = texture(uCurrent, uv + vec2(x, y) * texel);
+    vec2 q = uv + vec2(x, y) * texel;
+    vec4 s = texture(uCurrent, q);
+    if (depthHalf) s = vec4(texture(uCurrentDepth, q).r * CLOUD_DEPTH_SCALE * (1.0 - s.a), 1.0 - s.a, 0.0, 1.0);
     mn = min(mn, s);
     mx = max(mx, s);
   }
 
-  float depth = texture(uCurrentDepth, uv).r * CLOUD_DEPTH_SCALE;
-  vec3 rd = uCabinToWorld * cabinRay(gl_FragCoord.xy * (uResolution / uCloudResolution));
-  vec3 prevDir = normalize(rd * depth + uMotion);
+  vec3 rd = uCabinToWorld * cabinRay(fc * (uResolution / uCloudResolution));
+  vec3 prevDir = normalize(rd * dCur + uMotion);
   vec3 v = transpose(uPrevCamBasis) * (transpose(uPrevCabinToWorld) * prevDir);
   float blend = 0.12;
   vec2 puv = vec2(-1.0);
@@ -574,7 +596,9 @@ void main() {
     puv = ndc * 0.5 + 0.5;
   }
   if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0)))) blend = 1.0;
-  vec4 hist = clamp(texture(uHistory, puv), mn, mx);
+  // 上一帧的缓冲也是两倍宽：取对应的半边，夹在半边以内半个纹素（线性过滤不串到另一半）
+  float hx = clamp(puv.x * uCloudResolution.x, 0.5, uCloudResolution.x - 0.5) + (depthHalf ? uCloudResolution.x : 0.0);
+  vec4 hist = clamp(texture(uHistory, vec2(hx / (2.0 * uCloudResolution.x), puv.y)), mn, mx);
   gl_FragColor = mix(hist, cur, blend);
 }
 `;
@@ -1283,7 +1307,8 @@ export class Clouds {
     const h = Math.max(1, Math.round(fullHeight * this.resolutionScale));
     this.raw.setSize(w, h);
     this.wonderSurf.setSize(w, h);
-    for (const t of this.history) t.setSize(w, h);
+    // 云缓冲两倍宽：右半是云的平均深度（T38，见 RESOLVE_FRAG）
+    for (const t of this.history) t.setSize(2 * w, h);
     this.marchMat.uniforms.uCloudResolution.value.set(w, h);
     this.reset = true;
   }
