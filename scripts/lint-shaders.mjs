@@ -416,6 +416,93 @@ function samplerAudit(text, defines) {
   return { declaredCount: declared.length, activeCount: active.length, active };
 }
 
+// ---------- DX-09：README「硬约束速查表」的 sampler 表格，机器生成、机器比对 ----------
+//
+// README 手写过一次 sampler 数字，几波开发下来就和实测脱节（DX_REPORT_wave6 §1 第 5 条：README 写
+// 窗外 16/16、scene-default 3/16，实测早已是窗外 14/16、scene-default / scene-economy 5/16）。
+// 这里把「拼表格」和「数 sampler」用同一份数据、同一段代码做（emit 与 check 共用 computeSamplerRows /
+// renderSamplerTable），杜绝「表格自己一份逻辑、检查另一份逻辑」两边悄悄分叉。
+// 用法：`node scripts/lint-shaders.mjs --emit-table` 打印表格，手工贴进 README 硬约束速查表里
+// `<!-- DX-09:sampler-table:begin -->` … `<!-- DX-09:sampler-table:end -->` 之间；
+// 平时 `check:glsl` 会自动比对 README 里的这段和实测是否一致，不一致就 FAIL 并提示同一条命令。
+
+/** ANGLE 上 MAX_TEXTURE_IMAGE_UNITS，场景 / 窗外程序的 sampler 硬上限（坑点「窗外着色器的 sampler 已满」）。 */
+export const SAMPLER_LIMIT = 16;
+
+/** 需要进速查表、也需要致命检查的程序 id，顺序即表格行序。 */
+const SAMPLER_TABLE_PROGRAMS = ["scene-default", "scene-economy", "outside-default", "outside-ground-detail"];
+
+export const SAMPLER_TABLE_BEGIN = "<!-- DX-09:sampler-table:begin -->";
+export const SAMPLER_TABLE_END = "<!-- DX-09:sampler-table:end -->";
+
+function samplerDefinesFor(id) {
+  return id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : id === "scene-economy" ? new Set(["CABIN_CLASS_ECONOMY"]) : new Set();
+}
+
+/** 对 collectPrograms() 的结果，按 SAMPLER_TABLE_PROGRAMS 逐个跑 samplerAudit，返回表格需要的行
+ * （含 over-limit 判断要用的 active 名单）。程序缺失就直接抛错——说明 collectPrograms 的枚举变了，
+ * 表格和实测哪个都不该悄悄跳过一行。 */
+export function computeSamplerRows(programs) {
+  const byId = new Map(programs.map((p) => [p.id, p]));
+  return SAMPLER_TABLE_PROGRAMS.map((id) => {
+    const prog = byId.get(id);
+    if (!prog) throw new Error(`sampler 表缺少程序 ${id}（collectPrograms 的枚举变了？README 表格和这里要一起改)`);
+    const { declaredCount, activeCount, active } = samplerAudit(prog.fragmentShader, samplerDefinesFor(id));
+    return { id, declaredCount, activeCount, active };
+  });
+}
+
+/** 渲染成可以直接整段贴进 README 的 Markdown（含首尾标记行）。emit 和 check 走同一份渲染逻辑，
+ * 避免「生成的格式」和「比对时期望的格式」两处手写、悄悄不一致。 */
+export function renderSamplerTable(rows) {
+  const lines = [
+    SAMPLER_TABLE_BEGIN,
+    "| 程序 | sampler 上限 | 当前用量（引用中 / 声明） |",
+    "| --- | --- | --- |",
+    ...rows.map((r) => `| \`${r.id}\` | ${SAMPLER_LIMIT} | ${r.activeCount} / ${r.declaredCount} |`),
+    SAMPLER_TABLE_END,
+  ];
+  return lines.join("\n");
+}
+
+/** 归一化：统一换行符、去掉每行行尾空白，避免 CRLF / 编辑器自动加的行尾空格造成误报。 */
+function normalizeTableText(s) {
+  return s
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .join("\n")
+    .trim();
+}
+
+function extractReadmeTable(readmeText) {
+  const bi = readmeText.indexOf(SAMPLER_TABLE_BEGIN);
+  const ei = readmeText.indexOf(SAMPLER_TABLE_END);
+  if (bi === -1 || ei === -1 || ei < bi) return null;
+  return readmeText.slice(bi, ei + SAMPLER_TABLE_END.length);
+}
+
+/** 比对 README.md 里的 sampler 表格和 rows 算出来的实测是否一致。 */
+export function checkReadmeSamplerTable(rows, readmeText) {
+  const expected = renderSamplerTable(rows);
+  const actual = extractReadmeTable(readmeText);
+  if (actual === null) {
+    return {
+      ok: false,
+      reason: `README.md 里没找到 sampler 速查表标记（${SAMPLER_TABLE_BEGIN} … ${SAMPLER_TABLE_END}），先手工放好这对标记，再跑 node scripts/lint-shaders.mjs --emit-table 生成内容`,
+    };
+  }
+  if (normalizeTableText(actual) !== normalizeTableText(expected)) {
+    return {
+      ok: false,
+      reason:
+        `README.md 的 sampler 表格和实测不一致，跑 node scripts/lint-shaders.mjs --emit-table，把输出整段替换掉 README 里 ` +
+        `${SAMPLER_TABLE_BEGIN} … ${SAMPLER_TABLE_END} 之间的内容\n---- 期望 ----\n${expected}\n---- README 里实际的 ----\n${actual}`,
+    };
+  }
+  return { ok: true };
+}
+
 // ---------- samplerAudit / resolveConditionals 自检（node scripts/lint-shaders.mjs --self-test） ----------
 
 function runSelfTest() {
@@ -568,6 +655,20 @@ async function main() {
     process.exit(runSelfTest() ? 0 : 1);
   }
 
+  if (process.argv.includes("--emit-table")) {
+    // DX-09：只打印 README 硬约束速查表要贴的 sampler 表格，不跑语法校验 / 重名检查，用来在改了着色器
+    // 结构之后重新生成表格内容（README 那份和这里数出来的必须逐字一致，check:glsl 的 2d 步会比对）。
+    const server = await createServer({ root: VOYAGE_ROOT, server: { middlewareMode: true }, appType: "custom", logLevel: "error" });
+    let programs;
+    try {
+      programs = await collectPrograms(server);
+    } finally {
+      await server.close();
+    }
+    console.log(renderSamplerTable(computeSamplerRows(programs)));
+    process.exit(0);
+  }
+
   let exitCode = 0;
   console.log("== DX-02 离线 GLSL 检查 ==\n");
 
@@ -650,15 +751,13 @@ async function main() {
   // 仍然是静态近似（没有做跨函数数据流分析），只是现在经过了真实 GPU 交叉验证；以后这里报 FAIL
   // 时先怀疑真的超限了，但如果怀疑是静态法的盲区，用 dev-browser.mjs 起 WebGL2 读
   // gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) 复核一次再下结论。
-  console.log("\n-- 场景 / 窗外程序 sampler 数（ANGLE 上限 16，已用真实 GPU 交叉验证，见 handoff/DX.md） --");
-  for (const prog of programs) {
-    if (prog.id !== "scene-default" && prog.id !== "scene-economy" && prog.id !== "outside-default" && prog.id !== "outside-ground-detail") continue;
-    const defines = prog.id === "outside-ground-detail" ? new Set(["GROUND_DETAIL"]) : prog.id === "scene-economy" ? new Set(["CABIN_CLASS_ECONOMY"]) : new Set();
-    const { declaredCount, activeCount, active } = samplerAudit(prog.fragmentShader, defines);
-    const over = activeCount > 16;
+  console.log(`\n-- 场景 / 窗外程序 sampler 数（ANGLE 上限 ${SAMPLER_LIMIT}，已用真实 GPU 交叉验证，见 handoff/DX.md） --`);
+  const samplerRows = computeSamplerRows(programs);
+  for (const r of samplerRows) {
+    const over = r.activeCount > SAMPLER_LIMIT;
     if (over) exitCode = 1;
-    console.log(`  ${over ? "[FAIL]" : "[OK]  "} ${prog.id}: 引用中的 ${activeCount}/16（声明了 ${declaredCount} 个）`);
-    if (over) console.log(`         ${active.join(", ")}（怀疑是静态法盲区的话，用 dev-browser.mjs 读真实 ACTIVE_UNIFORMS 复核）`);
+    console.log(`  ${over ? "[FAIL]" : "[OK]  "} ${r.id}: 引用中的 ${r.activeCount}/${SAMPLER_LIMIT}（声明了 ${r.declaredCount} 个）`);
+    if (over) console.log(`         ${r.active.join(", ")}（怀疑是静态法盲区的话，用 dev-browser.mjs 读真实 ACTIVE_UNIFORMS 复核）`);
   }
 
   // -- 2c. scenarios.mjs 与 regression.playwright.js 的场景表是否同步 --
@@ -668,6 +767,16 @@ async function main() {
   else {
     exitCode = 1;
     console.log(`  [FAIL] ${syncCheck.reason}`);
+  }
+
+  // -- 2d. README「硬约束速查表」的 sampler 表格是否与实测一致（DX-09） --
+  console.log("\n-- README 硬约束速查表：sampler 表格与实测比对 --");
+  const readmeText = readFileSync(path.join(VOYAGE_ROOT, "README.md"), "utf8");
+  const tableCheck = checkReadmeSamplerTable(samplerRows, readmeText);
+  if (tableCheck.ok) console.log("  [OK]   README 表格与实测一致");
+  else {
+    exitCode = 1;
+    console.log(`  [FAIL] ${tableCheck.reason}`);
   }
 
   console.log(`\n${exitCode === 0 ? "全部通过。" : "有检查项失败，见上面的 [FAIL]。"}`);
