@@ -239,6 +239,9 @@ uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度�
 uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 x→y、像素亮度 log10 cd/m² z→w 之间由 0 过渡到 1（只在窗外）
 uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
 uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
+uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透明度 x→y 之间由 0 过渡到 1，z = 1 开 / 0 不看云（整窗都给）
+uniform float uDayHiSatRoll;  // TM01 返工：收回段按饱和度前移的倍数（见 dayHighlightGain）
+uniform sampler2D uClouds;    // 云缓冲（clouds.ts 的 history，两倍宽；main.ts 每帧 finalMat.uniforms.uClouds.value = clouds.texture）
 #include <common>
 #include <dithering_pars_fragment>
 varying vec2 vUv;
@@ -277,6 +280,9 @@ float dayHighlightGain(vec3 x) {
   vec4 p = uDayHiLook;
   float l = log2(max(dot(x, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18);
   float m = log2(max(max(max(x.r, x.g), x.b), 1e-9) / 0.18);
+  // 返工：收回段的位置再按饱和度前移 uDayHiSatRoll ×（最大通道 − 亮度）档：白云（两者几乎相等）不受影响，
+  //   夕照的橙色云边（差约 0.7 档）提前收回——它们的 R 通道在 AgX 里已经停在 249，再推 1 级就进了「≥250」
+  m += uDayHiSatRoll * (m - l);
   // 四个软铰链一次算：u ≤ −0.5 时恰为 0、u ≥ 0.5 时恰为 u，中间二次过渡（C1 连续）
   vec4 u = vec4(l, l, m, m) - p.xyyz;
   vec4 q = clamp(u + 0.5, 0.0, 1.0);
@@ -303,7 +309,12 @@ void main() {
     vec4 chroma = texture(uAdapted, vec2(0.75, 0.5));  // log2(R/G)、log2(B/G)：舱内 xy、窗外 zw（T28）
     ExpModel em = exposureModel(adapted);
     //    白天程度 × 不是「均匀视野」（云里的雾、雪原已由 ⑤ 抬成白色，不再加对比）× 窗外遮罩（交界按 alpha，只会更靠近舱内一侧，不过冲）
-    hiGate = em.day * (1.0 - em.uniformField) * src.a;
+    //    × 云覆盖（返工）：只给云加，天空 / 太阳光晕不吃这份增益——否则 backlit-cu 太阳周围 ≥200 的面积 +34%，成了一团更大的奶白光斑。
+    //    不透明度从云缓冲左半的 A（透射率）取，布局同 clouds.glsl.ts 的 cloudBufferColor（两倍宽，夹在左半以内半个纹素）；
+    //    斜坡放得很低（0.05 → 0.35），云边（不透明度 0.2–0.8，逆光银边所在）基本吃满，rim 不因「云芯加得比边多」而下降
+    float cw = float(textureSize(uClouds, 0).x) * 0.5;
+    float cloudOp = 1.0 - textureLod(uClouds, vec2(min(vUv.x * cw, cw - 0.5) / (2.0 * cw), vUv.y), 0.0).a;
+    hiGate = em.day * (1.0 - em.uniformField) * src.a * mix(1.0, smoothstep(uDayHiCloud.x, uDayHiCloud.y, cloudOp), uDayHiCloud.z);
     float eO = em.eO, eC = em.eC, aC = em.aC, o = adapted.x, dom = em.dom;
     // T47：交界像素（遮罩 0 < a < 1，窗板开口边、座椅 / 头枕压在窗前的轮廓）按「曝光的倒数」线性混合，不在 log 域混合。
     // HDR 里这个像素 = a·窗外 + (1 − a)·舱内，窗外绝对亮度高、曝光低；log 域混合给出两者的几何平均曝光，
@@ -427,7 +438,8 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  *      即不比 EV100 15（sunny-16）的相机更暗；只有比锚点亮的视野（满窗受光的云海）会被抬高，其余不变。
  *      TM01：max 换成宽 0.5 档的 C1 软拐角（g = 锚点 − eO，抬高量 = max(g, 0) + max(0.5 − |g|, 0)² / 2），离锚点 0.5 档以外逐位同 C02。
  *   TM01 白天窗外高光段（只在曝光合成里，AgX 之前）：亮度在中灰 +0.5 → +2.5 档之间对数斜率 ×1.4，
- *      +2.5 以上按最大通道收回，到 +4.0 档时增益归零；作用程度 = day ×（1 − 均匀视野）× 窗外遮罩。
+ *      +2.5 以上按最大通道（再按饱和度前移 0.3 ×（最大通道 − 亮度））收回，到 +5.0 档时增益归零；
+ *      作用程度 = day ×（1 − 均匀视野）× 窗外遮罩 × 云覆盖（云缓冲不透明度 0.05 → 0.35；天空、太阳光晕不吃增益）。
  *      比较过 AgX Punchy（天空 / 海整体变深变艳）和 Khronos PBR Neutral（云偏奶黄、天空暗 20+），都不满足「海 / 天空色相不变」，见 handoff/TM01.md。
  *   窗外看不到（遮光板全放下）时 o 取绝对锚点：o = c − 2.2·(1 − smoothstep(1.0, 2.5, log10 c[cd/m²]))，
  *      白天等于舱内亮度，暗处比舱内低 2.2 档（关灯夜里实测窗外比舱内低约 2.7 档），按窗外可见权重连续混合。
@@ -532,8 +544,12 @@ export class Exposure {
       uWinChromaMax: { value: 0.6 },
       uMesopicKeep: { value: new THREE.Vector4(0.5, 0.85, -2.0, -0.8) },
       uNightChroma: { value: new THREE.Vector3(0.45, -1.5, 0.0) }, // 协调者合并时 0.6 → 0.45：雾芯留一点明暗层次
-      // TM01：膝点中灰 +0.5 档（显示约 144）、顶点 +2.5（约 203）、收回到 +4.0（约 232），段内斜率 1.4；w = 1 即关（见 handoff/TM01.md 的方案对比）
-      uDayHiLook: { value: new THREE.Vector4(0.5, 2.5, 4.0, 1.4) },
+      // TM01：膝点中灰 +0.5 档（显示约 144）、顶点 +2.5（约 203）、收回到 +5.0，段内斜率 1.4；w = 1 即关（见 handoff/TM01.md 的方案对比）
+      // 返工：收回终点 4.0 → 5.0（+2.5→+4 档的局部对比从 0.39 回到 0.54；最亮的云边 / 砧顶细节要留住）
+      uDayHiLook: { value: new THREE.Vector4(0.5, 2.5, 5.0, 1.4) },
+      uDayHiCloud: { value: new THREE.Vector3(0.05, 0.35, 1.0) },
+      uDayHiSatRoll: { value: 0.3 }, // 返工：sunset-wing ≥250 +0.21% → +0.045%（0.5 以上把夕照 / 逆光场景的效果一起关掉，见 handoff/TM01.md）
+      uClouds: { value: null },
     },
     true,
   );
