@@ -1,0 +1,26 @@
+[
+  { "name": "biz-seated-noon", "scene": { "name": "biz-seated-noon", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business" }, "head": [0, 0.02, -0.42] },
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "lim32", "js": "__wsPatch([['else if (marchSteps != uWingSteps && t <= tExit', 'else if (marchSteps < uWingSteps / 4 && t <= tExit']]);" },
+      { "name": "lim16", "js": "__wsPatch([['else if (marchSteps != uWingSteps && t <= tExit', 'else if (marchSteps < uWingSteps / 8 && t <= tExit']]);" },
+      { "name": "full-nostarve", "js": "v.sceneMat.uniforms.uWingDebug.value = 1024 + 8192;" }
+    ] },
+  { "name": "sunset-wing", "scene": "sunset-wing",
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "lim32", "js": "__wsPatch([['else if (marchSteps != uWingSteps && t <= tExit', 'else if (marchSteps < uWingSteps / 4 && t <= tExit']]);" },
+      { "name": "lim16", "js": "__wsPatch([['else if (marchSteps != uWingSteps && t <= tExit', 'else if (marchSteps < uWingSteps / 8 && t <= tExit']]);" },
+      { "name": "full-nostarve", "js": "v.sceneMat.uniforms.uWingDebug.value = 1024 + 8192;" }
+    ] },
+  { "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "lim32", "js": "__wsPatch([['else if (marchSteps != uWingSteps && t <= tExit', 'else if (marchSteps < uWingSteps / 4 && t <= tExit']]);" },
+      { "name": "lim16", "js": "__wsPatch([['else if (marchSteps != uWingSteps && t <= tExit', 'else if (marchSteps < uWingSteps / 8 && t <= tExit']]);" },
+      { "name": "full-nostarve", "js": "v.sceneMat.uniforms.uWingDebug.value = 1024 + 8192;" }
+    ] }
+]

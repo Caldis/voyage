@@ -23,7 +23,8 @@ uniform float uSpoiler;        // 扰流板偏角（弧度）
 uniform int uWingSteps;        // 机翼光线步进的最大步数（128）。用 uniform 做循环上限，FXC 就不会展开循环（展开后冷编译时间翻倍）
 uniform int uWingShadowSteps;  // 机翼自阴影的最大步数（24）
 uniform int uWingDebug;        // 调试开关（按位）：1 去掉油罐鼓包，2 去掉翼尖灯照明，4 去掉环境反射，8 去掉自阴影，16 只看漫反射的反照率，
-                               // 64 关掉掠射射线的延长步数，128 边缘子射线一律从半路出发（T22 之前的做法，对照用）
+                               // 64 关掉掠射射线的延长步数，128 边缘子射线一律从半路出发（T22 之前的做法，对照用），
+                               // 256 / 1024 / 4096 见 wingView，8192 关掉「饿死的子射线按打中算」（W-STAIR 之前的做法，对照用）
 uniform int uWingEdgeAA;       // 内轮廓 / 薄边超采样：0 关，1 开，2 开并把超采样的像素标成品红（调试）
 
 const float CABIN_WALL_RADIUS = 1.85;  // 窗口内饰面到机身轴线的距离
@@ -96,6 +97,11 @@ WingCoord wingCoord(vec3 P) {
   return w;
 }
 
+// 完整翼型（襟翼收起、缝翼收起时的截面）的距离，不含展向边界（W-STAIR 的分段下界用）
+float wingFullSectionDist(vec3 P, WingCoord w) {
+  return max(abs(P.y - w.yMid) - w.halfT, max(-w.xi, w.xi - 1.0) * w.chord * cos(SWEEP));
+}
+
 float sdWingMain(vec3 P) {
   WingCoord w = wingCoord(P);
   float yU = w.yMid + w.halfT;
@@ -108,7 +114,8 @@ float sdWingMain(vec3 P) {
   // 副翼内端、整流罩后面一片逐像素乱跳的点阵阴影（穿云、襟翼放下时最明显）。
   // 现在按「隔壁可能更近」取下界：各段的截面（整流罩、D 形前缘）都是完整翼型的子集，离开自己这一段至少要走 m
   // （到段边界的距离），段外的形状又都在完整翼型里面，所以 真实距离 ≥ min(本段截面的距离, max(完整翼型的距离, m))。
-  // 完整翼型的距离只取竖直方向（|y − 中弧线| − 半厚度，仍是下界），用 wingCoord 已经算好的量，几次加减。
+  // 完整翼型的距离用 wingCoord 已经算好的中弧线 / 半厚度（wingFullSectionDist），几次加减。弦向那一项不能省：
+  // 只取竖直方向时，后缘后面、和翼型同高的点下界成了 m，射线在段边界平面上「打中」一面不存在的墙（云里约 1200 个像素）。
   // lb 只在两个段内分支里赋值：襟翼、缝翼都收起时 lb = 1e3，min 之后与旧版逐位相同，巡航时每步只多一次 min
   // （这里在球体追踪最内层，每条射线每步都走，多一点算术都看得出来）
   float lb = 1e3;
@@ -118,7 +125,7 @@ float sdWingMain(vec3 P) {
     xiB = WING_SHROUD_TE;
     yL = mix(yL, yU - 0.04, smoothstep(0.52, WING_SHROUD_TE, w.xi));
     m = min(P.z - (ROOT_Z + WING_FLAP_S0 * WING_SPAN), ROOT_Z + WING_FLAP_S1 * WING_SPAN - P.z);
-    lb = max(abs(P.y - w.yMid) - w.halfT, m);
+    lb = max(wingFullSectionDist(P, w), m);
   }
   // 缝翼伸出：主翼前缘退到缝翼后面，切口收圆（「D 形前缘」）
   if (uSlat > 1e-3 && w.s > WING_SLAT_S0 && w.s < WING_SLAT_S1) {
@@ -129,7 +136,7 @@ float sdWingMain(vec3 P) {
     yU = mid + hh;
     yL = mid - hh;
     m = min(m, min(P.z - (ROOT_Z + WING_SLAT_S0 * WING_SPAN), ROOT_Z + WING_SLAT_S1 * WING_SPAN - P.z));
-    lb = max(abs(P.y - w.yMid) - w.halfT, m);
+    lb = max(wingFullSectionDist(P, w), m);
   }
   float dy = abs(P.y - 0.5 * (yU + yL)) - 0.5 * (yU - yL);
   float dx = max(xiA - w.xi, w.xi - xiB) * w.chord * cos(SWEEP);
@@ -554,11 +561,13 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
           // W-STAIR：子射线常在还没走到后面那块表面时就把共用的步数用完——擦过薄后缘以后要一路走到下面的短舱，
           // 或者在内轮廓的缝里（整流罩后缘和襟翼之间）贴着表面挪。以前这算「没打中」，背后的天空 / 云从这条子样本漏进来，
           // 后缘、内轮廓上隔一个像素一个亮点（夕阳下一串亮珠、云里一串白点；调试位 1024 给足步数就消失）。
-          // 现在「还在包围盒里就把步数用完」一律算打中，但不在这里着色（着色点在空中、法线不可信，T22 的一串白点），
-          // 沿用中心射线的颜色（中心射线打中了才会有子射线）。只限子射线：中心射线走上面 nearGraze 的规则。
-          // 代价是外轮廓上真没打中、只是没走完的子样本被算成机翼，轮廓外扩不到半个像素（对照给足步数的参考图，
-          // sunset-wing 后缘只差一条 1 像素的淡线）。调试位 8192：关掉（旧做法，对照用）
-          else if (marchSteps != uWingSteps && t <= tExit && i >= limit - 1 && (uWingDebug & 8192) == 0) { w.cov = 1.0; w.bumpVar = -1.0; }
+          // 现在分到的步数不足 uWingSteps/4 的子射线（被前面的子射线挤掉了预算，「饿死」的）还在包围盒里就用完了步数，
+          // 算打中，但不在这里着色（着色点在空中、法线不可信，T22 的一串白点），沿用中心射线的颜色（中心射线打中了才会有子射线）。
+          // 分到的步数够多还走不完的，多半是擦过外轮廓以后贴着翼面慢慢远离、背后是天空（商务舱正午看前缘），仍按没打中算——
+          // 一律按打中算的话外轮廓外扩、斜边的过渡被吃掉，台阶反而更硬（W-STAIR 试过）。
+          // 门槛按「与给足步数（调试位 1024）的参考图逐像素比」选：uWingSteps/4 在 sunset-wing / 商务舱正午 / 云里三处都最接近参考，
+          // /8 次之，「一律算打中」和「只算还在逼近表面的」都更差。调试位 8192：关掉（旧做法，对照用）
+          else if (marchSteps < uWingSteps / 4 && t <= tExit && i >= limit - 1 && (uWingDebug & 8192) == 0) { w.cov = 1.0; w.bumpVar = -1.0; }
           if (w.cov <= 0.0) { w.steps = i + 1; return w; }
           w.t = tBest;
           w.part = partBest;

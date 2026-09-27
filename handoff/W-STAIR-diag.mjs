@@ -170,6 +170,10 @@ try {
       const r = await page.evaluate(({ a, b, mk }) => {
         const A = window.__wsBufs[a], B = window.__wsBufs[b], M = mk ? window.__wsBufs[mk] : null;
         let nonWing = 0, nonWingDiffPx = 0, nonWingMax = 0, diffPx = 0, maxAll = 0, wingPx = 0;
+        const W = window.__voyage.hdrWing.width, H = window.__voyage.hdrWing.height;
+        // 「旧版非机翼、新版有写入」的像素离最近的旧版机翼像素多远（像素，8 邻域 BFS 近似成切比雪夫距离，查到 6 为止）
+        const isWingB = (q) => { for (let c = 0; c < 4; c++) if (M && M[4 * q + c] !== B[4 * q + c]) return true; return false; };
+        const far = [];
         for (let p = 0; p < A.length; p += 4) {
           let d = 0, isNon = !!M;
           for (let c = 0; c < 4; c++) {
@@ -177,10 +181,27 @@ try {
             if (M && M[p + c] !== B[p + c]) isNon = false;
           }
           if (d > 0) { diffPx++; maxAll = Math.max(maxAll, d); }
-          if (isNon) { nonWing++; if (d > 0) { nonWingDiffPx++; nonWingMax = Math.max(nonWingMax, d); } }
-          else wingPx++;
+          if (isNon) {
+            nonWing++;
+            if (d > 0) {
+              nonWingDiffPx++;
+              nonWingMax = Math.max(nonWingMax, d);
+              const q = p / 4, x = q % W, y = (q - x) / W;
+              let dist = 99;
+              for (let r = 1; r <= 6 && dist === 99; r++)
+                for (let dy = -r; dy <= r && dist === 99; dy++)
+                  for (let dx = -r; dx <= r; dx++) {
+                    const xx = x + dx, yy = y + dy;
+                    if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+                    if (isWingB(yy * W + xx)) { dist = r; break; }
+                  }
+              far.push(dist);
+            }
+          } else wingPx++;
         }
-        return { a, b, mask: mk, pixels: A.length / 4, nonWing, nonWingDiffPx, nonWingMax, wingOrOther: wingPx, diffPx, maxAll };
+        const hist = {};
+        for (const f of far) hist[f] = (hist[f] ?? 0) + 1;
+        return { a, b, mask: mk, pixels: A.length / 4, nonWing, nonWingDiffPx, nonWingMax, distToOldWing: hist, wingOrOther: wingPx, diffPx, maxAll };
       }, { a, b, mk });
       log(j.name, "对照", JSON.stringify(r));
       fs.appendFileSync(path.join(OUT, "compare.jsonl"), JSON.stringify({ job: j.name, ...r }) + "\n");
