@@ -303,7 +303,9 @@ const HUR_BANDS_FULL = /* glsl */ `
         bool isSkirt = !isAnvil && skirt > towerD;
         ao = isAnvil ? mix(0.5, 1.0, smoothstep(9.0, 12.0, alt))
            : isSkirt ? mix(0.55, 1.0, smoothstep(H - 1.0, H - 0.1, alt))
-           : mix(0.35, 1.0, smoothstep(-1.0, 0.8, bump)) * mix(0.5, 1.0, smoothstep(0.5, 8.0, alt));
+           // 塔身（T38，T44 遗留）：明暗交给隆起（鼓包顶面亮、鼓包之间的折痕暗），按高度压暗减轻（旧版 0.5 → 1：
+           // 和步进里按高度的环境光叠在一起，下半截整片发暗，读成圆桶）
+           : mix(0.25, 1.0, smoothstep(-1.0, 0.8, bump)) * mix(0.75, 1.0, smoothstep(0.5, 8.0, alt));
       }
     }
   }
@@ -335,7 +337,10 @@ const HUR_BANDS_LIGHT = /* glsl */ `
         float topMax = mix(13.0, 8.5, smoothstep(Re * 3.5, Re * 15.0, rcc));
         float Ht = 2.0 + (mix(5.0, topMax, h2.y * (1.3 - 0.3 * h2.y)) - 2.0) * mix(0.55, 1.0, coreC);
         float Rt = CELL * (0.22 + 0.24 * h1.x) * mix(0.75, 1.0, coreC);
-        towerD = smoothstep(0.0, 0.35, -bandTowerSdf(xz, alt, c, Ht, Rt, h3));
+        // 受光步进的一步有多长（gLightLen，km），过渡带就放多宽：约等于「这一步落在塔里的比例」。
+        // 旧版只按中点取 0 / 1，后几步一步几公里，中点进出塔身在某个高度上一跳，背光面的亮度跟着跳 4 倍：
+        // 近处的塔半腰一条水平分界、下半截整片发暗，读成圆桶（T38，T44 遗留；读回的光学厚度只有 227 / 457 两个值）
+        towerD = smoothstep(-0.5 * gLightLen, 0.35 + 0.5 * gLightLen, -bandTowerSdf(xz, alt, c, Ht, Rt, h3));
       }
       float H = 1.0 + 1.6 * band * 0.8 - 0.6 * (1.0 - band);
       float skirt = smoothstep(0.0, 0.35, H - alt) * smoothstep(0.5, 0.8, alt);
@@ -466,6 +471,7 @@ float detailTap(vec2 rel, vec3 h, float qy, float lod) {
 // 云步进那一点没求细节（150 km 以外、或那一点只有雷暴 / 台风的云）时沿用上一个求过的格点：只是换了一个随机平移，仍然连续
 float gDetailRnd = 0.5;
 bool gDetailLight = false;
+float gLightLen = 0.0;   // 受光步进这一步代表的长度（km），只在雷暴 / 台风的受光步进里非 0（T38，见 HUR_BANDS_LIGHT）
 vec2 gDetailVert = vec2(0.0);
 vec3 gDetailHash = vec3(0.0);
 
@@ -908,6 +914,11 @@ float bandTowerSdf(vec2 xz, float alt, vec2 c, float Ht, float Rt, vec2 h3) {
   // T44：底部收得少一些。旧版底部只有顶部的 70–95%，远看是细柄上顶着一块砧——高脚杯 / 蘑菇（美术总监 wave6 第 3 条）；
   // 试过底部比顶部宽（100–115% → 90%），近处的塔成了上下一样粗的圆桶（T37 要避免的），取中间：底部 88–103%
   float rb = Rt * mix(0.88 + 0.15 * h3.x, 1.0, smoothstep(0.05, 0.7, hh));
+  // 一节节上升气泡叠出来的腰身（T38，T44 遗留）：半径随高度起伏 ±约 10%，两个不成整数比的周期（约 0.3 / 0.17 倍塔高）、
+  // 相位每座塔不同。旧版侧面是一根直筒，背光面明暗只随高度变，近处的塔读成圆桶；有了腰身，鼓出的一节顶面朝天、
+  // 收进去的一节被上面挡住，侧面才有一层层的体积起伏
+  float ph = h3.y * 6.2831853;
+  rb *= 1.0 + (0.07 * sin(alt * 21.0 / Ht + ph) + 0.045 * sin(alt * 37.0 / Ht + 2.3 * ph + 1.7)) * smoothstep(0.1, 0.3, hh);
   float domeH = min(Rt * 0.6, Ht * 0.3);
   vec2 q = vec2(rho / rb, max(alt - Ht + domeH, 0.0) / domeH);
   float lq = length(q);
@@ -1080,7 +1091,8 @@ vec2 cloudShellIntervalH(vec3 ro, vec3 rd, float hb, float ht) {
 }
 vec2 cloudShellInterval(vec3 ro, vec3 rd) { return cloudShellIntervalH(ro, rd, uShellBottom, uShellTop); }
 
-// 云缓冲（clouds.ts 的 history，T38 起两倍宽）：左半是云（RGB 预乘辐亮度 + A 透射率），右半 R 是云按不透明度加权的平均深度（km）。
+// 云缓冲（clouds.ts 的 history，T38 起两倍宽）：左半是云（RGB 预乘辐亮度 + A 透射率），右半是 (深度 × 不透明度, 不透明度)，
+// cloudBufferDepth 相除得到云按不透明度加权的平均深度（km）。
 // 放进同一张纹理而不是另给一张深度图：窗外 / 机翼程序不多占 sampler（窗外程序 sampler 快满了）。
 // 取样夹在各自半边以内半个纹素，线性过滤不会串到另一半
 vec4 cloudBufferColor(sampler2D buf, vec2 uv) {
@@ -1089,7 +1101,8 @@ vec4 cloudBufferColor(sampler2D buf, vec2 uv) {
 }
 float cloudBufferDepth(sampler2D buf, vec2 uv) {
   float w = float(textureSize(buf, 0).x) * 0.5;
-  return textureLod(buf, vec2((w + clamp(uv.x * w, 0.5, w - 0.5)) / (2.0 * w), uv.y), 0.0).r;
+  vec2 d = textureLod(buf, vec2((w + clamp(uv.x * w, 0.5, w - 0.5)) / (2.0 * w), uv.y), 0.0).rg;
+  return d.x / max(d.y, 1e-4);
 }
 
 // 地形挡住它后面的云（T38）。云步进不知道地形（只按球壳走），视线打到山上以后还一路走到几百公里外，
