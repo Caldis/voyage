@@ -164,6 +164,7 @@ try {
     // 冻结时刻固定（C11 手法：freeze 每次都把 frozenNow 设成 performance.now()）
     await page.evaluate(() => {
       window.__c12bT0 = performance.now();
+      window.__c12bTruthStatic = null;
       const pn = performance.now; performance.now = () => window.__c12bT0;
       try { window.__voyage.freeze(true, { cloudLive: true }); } finally { performance.now = pn; }
     });
@@ -175,7 +176,7 @@ try {
     fs.mkdirSync(jdir, { recursive: true });
     const truthDone = {};
     for (const [vn, defs] of Object.entries(VARS)) {
-      const src = defs === "current" ? current : resolveVariant(master, defs);
+      const src = defs === "current" ? current : defs.startsWith("file:") ? fs.readFileSync(defs.slice(5), "utf-8") : resolveVariant(master, defs);
       const e0 = errors.length;
       const res = { errors: 0 };
       await page.evaluate(({ src }) => window.__c12b.setResolve(src), { src });
@@ -222,6 +223,43 @@ try {
           }
           await page.screenshot({ path: path.join(sd, "full.png") });
         }
+      }
+      if (MODES.includes("reset")) {
+        // reset 后收敛（C12b 审查）：静止姿态，snap() 后第 k 帧读 HDR，对静止 256 帧等权真值算相对 rms 误差；3 个 uFrame 起点平均
+        const out = await page.evaluate(({ tsrc, TRUTH, crop }) => {
+          const v = window.__voyage, L = window.__c12b;
+          const zero = v.clouds.resolveMat.uniforms.uMotion.value.clone().set(0, 0, 0);
+          const r = L.cropRect(crop);
+          L.setPose(L.pose0);
+          if (!window.__c12bTruthStatic) {
+            const keep = v.clouds.resolveMat.fragmentShader;
+            L.setResolve(tsrc);
+            const tk = v.clouds.resolveMat.uniforms.uTruthK;
+            v.clouds.frame = 0; v.clouds.snap();
+            for (let i = 0; i < TRUTH; i++) { tk.value = i; L.render(zero); }
+            window.__c12bTruthStatic = L.readLum(r);
+            L.setResolve(keep);
+            L.render(zero); // 让变体程序编好
+          }
+          const T = window.__c12bTruthStatic;
+          let mu = 0; for (let i = 0; i < T.length; i++) mu += T[i]; mu /= T.length;
+          const K = [1, 2, 4, 8, 16, 24, 32, 48, 64];
+          const acc = K.map(() => 0);
+          const starts = [0, 21, 43];
+          for (const s0 of starts) {
+            v.clouds.frame = s0; v.clouds.snap();
+            L.render(zero); // reset 帧（k = 0）
+            for (let k = 1; k <= 64; k++) {
+              L.render(zero);
+              const ki = K.indexOf(k);
+              if (ki >= 0) { const V = L.readLum(r); let e = 0; for (let i = 0; i < V.length; i++) e += (V[i] - T[i]) ** 2; acc[ki] += Math.sqrt(e / V.length) / mu / starts.length; }
+            }
+          }
+          v.sceneMat.uniforms.uClouds.value = v.clouds.texture;
+          return Object.fromEntries(K.map((k, i) => [k, +acc[i].toFixed(4)]));
+        }, { tsrc: truthSrc, TRUTH, crop: j.crop });
+        res.reset = out;
+        log(j.name, vn, "reset", JSON.stringify(out));
       }
       for (const mode of ["motion", "turn", "exit"]) {
         if (!MODES.includes(mode)) continue;

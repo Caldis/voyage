@@ -746,6 +746,7 @@ uniform bool uReset;
 uniform bool uResetDepth;   // 右半（深度）这一帧从停用变回启用：右半不取历史（PERF-11）
 uniform vec2 uCloudResolution;
 uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；与步进程序、曝光的 uWhiteout 同一个 uniform 对象，C11）
+uniform float uSinceReset;     // 自上次 reset 起的帧数（reset 帧 = 0，C12b 审查）
 varying vec2 vUv;
 // 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半是云的深度——窗外程序要拿它判断云在山前还是山后
 // （clouds.glsl.ts 的 cloudBeforeGround），放进同一张纹理，窗外 / 机翼程序不多占 sampler。两半各自时间累积、各自邻域夹取。
@@ -848,6 +849,9 @@ void main() {
     vec2 fr = fract(hp - 0.5);
     blend = mix(0.04, 0.12, clamp(4.0 * (fr.x * (1.0 - fr.x) + fr.y * (1.0 - fr.y)), 0.0, 1.0));
   }
+  // reset 之后按等权平均兜底（C12b 审查）：reset 帧只有 1 spp，blend 0.04 下它的权重 0.96ⁿ 衰减得慢，
+  // 第 16 帧误差是 master 的 2.4–3.1 倍；前约 25 帧取 1/(n+1)（等权平均）以后自然交还给上面的自适应 blend
+  if (c12b) blend = max(blend, 1.0 / (uSinceReset + 1.0));
   gl_FragColor = mix(hist, cur, blend);
 }
 `;
@@ -1331,6 +1335,7 @@ export class Clouds {
         uResetDepth: { value: false },
         uCloudResolution: this.marchMat.uniforms.uCloudResolution,
         uCloudImmersion: EXPOSURE_WHITEOUT, // 云里的空间平均（C11，见 RESOLVE_FRAG）
+        uSinceReset: { value: 0 },
       },
     });
   }
@@ -1822,6 +1827,8 @@ export class Clouds {
     r.uHistory.value = prev.texture;
     r.uMotion.value.copy(motion);
     r.uReset.value = this.reset;
+    // reset 后的帧计数（C12b 审查：reset 后按等权平均兜底收敛，见 RESOLVE_FRAG 末尾）
+    r.uSinceReset.value = this.reset ? 0 : Math.min(r.uSinceReset.value + 1, 1e4);
     // 云缓冲右半（云的平均深度，T38）只在附近有高出海面的真实地形时写（PERF-11）：它只用来判断「云在山前还是山后」，
     // 海面 / 没开真实地理时用不上，却让 resolve 多一倍像素。停用期间右半不更新（窗外按 uCloudDepthOn = 0 不读），
     // 重新启用的那一帧右半不取历史（旧内容早已过时）

@@ -8,7 +8,7 @@
   edge  = 云边带（T 的梯度前 10%）上，3×3 盒滤波后梯度能量 V / T（1 = 同样锐，< 1 变糊）
 用法：python C12b-metrics.py <目录> [基准变体=master]
 """
-import json, math, os, sys
+import json, math, os, re, sys
 import numpy as np
 from PIL import Image
 sys.stdout.reconfigure(encoding="utf-8")
@@ -105,7 +105,7 @@ for row in rows:
             st = res["static"]
             r.update(relStd=st["relStd"], relLow16=st["relLow16"], spatRms=st["spatRms"], hdr=st["meanHdr"])
             d = os.path.join(root, job, "static", vn)
-            fs = sorted(f for f in os.listdir(d) if f.startswith("f") and f.endswith(".png"))
+            fs = sorted(f for f in os.listdir(d) if re.fullmatch(r"f\d\d\.png", f))
             if fs:
                 Ls = [np.asarray(Image.open(os.path.join(d, f)).convert("RGB")).astype(np.float64) @ [0.2126, 0.7152, 0.0722] for f in fs]
                 ms = np.array([fm(L) for L in Ls])
