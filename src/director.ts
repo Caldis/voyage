@@ -2,6 +2,9 @@ import * as THREE from "three";
 import { haversineKm, speedAt } from "./flight";
 import { AIRPORTS, airportAhead, makeLeg, nearestAirport, pickNextLeg, type Airport, type Leg } from "./routes";
 import type { Preset, VoyageState } from "./state";
+import type { CloudParams } from "./clouds/clouds";
+import { WeatherDirector } from "./weather-director";
+import type { WeatherSystem } from "./weather";
 
 /**
  * 导演（T19a）：连续航程 / 背景板模式的编排层。回答两件事：
@@ -64,6 +67,17 @@ export interface DirectorHost {
   sunAltDeg(): number;
   /** 切换舱灯档位（面板下拉的值：true 开 / false 睡眠 / off 全关），面板同步由 main / ui 负责 */
   setCabinLight(mode: "true" | "false"): void;
+  // ---- 天气（T19b） ----
+  weather: WeatherSystem;
+  /** 云层参数：读当前值；写入时 gradual = 连续推进的一小步（不清时间累积），false = 借遮挡的硬切。实现里要顺带 weather.updateShell() */
+  cloudParams(): CloudParams;
+  setCloudParams(p: Partial<CloudParams>, gradual: boolean): void;
+  /** 经纬度 → 本地公里坐标（x 东、z 南） */
+  toLocal(lat: number, lon: number): [number, number];
+  /** 飞机的本地坐标 */
+  localPos(): [number, number];
+  /** 正下方是陆地 / 海（地形数据还没到时 null，天气场改用粗略海陆分布） */
+  landBelow(): boolean | null;
 }
 
 export interface DirectorTelemetry {
@@ -96,6 +110,9 @@ export class Director {
   readonly visits = new Map<string, number>();
   readonly telemetry: DirectorTelemetry = { frames: 0, maxJumpRatio: 0, maxJumpKm: 0, maxAltRate: 0, maxTurnRate: 0, legs: [], switches: [] };
 
+  /** 天气驱动（T19b，weather-director.ts）：连续航程开着时按天气场推云量 / 云型、摆放雷暴与台风、奇观之门的云墙 */
+  readonly weather: WeatherDirector;
+
   private pending: SwitchRequest[] = [];
   private coverSince: Record<CoverKind, number> = { cloud: -1, night: -1 };
   private coverListeners: ((kind: CoverKind) => void)[] = [];
@@ -106,7 +123,9 @@ export class Director {
   /** 平滑过的地区霾（写进当前航段预设的 haze） */
   private haze = -1;
 
-  constructor(private readonly host: DirectorHost) {}
+  constructor(private readonly host: DirectorHost) {
+    this.weather = new WeatherDirector(this, host);
+  }
 
   // ---------- 时间 ----------
 
@@ -133,6 +152,15 @@ export class Director {
     const out: Partial<Record<CoverKind, number>> = {};
     for (const k of ["cloud", "night"] as const) if (this.coverSince[k] >= 0) out[k] = this.realTime - this.coverSince[k];
     return out;
+  }
+
+  /** 撤掉一个还没执行的请求（天气场改主意了：例如目标云型又回到当前这一族） */
+  cancel(id: string) {
+    this.pending = this.pending.filter((r) => r.id !== id);
+  }
+
+  hasPending(id: string) {
+    return this.pending.some((r) => r.id === id);
   }
 
   get pendingIds() {
@@ -203,6 +231,8 @@ export class Director {
       this.leg = null;
       if (this.active) this.joinNetwork();
     }
+    // 换预设是用户的跳变：天气直接对齐到天气场（本地坐标原点也换了，已摆放的雷暴 / 台风作废）
+    if (this.active) this.weather.onJump();
   }
 
   /** 开启 / 关闭连续航程 */
@@ -212,6 +242,7 @@ export class Director {
     if (!on) {
       this.backdrop = false;
       this.host.state.altRateKms = undefined;
+      this.weather.stop();
       return;
     }
     if (!this.leg) this.joinNetwork();
@@ -327,6 +358,7 @@ export class Director {
     this.updateCabin();
     this.updateHaze(lat, lon, simDt);
     this.maybeRequestRebase();
+    this.weather.update(dtReal, simDt, lat, lon);
   }
 
   private recordContinuity(lat: number, lon: number, simDt: number, speedKms: number) {
@@ -352,7 +384,7 @@ export class Director {
     if (!this.leg) return "";
     const l = this.leg;
     const phase = { climb: "爬升", cruise: "巡航", descent: "下降" }[this.phase];
-    return `航段 ${l.from.code} → ${l.to.code}（${l.from.name} → ${l.to.name}，${Math.round(l.distKm)} km）` + (this.active ? `，${phase}，${this.rate}×` : "");
+    return `航段 ${l.from.code} → ${l.to.code}（${l.from.name} → ${l.to.name}，${Math.round(l.distKm)} km）` + (this.active ? `，${phase}，${this.rate}×；${this.weather.describe()}` : "");
   }
 }
 
