@@ -11,7 +11,6 @@
 | INV-INCLOUD | 第 7 波（回归调查） | — | 主仓库 handoff/ | Opus 调查代理（C03 合并后 in-cloud 实时相邻像素差 2.56→8.38？同口径对比 C03 前 / 定稿 / 回退一行，给零开销修法） | — | 进行中 |
 | C09 | 第 7 波（云锐度，用户需求） | 5209 | worktree | Opus（逆光银边：backlit-close 场景 + 银边指标，比较前向峰加宽瓣 / 受光首步缩短；必审） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
-| PERF-14 | 第 7 波（飞机性能） | 5214 | `worktree-agent-ae3e95f93a3e4d63a`（cfb2969） | Opus | 审查中 | 已交付：**真冷启动 12.0→9.1 s**（座椅单独 pass、WING_WET 变体；scene-default 离线 −46%），44 组零回归 |
 | G06 | 第 7 波（飞机地面） | 5206 | worktree | Opus（clipmap 地面纹理精度 + mipmap / 各向异性：巡航纹素 / 屏幕像素比 ~3 → 1–1.5；先实验比较方案；必审） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -97,6 +96,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | DX-11/12 | compare 补 RGB / 饱和度 / 相邻像素差 / 亮暗比 / 遮罩 / 行列曲线 / 缩略图；shots --pair / --ab / --base-shader 同机位 A/B、--scenes-file、--query、view-preset、默认关连续航程；变体就绪后复位云；冻结钉频闪；probe / passes 编译失败报错；测量锁跨 worktree 生效；shader-budget 指令槽；scripts/shader-parity.mjs；ts-resolve | 2026-09-28 | Sonnet 实现，协调者核对改动范围（main.ts 仅调试句柄）后合并，**已通知在途代理**。实现代理报告其内部「只读」分身写了文件（同一 worktree，未波及他人）。**遗留**：--pair 同 js 两次仍有 2.8–4/255 残差（先测噪声底）；src/rail/shader-parity.mjs 旧入口未转发 |
 | C03 | 层状云水平横纹：受光细节随机数与步进 jitter 去相关（独立 IGN + √2−1 增量），横纹能量 −12–15%、对角高频 +1–8%、零开销 | 2026-09-28 | Opus 实现，**独立审查返工一次**（实时单帧菱形交叉纹；flicker 冻结不渲染云、证据无效），协调者核验合并。**未达成**：边宽 −20%（按表面距离变步长都长新条纹 → C10） |
 | TM01 | 白天窗外色调映射：AgX 前高光段斜率（协调者取 1.3）、收回到 +5 档按最大通道 + 偏橙提前收回、门控乘云不透明度、EV 锚定软过渡 | 2026-09-28 | Opus 实现，**独立审查返工一次**；实现者证明审查的「最亮段 ≥×0.95」与「云芯 ≥×1.6」在全局曲线下不可兼得（480 组参数扫描），协调者取折中 1.3。**遗留** → TM02 局部色调映射（两者兼得） |
+| PERF-14 | 舱内 / 机翼冷编译：座椅单独 pass（hdrSeat）、WING_WET 按需变体、wingEnv 循环化；关键路径分解写进 __voyageStartup | 2026-09-28 | Opus 实现，**独立审查通过**。**真冷启动 12.0→9.1 s**（审查复测 −26–27%）；今晚冷启动：19.0（午）→ 15.9 → 11.1 → **9.1 s**。关键路径转为窗外 / 机翼。**遗留**：座椅 pass 只画包围矩形省 0.016 ms；湿窗变体预编避让其他变体；applyScene 窗湿时等变体；判零回归要看最大差 / 平均差，不只看超阈值像素数 |
 | DX-01~03 | 私有 headless 联调 dev-browser.mjs（shots / cold / bench --baseline）、离线 GLSL 检查 lint-shaders.mjs（条件编译 + 可达性 + sampler + 重名，--self-test）、回归脚本加固 | 2026-09-26 | Sonnet 实现，审查有条件通过 → 返工 → 协调者核验；真实 GPU 读数两变体均 16/16（T02 无真 bug） |
 | T13 | 低云横纹 / 重影 / 椭圆分身：天气图坐标扭曲过陡（5 km Worley 带折痕、±1.5 km）改为平缓 Perlin ±1 km；空白步抖动只覆盖半个区间导致远处「同心球壳」切片，改为覆盖整个区间 | 2026-09-26 | T04 代理先修（排除 TAA 后逐项定位），协调者核验前后对照后单独合并 |
 | T21 | 俯视海面去重复：自相关定位主因为 211 m 级联；三级按世界坐标的六边形随机平铺（Heitz & Neyret 2018 / Mikkelsen 2022 / Ubisoft La Forge）、方差守恒混合、闪烁格子固定到世界坐标 | 2026-09-26 | Opus 实现，审查通过（俯视格子峰 ≤0.05，帧时间 +3–7%）。非阻塞：俯视细节对比 −19%、HEX_SCALE 两处同步 |
