@@ -12,6 +12,7 @@ import { VIEW_COMMON } from "./view.glsl";
 import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
 import { LIGHTS_COMMON } from "./lights.glsl";
 import { WING_COMMON } from "./wing.glsl";
+import { STAR_MAP_COMMON, STAR_POINTS_COMMON } from "./stars.glsl";
 import type { CabinClass } from "../state";
 
 /**
@@ -86,6 +87,8 @@ ${FABRIC_COMMON}
 ${SEATS_COMMON}
 ${CABIN_REFLECT_COMMON}
 ${EXPOSURE_MODEL}
+${STAR_MAP_COMMON}
+${STAR_POINTS_COMMON}
 
 void main() {
   vec3 viewPre = vec3(0.0);   // 窗外加窗板效果之前的颜色，打包给机翼 pass
@@ -206,7 +209,15 @@ void main() {
   // 机翼和翼尖灯不在这里画：由单独的机翼 pass（wing-pass.ts）读这张结果、按 alpha（窗外遮罩）合成上去。
   // 窗外（天空、云、地面、海面、交通、闪电，已乘窗板透射率）由窗外 pass 算好（outside-pass.ts），这里按像素读回。
   // 窗外 pass 只在本窗窗洞与窗板开口以内算，判定和这个分支、inPane 同一公式（略放宽），这里读到的都是算过的值
-  view = texelFetch(uOutside, ivec2(gl_FragCoord.xy), 0).rgb;
+  vec4 outside = texelFetch(uOutside, ivec2(gl_FragCoord.xy), 0);
+  view = outside.rgb;
+  // 点星（T41，stars.glsl.ts）：窗外程序在 alpha 里写 1 + 这个像素能看到多少星（天空 × 云 × 交通的透射率），
+  // 这里补上相机上方大气的消光和窗板透射率。点星放在舱内程序是为了冷编译（放进窗外程序 d3d11 冷编译 17 → 52 s，见 handoff/T41.md）。
+  // 算进 viewPre（窗外的颜色），机翼 pass 按窗外遮罩合成时机翼会挡住它
+  if (outside.a > 1.0) {
+    vec3 rdW = uCabinToWorld * rd;
+    view += starPoints(starMapUv(rdW)) * sunTransmittance(uCamR, rdW.y) * (PANE_TRANSMITTANCE * (outside.a - 1.0));
+  }
   viewPre = view;
 
   // ---- 窗板上的细节 ----

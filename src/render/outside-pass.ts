@@ -9,7 +9,7 @@ import { LIGHTNING_COMMON } from "./lightning.glsl";
 import { LIGHTS_COMMON } from "./lights.glsl";
 import { NOISE_COMMON } from "./noise.glsl";
 import { OCEAN_COMMON } from "./ocean.glsl";
-import { STARS_COMMON } from "./stars.glsl";
+import { STAR_MAP_COMMON, STARS_COMMON } from "./stars.glsl";
 import { TERRAIN_SHADING_COMMON } from "./terrain-shading.glsl";
 import { TRAFFIC_COMMON } from "./traffic.glsl";
 import { VIEW_COMMON } from "./view.glsl";
@@ -40,6 +40,7 @@ ${VIEW_COMMON}
 ${CLOUD_COMMON}
 ${NOISE_COMMON}
 ${LIGHTS_COMMON}
+${STAR_MAP_COMMON}
 ${STARS_COMMON}
 ${ISLANDS_COMMON}
 ${GROUND_COMMON}
@@ -67,6 +68,7 @@ ${WONDER_SKY_COMMON}
 // 命中点的云影、水面照度、闪光照度也只算一次，陆地、湖河、海面共用。FXC 会把每个调用点整份内联，
 // 原来地面水体和开阔海面各调一次 oceanRadiance，场景程序冷编译多出约 50 s。以后加分支时不要再在别处调这些函数，
 // 把输入交给这里唯一的调用点
+float gStarVis = 0.0; // 这个像素是天空（看得到点星）时由 outsideRadiance 置 1（T41，点星在舱内程序画）
 vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   vec3 ro = vec3(0.0, uCamR, 0.0);
   // 真实地面：先求交（打不到或还没有数据时退回原来的海平面球）
@@ -158,6 +160,7 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
     // 银河的可见度按它对这个方向天空底色（此时的 L：月光照亮的天空 + 夜天光）的对比度判断（T09，stars.glsl.ts）
     vec3 tUp = sunTransmittance(uCamR, rd.y);
     L += moonDisk(rd) * tUp + starRadiance(rd, tUp, L);
+    gStarVis = 1.0; // 点星由舱内程序画（T41），这里只标出「这个像素是天空」
   }
   // 【大气合成接入点】到这里 L 是云层背后的背景辐亮度：地面 / 海面已含空气透视，天空含内散射。
   // T18 的边界层霾不在这里叠：它是大气里的一层气溶胶，已经进了透射率 / 天空视图 / 空气透视 LUT（atmosphere/haze.ts），
@@ -191,10 +194,12 @@ void main() {
   vec3 rdW = uCabinToWorld * rd;
   vec4 cloud = texture(uClouds, gl_FragCoord.xy / uResolution);
   vec3 view = outsideRadiance(rdW, cloud);
+  float starVis = gStarVis * cloud.a;
   // 远处的飞机和航迹云在云层之上，挡在海面和云前面
   vec4 tr = trafficRadiance(rdW);
   view = (view * tr.a + tr.rgb + boltRadiance(rdW)) * PANE_TRANSMITTANCE;
-  gl_FragColor = vec4(min(view, vec3(uHdrMax)), 1.0);
+  // alpha：1 = 这个像素算过（舱内程序的水珠折射按 > 0.99 判断），再加上能看到多少点星（T41，舱内程序画点星时乘它）
+  gl_FragColor = vec4(min(view, vec3(uHdrMax)), 1.0 + starVis * tr.a);
 }
 `;
 

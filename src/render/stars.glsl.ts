@@ -1,14 +1,27 @@
 /**
  * 星星与月亮（GLSL）。依赖 LIGHTS_COMMON。
  * - 星星（T41 起）：耶鲁亮星表（BSC5）放进 J2000 赤道坐标的「每格最多一颗星」的格子（见 sky-assets.ts），
- *   这里查视线附近的 3×3 格，把每颗星投影到屏幕、按亚像素位置做能量守恒的点扩散积分（starPoints）。依赖 VIEW_COMMON、NOISE_COMMON（uLoopGuard）。
+ *   查视线附近的 3×3 格，把每颗星投影到屏幕、按亚像素位置做能量守恒的点扩散积分（STAR_POINTS_COMMON 的 starPoints）。
+ *   **点星画在舱内程序（scene.ts）里，不在窗外程序**：同一段代码放进窗外程序，d3d11 冷编译 17 → 52 s（FXC 离线 5.5 → 45 s，
+ *   见 handoff/T41.md 的二分记录），放进舱内程序只多约 1 s。窗外程序在 alpha 里告诉舱内程序这个像素能看到多少星（天空 × 云 × 交通的透射率）。
+ * - 三段：STAR_MAP_COMMON（两个程序都要的 uniform）、STARS_COMMON（窗外：银河、月亮）、STAR_POINTS_COMMON（舱内：点星）。
  * - 银河（T09）：同一张图的 A 通道，按物理量级定标，乘大气透射率；显示多少由眼睛的对比度阈值决定（月光、城市光、舱内光都会压它）。
  * - 月亮：Lommel-Seeliger 反射（月面没有临边昏暗、满月是均匀圆盘），相位由阳光方向自然产生；
  *   亮度按「整个圆盘积分 = 月光照度」归一；暗面有微弱的地照。
  */
-export const STARS_COMMON = /* glsl */ `
-uniform sampler2D uStarMap;
+export const STAR_MAP_COMMON = /* glsl */ `
+uniform sampler2D uStarMap;        // RGB：星表格子（T41），A：银河（T09）
 uniform mat3 uLocalToEquatorial;   // 当地（x 东、y 上、z 南）→ J2000 赤道直角坐标
+
+// 视线（当地坐标）→ 星图坐标（x = 赤经 / 2π，y = 0.5 + 赤纬 / π）
+vec2 starMapUv(vec3 rd) {
+  vec3 eq = uLocalToEquatorial * rd;
+  return vec2(fract(atan(eq.y, eq.x) / (2.0 * M_PI)), 0.5 + asin(clamp(eq.z, -1.0, 1.0)) / M_PI);
+}
+`;
+
+// 窗外程序：银河、月亮圆盘。依赖 STAR_MAP_COMMON、LIGHTS_COMMON
+export const STARS_COMMON = /* glsl */ `
 uniform sampler2D uMoonTexture;    // 月面反照率（等距柱状，经度 0 在中央）
 uniform vec3 uSunFromMoon;         // 从月亮看太阳的方向（≈ 从地球看）
 uniform float uMoonAngularRadius;  // 弧度
@@ -47,6 +60,51 @@ float milkyWayVisibility(float mwKcd, float backgroundKcd) {
   return max(1.0 - cth / max(c, 1e-9), 0.0) * (drawnCd / bCd);
 }
 
+// 银河，已乘相机上方大气的透射率 tUp（消光）。background：这个方向的天空辐亮度（kcd/m²，不含星星和月亮圆盘）。
+// 点星不在这里（T41 起在舱内程序画，见文件头）
+vec3 starRadiance(vec3 rd, vec3 tUp, vec3 background) {
+  // 银河在 A 通道，照旧双线性过滤（5.3′ 的漫射光比暗视觉的分辨率还细）；RGB 是星表格子，由舱内程序的 starPoints 用 texelFetch 读
+  float mwA = textureLod(uStarMap, starMapUv(rd), 0.0).a;
+  vec3 mw = mwA * MILKY_WAY_UNIT * MILKY_WAY_TINT * tUp;
+  float mwLum = dot(mw, vec3(0.2126, 0.7152, 0.0722));
+  float bgLum = dot(background, vec3(0.2126, 0.7152, 0.0722));
+  return mw * milkyWayVisibility(mwLum, bgLum);
+}
+
+vec3 moonDisk(vec3 rd) {
+  vec3 w = uMoonDir;
+  float c = dot(rd, w);
+  if (c <= 0.0) return vec3(0.0);
+  float sinR = sin(uMoonAngularRadius);
+  float ang = asin(min(length(cross(rd, w)), 1.0));
+  if (ang > uMoonAngularRadius * 1.3) return vec3(0.0);
+  // 月面朝向：月球北极大致指向天球北极
+  vec3 north = transpose(uLocalToEquatorial) * vec3(0.0, 0.0, 1.0);
+  vec3 right = normalize(cross(w, north));
+  vec3 up = cross(right, w);
+  vec2 q = vec2(dot(rd, right), dot(rd, up)) / sinR;
+  float r2 = min(dot(q, q), 0.9999);
+  float cosE = sqrt(1.0 - r2);
+  vec3 nrm = -w * cosE + right * q.x + up * q.y; // 月面法线（朝向观察者一侧）
+  float cosI = dot(nrm, uSunFromMoon);
+  float ls = cosI > 0.0 ? cosI / (cosI + cosE) : 0.0;
+  // 月面坐标：圆盘中心是经度 0（近地面正中）
+  float lon = atan(dot(nrm, right), cosE);
+  float lat = asin(clamp(dot(nrm, up), -1.0, 1.0));
+  vec3 albedo = texture(uMoonTexture, vec2(0.5 + lon / (2.0 * M_PI), 0.5 + lat / M_PI)).rgb;
+  albedo /= 0.45; // 贴图平均值约 0.45（线性），归一到 1
+  float omega = M_PI * uMoonAngularRadius * uMoonAngularRadius;
+  // 满月时 2·LS = 1 且照亮比例 = 1，圆盘均匀，积分正好等于月光照度
+  vec3 lit = uMoonIlluminance / (omega * max(uMoonPhaseFraction, 0.02)) * 2.0 * ls * albedo;
+  vec3 earthshine = uMoonIlluminance / omega * 2e-4 * albedo * (1.0 - uMoonPhaseFraction);
+  float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
+  float coverage = clamp((uMoonAngularRadius - ang) / pixelAngle + 0.5, 0.0, 1.0);
+  return (lit + earthshine) * coverage;
+}
+`;
+
+// 舱内程序：点星（T41）。依赖 STAR_MAP_COMMON、VIEW_COMMON、uLoopGuard（NOISE_COMMON / 舱内的同名声明）
+export const STAR_POINTS_COMMON = /* glsl */ `
 // ---- 点星（T41）----
 // 星点在大气层外是点光源，眼睛里的像远小于一个屏幕像素（1600×1200 下一个像素约 2.7′）。原来把星溅射进 5.3′ 的等距柱状图、
 // 再双线性放大，星是 2–4 像素的方块 / 菱形，高赤纬处 texel 在赤经方向变窄，读成短划线。
@@ -93,82 +151,42 @@ vec3 starPoints(vec2 uv) {
   int j0 = int(floor(uv.y * float(STAR_ROWS)));
   float eSum = 0.0;
   float bvSum = 0.0;
-  for (int dj = -1; dj <= 1 + uLoopGuard; dj++) {
-    int j = j0 + dj;
-    if (j < 0 || j >= STAR_ROWS) continue;
-    vec4 info = texelFetch(uStarMap, ivec2(STAR_ROW_INFO_X, j), 0);
-    int n = int(info.g + 0.5) * 64 + int(info.b + 0.5);
-    int ic = int(floor(uv.x * float(n)));
-    for (int di = -1; di <= 1 + uLoopGuard; di++) {
-      if (di + 1 >= n) continue; // 极点附近一行只有一两格时，别把同一格数两遍
-      int i = ic + di;
-      i = i < 0 ? i + n : (i >= n ? i - n : i);
-      vec4 s = texelFetch(uStarMap, ivec2(i, j), 0);
-      if (s.r <= 0.0) continue;
+  // 3×3 格压成一个循环（k = 0..8，行 = k / 3，列 = k % 3），上限写成「常数 + uLoopGuard」防 FXC 展开
+  int n = 1;
+  int ic = 0;
+  for (int k = 0; k < 9 + uLoopGuard; k++) {
+    int dj = k / 3 - 1;
+    int di = k - (k / 3) * 3 - 1;
+    int j = clamp(j0 + dj, 0, STAR_ROWS - 1);
+    if (di == -1) {
+      vec4 info = texelFetch(uStarMap, ivec2(STAR_ROW_INFO_X, j), 0);
+      n = int(info.g + 0.5) * 64 + int(info.b + 0.5);
+      ic = int(floor(uv.x * float(n)));
+    }
+    int i = ic + di;
+    i = i < 0 ? i + n : (i >= n ? i - n : i);
+    vec4 s = texelFetch(uStarMap, ivec2(i, j), 0);
+    // 行越界（极点外）或极点附近一行只有一两格时（别把同一格数两遍）不算
+    if (s.r > 0.0 && j0 + dj == j && di + 1 < n) {
       float qy = floor((s.g + 0.5) / 32.0);
       float qx = s.g - qy * 32.0;
       float sra = (float(i) + (qx + 0.5) / 32.0) / float(n) * 2.0 * M_PI;
       float sdec = ((float(j) + (qy + 0.5) / 32.0) / float(STAR_ROWS) - 0.5) * M_PI;
       vec3 v = normalize(eqToCam * vec3(cos(sdec) * cos(sra), cos(sdec) * sin(sra), sin(sdec)));
-      if (v.z > -0.01) continue;
-      vec2 d = ((v.xy / -v.z) * toPix * 0.5 + 0.5) * uResolution - gl_FragCoord.xy;
-      if (max(abs(d.x), abs(d.y)) > reach) continue;
-      // 高斯在这个像素方格 [d − 0.5, d + 0.5]² 上的积分
-      vec4 e4 = vec4(d + 0.5, d - 0.5) * kk;
-      float cov = 0.25 * (starErf(e4.x) - starErf(e4.z)) * (starErf(e4.y) - starErf(e4.w));
-      // 离轴像素的立体角是 pixAng² · cos³θ
-      float w = s.r * cov / (-v.z * v.z * v.z);
-      eSum += w;
-      bvSum += w * s.b;
+      vec2 d = ((v.xy / max(-v.z, 0.01)) * toPix * 0.5 + 0.5) * uResolution - gl_FragCoord.xy;
+      if (v.z < -0.01 && max(abs(d.x), abs(d.y)) < reach) {
+        // 高斯在这个像素方格 [d − 0.5, d + 0.5]² 上的积分
+        vec4 e4 = vec4(d + 0.5, d - 0.5) * kk;
+        float cov = 0.25 * (starErf(e4.x) - starErf(e4.z)) * (starErf(e4.y) - starErf(e4.w));
+        // 离轴像素的立体角是 pixAng² · cos³θ
+        float w = s.r * cov / (-v.z * v.z * v.z);
+        eSum += w;
+        bvSum += w * s.b;
+      }
     }
   }
   if (eSum <= 0.0) return vec3(0.0);
   // R 存的是 klux × 1e12；除以像素立体角得辐亮度
   return eSum * 1e-12 / (pixAng * pixAng) * starBvToRgb(bvSum / eSum);
-}
-
-// 星星 + 银河，已乘相机上方大气的透射率 tUp（消光）。background：这个方向的天空辐亮度（kcd/m²，不含星星和月亮圆盘）
-vec3 starRadiance(vec3 rd, vec3 tUp, vec3 background) {
-  vec3 eq = uLocalToEquatorial * rd;
-  float ra = atan(eq.y, eq.x);
-  float dec = asin(clamp(eq.z, -1.0, 1.0));
-  vec2 uv = vec2(fract(ra / (2.0 * M_PI)), 0.5 + dec / M_PI);
-  // 银河在 A 通道，照旧双线性过滤（5.3′ 的漫射光比暗视觉的分辨率还细）；RGB 是星表格子，由 starPoints 用 texelFetch 读
-  float mwA = textureLod(uStarMap, uv, 0.0).a;
-  vec3 mw = mwA * MILKY_WAY_UNIT * MILKY_WAY_TINT * tUp;
-  float mwLum = dot(mw, vec3(0.2126, 0.7152, 0.0722));
-  float bgLum = dot(background, vec3(0.2126, 0.7152, 0.0722));
-  return starPoints(uv) * tUp + mw * milkyWayVisibility(mwLum, bgLum);
-}
-
-vec3 moonDisk(vec3 rd) {
-  vec3 w = uMoonDir;
-  float c = dot(rd, w);
-  if (c <= 0.0) return vec3(0.0);
-  float sinR = sin(uMoonAngularRadius);
-  float ang = asin(min(length(cross(rd, w)), 1.0));
-  if (ang > uMoonAngularRadius * 1.3) return vec3(0.0);
-  // 月面朝向：月球北极大致指向天球北极
-  vec3 north = transpose(uLocalToEquatorial) * vec3(0.0, 0.0, 1.0);
-  vec3 right = normalize(cross(w, north));
-  vec3 up = cross(right, w);
-  vec2 q = vec2(dot(rd, right), dot(rd, up)) / sinR;
-  float r2 = min(dot(q, q), 0.9999);
-  float cosE = sqrt(1.0 - r2);
-  vec3 nrm = -w * cosE + right * q.x + up * q.y; // 月面法线（朝向观察者一侧）
-  float cosI = dot(nrm, uSunFromMoon);
-  float ls = cosI > 0.0 ? cosI / (cosI + cosE) : 0.0;
-  // 月面坐标：圆盘中心是经度 0（近地面正中）
-  float lon = atan(dot(nrm, right), cosE);
-  float lat = asin(clamp(dot(nrm, up), -1.0, 1.0));
-  vec3 albedo = texture(uMoonTexture, vec2(0.5 + lon / (2.0 * M_PI), 0.5 + lat / M_PI)).rgb;
-  albedo /= 0.45; // 贴图平均值约 0.45（线性），归一到 1
-  float omega = M_PI * uMoonAngularRadius * uMoonAngularRadius;
-  // 满月时 2·LS = 1 且照亮比例 = 1，圆盘均匀，积分正好等于月光照度
-  vec3 lit = uMoonIlluminance / (omega * max(uMoonPhaseFraction, 0.02)) * 2.0 * ls * albedo;
-  vec3 earthshine = uMoonIlluminance / omega * 2e-4 * albedo * (1.0 - uMoonPhaseFraction);
-  float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
-  float coverage = clamp((uMoonAngularRadius - ang) / pixelAngle + 0.5, 0.0, 1.0);
-  return (lit + earthshine) * coverage;
 }
 `;
