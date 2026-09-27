@@ -161,5 +161,22 @@ for (const rate of [10, 60]) {
   check("手动航向时不接力、不排队掉头", director.telemetry.legs.length === 0 && !director.pendingIds.includes("leg-turn"), `接力 ${director.telemetry.legs.length} 次，排队 ${director.pendingIds.join(",") || "无"}`);
 }
 
-console.log(fails ? `\n${fails} 项失败` : "\n全部通过");
+// ---------- 9. 审查 P1：默认状态（不开连续航程、时间流速停着，simTime 不走）到达后要掉头，也必须在有限真实时间内转完 ----------
+{
+  const { rows, director } = runSim({ rate: 1, realMin: 60, presetId: "hnd-cts", fps: 30, active: false, advanceSimTime: false });
+  const ev = turnEvents(rows, 90, 1);
+  check(
+    "默认状态：到新千岁后照常转弯接下一段，不卡在直飞",
+    director.telemetry.legs.length >= 1 && ev.length >= 1 && !director.ap.holdCourse && !director.pendingIds.includes("leg-turn"),
+    `接力 ${director.telemetry.legs.map((l) => `${l.from}-${l.to}`).join(",")}，>90° 转向 ${ev.map((e) => `${e.deg.toFixed(0)}° / ${(e.t1 - e.t0).toFixed(0)} s`).join(",") || "无"}，holdCourse=${director.ap.holdCourse}`,
+  );
+}
+// 连续航程 10× 但 simTime 被外部冻住（例如拖时间滑块倒退）：掉头排队也要按导演自己的时钟 / 真实秒放行
+{
+  const { director } = runSim({ rate: 10, realMin: 12, presetId: "hnd-cts", fps: 30, advanceSimTime: false });
+  const sw = director.telemetry.switches.filter((w) => w.id === "leg-turn");
+  check("simTime 不走时掉头排队仍会放行", sw.length >= 1 && !director.ap.holdCourse, sw.map((w) => w.how).join(",") || "没有放行");
+}
+
+console.log(fails ?`\n${fails} 项失败` : "\n全部通过");
 process.exitCode = fails ? 1 : 0;

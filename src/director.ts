@@ -43,6 +43,9 @@ const PREVIEW_KM = 400;
  *  等太久（BIG_TURN_WAIT_S 模拟秒，巡航约 120 km）仍没遮挡就照常转弯 */
 const BIG_TURN_DEG = 90;
 const BIG_TURN_WAIT_S = 480;
+/** 同时不超过这么多真实秒（T49 审查 P1）：等待时限只用导演自己累加的时钟，不看 state.simTime——
+ *  不开连续航程时 simTime 只随「时间流速」走（默认暂停），拖时间滑块还会倒退，靠它放行会永远卡住 */
+const BIG_TURN_WAIT_REAL_S = 45;
 
 /** 遮挡种类：穿云（窗外全白）、深夜 */
 export type CoverKind = "cloud" | "night";
@@ -125,6 +128,8 @@ export class Director {
   private coverSince: Record<CoverKind, number> = { cloud: -1, night: -1 };
   private coverListeners: ((kind: CoverKind) => void)[] = [];
   private realTime = 0;
+  /** 导演自己累加的模拟秒（只随飞行推进，不受时间滑块影响） */
+  private simClock = 0;
   private prevGeo: [number, number] | null = null;
   private prevAlt = 0;
   private prevHeading = 0;
@@ -299,7 +304,8 @@ export class Director {
     this.beginLeg(next);
     const [lat, lon] = this.host.geo();
     const turn = Math.abs(((greatCircleBearing(lat, lon, next.to.lat, next.to.lon) - s.heading + 540) % 360) - 180);
-    if (turn > BIG_TURN_DEG) this.queueBigTurn();
+    // 1× 时直接照常转（25° 坡度约 3 分钟掉头，真实客机就是这样）；只有时间加速时才借遮挡，免得几秒内原地掉头
+    if (turn > BIG_TURN_DEG && ap.timeScale > 1) this.queueBigTurn();
   }
 
   /** 调试（T49）：立即触发「到达」——航线模式接下一段（与真实到达走同一条路，包括大角度掉头的遮挡排队），直飞模式转入盘旋 */
@@ -312,13 +318,14 @@ export class Director {
   private queueBigTurn() {
     const s = this.host.state;
     const ap = this.ap;
-    const t0 = s.simTime;
+    const sim0 = this.simClock;
+    const real0 = this.realTime;
     ap.holdCourse = true;
     this.request({
       id: "leg-turn",
       covers: ["cloud", "night"],
       minCoverS: 1.0,
-      force: () => s.simTime - t0 > BIG_TURN_WAIT_S * 1000,
+      force: () => this.simClock - sim0 > BIG_TURN_WAIT_S || this.realTime - real0 > BIG_TURN_WAIT_REAL_S,
       run: (how) => {
         ap.holdCourse = false;
         if (how === "cloud" && s.preset.dest) {
@@ -346,6 +353,7 @@ export class Director {
 
   /** 手动航向：飞到 deg 后保持。dir 指定转向方向（-1 左、1 右、0 最短） */
   setHeading(deg: number, dir: -1 | 0 | 1 = 0) {
+    this.holdAltitude();
     this.clearNav();
     const ap = this.ap;
     ap.mode = "heading";
@@ -368,8 +376,18 @@ export class Director {
 
   /** 盘旋：以当前位置为等待点，飞跑道形等待航线（转弯朝乘客这一侧，见 flight.ts 的 startHold） */
   hold() {
+    this.holdAltitude();
     this.clearNav();
     startHold(this.host.state);
+  }
+
+  /** 从自动航线 / 直飞切到手动航向或盘旋时，高度就停在此刻（航段剖面暂停；否则会接着执行下降段的目标高度一路降到 3 km）。
+   *  不开连续航程时高度本来就不归导演管（面板的飞行阶段按钮设的目标照旧） */
+  private holdAltitude() {
+    const ap = this.ap;
+    if (!this.active || !(ap.mode === "route" || ap.mode === "direct")) return;
+    const s = this.host.state;
+    s.targetAltKm = s.altitudeKm;
   }
 
   /** 直飞某个机场（routes.ts 的 AIRPORTS）：从当前位置沿大圆飞过去，到达后在它上空盘旋。连续航程开着时照常走爬升—巡航—下降剖面 */
@@ -493,6 +511,7 @@ export class Director {
   /** 每帧调用（advanceFlight 之后）：dtReal 真实秒，simDt 模拟秒，speedKms 地速 */
   update(dtReal: number, simDt: number, speedKms: number) {
     this.realTime += dtReal;
+    this.simClock += simDt;
     const [lat, lon] = this.host.geo();
     this.recordContinuity(lat, lon, simDt, speedKms);
     this.previewNext(lat, lon);

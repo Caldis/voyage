@@ -21,7 +21,7 @@ Math.random = () => {
   return seed / 4294967296;
 };
 
-export function runSim(opts: { rate: number; realMin: number; presetId: string; fps?: number; setup?: (d: Director, s: VoyageState) => void; perFrame?: (t: number, d: Director, s: VoyageState) => void; cloudCover?: (t: number) => number }) {
+export function runSim(opts: { rate: number; realMin: number; presetId: string; fps?: number; setup?: (d: Director, s: VoyageState) => void; perFrame?: (t: number, d: Director, s: VoyageState) => void; cloudCover?: (t: number) => number; active?: boolean; advanceSimTime?: boolean }) {
   const preset = PRESETS.find((p) => p.id === opts.presetId)!;
   const state = {
     preset,
@@ -67,7 +67,7 @@ export function runSim(opts: { rate: number; realMin: number; presetId: string; 
   director.onPresetChanged();
   // 连续航程开着（流速才生效）；天气驱动在离线模拟里不跑
   (director.weather as unknown as { update: () => void }).update = () => {};
-  director.active = true;
+  director.active = opts.active ?? true; // false = 默认状态：不开连续航程（流速不生效，高度剖面不管）
   director.rate = opts.rate;
   opts.setup?.(director, state);
   const fps = opts.fps ?? 60;
@@ -78,7 +78,7 @@ export function runSim(opts: { rate: number; realMin: number; presetId: string; 
     tReal = f * dt;
     opts.perFrame?.(tReal, director, state);
     const simDt = director.simDt(dt);
-    state.simTime += simDt * 1000;
+    if (opts.advanceSimTime ?? true) state.simTime += simDt * 1000; // false = 面板「时间流速」停着（默认），simTime 不走
     const n = Math.max(1, Math.ceil(simDt / 0.5));
     let speed = 0;
     for (let i = 0; i < n; i++) {

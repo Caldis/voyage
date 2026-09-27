@@ -388,6 +388,7 @@ function setupNavUi(director: Director, vehicle: VehicleControl, s0: VoyageState
   const hdgOut = $("hdg-out");
   const dest = $<HTMLSelectElement>("nav-dest");
   const status = $("nav-status");
+  const arriveBtn = $<HTMLButtonElement>("debug-arrive");
   const state = () => s0;
   dest.innerHTML =
     `<option value="">（选择机场）</option>` +
@@ -400,7 +401,12 @@ function setupNavUi(director: Director, vehicle: VehicleControl, s0: VoyageState
   function sync() {
     const ap = director.ap;
     const s = state();
-    modeBtns.forEach((b) => b.classList.toggle("on", b.dataset.nav === (ap.mode === "direct" ? "route" : ap.mode)));
+    // 直飞时三个按钮都不亮（状态行与「直飞机场」下拉显示直飞）
+    modeBtns.forEach((b) => b.classList.toggle("on", b.dataset.nav === ap.mode));
+    // 调试「到达」：手动航向 / 盘旋时没有终点可到（relay 不做事），变灰并说明；火车模式下也不可用
+    const manual = ap.mode === "heading" || ap.mode === "hold";
+    arriveBtn.disabled = manual || vehicle.active;
+    arriveBtn.title = manual ? "手动航向 / 盘旋时没有终点，先点「自动航线」或选一个直飞机场" : "不等飞到终点，立即走一次到达：自动航线接下一段，直飞转入盘旋";
     // 手动航向时滑块停在选定航向；其他方式跟着实际航向走（拖动中不去抢）
     const shown = ap.mode === "heading" ? ap.selHeading : s.heading;
     if (!dragging) hdg.value = String(Math.round(shown) % 360);
@@ -579,7 +585,7 @@ function setupVehicleUi(vehicle: VehicleControl) {
   const sel = $<HTMLSelectElement>("vehicle");
   const status = $("vehicle-status");
   // T49：航向控制（航向滑块、左右转、直飞、调试「到达」）也是飞机专用
-  const planeOnly = ["preset", "altitude", "wing-pos", "high-lift", "voyage-on", "hdg", "nav-dest", "turn-left", "turn-right", "debug-arrive"].map((id) =>
+  const planeOnly = ["preset", "altitude", "wing-pos", "high-lift", "voyage-on", "hdg", "nav-dest", "turn-left", "turn-right"].map((id) =>
     $<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(id),
   );
   const sync = () => {
