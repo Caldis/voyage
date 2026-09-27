@@ -156,10 +156,22 @@ export async function collectPrograms(server, opts = {}) {
     );
   });
 
+  // 座椅 pass（PERF-14，seat-pass.ts）：从舱内合成里拆出来的座椅追踪与着色；经济舱同样靠 #define CABIN_CLASS_ECONOMY。
+  // 旧树（PERF-14 之前）没有这个模块，lenient 下整块跳过
+  await section("seat", async () => {
+    const m = await server.ssrLoadModule("/src/render/seat-pass.ts");
+    const mat = m.createSeatMaterial({});
+    add("seat-default", mat);
+    addDerived("seat-economy", mat, (m2) => ({ fragmentShader: "#define CABIN_CLASS_ECONOMY 1\n" + m2.fragmentShader, vertexShader: m2.vertexShader }));
+  });
+
   // 机翼 pass
   await section("wing", async () => {
     const m = await server.ssrLoadModule("/src/render/wing-pass.ts");
-    add("wing", m.createWingMaterial({}));
+    const wing = m.createWingMaterial({});
+    add("wing", wing);
+    // PERF-14：窗上有水时的变体（WingWetVariant 在运行时加 #define WING_WET 1），水珠暗边只在它里面。旧树没有 WingWetVariant 时按缺失处理
+    addDerived("wing-wet", typeof m.WingWetVariant === "function" ? wing : null, (m2) => ({ fragmentShader: "#define WING_WET 1\n" + m2.fragmentShader, vertexShader: m2.vertexShader }));
   });
 
   // 云：光线步进 / 密度探针 / 时间累积解析，三个都是构造函数里直接赋的实例字段（TS 的 private 只在编译期存在，
@@ -852,6 +864,31 @@ async function main() {
         exitCode = 1;
         console.log(`  [FAIL] ${id}：变体里缺 ${EXTRA_IDS.filter((w) => !hits.includes(w)).join(", ")}（宏没定义上？这个变体应该带罕见光学与天幕层奇观）`);
       } else console.log(`  [OK]   ${id}：${expectAll ? "含" : "不含"}罕见光学 / 天幕层奇观代码`);
+    }
+
+    // -- 1d. PERF-14：舱内合成不再调用座椅的追踪 / 着色（在座椅 pass 里）；机翼默认程序不调用 waterOnPane（只在 WING_WET 变体里）。
+    // 函数定义还在（模块整段拼进来，FXC 只编调用得到的），所以数「名字(」出现的次数：只有定义 = 1，有调用点 ≥ 2。
+    // 这两处一旦在默认程序里又被调用，冷启动关键路径就回到 PERF-14 之前（README 坑点「着色器编译」PERF-14）
+    console.log("\n-- 舱内合成不调用座椅着色、机翼默认程序不算水珠（PERF-14，glslangValidator -E） --");
+    const callCount = (out, fn) => (out.match(new RegExp(`\\b${fn}\\s*\\(`, "g")) || []).length;
+    for (const [id, fn, expectCall] of [
+      ["scene-default", "shadeSeat", false], ["scene-economy", "shadeSeat", false], ["scene-default", "traceSeats", false],
+      ["seat-default", "shadeSeat", true], ["seat-economy", "shadeSeat", true], ["seat-default", "traceSeats", true],
+      ["wing", "waterOnPane", false], ["wing-wet", "waterOnPane", true],
+    ]) {
+      const prog = programs.find((p) => p.id === id);
+      if (!prog) continue;
+      const out = preprocess(prog);
+      if (out === null) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：预处理失败`);
+        continue;
+      }
+      const n = callCount(out, fn);
+      if (expectCall ? n < 2 : n > 1) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：${fn} 出现 ${n} 次，${expectCall ? "应该有调用点（这个程序就是为它拆出来的）" : "不该有调用点——座椅着色在座椅 pass（seat-pass.ts），水珠暗边在 WING_WET 变体里"}`);
+      } else console.log(`  [OK]   ${id}：${expectCall ? "调用" : "不调用"} ${fn}`);
     }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
