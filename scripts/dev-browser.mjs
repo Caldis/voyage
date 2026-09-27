@@ -424,29 +424,41 @@ async function setWingStrobe(page, value) {
 /** --material 点号路径 -> collectPrograms（lint-shaders.mjs）枚举出的程序 id，只有这张表里的材质
  * 才能用「目录 / 提交」当 --base-shader（离线枚举，不用真起开发服务器）；传端口号不受此限制（直接读
  * 那个端口页面上材质此刻的 fragmentShader，见 resolveBaseShaderSource）。
- * DX-22：`cabinClass.current`（这一帧实际画的舱等材质）与「`clouds.marchMat` 当前实际画的变体」这两个
- * --material 值是「运行中的页面状态」，离线枚举一棵目录 / 提交时没有「当前」这个概念，所以故意不放进这张
- * 表——传目录 / 提交时会走下面 resolveBaseShaderSource 的通用报错，提示改传端口号（见 resolveLiveMaterial）。
- * `clouds.marchMat` 字面值仍然映射到默认（无天气 / 无奇观）变体的程序 id，离线对照默认变体不受影响。 */
+ * DX-22：`cabinClass.current` / `cabinClass.seat` / `wingMat.current` / `wingMat.wet`（这一帧或强制
+ * 指定实际画的变体）与「`clouds.marchMat` 当前实际画的变体」这几个 --material 值是「运行中的页面状态」，
+ * 离线枚举一棵目录 / 提交时没有「当前 / 这一帧」的概念，所以故意不放进这张表——传目录 / 提交时会走下面
+ * resolveBaseShaderSource 的通用报错，提示改传端口号（见 resolveLiveMaterial）。`clouds.marchMat` / `wingMat`
+ * / `seatMat` 字面值仍然映射到各自默认变体的程序 id，离线对照默认变体不受影响。
+ * PERF-14 合并后新增 `seatMat`（座椅单独拆出的 pass，见 seat-pass.ts）与 wing 的 WING_WET 派生变体
+ * （wing-pass.ts 的 WingWetVariant，窗上有水时的湿窗版本）。 */
 const MATERIAL_TO_PROGRAM_ID = {
   sceneMat: "scene-default",
   outsideMat: "outside-default",
   wingMat: "wing",
+  seatMat: "seat-default",
   "clouds.marchMat": "cloud-march",
   "clouds.resolveMat": "cloud-resolve",
 };
 
-// DX-22：在页面里解析 --material 点号路径到真正的材质对象，特判两个「路径本身不够、还要看运行时状态」的
+// DX-22：在页面里解析 --material 点号路径到真正的材质对象，特判几个「路径本身不够、还要看运行时状态」的
 // 值（其余按字面点号路径逐级取属性，和以前的 resolvePath 行为一致）：
-//   "cabinClass.current"  这一帧实际画的舱等材质（v.cabinClass.mats[v.cabinClass.shown]），不是构造时
-//                          传入的默认商务舱材质字面量——想换经济舱正在用的着色器时，"cabinClass.mats.business"
-//                          这种写法拿到的永远是商务舱（无论面板选的是什么）。
+//   "cabinClass.current"  这一帧实际画的舱内合成材质（v.cabinClass.mats[v.cabinClass.shown].cabin），不是
+//                          构造时传入的默认商务舱材质字面量（= 字面量 "sceneMat"）——想换经济舱正在用的
+//                          着色器时，"cabinClass.mats.business.cabin" 这种写法拿到的永远是商务舱（无论
+//                          面板选的是什么）。PERF-14 起 `mats[班次]` 是 `{cabin, seat}` 对子，不再是单个
+//                          材质，取错一层会拿到整个对子对象（不是 ShaderMaterial，下面会报错提醒）。
+//   "cabinClass.seat"     这一帧实际画的座椅 pass 材质（PERF-14 拆出来的单独 pass，v.cabinClass.seat()），
+//                          和舱内合成材质是同一个舱等但两个不同的程序（分别编译、分别计时）。
+//   "wingMat.current"     这一帧实际画的机翼材质：窗上有水（湿度超阈值）且 WING_WET 变体已编好时是湿窗版
+//                          （v.wingVariant.wet），否则是默认干窗版（字面量 "wingMat" 本身）。
+//   "wingMat.wet"          不管这一帧实际画的是不是它，强制取 WING_WET 变体本身（v.wingVariant.wet，变体
+//                          还没编好时是 null，调用方会看到解析失败的报错，不会拿到默认材质悄悄顶替）。
 //   "clouds.marchMat"     当前实际画的云步进变体（v.clouds.marchVariants.get(v.clouds.marchShown).mat），
 //                          不是字面属性 clouds.marchMat（只是默认变体，天气 / 奇观 / 卷云场景下不是实际在画的那个，
 //                          C03 审查发现的「冻结工具对云是瞎的」同一类问题——materialPath 对不上实际渲染路径）。
-// 只在这两个值上特判：老版本页面缺 marchVariants/cabinClass.mats 时自动退回字面属性（跨版本对照容错，
-// 和 applyScene 的容错原则一致），其余任意点号路径（sceneMat、outsideMat、wingMat，以及以后新增的材质，
-// 例如 PERF-14 若拆出单独的「座椅 pass」材质）不需要在这里特判，通用的点号路径解析已经能覆盖。
+// 只在这些值上特判：老版本页面缺对应字段时自动退回能找到的最接近的东西（跨版本对照容错，和 applyScene 的
+// 容错原则一致），其余任意点号路径（sceneMat、outsideMat、wingMat、seatMat，以及以后新增的材质）不需要
+// 在这里特判，通用的点号路径解析已经能覆盖。
 //
 // 这段逻辑要在**两处** page.evaluate 里各写一遍（resolveBaseShaderSource 的端口分支、swapMaterialShader，
 // 各自内联一份 resolveLiveMaterial）：page.evaluate 只序列化传入函数自身的源码，不能引用 Node 侧的闭包函数，
@@ -468,7 +480,19 @@ async function resolveBaseShaderSource(spec, materialPath, { browser, angle }) {
       const src = await page.evaluate((materialPath) => {
         function resolveLiveMaterial(v, materialPath) {
           if (materialPath === "cabinClass.current" && v.cabinClass && v.cabinClass.mats) {
-            return v.cabinClass.mats[v.cabinClass.shown] || null;
+            const pair = v.cabinClass.mats[v.cabinClass.shown];
+            return pair ? pair.cabin || pair : null; // pair.cabin：PERF-14 起 mats[班次] 是 {cabin, seat} 对子；老页面兜底 pair 本身
+          }
+          if (materialPath === "cabinClass.seat" && v.cabinClass) {
+            if (typeof v.cabinClass.seat === "function") return v.cabinClass.seat();
+            const pair = v.cabinClass.mats && v.cabinClass.mats[v.cabinClass.shown];
+            return pair ? pair.seat || null : null; // 老页面（PERF-14 之前）没有座椅单独 pass，解析不到
+          }
+          if (materialPath === "wingMat.current" && v.wingVariant) {
+            return v.wingVariant.shownWet ? v.wingVariant.wet : v.wingMat;
+          }
+          if (materialPath === "wingMat.wet" && v.wingVariant) {
+            return v.wingVariant.wet || null; // 还没编好（state 不是 ready）时是 null，不悄悄退回干窗版
           }
           if (materialPath === "clouds.marchMat" && v.clouds && v.clouds.marchVariants && v.clouds.marchShown !== undefined) {
             const variant = v.clouds.marchVariants.get(v.clouds.marchShown || "");
@@ -528,7 +552,19 @@ async function swapMaterialShader(page, materialPath, src, defines) {
       // 同 resolveBaseShaderSource 端口分支的 resolveLiveMaterial，见上面「--material 点号路径」注释
       function resolveLiveMaterial(v, materialPath) {
         if (materialPath === "cabinClass.current" && v.cabinClass && v.cabinClass.mats) {
-          return v.cabinClass.mats[v.cabinClass.shown] || null;
+          const pair = v.cabinClass.mats[v.cabinClass.shown];
+          return pair ? pair.cabin || pair : null;
+        }
+        if (materialPath === "cabinClass.seat" && v.cabinClass) {
+          if (typeof v.cabinClass.seat === "function") return v.cabinClass.seat();
+          const pair = v.cabinClass.mats && v.cabinClass.mats[v.cabinClass.shown];
+          return pair ? pair.seat || null : null;
+        }
+        if (materialPath === "wingMat.current" && v.wingVariant) {
+          return v.wingVariant.shownWet ? v.wingVariant.wet : v.wingMat;
+        }
+        if (materialPath === "wingMat.wet" && v.wingVariant) {
+          return v.wingVariant.wet || null;
         }
         if (materialPath === "clouds.marchMat" && v.clouds && v.clouds.marchVariants && v.clouds.marchShown !== undefined) {
           const variant = v.clouds.marchVariants.get(v.clouds.marchShown || "");
@@ -537,7 +573,7 @@ async function swapMaterialShader(page, materialPath, src, defines) {
         return materialPath.split(".").reduce((o, k) => (o == null ? o : o[k]), v);
       }
       const m = resolveLiveMaterial(v, materialPath);
-      if (!m || typeof m.fragmentShader !== "string") throw new Error(`--material 解析不到 "${materialPath}"（或它不是 ShaderMaterial）`);
+      if (!m || typeof m.fragmentShader !== "string") throw new Error(`--material 解析不到 "${materialPath}"（或它不是 ShaderMaterial——变体可能还没编好，比如 wingMat.wet 在窗还没湿过、WING_WET 从未后台编译时就是 null）`);
       window.__pairOrigShaders ??= new Map();
       window.__pairOrigDefines ??= new Map();
       if (!window.__pairOrigShaders.has(m)) window.__pairOrigShaders.set(m, m.fragmentShader);
@@ -550,20 +586,23 @@ async function swapMaterialShader(page, materialPath, src, defines) {
       const renderer = passObj.renderer;
       const prevMat = passObj.mesh.material;
       const prevTarget = renderer.getRenderTarget();
-      // DX-22：按材质选它真正画进去的目标，不再统一绑 hdrOutside——ANGLE/D3D11 按链接时绑定的帧缓冲
-      // 生成输出布局，绑错会在下一次真实渲染时同步重编（README「着色器编译」坑点，PERF-1）。wingMat
-      // 需要 __voyage.hdrWing（本任务加的调试句柄，见 main.ts），老版本页面没有就退回 hdrOutside
-      // （画面仍然对，只是多一次同步重编，不影响截图正确性）。
+      // DX-22：按 materialPath 直接查表选真正画进去的目标，不再靠「在 cabinClass.mats 里做对象身份查找」
+      // 猜（PERF-14 把 mats[班次] 从单个材质改成了 {cabin, seat} 对子后，原来的 Object.values(mats).includes(m)
+      // 永远查不到、会一律退化成 hdrOutside，协调者验收前发现的坑）。ANGLE/D3D11 按链接时绑定的帧缓冲生成
+      // 输出布局，绑错会在下一次真实渲染时同步重编（README「着色器编译」坑点，PERF-1）；hdrWing / hdrSeat
+      // 是本任务和 PERF-14 分别加的调试句柄，老版本页面没有就退回 hdrOutside（画面仍然对，只是多一次同步重编）。
       const tgt =
-        materialPath === "wingMat"
-          ? v.hdrWing || v.hdrOutside
-          : materialPath === "clouds.resolveMat"
-            ? v.clouds.history[0]
-            : materialPath.startsWith("clouds.")
-              ? v.clouds.raw
-              : v.cabinClass && v.cabinClass.mats && Object.values(v.cabinClass.mats).includes(m)
-                ? v.cabinClass.target
-                : v.hdrOutside;
+        materialPath === "sceneMat" || materialPath === "cabinClass.current"
+          ? v.cabinClass?.target || v.hdrOutside
+          : materialPath === "seatMat" || materialPath === "cabinClass.seat"
+            ? v.hdrSeat || v.cabinClass?.seatTarget || v.hdrOutside
+            : materialPath === "wingMat" || materialPath === "wingMat.current" || materialPath === "wingMat.wet"
+              ? v.hdrWing || v.hdrOutside
+              : materialPath === "clouds.resolveMat"
+                ? v.clouds.history[0]
+                : materialPath.startsWith("clouds.")
+                  ? v.clouds.raw
+                  : v.hdrOutside;
       passObj.mesh.material = m;
       renderer.setRenderTarget(tgt);
       await renderer.compileAsync(passObj.scene, passObj.camera);
@@ -780,10 +819,11 @@ async function coldOnce(browser, origin, angle, viewport, dpr) {
 
 /** DX-22：把多轮 cold 的 startup（各阶段耗时，`window.__voyageStartup`）汇总成 min/median/max——以前
  * `cmdCold` 只是每一轮各打印一份，`--repeat` 传大了以后自己拿眼睛比哪个阶段稳定、哪个阶段来回跳很费劲。
- * 数值型的键直接聚合；值本身是对象的键（例如 PERF-14 打算加的「批次各程序编好（ms）」——同一批后台并行
- * 编译的窗外 / 舱内 / 机翼 / 云步进 / 云 resolve 各自编完的时刻，见 main.ts 的 tick()/boot 批次注释与
- * DEV_SOP DX-22 简报）按子键分别聚合，多一层是为了这类「一个阶段拆成几个子项」的未来字段也能落进同一份
- * 汇总里，不用等它落地了再改这段代码。非数值、非对象的键（如老页面缺这个字段时的 undefined）跳过。 */
+ * 数值型的键直接聚合；值本身是对象、或是「对象序列化后的 JSON 字符串」的键（PERF-14 加的
+ * `startup["批次各程序编好（ms）"]` 就是后者：`JSON.stringify({窗外: ms, 舱内: ms, 座椅: ms, 机翼: ms, "云#0": ms, ...})`，
+ * main.ts 的 `startup` 类型是 `Record<string, number | string>`，塞对象会被 `JSON.stringify` 整个页面状态
+ * 序列化失败，所以那边写成了字符串）按子键分别聚合，找出这一批并行后台编译里稳定的关键路径瓶颈是哪个程序。
+ * 非数值、非对象、不是能解析成对象的 JSON 字符串的键（如老页面缺这个字段时的 undefined）跳过。 */
 function summarizeStartup(entries) {
   const keys = new Set();
   for (const e of entries) for (const k of Object.keys(e.startup || {})) keys.add(k);
@@ -793,18 +833,29 @@ function summarizeStartup(entries) {
     const sorted = [...nums].sort((a, b) => a - b);
     return { min: sorted[0], median: sorted[Math.floor(sorted.length / 2)], max: sorted[sorted.length - 1], n: nums.length };
   };
+  /** "批次各程序编好（ms）" 这类字段是 JSON.stringify 过的对象（见上）：能解析且解析出来是纯对象就返回解析结果，
+   * 否则（不是 JSON、或解析出来是数组 / 原语）原样返回，交给外层按普通字符串处理（跳过，不硬凑聚合）。 */
+  const tryParseObject = (v) => {
+    if (typeof v !== "string") return v;
+    try {
+      const parsed = JSON.parse(v);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : v;
+    } catch {
+      return v;
+    }
+  };
   const summary = {};
   for (const k of keys) {
-    const vals = entries.map((e) => e.startup && e.startup[k]).filter((v) => v !== undefined);
+    const vals = entries.map((e) => e.startup && e.startup[k]).filter((v) => v !== undefined).map(tryParseObject);
     if (vals.length === 0) continue;
     if (typeof vals[0] === "number") {
       summary[k] = summarizeNums(vals);
     } else if (typeof vals[0] === "object" && vals[0] !== null) {
       const subKeys = new Set();
-      for (const v of vals) for (const sk of Object.keys(v)) subKeys.add(sk);
+      for (const v of vals) if (v && typeof v === "object") for (const sk of Object.keys(v)) subKeys.add(sk);
       const sub = {};
       for (const sk of subKeys) {
-        const s = summarizeNums(vals.map((v) => v[sk]));
+        const s = summarizeNums(vals.map((v) => (v && typeof v === "object" ? v[sk] : undefined)));
         if (s) sub[sk] = s;
       }
       summary[k] = sub;
