@@ -457,7 +457,7 @@ export class WonderSystem {
     u.uWonderStep.value = v.stepKm;
     u.uWonderParams.value.set(a.reveal, this.clock, a.seed, v.params?.[0] ?? 0);
     if (v.caster) {
-      u.uWonderCaster.value.set(...v.caster.center, 1);
+      u.uWonderCaster.value.set(...v.caster.center, Math.max(0.5, Math.min(1, v.caster.strength ?? 1)));
       u.uWonderCasterR.value.set(...v.caster.radii);
     } else u.uWonderCaster.value.w = 0;
     u.uWonderVol.value = v.kind;

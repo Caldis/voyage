@@ -165,15 +165,15 @@ uniform mat3 uWonderToLocal;    // 窗外坐标方向 → 奇观局部坐标方�
 uniform vec3 uWonderBoxMin;     // 局部坐标的包围盒（km）：表面和介质都必须在里面
 uniform vec3 uWonderBoxMax;
 uniform vec4 uWonderParams;     // x：reveal（0..1）；y：时间（真实秒，1 小时循环）；z：本次出现的随机种子（0..1，W02）；w：catalog 的 params[0]
-uniform vec4 uWonderCaster;     // 投影椭球：xyz 中心（局部坐标），w：1 = 启用
+uniform vec4 uWonderCaster;     // 投影椭球：xyz 中心（局部坐标），w：影子浓度（≥ 0.5 = 启用，W03 起可 < 1）
 uniform vec3 uWonderCasterR;    // 投影椭球的三个半轴（km）
 uniform float uWonderStep;      // 介质的步长（km）；包围盒里另外保证 8–96 步
 `;
 
 // 投影：光线离椭球中心的最近距离 m（椭球归一化后），m < 0.8 全影、> 1.15 没挡
 const CASTER_GLSL = /* glsl */ `
-const float WONDER_PENUMBRA_IN = 0.8;
-const float WONDER_PENUMBRA_OUT = 1.15;
+const float WONDER_PENUMBRA_IN = 0.55;   // W03：半影放宽（原 0.8..1.15，椭球影子在云海上边缘太硬、像一个坑）
+const float WONDER_PENUMBRA_OUT = 1.3;
 // 云步进用：视线上的点 p(t) 在归一化空间里是 t 的线性函数，m² 是 t 的二次式。每条视线在步进前算一次
 // 「落在影子柱里的区间」和二次式系数，循环里只做区间判断和一次开方（逐采样点做完整的椭球测试会拖慢整个步进，W00 实测）
 vec2 wonderCasterSegment(vec3 rd, out vec3 shQ) {
@@ -202,8 +202,9 @@ vec2 wonderCasterSegment(vec3 rd, out vec3 shQ) {
   seg.x = max(seg.x, 0.0);
   return seg;
 }
+// uWonderCaster.w = 影子的浓度（0.5..1；< 0.5 = 不投影）：投影椭球只是整座城的粗近似，影子不该比真的城更实
 float wonderCasterVis(float t, vec3 shQ) {
-  return smoothstep(WONDER_PENUMBRA_IN, WONDER_PENUMBRA_OUT, sqrt(max(shQ.x + t * (shQ.y + t * shQ.z), 0.0)));
+  return 1.0 - uWonderCaster.w * (1.0 - smoothstep(WONDER_PENUMBRA_IN, WONDER_PENUMBRA_OUT, sqrt(max(shQ.x + t * (shQ.y + t * shQ.z), 0.0))));
 }
 `;
 
@@ -356,7 +357,7 @@ vec3 wonderMediumLight(vec3 pW, vec3 q, float cosT) {
     vec3 oq = (q - uWonderCaster.xyz) / uWonderCasterR;
     vec3 dq = (uWonderToLocal * uKeyDir) / uWonderCasterR;
     float s = max(-dot(oq, dq) / dot(dq, dq), 0.0);
-    vis *= smoothstep(WONDER_PENUMBRA_IN, WONDER_PENUMBRA_OUT, length(oq + dq * s));
+    vis *= 1.0 - uWonderCaster.w * (1.0 - smoothstep(WONDER_PENUMBRA_IN, WONDER_PENUMBRA_OUT, length(oq + dq * s)));
   }
   // 多次散射近似（和云步进同一套 Wrenninge 2013 的做法，只是光学厚度按 0 取）：每一阶更弱、相函数更平。
   // 只算单次散射时雾罩在云旁边发灰（W00 截图）

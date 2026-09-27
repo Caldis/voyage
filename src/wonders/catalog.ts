@@ -80,7 +80,7 @@ export interface WonderVolume {
   /** 介质里的最大步长（km）；包围盒另外保证至少分 48 步 */
   stepKm: number;
   /** 投影椭球（挡住云受到的直射光）：中心、三个半轴（km，局部坐标） */
-  caster?: { center: [number, number, number]; radii: [number, number, number] };
+  caster?: { center: [number, number, number]; radii: [number, number, number]; strength?: number };
   /** 给着色器的自定义参数（uWonderParams.w = params[0]；uWonderParams.z 是每次出现的随机种子，W02 起） */
   params?: [number];
 }
@@ -172,7 +172,8 @@ export const WONDERS: WonderDef[] = [
       surface: true,
       medium: true,
       stepKm: 0.12,
-      caster: { center: [0, 0.5, 0], radii: [3.0, 3.0, 3.0] },
+      // 影子浓度 0.6：椭球只是整座城的粗近似（树冠有缝、根须透光），不该投出一个实心的坑
+      caster: { center: [0, 0.5, 0], radii: [3.0, 3.0, 3.0], strength: 0.6 },
     },
   },
 ];

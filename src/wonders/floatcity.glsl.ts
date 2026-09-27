@@ -28,8 +28,8 @@ const float FLC_A = 3.0;          // 岩石半球的水平半径（km）
 const float FLC_B = 1.45;         // 岩石半球的深度
 const vec3 FLC_MIST_C = vec3(0.0, -0.1, 0.0);   // 雾罩椭球（局部 / 城坐标都一样：绕 y 轴对称）
 const vec3 FLC_MIST_R = vec3(6.2, 5.6, 6.2);
-const vec3 FLC_CROWN_C = vec3(0.0, 2.35, 0.0);  // 树冠中心；树冠的大致椭球（光束、树冠边缘的叶层用）
-const vec3 FLC_CROWN_R = vec3(2.45, 1.95, 2.45);
+const vec3 FLC_CROWN_C = vec3(1.0, 2.2, 0.35);  // 主冠层中心（城坐标，偏向 +x）；冠层的大致椭球（光束、叶层用）
+const vec3 FLC_CROWN_R = vec3(2.9, 1.3, 2.0);
 const vec3 FLC_BODY_C = vec3(0.0, -0.2, 0.0);   // 台地 + 底座的大致椭球（光束用）
 const vec3 FLC_BODY_R = vec3(3.0, 1.7, 3.0);
 
@@ -145,10 +145,11 @@ float flcTowers(vec3 c) {
     int k = i == 0 ? 0 : i == 1 ? 1 : i == 2 ? 1 : 2;
     vec2 off;
     vec4 t = flcTier(k, off);
-    float a = 6.2831853 * (fi * 0.29 + flcHash(fi * 7.3 + S * 13.0) * 0.2 + S * 3.0);
+    // 放在冠层的另一侧（−x 方向 ±80°），从冠层旁边露出来
+    float a = 3.14159 + 1.4 * (fi / 3.0 - 0.5) + 0.3 * (flcHash(fi * 7.3 + S * 13.0) - 0.5);
     vec2 p = off + (t.z - 0.14) * vec2(cos(a), sin(a));
     float r = 0.07 + 0.05 * flcHash(fi + S * 5.0);
-    float h = 0.35 + 0.55 * flcHash(fi * 2.3 + S * 19.0);
+    float h = 0.5 + 0.8 * flcHash(fi * 2.3 + S * 19.0);
     vec3 lp = c - vec3(p.x, t.y, p.y);
     float dt = flcCyl(lp - vec3(0.0, 0.5 * h, 0.0), r, 0.5 * h);
     // 斜断面
@@ -158,27 +159,30 @@ float flcTowers(vec3 c) {
   }
   return d;
 }
-// 巨树：树干 + 树冠（一个扁的大椭球 + 6 个团块的平滑并集，表面再鼓出菜花状的小团）
+// 巨树：主树偏向城的一侧（+x），冠层横向宽、扁，顶面是高低起伏的团块（像一片抬起来的林冠，不是一个圆球）；
+// 另一侧（−x）是一丛低矮的次冠，中间露出台地、城墙和残塔——远看读成「城 + 树」，不是「云柱 + 云帽」（协调者返工）
 float flcCrown(vec3 c, float fp) {
   float S = flcSeed();
-  float d = flcEllipsoid(c - FLC_CROWN_C, vec3(2.0, 1.6, 2.0));
+  float d = flcEllipsoid(c - FLC_CROWN_C, vec3(2.3, 0.85, 1.6));
   for (int j = 0; j < 8 + min(uStormCount, 0); j++) {
     float fj = float(j);
-    float a = 6.2831853 * (fj / 7.0 + 0.1 * flcHash(fj + S * 41.0)) + S * 11.0;
-    // 前 7 个绕一圈（高低、远近不一），第 8 个在顶上偏一侧
-    float rr = j == 7 ? 0.6 : 1.3 + 0.5 * flcHash(fj * 3.3 + S * 7.0);
-    float y = j == 7 ? 3.35 : 1.7 + 1.3 * flcHash(fj * 1.9 + S * 3.0);
-    vec3 cc = vec3(rr * cos(a), y, rr * sin(a));
-    float r = (j == 7 ? 0.9 : 0.72 + 0.35 * flcHash(fj * 4.1 + S * 2.0));
-    d = flcSmin(d, length(c - cc) - r, 0.45);
+    // 沿主轴（x）从 −0.7 排到 2.9，前后错开，高低不一：顶面起伏
+    float x = -0.7 + 3.6 * (fj + 0.5 * flcHash(fj + S * 41.0)) / 8.0;
+    float z = 0.35 + 1.5 * (flcHash(fj * 3.3 + S * 7.0) - 0.5);
+    float y = 2.1 + 0.55 * flcHash(fj * 1.9 + S * 3.0) - 0.25 * max(x - 2.0, 0.0);
+    float r = 0.5 + 0.3 * flcHash(fj * 4.1 + S * 2.0);
+    d = flcSmin(d, length(c - vec3(x, y, z)) - r, 0.35);
   }
+  // 次冠：城的另一侧一丛低矮的树
+  d = flcSmin(d, flcEllipsoid(c - vec3(-1.75, 1.3, -0.8), vec3(0.95, 0.5, 0.85)), 0.2);
   // 菜花状的团块：一次纹理的两级 Worley（按足迹选 mip，远处不闪）
   if (d < 0.6) {
     float lod = clamp(log2(max(fp, 1e-3) / 0.02), 0.0, 5.0);
     vec4 n = textureLod(uShapeNoise, c * 0.5 + vec3(S * 5.1, 0.3, S * 2.3), lod);
     d -= 0.22 * (n.g - 0.45) + 0.12 * (n.b - 0.5);
   }
-  float trunk = flcCone(c - vec3(0.0, 1.55, 0.0), 0.5, 0.6, 0.35);
+  // 主干：从台地顶上斜着长向冠层
+  float trunk = flcCone(c - vec3(0.75 + 0.25 * (c.y - 1.5), 1.55, 0.3), 0.55, 0.55, 0.3);
   return min(d * 0.6, trunk);
 }
 // 垂下的粗根：7 条从底座下面垂下来的竖根，越往下越细，轻微摆动
@@ -206,7 +210,7 @@ float flcSdf(vec3 q) {
   // 浮现的前段（reveal < 0.12）只有雾罩在「长」成一团云，城本身还不出现（被那团云完全裹着之后才加进来）
   if (uWonderParams.x < 0.12) return 1e3;
   vec3 c = flcToC(q);
-  float bound = length(c - vec3(0.0, 0.1, 0.0)) - 4.8;
+  float bound = length(c - vec3(0.0, 0.1, 0.0)) - 5.1;
   if (bound > 0.3) return bound;
   float fp = flcFoot(c);
   float d = 1e9;
@@ -319,6 +323,12 @@ vec3 flcShade(vec3 q, vec3 n, vec3 pW, vec3 nW, vec3 rd) {
     float edge = pow(1.0 - abs(dot(nW, rd)), 3.0);
     L += key * vis * back * edge * vec3(0.10, 0.13, 0.05) * 0.5;
   }
+  // 远处再往同方向的天空色靠一些（协调者返工：80 km 外白天比周围天空暗、饱和太多，像贴上去的）。
+  // 步进最后还会统一加空气透视；这里补的是「城周围湿空气」的那一层，按距离 1 − e^(−d/70 km) 取 0..0.5
+  float dist = length(q - uWonderCam);
+  // 往下看的视线（底座下面）不能直接查天空 LUT 的地平线以下（给出的是一团偏橙的错色）：抬到地平线（巡航高度约 −3.3°）上方一点，取地平线的霾色
+  vec3 rdH = normalize(vec3(rd.x, max(rd.y, -0.045), rd.z));
+  L = mix(L, skyRadiance(rdH, false), 0.5 * (1.0 - exp(-dist / 70.0)));
   return L;
 }
 
@@ -385,12 +395,12 @@ float flcMedium(vec3 q, out vec3 albedo, out vec3 emit) {
   // 整个雾罩里极薄的一层（逆光时被城挡出暗的楔形、从树冠缝隙漏下的光成一道道光束），往边缘平滑地淡到 0（不留圆盘的边）
   float sVeil = 0.025 * pr * pr * (0.3 + 1.4 * n.g);
   // 贴在底座下面的云团（像城底下挂着的一圈云，不是一圈竖直的雾墙）：底座下方的椭球里，按一次较细的噪声成团
-  vec3 es = (c - vec3(0.0, -1.5, 0.0)) / vec3(4.3, 1.7, 4.3);
+  vec3 es = (c - vec3(-1.3, -1.3, 0.9)) / vec3(3.0, 1.3, 2.6);
   float hs = 1.0 - dot(es, es);
   float sSkirt = 0.0;
   if (hs > 0.0) {
     vec4 ns = textureLod(uShapeNoise, c * 0.42 + vec3(t * (4.0 / 3600.0), 0.0, 0.0) + S * 7.7, 0.0);
-    sSkirt = 0.8 * smoothstep(0.66, 0.9, 0.55 * hs + 0.55 * ns.r + 0.25 * ns.g);
+    sSkirt = 0.45 * smoothstep(0.66, 0.9, 0.55 * hs + 0.55 * ns.r + 0.25 * ns.g);
   }
   // 树冠外沿的叶层：离树冠表面 0–0.18 km 的一层稀疏「叶雾」（远看轮廓毛茸茸的，逆光时被照透成一圈亮边）
   float sLeaf = 0.0;
