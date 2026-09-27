@@ -60,6 +60,7 @@ export const SCENES = [
   // T12：卷云（11.5–12.5 km），从 9 km 往上斜看：顺高空风拉长的丝缕、向一侧甩下去的马尾，半透明、透出蓝天
   // 卷云用单独的云步进变体（clouds.ts 的 marchCirrusMat），第一次选卷云时在后台编译：js 里等它编好（最多 60 s）再截图
   { name: "cirrus-noon", p: { preset: "wpac", time: 720, "cloud-preset": "cirrus", coverage: 0.5, altitude: 9, "wing-pos": "8" }, js: "for (let i = 0; i < 240 && !['ready', 'failed'].includes(v.clouds.cirrusLayerState); i++) await new Promise((r) => setTimeout(r, 250)); return 'cirrus ' + v.clouds.cirrusLayerState;" },
+  { name: "backlit-close", p: { preset: "wpac", date: "2026-09-27", time: 1005, altitude: 4, "cloud-preset": "towering", coverage: 0.25, "wing-pos": "-4" }, offset: [0, 0], js: "v.director.setHeading(169); v.state.heading = 169; v.state.bankDeg = 0; return 'heading ' + v.state.heading;" },
   { name: "low-sea-glint", p: { preset: "wpac", time: 980, coverage: 0, altitude: 0.6, "wing-pos": "-4" } },
   { name: "in-cloud", p: { preset: "wpac", time: 840, "cloud-preset": "stratocumulus", coverage: 0.95, altitude: 1.35, "wing-pos": "8" }, wait: 6000 },
   { name: "storm-day", p: { preset: "wpac", time: 900, coverage: 0.3, weather: "storm", "wing-pos": "-4" } },
