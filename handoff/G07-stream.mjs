@@ -72,7 +72,8 @@ try {
     window.__voyage.director.rate = r;
     const f = (window.__g06f = []);
     let last = performance.now();
-    const tick = (t) => { f.push(t - last); last = t; requestAnimationFrame(tick); };
+    const q = (window.__g07q = { max: 0, heap: [] }); let n = 0;
+    const tick = (t) => { f.push(t - last); last = t; const g = window.__voyage.ground; if (g.uploadQueue) q.max = Math.max(q.max, g.uploadQueue.length); if (++n % 600 === 0 && performance.memory) q.heap.push(Math.round(performance.memory.usedJSHeapSize / 1e6)); requestAnimationFrame(tick); };
     requestAnimationFrame(tick);
     window.__g06lt.length = 0;
     for (const k in window.__g06prof) delete window.__g06prof[k]; Object.assign(window.__g06up, { sub3d: 0, sub3dMs: 0, sub3dMax: 0, bytes: 0, mip: 0, mipMs: 0, mipMax: 0 });
@@ -89,7 +90,7 @@ try {
       frames: f.length, over16: n(16.7), over33: n(33.4), over50: n(50), over100: n(100), worst: s.slice(0, 6).map((x) => +x.toFixed(1)),
       longtasks: window.__g06lt.length, longtaskMax: Math.max(0, ...window.__g06lt).toFixed(0),
       upload: window.__g06up, worker: g.worker, fine: g.fine, res: g.res, warmup: g.warmup,
-      prof: window.__g06prof, heapMB: performance.memory ? +(performance.memory.usedJSHeapSize / 1e6).toFixed(0) : null,
+      prof: window.__g06prof, queueMax: window.__g07q.max, heapSeries: window.__g07q.heap, heapMB: performance.memory ? +(performance.memory.usedJSHeapSize / 1e6).toFixed(0) : null,
     };
   });
   const perMin = Object.fromEntries(Object.entries(requests).map(([h, c]) => [h, Math.round((c * 60) / secs)]));

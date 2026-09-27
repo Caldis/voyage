@@ -106,6 +106,8 @@ export function isHighEndGpu(renderer: string): boolean {
     if (/geforce\s*(gt|mx)\s*\d|gtx\s*(6|7|9)\d\d\b|gtx\s*10[1-5]0\b|quadro\s*[kpm]\d/.test(r)) return false;
     return /rtx|gtx\s*16\d\d|gtx\s*10[6-8]0|quadro/.test(r);
   }
+  // 「Radeon RX Vega 3 / 8 / 11 Graphics」是 APU 集显，名字里也带 RX
+  if (/vega\s*\d+\s*graphics/.test(r)) return false;
   if (/radeon\s*(\(tm\)\s*)?(rx|pro)\b/.test(r)) return true;
   if (/arc\s*(\(tm\)\s*)?[ab]\d{3}/.test(r)) return true;
   if (/apple\s*m\d+\s*(pro|max|ultra)/.test(r)) return true;
@@ -286,6 +288,14 @@ export class QualityController {
 
   constructor(private readonly deps: QualityControllerDeps) {
     this.timer = new GpuTimer(deps.renderer);
+    // G07：上次在面板手动选的档位载入时恢复（地面精度已按它定了，面板也得显示同一档，否则面板写着「自动」、地面却是 1024²，
+    // 用户也没法再选一次「自动」把它改回来——同档 setTier 直接返回）。没选过 / 选的是自动：照旧从「高」起步
+    const saved = storedTier();
+    if (saved && saved !== "auto") {
+      this.tierValue = saved;
+      this.levelIndex = MANUAL_INDEX[saved];
+      this.applyLevel();
+    }
   }
 
   get tier() {

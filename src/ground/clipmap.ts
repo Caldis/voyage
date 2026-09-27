@@ -213,6 +213,8 @@ export class GroundClipmap {
   private frame: LocalFrame;
   /** 航程流速（setDetailContext 传进来）：> FINE_MAX_RATE 时影像按粗一级取（G06） */
   private rate = 1;
+  /** 太阳高度（sin，setDetailContext 传进来）：夜里首载不走先粗后细（见 warm） */
+  private sunY = 1;
   /** 高清细节此刻开没开（G03，setDetailContext 按高度 / 视角 / 流速 / 太阳算，带回差） */
   private detailOn = false;
   /** 上一次 update 的飞机位置（km），setDetailContext 算离地高度用 */
@@ -224,7 +226,7 @@ export class GroundClipmap {
    * 在后台逐级升级成按 RES 选的缩放级（G06 首载 13.4 → 33.7 s，期间逐级「一圈变清楚」，低清露得更久）。
    * 升级只换影像的锐度（同一片 EOX 细一级；矢量 / 夜光 / 高度 / 高清细节都与 fine 无关）。影像 A 的路灯照亮宽度经聚落地毯
    * （约 250 m 格平均的建成区判据）间接依赖影像颜色，会有很小的变化。旧的一版照常用到新的一版传完才切换。
-   * 1024 档恒为 true（两种缩放级相同，不用升级）
+   * 1024 档恒为 true（两种缩放级相同，不用升级）；夜里首载也直接为 true（见 updateWarm）
    */
   private warm = RES <= TILE_RES_COARSE;
   /** 首载时间（诊断，`imageryStats.warmup`）：reset 起到粗版全部就位、到全部升级成 fine 的毫秒数 */
@@ -351,6 +353,7 @@ export class GroundClipmap {
     const day = sunDirY > (on ? DETAIL_SUN_OFF : DETAIL_SUN_ON);
     this.detailOn = this.detailEnabled && allowed && (low || wingView) && rate <= DETAIL_MAX_RATE && day;
     this.rate = rate;
+    this.sunY = sunDirY;
   }
 
   /** 第 i 级以 (cx, cz) 为中心时要不要高清细节 */
@@ -406,6 +409,10 @@ export class GroundClipmap {
       for (let i = this.minLevel; i < GROUND_LEVELS; i++) if (!this.levels[i].valid) return false;
       return true;
     };
+    // 夜里（太阳低于 +6°，路灯 / 城市灯点看得见）不走先粗后细：灯点（着色器按影像颜色判建成区）和路灯（Worker 按影像算聚落地毯）
+    // 都随影像的锐度非线性地变，粗版升级成细版时整片灯光换一版（同页实测 night-city 平均差 1.25、p99 23，hnd-cts 夜景 1.9 / 45；
+    // 白天同样的升级只有 0.03–0.12 / 0.7–2.7）。夜里直接按细级建（G06 的行为），宁可慢，不让灯光在眼前换一版
+    if (!this.warm && this.sunY < DETAIL_SUN_ON) this.warm = true;
     if (this.warmMs.fine >= 0 || !settled()) return;
     if (this.warmMs.coarse < 0) this.warmMs.coarse = performance.now() - this.warmStart;
     this.warm = true;

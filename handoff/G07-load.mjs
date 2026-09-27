@@ -55,7 +55,7 @@ try {
     page.evaluate(() => {
       const g = window.__voyage.ground;
       const st = g.imageryStats;
-      return { valid: g.levelUniform.filter((u) => u.w > 0.5).length, fine: (st.fine ?? []).filter(Boolean).length, pending: g.pending, warmup: st.warmup ?? null, res: st.res ?? 2048, t: performance.now() };
+      return { fineMask: (st.fine ?? []).map((f) => (f ? 1 : 0)).join(""), bld: g.levels.map((l) => (l.building ? 1 : 0)).join(""), valid: g.levelUniform.filter((u) => u.w > 0.5).length, fine: (st.fine ?? []).filter(Boolean).length, pending: g.pending, warmup: st.warmup ?? null, res: st.res ?? 2048, t: performance.now() };
     });
   const frames = (n) => page.evaluate((n) => new Promise((r) => { let k = 0; const f = () => (++k >= n ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }), n);
   let last = "";
@@ -70,7 +70,7 @@ try {
       const s2 = await state();
       const file = path.join(outDir, `${String(idx++).padStart(2, "0")}-v${s2.valid}-f${s2.fine}.png`);
       await page.screenshot({ path: file });
-      timeline.push({ file: path.basename(file), sec: +((s2.t - t0) / 1000).toFixed(1), valid: s2.valid, fine: s2.fine, pending: s2.pending });
+      timeline.push({ mask: s2.fineMask, bld: s2.bld, file: path.basename(file), sec: +((s2.t - t0) / 1000).toFixed(1), valid: s2.valid, fine: s2.fine, pending: s2.pending });
       last = `${s2.valid}/${s2.fine}`;
       calm = 0;
     }
