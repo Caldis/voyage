@@ -155,7 +155,11 @@ vec3 cabinMoodSpec(vec3 p, vec3 n, vec3 v, float a, float f0, vec3 moodI) {
 vec3 cabinChampagne(vec3 p, vec3 n, vec3 rd, float mr, float ao, vec3 e, CabinLights cl) {
   float nv = max(dot(n, -rd), 1e-3);
   vec3 F = CHAMPAGNE_F0 + (vec3(max(1.0 - mr, 0.9)) - CHAMPAGNE_F0) * pow(1.0 - nv, 5.0);
-  vec3 col = CHAMPAGNE_F0 * 0.12 / M_PI * e + F * cabinEnv(reflect(rd, n), cl) * ao;
+  // 金属靠反射的明暗对比读出来（T35：收边条原来读成白塑料）：朝下反射到的是深色的座椅、地毯，远比 cabinEnv 的均匀近似暗；
+  // 朝上是灯带和被洗亮的上墙。只在金属上加这层对比，漆面 / 皮面的粗糙反射仍用原来的均匀近似
+  vec3 rm = reflect(rd, n);
+  float envK = mix(0.28, 1.2, smoothstep(-0.35, 0.45, rm.y));
+  vec3 col = CHAMPAGNE_F0 * 0.12 / M_PI * e + F * cabinEnv(rm, cl) * envK * ao;
   // 金属的颜色只乘一次：keySpec 的 f0 取 1（菲涅尔 ≡ 1），颜色由 CHAMPAGNE_F0 给
   col += CHAMPAGNE_F0 * keySpec(n, -rd, normalize(CABIN_LIGHT_DIR), mr * mr, 1.0, cl.eCabin * 1.5) * ao;
   col += CHAMPAGNE_F0 * cabinMoodSpec(p, n, -rd, mr * mr, 1.0, cl.moodI);
@@ -220,7 +224,15 @@ float lineCov(float d, float w, float pix) {
 // seatAO：座椅对侧壁的遮挡（接触阴影）
 vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, float seed, float seatAO, CabinLights cl) {
   vec3 n0 = normalize(vec3(0.0, wallSlope(p.y), -1.0));
-  float pix = t * pixAng / max(-dot(n0, rd), 0.2);
+  float cosV = max(-dot(n0, rd), 0.02);
+  float pix = t * pixAng / max(cosV, 0.2);
+  // 各向异性的像素足迹（T35）：「看前方 / 看后方」时视线几乎贴着侧壁，像素沿视线在墙面上的投影方向被拉长 1/cos，
+  // 垂直于它的方向不拉长。沿 x、沿 y 变化的纹理各按自己方向上的足迹淡出，横向的细纹在掠射时就不会被一起抹平
+  float pix0 = t * pixAng;
+  vec2 vp = rd.xy;
+  vp = dot(vp, vp) > 1e-8 ? normalize(vp) : vec2(1.0, 0.0);
+  float pixX = pix0 * length(vec2(vp.x / cosV, vp.y));   // 沿 x 方向的足迹（竖缝、竖纹用）
+  float pixY = pix0 * length(vec2(vp.y / cosV, vp.x));   // 沿 y 方向的足迹（横缝、横纹用）
   vec3 albedo = LINING_ALBEDO;
   float ao = seatAO;
 
@@ -234,6 +246,21 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   float fA = 1.0 - smoothstep(0.0006, 0.0012, pix);
   float fB = 1.0 - smoothstep(0.00025, 0.0005, pix);
   vec2 slope = vec2(0.0);
+#ifndef CABIN_CLASS_ECONOMY
+  // 1b. 亚麻压纹的装饰膜（T35）：高端侧壁常见的做法，纬向约 1.9 mm、经向约 2.1 mm 的细棱，每根棱沿长度方向有 1–2 cm 的粗细起伏，
+  //     互相不对齐（铁律 4）。只有几微米高：正面看几乎看不出，掠射的洗墙光和掠射反射里显出 2–4% 的明暗。
+  //     纬棱（沿 y 变化）按 pixY 淡出、经棱按 pixX 淡出：「看前方」时纬棱留下、经棱先淡掉，远处两者都淡成均匀的缎面
+  float fWeft = (1.0 - smoothstep(0.0007, 0.0016, pixY)) * (1.0 - smoothstep(0.005, 0.009, pixX));
+  float fWarp = (1.0 - smoothstep(0.0008, 0.0017, pixX)) * (1.0 - smoothstep(0.004, 0.008, pixY));
+  if (fWeft + fWarp > 0.0) {
+    vec3 we = vnoiseD(vec2(p.x * 60.0 + seed, p.y * 540.0));
+    vec3 wa = vnoiseD(vec2(p.x * 470.0, p.y * 70.0 + seed * 1.7) + 13.1);
+    slope += vec2(we.y * 60.0, we.z * 540.0) * 0.00006 * fWeft + vec2(wa.y * 470.0, wa.z * 70.0) * 0.00004 * fWarp;
+    albedo *= 1.0 + 0.035 * ((we.x - 0.5) * fWeft + 0.7 * (wa.x - 0.5) * fWarp);
+  }
+  // 淡出的压纹折算成粗糙度（Toksvig 思路）：远处 / 掠射时高光变宽变柔，不闪
+  rough += 0.05 * (1.0 - 0.5 * (fWeft + fWarp));
+#endif
 #ifdef CABIN_CLASS_ECONOMY
   // 经济舱：塑料板的橘皮纹（约 1 mm 的起伏、十几微米高，主要在高光里看得出；T06），比像素细时淡出
   float fPeel = 1.0 - smoothstep(0.00025, 0.0005, pix);
@@ -295,13 +322,51 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   }
 #endif
 
-  // 3. 面板接缝：每两扇窗一块板，竖缝在两窗之间；上方一道横缝接行李架下的面板。缝宽 1 mm，均匀、精密
-  float sx = abs(fract((p.x + 0.2665) / (2.0 * WINDOW_PITCH) + 0.5) - 0.5) * 2.0 * WINDOW_PITCH;
+  // 3. 面板分块（T35）：每两扇窗一块板，竖缝在两窗之间；上方一道横缝接行李架下的面板；
+  //    窗下沿再往下（侧壁开始内收的地方）一道横缝分出下侧壁。缝都是约 2.5 mm 的阴影缝：缝里暗，
+  //    朝上的那道棱边迎着上方的灯带发亮、朝下的棱边在自己的阴影里。宽度按各自方向上的像素足迹做面积守恒的抗锯齿
+  float sxs = (fract((p.x + 0.2665) / (2.0 * WINDOW_PITCH) + 0.5) - 0.5) * 2.0 * WINDOW_PITCH;
+  float sx = abs(sxs);
   float sy = abs(p.y - 0.42);
-  float groove = max(lineCov(sx, 0.0005, pix), lineCov(sy, 0.0005, pix));
-  // 接缝上沿有一道被灯带照亮的倒角
-  float bevel = lineCov(abs(p.y - 0.4212), 0.0006, pix) * step(0.42, p.y);
-  ao *= 1.0 - 0.55 * groove;
+  const float DADO_Y = -0.30;
+  float sd = p.y - DADO_Y;
+  float grooveDado = lineCov(abs(sd), 0.00125, pixY);
+#ifndef CABIN_CLASS_ECONOMY
+  // 商务舱：分界缝里嵌一道 4 mm 高的香槟色金属饰条（上下各留 0.8 mm 的阴影缝），这一段缝由饰条自己着色
+  float dadoTrim = lineCov(abs(sd), 0.002, pixY);
+  grooveDado = 0.8 * lineCov(abs(abs(sd) - 0.0028), 0.0004, pixY);
+#endif
+  float groove = max(max(lineCov(sx, 0.00125, pixX), lineCov(sy, 0.00125, pixY)), grooveDado);
+  // 缝的深处更暗（接缝阴影），缝边的棱：下沿（缝上方那块板的底棱）朝下、在阴影里；上沿（缝下方那块板的顶棱）朝上迎光
+  float bevel = lineCov(abs(p.y - 0.4218), 0.0006, pixY) * step(0.42, p.y)
+              + lineCov(abs(sd + 0.0018), 0.0006, pixY);
+  float lipDark = lineCov(abs(sd - 0.0018), 0.0006, pixY) + lineCov(abs(p.y - 0.4182), 0.0006, pixY);
+  // 竖缝两侧的棱：面向窗（受窗光）的那侧略亮，另一侧略暗；沿 x 的足迹一大就一起淡掉
+  float vEdge = lineCov(abs(sx - 0.0018), 0.0006, pixX);
+  slope.x += sign(sxs) * 0.35 * vEdge;
+  ao *= 1.0 - 0.8 * groove;
+  ao *= 1.0 - 0.25 * lipDark;
+  // 下侧壁：比窗带一圈略深一点的同色系饰面（商务舱是暖灰褐的软触感面，经济舱是同一种塑料、略灰），
+  //    分界按像素足迹过渡；再往下贴近地板有一条回风格栅（横向百叶，约 7 mm 一片）
+  float lower = 1.0 - smoothstep(-pixY, pixY, sd + 0.0013);
+#ifdef CABIN_CLASS_ECONOMY
+  albedo *= mix(1.0, 0.9, lower);
+#else
+  albedo = mix(albedo, vec3(0.52, 0.475, 0.415), lower);
+  rough = mix(rough, 0.7, lower);
+#endif
+  float gy = p.y + 0.72;                                  // 格栅高 6 cm，中心在 y = −0.72
+  float grilleBox = (1.0 - smoothstep(0.03 - pixY, 0.03 + pixY, abs(gy)))
+                  * smoothstep(-pixX, pixX, sx - 0.06);    // 离竖缝 6 cm 以内不开格栅
+  if (grilleBox > 0.0) {
+    // 百叶：每片 7 mm，片间暗缝 3 mm；足迹比片距大时淡成平均的暗度
+    float ph = fract(gy / 0.007);
+    float slat = lineCov(abs(ph - 0.5) * 0.007, 0.0015, pixY);
+    float fS = 1.0 - smoothstep(0.0025, 0.005, pixY);
+    float dark = mix(0.43, slat, fS);
+    ao *= 1.0 - 0.85 * dark * grilleBox;
+    slope.y += 0.4 * (ph - 0.5) * fS * grilleBox;          // 百叶片朝下斜
+  }
 #ifdef CABIN_CLASS_ECONOMY
   // 4. 经济舱的使用痕迹（T06 的做法，强度收敛到约一半，蹭痕更稀）：大尺度的轻微斑驳、越往下越灰一点、
   //    窗下沿手常扶的地方略暗略油亮、零星的鞋 / 包蹭痕、收边条外侧凹角里一点积灰
@@ -334,18 +399,38 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   // 上亮下暗：顶灯和行李架下的灯带从上方照下来
   float grad = 1.0 + 0.35 * clamp(p.y / 0.4, -1.0, 1.0);
   vec3 e = cabinIrradiance(p, n, cl) * grad * ao;
+  // 窗光的回弹（T35）：从窗户进来的光落在窗下的扶手、座椅和地板上再弹回侧壁，窗下方一大块柔和的亮区（半径约 30 cm）。
+  // 本窗按窗板面光源的照度（加上照进来的直射光），邻窗遮光板放下，只有透过来的那一点。经验系数，不是辐射度解
+  float wiB = floor(p.x / WINDOW_PITCH + 0.5);
+  vec3 eThrough = wiB == 0.0 ? M_PI * cl.lWin + 0.35 * cl.eSunNormal * max(cl.sunC.z, 0.0) : M_PI * cl.lGlow;
+  float winPatch = exp(-wq.x * wq.x / 0.1) * exp(-(wq.y + 0.33) * (wq.y + 0.33) / 0.07);
+  e += 0.08 * eThrough * winPatch * seatAO;
   vec3 col = albedo / M_PI * e;
   col += albedo / M_PI * e * 0.8 * bevel;
   // 环境反射（柔光饰面只有很弱的光泽；翻边的圆角靠它显形）
   float F = fresnelRough(nv, 0.04, rough);
   col += F * cabinEnv(reflect(rd, n), cl) * ao * (1.0 - 0.5 * rough) * grad;
-  // 金属收边条：拉丝的细纹沿着收边条走（同心），按像素足迹淡出成均匀的缎面
-  if (trim > 0.0) {
+  // 金属：窗罩一圈的收边条（拉丝的细纹沿着收边条走，同心，按像素足迹淡出成均匀的缎面）；
+  // 商务舱还有下侧壁分界缝里的香槟色饰条（沿机身方向拉丝，截面微凸）。两处合成一次调用（FXC 按调用点内联）
+  float metalCov = trim;
+#ifndef CABIN_CLASS_ECONOMY
+  metalCov = max(metalCov, dadoTrim);
+#endif
+  if (metalCov > 0.0) {
     float fBr = 1.0 - smoothstep(0.00012, 0.0003, pix);
     float brush = vnoise(vec2(dBez * 7000.0, (wq.x + wq.y) * 30.0 + seed));
+    vec3 nm = n;
+#ifndef CABIN_CLASS_ECONOMY
+    if (dadoTrim > trim) {
+      float fBd = 1.0 - smoothstep(0.00012, 0.0003, pixY);
+      brush = vnoise(vec2(p.x * 30.0 + seed, p.y * 7000.0));
+      fBr = fBd;
+      nm = normalize(n0 + vec3(0.0, clamp(sd / 0.002, -1.0, 1.0) * 0.5, 0.0));
+    }
+#endif
     float mr = 0.26 + 0.08 * (brush - 0.5) * fBr;
-    vec3 metalCol = cabinChampagne(p, n, rd, mr, ao, e, cl) * (1.0 + 0.12 * (brush - 0.5) * fBr);
-    col = mix(col, metalCol, trim);
+    vec3 metalCol = cabinChampagne(p, nm, rd, mr, ao, e, cl) * (1.0 + 0.12 * (brush - 0.5) * fBr);
+    col = mix(col, metalCol, metalCov);
   }
 #ifdef CABIN_CLASS_ECONOMY
   if (screw > 0.0) col = mix(col, cabinChampagne(p, n, rd, 0.3, ao, e, cl) * (1.0 - 0.8 * screwSlot), screw);
