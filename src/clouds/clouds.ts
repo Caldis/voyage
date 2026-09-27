@@ -969,6 +969,8 @@ const WEATHER_PREWARM_PROBES = 60;
 
 /** 云缓冲右半（深度，T38）只在附近有高于这个值（km）的真实地形时写（PERF-11）：海面、平原上云不可能在「地面后面」 */
 const DEPTH_TERRAIN_MIN_KM = 0.05;
+/** 相机低于这个高度（km）时右半深度常开（火车、起降）：贴地的视线上矮丘也能挡住远处的云 */
+const DEPTH_LOW_CAMERA_KM = 1.0;
 
 export class Clouds {
   private raw = rawTarget(1, 1);
@@ -1243,9 +1245,31 @@ export class Clouds {
     const renderer = this.pass.renderer;
     if (v.state === "idle" && renderer) {
       v.state = "compiling";
-      this.compileInBackground(renderer, v.mat, this.raw, () => (v.state = this.runnable(renderer, v.mat) ? "ready" : "failed"));
+      this.compileInBackground(renderer, v.mat, this.raw, () => {
+        v.state = this.runnable(renderer, v.mat) ? "ready" : "failed";
+        // 静默失效最难查（审查建议）：天气变体编不过时，导演会一直推迟摆放这种天气
+        if (v.state === "failed") console.warn(`[clouds] 云步进变体 "${key}" 编译失败：含这些特性的组合改画已编好的子集${/[ST]/.test(key) ? "，导演不再摆放对应的雷暴 / 台风" : ""}`);
+      });
     }
     return v.state;
+  }
+
+  /**
+   * 这一帧想画的步进变体键（PERF-10）：**选变体的唯一规则**，步进（pickMarch）、导演预告（prepareWeather）都从这里算，
+   * 免得各算各的对不上（审查返工：预告只看 S / T，卷云 / 奇观在场时摆了雷暴，步进要的 CS / WCS 没编好，整层卷云 / 奇观当场跳变）。
+   * extra：预告时额外要加的天气（"S" / "T"）
+   */
+  private wantedKey(extra = "") {
+    const u = this.uniforms;
+    const wonder = this.wonderState === "ready" && this.marchMat.uniforms.uWonderVol.value > 0.5;
+    const cirrus = u.uCloudType.value < 0.2;
+    const w = this.weatherKey() + extra;
+    return (wonder ? "WC" : cirrus ? "C" : "") + (w.includes("S") ? "S" : "") + (w.includes("T") ? "T" : "");
+  }
+
+  /** 天气小程序（占据网格、云影图 / 探针天气版）这一帧用不用：只在步进实际画的变体带雷暴 / 台风时用，三者始终一致 */
+  private weatherAuxOn() {
+    return this.weatherAuxState === "ready" && /[ST]/.test(this.marchShown);
   }
 
   /** 此刻场上的天气要哪种天气变体："" 没有雷暴 / 台风，"S" / "T" / "ST" */
@@ -1267,7 +1291,10 @@ export class Clouds {
       let ok = true;
       const done = (mat: THREE.ShaderMaterial) => () => {
         if (!this.runnable(renderer, mat)) ok = false;
-        if (--left === 0) this.weatherAuxState = ok ? "ready" : "failed";
+        if (--left === 0) {
+          this.weatherAuxState = ok ? "ready" : "failed";
+          if (!ok) console.warn("[clouds] 占据网格 / 云影图 / 探针的天气版编译失败：雷暴 / 台风没有云影、探针看不到它们（步进照画）");
+        }
       };
       this.compileInBackground(renderer, this.occMat, this.occ[1], done(this.occMat));
       this.compileInBackground(renderer, this.shadowWeatherMat, this.shadow[1], done(this.shadowWeatherMat));
@@ -1275,6 +1302,12 @@ export class Clouds {
     }
     this.requestMarch("S");
     this.requestMarch("T");
+    // 卷云层 / 云间层奇观正在画时，顺带预编它们和雷暴 / 台风的组合（导演一摆天气就要用；wantedKey("S") = "CS" / "WCS"）
+    const base = this.wantedKey().replace(/[ST]/g, "");
+    if (base) {
+      this.requestMarch(base + "S");
+      this.requestMarch(base + "T");
+    }
   }
 
   /**
@@ -1284,9 +1317,12 @@ export class Clouds {
   prepareWeather(storm: boolean, typhoon: boolean): boolean {
     const renderer = this.pass.renderer;
     if (renderer) this.prewarmWeather(renderer, true);
-    const cur = this.weatherKey();
-    const key = (storm || cur.includes("S") ? "S" : "") + (typhoon || cur.includes("T") ? "T" : "");
-    return !key || this.requestMarch(key) === "ready";
+    // 按步进的同一规则拼完整的键（含场上的卷云 / 奇观，以及已有的另一种天气）：摆放之后步进要画的就是它
+    const key = this.wantedKey((storm ? "S" : "") + (typhoon ? "T" : ""));
+    if (!/[ST]/.test(key)) return true;
+    // 天气小程序也要编好（失败了就不等：步进照画，只是没有云影）
+    const auxDone = this.weatherAuxState === "ready" || this.weatherAuxState === "failed";
+    return this.requestMarch(key) === "ready" && auxDone;
   }
 
   private compileInBackground(renderer: THREE.WebGLRenderer, mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget, done: () => void) {
@@ -1364,10 +1400,7 @@ export class Clouds {
    * 想要的组合没编好就顺手开始后台编。默认程序（空集）总是可用，所以最坏是「天气系统暂时不画，普通云照常」，不会画空或同步卡住
    */
   private pickMarch(): string {
-    const u = this.uniforms;
-    const wonder = this.wonderState === "ready" && this.marchMat.uniforms.uWonderVol.value > 0.5;
-    const cirrus = u.uCloudType.value < 0.2;
-    const want = (wonder ? "WC" : cirrus ? "C" : "") + this.weatherKey();
+    const want = this.wantedKey();
     this.marchWanted = want;
     if (want) {
       // 卷云单独要（"C"）时照旧按 T12 的节奏（ensureCirrusCompiled，probe 里），这里只管其余组合
@@ -1403,10 +1436,13 @@ export class Clouds {
     const u = this.uniforms;
     if (this.shadowState !== "ready" || !this.keyDir) return;
     // 有雷暴 / 台风时用天气版（PERF-10）；天气版还没编好时先用默认版（天气系统暂时没有影子），编好后按分片节奏重建一次
-    const mat = this.weatherKey() && this.weatherAuxState === "ready" ? this.shadowWeatherMat : this.shadowMat;
+    // 和步进实际画的变体一致（weatherAuxOn）：步进还没画出雷暴 / 台风时，云影也不带它们
+    const mat = this.weatherAuxOn() ? this.shadowWeatherMat : this.shadowMat;
     if (mat !== this.shadowProg) {
       this.shadowProg = mat;
+      // 换程序等于有无整个天气系统：正在分片建的那张作废，从第 0 片按分片节奏重建（审查建议：否则半张有影子、半张没有）
       this.shadowGradual = true;
+      this.shadowSlice = -1;
     }
     const key = [
       u.uCloudBottom.value, u.uCloudTop.value, u.uCoverage.value, u.uCloudType.value, u.uCloudDensity.value,
@@ -1519,7 +1555,7 @@ export class Clouds {
     if (this.probeBusy) return;
     this.probeMat.uniforms.uProbeDir.value.copy(heading);
     // 有雷暴 / 台风时用天气版探针（穿进雷暴时的颠簸、窗上的水、舱内光照）；没编好之前用默认版（只看得到层状云）
-    this.pass.render(weather && this.weatherAuxState === "ready" ? this.probeWeatherMat : this.probeMat, this.probeTarget);
+    this.pass.render(this.weatherAuxOn() ? this.probeWeatherMat : this.probeMat, this.probeTarget);
     this.probeBusy = true;
     renderer
       .readRenderTargetPixelsAsync(this.probeTarget, 0, 0, 1, 1, this.probePixel)
@@ -1633,7 +1669,9 @@ export class Clouds {
     // 海面 / 没开真实地理时用不上，却让 resolve 多一倍像素。停用期间右半不更新（窗外按 uCloudDepthOn = 0 不读），
     // 重新启用的那一帧右半不取历史（旧内容早已过时）
     const v = this.view;
-    const depthOn = (v.uGroundOn?.value ?? 0) > 0.5 && (v.uTerrainMax?.value ?? 0) > DEPTH_TERRAIN_MIN_KM;
+    // 相机离地很低（火车 TR03、低空）时常开：平原上几十米的小丘也挡得住贴地平线的远云（审查建议）
+    const camAlt = (v.uCamR?.value ?? 1e9) - 6360;
+    const depthOn = (v.uGroundOn?.value ?? 0) > 0.5 && ((v.uTerrainMax?.value ?? 0) > DEPTH_TERRAIN_MIN_KM || camAlt < DEPTH_LOW_CAMERA_KM);
     r.uResetDepth.value = depthOn && !this.depthOn;
     this.depthOn = depthOn;
     if (this.uniforms.uCloudDepthOn) this.uniforms.uCloudDepthOn.value = depthOn ? 1 : 0;

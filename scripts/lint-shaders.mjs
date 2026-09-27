@@ -784,6 +784,28 @@ async function main() {
         console.log(res.output.split("\n").map((l) => `         ${l}`).join("\n"));
       }
     }
+
+    // -- 1b. PERF-10：不带天气宏的云程序预处理后不能含雷暴 / 台风代码 --
+    // 天气密度一旦写到 #ifdef CLOUD_STORM / CLOUD_TYPHOON 外面，就又编进了默认云步进（启动关键路径，第 6 波 +51% 冷编译的根源）。
+    // 用 glslangValidator -E 做真预处理（不是按文本数），数雷暴 / 台风的函数名
+    console.log("\n-- 默认云程序不含雷暴 / 台风代码（PERF-10，glslangValidator -E） --");
+    const WEATHER_IDS = ["stormDensity", "towerSdf", "anvilDensity", "rainDensity", "hurricaneDensity", "bandTowerSdf", "hurricaneSunVis", "hurricaneCasterDensity", "cloudWeatherMaybe"];
+    for (const id of ["cloud-march", "cloud-march-cirrus", "cloud-march-wonder", "cloud-shadow-map", "cloud-probe", "outside-default", "wing"]) {
+      const prog = programs.find((p) => p.id === id);
+      if (!prog) continue;
+      const file = path.join(tmpDir, `${id}.pp.frag`);
+      writeFileSync(file, FRAG_PREFIX + resolveIncludes(prog.fragmentShader, new Set()));
+      const res = spawnSync(bin, ["-E", "-S", "frag", file], { encoding: "utf8", maxBuffer: 64 << 20 });
+      const out = res.stdout || "";
+      const hits = WEATHER_IDS.filter((w) => new RegExp(`\\b${w}\\b`).test(out));
+      if (res.error || !out) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：预处理失败 ${res.error ? res.error.message : ""}`);
+      } else if (hits.length) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：预处理后仍含 ${hits.join(", ")}——天气代码要写在 #ifdef CLOUD_STORM / CLOUD_TYPHOON / CLOUD_WEATHER 里（见 README 坑点「着色器编译」PERF-10）`);
+      } else console.log(`  [OK]   ${id}：${out.split("\n").filter((l) => l.trim()).length} 行，无雷暴 / 台风代码`);
+    }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

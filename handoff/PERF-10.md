@@ -56,6 +56,21 @@
 - **深度没有改半精度**：右半和左半同在一张纹理里（T38 为了不给窗外程序多占 sampler），一张纹理只能一种格式；改半精度就要单独一张纹理 + 窗外多一个 sampler（14/16 → 15/16），不划算。真正的大头是邻域夹取对 RGBA32F 的 `texture()` 过滤读：改 `texelFetch` 后 resolve 已在 0.025–0.040 ms。T38 审查提到的精度保护（`max(d.y, 1e-4)`、按不透明度加权）都保留。
 - 窗板外 `paneDistance > 0.025` 直接写 (0, 0, 0, 1)：步进在 > 0.02 处只写这个值，邻域全是它时夹取结果恒为它，逐位不变。
 
+## 返工（审查 `handoff/PERF-10-review.md`，2026-09-27 夜）
+
+1. **选变体收敛成一个函数** `wantedKey(extra)`：步进（`pickMarch`）和导演预告（`prepareWeather`）都用它。预告按完整键（含卷云 C / 奇观 W）`requestMarch`，并等天气小程序 ready / failed 才返回 true。
+2. **云影图 / 探针的天气版跟步进实际画的变体走**（`weatherAuxOn()` = 天气小程序 ready 且 `marchShown` 含 S / T）。云影图换程序时丢掉正在分片建的那张，从第 0 片重建。
+3. 卷云 / 奇观在场时，预编阶段顺带编 `CS` / `CT`（或 `WCS` / `WCT`）。
+4. 变体、天气小程序编译失败时 `console.warn` 一次。
+5. PERF-11 深度：相机低于 1 km（火车 TR03、起降）时也开（`DEPTH_LOW_CAMERA_KM`）。
+6. `check:glsl` 新增断言：cloud-march / -cirrus / -wonder / cloud-shadow-map / cloud-probe / outside-default / wing 用 glslangValidator `-E` 预处理后不含雷暴 / 台风函数名。
+7. 已合并最新 master（TR03 等），check:glsl 41 个片元程序全部通过，typecheck 通过。
+
+验证（`handoff/PERF-10-combo.mjs --port 5210`，冷缓存、按导演流程「预告到 true 再摆放」，摆放后逐帧比 shown / wanted 180 帧）：
+- 卷云在场 + 摆雷暴：预告等 5.6 s，摆放后 shown = wanted = `CS`，0 帧不一致；撤掉后回到 `C`。
+- 奇观（浮空古城）在场 + 摆台风：预告等 8.5–9.5 s，摆放后 shown = wanted = `WCT`，0 帧不一致；撤掉后回到 `WC`。
+- 零回归复拍（n5）：11 个场景对 master（b3）、对返工前（n4）都在噪声底内。
+
 ## 已知问题 / 没做的
 
 1. 冷启动 16 s 不到 12–13 s：窗外程序是新的关键路径（PERF-13）。
