@@ -8,6 +8,8 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| T31 + T33 | 第 6 波 | 5231 | worktree | Opus（穿云舱内光斑随云透射衰减；远处雷暴 / 台风简化计算） | — | 进行中 |
+| 美术总监 | 第 4–5 波收尾检查 | — | — | Opus（ART_REVIEW_wave5.md，含两项待确认取向的推荐） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
