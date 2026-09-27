@@ -7,6 +7,8 @@ import { $, type HighLiftSetting, type VoyageState } from "./state";
 import { WEATHER_PRESETS, type WeatherSystem } from "./weather";
 import { VIEW_PRESETS } from "./view-presets";
 import type { Director } from "./director";
+import { WONDERS } from "./wonders/catalog";
+import { RARITY_LEVELS, type WonderSystem } from "./wonders/system";
 
 /**
  * 面板：DOM 绑定、信息栏文字、方位文字（COMPASS）。从 main.ts 拆出（T01 纯重构，未改动任何取值或绑定顺序）。
@@ -111,6 +113,8 @@ export interface UiDeps {
   currentView: () => string;
   /** 导演（T19a）：连续航程 / 背景板模式 */
   director: Director;
+  /** 奇观系统（W01） */
+  wonders: WonderSystem;
 }
 
 /** 绑定面板上的所有控件。调用一次，顺序和原来 main.ts 里一致。 */
@@ -273,6 +277,7 @@ export function setupUi(deps: UiDeps) {
     if (e.key === "h" || e.key === "H") $("panel").classList.toggle("hidden");
   });
   setupVoyageUi(director);
+  setupWonderUi(deps.wonders);
 
   $<HTMLSelectElement>("quality").addEventListener("change", (e) => {
     clouds.resolutionScale = Number((e.target as HTMLSelectElement).value);
@@ -340,4 +345,46 @@ function setupVoyageUi(director: Director) {
   sync();
   // 调试 / 测试脚本用
   (window as unknown as { __voyageUi?: unknown }).__voyageUi = { setBackdrop, sync };
+}
+
+// ---------- 奇观模式（W01） ----------
+
+function setupWonderUi(wonders: WonderSystem) {
+  const box = $<HTMLInputElement>("wonders-on");
+  const controls = $("wonder-controls");
+  const pick = $<HTMLSelectElement>("wonder-pick");
+  const status = $("wonder-status");
+  pick.innerHTML = `<option value="">按此刻的条件挑一个</option>` + WONDERS.map((w) => `<option value="${w.id}">${w.name}</option>`).join("");
+  const sync = () => {
+    box.checked = wonders.enabled;
+    controls.hidden = !wonders.enabled;
+  };
+  box.addEventListener("change", () => {
+    wonders.enabled = box.checked;
+    if (!box.checked) wonders.clear();
+    sync();
+  });
+  const rarity = $<HTMLInputElement>("wonder-rarity");
+  const rarityOut = $("wonder-rarity-out");
+  const applyRarity = () => {
+    const lv = RARITY_LEVELS[Math.round(Number(rarity.value))] ?? RARITY_LEVELS[1];
+    wonders.rarityPerHour = lv.perHour;
+    rarityOut.textContent = `${lv.name}（每小时约 ${lv.perHour} 次）`;
+  };
+  rarity.addEventListener("input", applyRarity);
+  applyRarity();
+  // 立即召唤：放在窗外略偏机头处，用 20 秒浮现（自动出现时是 1.5–2 分钟）
+  $("wonder-summon").addEventListener("click", () => {
+    wonders.enabled = true;
+    wonders.clear();
+    wonders.trigger(pick.value || undefined, { riseS: 20, forwardOffsetDeg: 6 });
+    sync();
+  });
+  $("wonder-dismiss").addEventListener("click", () => wonders.dismiss());
+  let last = "";
+  window.setInterval(() => {
+    const t = wonders.describe();
+    if (t !== last) status.textContent = last = t;
+  }, 500);
+  sync();
 }

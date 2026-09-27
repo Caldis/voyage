@@ -57,6 +57,17 @@
         <button type="button" data-voyage-rate="60">60×</button>
       </div>
       <button id="backdrop-on" type="button">背景板模式（隐藏面板，按 Esc 或 B 退出）</button>
+      <!-- 奇观模式（W01，research/WONDERS.md）：默认关；开了之后偶尔在远方出现不真实的东西，出现时不弹任何提示 -->
+      <label class="check"><input id="wonders-on" type="checkbox" />奇观模式（偶尔在远方出现不真实的东西）</label>
+      <div id="wonder-controls" hidden>
+        <label>稀有度 <output id="wonder-rarity-out"></output><input id="wonder-rarity" type="range" min="0" max="3" step="1" value="1" /></label>
+        <label>召唤（调试）<select id="wonder-pick"></select></label>
+        <div class="row">
+          <button id="wonder-summon" type="button">立即召唤</button>
+          <button id="wonder-dismiss" type="button">让它退场</button>
+        </div>
+        <p id="wonder-status" class="hint"></p>
+      </div>
       <label>座位
         <select id="seat">
           <option value="right">右侧靠窗</option>
