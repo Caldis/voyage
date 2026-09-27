@@ -11,7 +11,7 @@
 | TM01 | 第 7 波（云锐度，用户需求） | 5216 | worktree | Opus（白天窗外色调映射找回云显示对比 + EV 锚定软过渡；必审） | — | 进行中 |
 | C03 | 第 7 波（云锐度，用户需求） | 5211 | worktree | Opus（层状云进云处表面细化 + 远处横纹；必审） | — | 进行中 |
 | DX-11/12 | 第 7 波（工具） | — | worktree | Sonnet（compare 补 RGB / 饱和度 / 相邻像素差 / 阈值比例 / 缩略图；shots --pair 同机位 A/B、--scenes-file、--query、view-preset、默认关连续航程；变体就绪后复位云；补丁编译失败报错；ts-resolve 入口） | — | 进行中 |
-| PERF-13 | 第 7 波（飞机性能） | 5213 | worktree | Opus（窗外程序冷编译回收：optics / wonder-sky 等拆按需变体，目标真冷启动 ≤13 s；必审） | — | 进行中 |
+| PERF-13 | 第 7 波（飞机性能） | 5213 | `worktree-agent-a9821ca63ea19ce23`（8f57d38） | Opus | 审查中 | 已交付：真冷启动 13.4→11.1 s（达标）、outside-default 离线 −35–48%；关键路径转为舱内 / 机翼程序 |
 | PERF-12 | 第 7 波（飞机性能） | 5212 | `worktree-agent-a50456d82ceaae9c5`（8b5eee1） | Opus | 审查中 | 已交付：舱内合成 0.36–0.39→0.28–0.31 ms（贴线达标）、13 场景零回归；scene-default 编译仅 −5%（要改结构，另开） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
