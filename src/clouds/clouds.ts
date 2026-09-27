@@ -455,6 +455,10 @@ void main() {
     apL *= 1.0 - HUR_BACKLIT_AP_CUT * inEye * toward * toward * (1.0 - smoothstep(0.35, 0.8, uSunDir.y));
   }
   apL *= uSunIlluminance;
+  // 透射率 < 0.005 时步进提前停了（上面的 break），剩下的 T 只是「停在哪一步」的截断残差，不是真实透射率：
+  // 真实的积雨云光学厚度几百，T ≈ e^−几百。窗外 pass 按背景 × T 合成，太阳圆盘比云亮 10^5 倍，
+  // 残差 4e-5 也足以让日盘从积雨云里透出来（T45 实测日盘处 T = 4.2e-5）。按阈值连续地减掉这段残差（T = 1 不变）
+  T = max(T - 0.005, 0.0) / 0.995;
   L = L * apT + apL * (1.0 - T);
   gl_FragColor = vec4(min(L, vec3(60000.0)), T);
   gl_FragDepth = clamp(depth / AERIAL_MAX_DISTANCE, 0.0, 1.0);

@@ -867,12 +867,16 @@ float hurricaneLayerMask(vec2 xz) {
   return smoothstep(uHurricane.z * 3.0, uHurricane.z * 4.5, r);
 }
 
-// 精简版雷暴密度：只有塔身（含伴生塔）和砧的大形，没有乳状云、雨幡、细节侵蚀。
-// 给光线步进（朝太阳）、云影、探针用：这些地方只要光学厚度的大概，而完整版被内联进 4 个地方，冷编译慢了约 50%
+// 精简版雷暴密度：塔身（含伴生塔）和砧的大形 + 雨幡，没有乳状云、细节侵蚀。
+// 给光线步进（朝太阳）、云影、探针用：这些地方只要光学厚度的大概，而完整版被内联进 4 个地方，冷编译慢了约 50%。
+// 雨幡必须在（T45）：旧版这里没有雨幡，雨幡朝太阳的受光步进一路透明、不自遮挡。黄昏太阳贴着地平线从云底下平射进来，
+// 整片雨幡被照透，逆光看又落在前向散射的峰上，云底下挂着一块边缘清楚的橙色发光椭圆（美术总监 wave6 第 4 条的「飞碟」）
 float stormDensityLite(vec4 c, vec2 xz, float alt, float lod) {
   float top = c.w;
   float R = c.z;
-  if (alt < STORM_BASE - 0.1 || alt > top + STORM_OVERSHOOT + 0.7) return 0.0;
+  if (alt > top + STORM_OVERSHOOT + 0.7) return 0.0;
+  float rainL = alt < STORM_BASE + 0.1 ? rainDensity(xz, alt, c.xy, R, lod) : 0.0;
+  if (alt < STORM_BASE - 0.1) return rainL;
   float ao;
   float sdf = towerSdf(xz, alt, c.xy, R, top + STORM_OVERSHOOT, 0.72, lod, ao);
   // 伴生塔数量写成「3 + 一个恒为 0 的 uniform 表达式」，FXC 就不会把塔身 SDF 展开 3 份
@@ -885,7 +889,7 @@ float stormDensityLite(vec4 c, vec2 xz, float alt, float lod) {
     sdf = sminStorm(sdf, towerSdf(xz, alt, ax, R * 0.45, tk, 0.4, lod, ao), mix(2.2, 0.6, smoothstep(STORM_BASE + 0.5, STORM_BASE + 3.5, alt)));
   }
   vec3 geo;
-  return max(smoothstep(0.0, 0.25, -sdf), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo));
+  return max(max(smoothstep(0.0, 0.25, -sdf), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo)), rainL);
 }
 
 // 云影用的台风大形：只有眼壁（不含隆起）、卷云盖和雨带的解析形状，不采样纹理。
