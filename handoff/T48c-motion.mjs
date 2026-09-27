@@ -22,17 +22,22 @@ for (let i = 2; i < process.argv.length; i++) {
 const outDir = resolveRepoPath(REPO_ROOT, args.out);
 fs.mkdirSync(outDir, { recursive: true });
 const scenes = JSON.parse(fs.readFileSync(resolveRepoPath(REPO_ROOT, args["scenes-file"]), "utf8"));
-const ROUNDS = Number(args.rounds || 20);
+const ROUNDS = Number(args.rounds ?? 20);
 const N = Number(args.n || 10);
 const SEGS = Number(args.segs || 5);
 const SETTLE = Number(args.settle || 700);
 const [cx, cy, cw, ch] = String(args.crop || "400,700,800,450").split(",").map(Number);
 const ALL_MODES = {
-  tau: "u.uNightLocal.value.y = 0.6; r.value.set(4, 10);",
-  inst: "u.uNightLocal.value.y = 0.6; r.value.set(1e6, 1e6);",
-  noLocal: "u.uNightLocal.value.y = 0; r.value.set(4, 10);",
-  tauF: "u.uNightLocal.value.y = 0.6; r.value.set(4, 1e6);",   // 变暗即时
-  tau15: "u.uNightLocal.value.y = 0.6; r.value.set(1 / 0.15, 10);",
+  tau: "u.uNightLocal.value.y = 0.6; r.value.set(4, 10, 0);",
+  inst: "u.uNightLocal.value.y = 0.6; r.value.set(1e6, 1e6, 0);",
+  noLocal: "u.uNightLocal.value.y = 0; r.value.set(4, 10, 0);",
+  tauF: "u.uNightLocal.value.y = 0.6; r.value.set(4, 1e6, 0);",   // 变暗即时
+  tau15: "u.uNightLocal.value.y = 0.6; r.value.set(1 / 0.15, 10, 0);",
+  tauS: "u.uNightLocal.value.y = 0.6; r.value.set(4, 4, 0);",          // 对称 τ 0.25 s
+  tauS15: "u.uNightLocal.value.y = 0.6; r.value.set(1 / 0.15, 1 / 0.15, 0);",
+  dz05: "u.uNightLocal.value.y = 0.6; r.value.set(4, 10, 0.05);",   // 瞬态死区 0.05 档
+  dz10: "u.uNightLocal.value.y = 0.6; r.value.set(4, 10, 0.1);",
+  dz20: "u.uNightLocal.value.y = 0.6; r.value.set(4, 10, 0.2);",
 };
 // --modes tau,inst,noLocal（默认）；可选 tauF（变暗即时）、tau15（变亮 τ 0.15 s）
 const MODES = Object.fromEntries(String(args.modes || "tau,inst,noLocal").split(",").map((m) => [m, ALL_MODES[m]]));
@@ -60,16 +65,55 @@ try {
     const clip = { x: cx, y: cy, width: cw, height: ch };
     const t0 = Date.now();
     // 连续段放前面（画面还在城区上），并且按模式轮流、每段 --n 帧：三种模式看到的内容相近，帧间抖动才可比
+    //   每轮的模式顺序轮换（第 r 轮从第 r 个模式开始），抵消「画面慢慢离开城区」造成的先后偏差。
+    //   --inpage：不截图，在页面里每个 rAF 紧跟主循环之后 readPixels 裁剪区（截图会让帧间隔忽长忽短，带时间常数的一方被这种
+    //   不均匀的 dt 额外调制，量出来的抖动是假的），逐帧记整片均值与 16×16 分块均值，写 inpage.json
+    const names = Object.keys(MODES);
+    const inpage = {};
     for (let r = 0; r < SEGS; r++) {
-      for (const m of Object.keys(MODES)) {
+      for (let j = 0; j < names.length; j++) {
+        const m = names[(j + r) % names.length];
         await setMode(m);
         await page.waitForTimeout(SETTLE);
+        if (args.inpage) {
+          const res = await page.evaluate(async ({ crop, n }) => {
+            const cv = document.querySelector("canvas");
+            const gl = cv.getContext("webgl2");
+            const sx = gl.drawingBufferWidth / cv.clientWidth, sy = gl.drawingBufferHeight / cv.clientHeight;
+            const w = Math.round(crop[2] * sx), h = Math.round(crop[3] * sy);
+            const x = Math.round(crop[0] * sx), y = gl.drawingBufferHeight - Math.round((crop[1] + crop[3]) * sy);
+            const buf = new Uint8Array(w * h * 4);
+            const T = 16, tw = Math.floor(w / T), th = Math.floor(h / T);
+            const frames = [], dts = [];
+            let last = performance.now();
+            for (let i = 0; i < n; i++) {
+              // 主循环的 rAF 回调先注册，同一帧里先于这里执行：读到的是刚画完的这一帧
+              const now = await new Promise((res) => requestAnimationFrame(res));
+              gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+              gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+              let sum = 0;
+              const tiles = new Float64Array(tw * th);
+              for (let yy = 0; yy < th * T; yy++) for (let xx = 0; xx < tw * T; xx++) {
+                const k = (yy * w + xx) * 4;
+                const l = 0.2126 * buf[k] + 0.7152 * buf[k + 1] + 0.0722 * buf[k + 2];
+                sum += l;
+                tiles[Math.floor(yy / T) * tw + Math.floor(xx / T)] += l / (T * T);
+              }
+              frames.push({ mean: sum / (tw * th * T * T), tiles: Array.from(tiles, (v) => Math.round(v * 100) / 100) });
+              dts.push(now - last); last = now;
+            }
+            return { frames, dts };
+          }, { crop: [cx, cy, cw, ch], n: N });
+          (inpage[m] ||= []).push(res);
+          continue;
+        }
         for (let i = 0; i < N; i++) {
           await raf2();
           await page.screenshot({ path: path.join(dir, `seq-${m}-${String(r).padStart(2, "0")}-${String(i).padStart(3, "0")}.png`), clip });
         }
       }
     }
+    if (args.inpage) fs.writeFileSync(path.join(dir, "inpage.json"), JSON.stringify(inpage));
     for (let i = 0; i < ROUNDS; i++) {
       for (const m of Object.keys(MODES)) {
         await setMode(m);

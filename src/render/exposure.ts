@@ -222,29 +222,39 @@ void main() {
 }
 `;
 
-// T48c 夜间局部适应的低通亮度，带时间常数（半分辨率，与眩光纹理同尺寸、同类型，ping-pong）。
+// T48c 夜间局部适应的「瞬态扣除」（1/16 屏幕分辨率的粗网格，ping-pong）。
 //   T48b 的局部适应直接用当帧的眩光低通：翼尖频闪 / 夜间闪电这类 50–200 ms 的瞬态一亮，低通跟着涨，
-//   周围的城区灯芯、被照亮的云芯当帧就被压暗（审查 P2-1：频闪瞬间城区灯芯 −8、闪电云芯最多 −62）。
-//   人眼的局部适应有时间常数，所以这里把低通亮度在对数域里做指数平滑：变亮慢（τ ≈ 0.25 s，瞬态基本不进适应）、
-//   变暗快（τ ≈ 0.1 s，闪光过后很快复原，画面移动时亮区离开后不拖一道暗影）。
-//   存线性亮度（不是 log）：最终合成按 vUv 双线性取样，稳态时（prev = cur）与 T48b 对眩光纹理取样后再求亮度逐点相同。
-//   uDt ≥ 1e8 视为「直接收敛」：跳变（snap）与冻结（dt = 0，静止画面的稳态就是当帧）都走这条，冻结对照工具照旧逐像素可比。
+//   周围的城区灯芯、被照亮的云芯当帧就被压暗（审查 P2-1：频闪瞬间城区灯芯 −8、闪电云芯最多 −62）。人眼的局部适应有时间常数。
+//   第一版把整张半分辨率低通做指数平滑：瞬态是挡住了，但画面移动时每个灯点跨过低通纹素都要「先亮、再被压」，
+//   运动中逐帧的亮度变化比即时适应大约 1.5 倍（handoff/T48c.md「运动」）。所以改成只对粗网格做时间平滑：
+//   每个粗纹素 = 眩光纹理 8×8 纹素的平均亮度（16 次双线性取样），在对数域做指数平滑（变亮 τ 0.25 s、变暗 0.1 s），
+//   输出 R = 平滑后的 log2 亮度（状态），G = max(当帧 − 平滑, 0)：「这一片刚刚突然变亮了多少档」。
+//   最终合成照旧按当帧的眩光低通算局部适应（细节、移动的灯点与 T48b 完全一样即时），只把低通减去 G——
+//   频闪 / 闪电这种大片、突然的变亮不进适应；画面平移时粗网格变化缓慢，G ≈ 0。
+//   uDt ≥ 1e8 视为「直接收敛」（G = 0）：跳变（snap）与冻结（dt = 0）都走这条，冻结时与 T48b 逐位相同。
 const LOCAL_FRAG = /* glsl */ `
 uniform sampler2D uBloom;
 uniform sampler2D uPrevLocal;
-uniform float uBloomLevels;
-uniform vec2 uLocalRate; // 1/秒：x = 变亮，y = 变暗
+uniform vec2 uBloomTexel; // 眩光纹理的纹素大小（uv）
+uniform vec3 uLocalRate;  // x、y：1/秒（变亮、变暗）；z：死区（档），比平滑值亮不到 z 档的不算瞬态
 uniform float uDt;
 varying vec2 vUv;
 void main() {
-  float cur = dot(texture(uBloom, vUv).rgb, vec3(0.2126, 0.7152, 0.0722)) / uBloomLevels;
-  float prev = texture(uPrevLocal, vUv).r;
-  float lc = log2(max(cur, 1e-30)), lp = log2(max(prev, 1e-30));
+  float s = 0.0;
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      // 偏移 ±1、±3 个纹素：每次双线性取样正好是 2×2 纹素的平均，16 次覆盖 8×8
+      vec2 o = vec2(float(i), float(j)) * 2.0 - 3.0;
+      s += dot(texture(uBloom, vUv + o * uBloomTexel).rgb, vec3(0.2126, 0.7152, 0.0722));
+    }
+  }
+  float lc = log2(max(s * 0.0625, 1e-30));
+  float lp = texture(uPrevLocal, vUv).r;
   float k = 1.0 - exp(-uDt * (lc > lp ? uLocalRate.x : uLocalRate.y));
-  gl_FragColor = vec4(k >= 1.0 ? cur : k <= 0.0 ? prev : exp2(mix(lp, lc, k)), 0.0, 0.0, 1.0);
+  float ls = mix(lp, lc, k);
+  gl_FragColor = vec4(ls, max(lc - ls - uLocalRate.z, 0.0), 0.0, 1.0);
 }
 `;
-
 const FINAL_FRAG = /* glsl */ `
 uniform sampler2D uHdr;
 uniform sampler2D uAdapted;
@@ -263,7 +273,7 @@ uniform float uWinChromaMax;  // 窗外平均色进入适应白点前的色度�
 uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 x→y、像素亮度 log10 cd/m² z→w 之间由 0 过渡到 1（只在窗外）
 uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
 uniform vec3 uNightLocal;     // T48b 夜里窗外的局部适应：低通亮度超过中灰 x 档的部分，整个像素压暗 y × 超出量（log2）；y = 0 关；z：T48c 机翼翼面自身参与的比例（见下文）
-uniform sampler2D uLocalLum;  // T48c 局部适应用的低通亮度（LOCAL_FRAG 的结果：眩光亮度 ÷ uBloomLevels，带时间常数）
+uniform sampler2D uLocalLum;  // T48c 粗网格的瞬态扣除（LOCAL_FRAG 的结果，G = 这一片刚刚突然变亮了多少档）
 uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
 uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透明度 x→y 之间由 0 过渡到 1，z = 1 开 / 0 不看云（整窗都给）
 uniform float uDayHiSatRoll;  // TM01 返工：收回段按饱和度前移的倍数（见 dayHighlightGain）
@@ -454,15 +464,15 @@ void main() {
     //    超过中灰 + uNightLocal.x 档的部分，把整个像素压暗 uNightLocal.y × 超出量（软铰链，C1 连续）。
     //    低通之上的细节（单个灯点、路网）原样保留——压的是「地毯」不是「灯」，灯点与路网因此重新分开。
     //    黑地、星空、月夜的海（低通远低于拐点）逐位不变；白天 / 黄昏 nightLoc = 0。
-    //    T48c：低通亮度改读 uLocalLum（同一个眩光低通，只是带了时间常数，见 LOCAL_FRAG），频闪 / 闪电不当帧进适应
-    float lb = log2(max(texture(uLocalLum, vUv).r * exposure, 1e-9) / 0.18) - uNightLocal.x;
+    //    T48c：低通再减去粗网格上「刚刚突然变亮」的档数（见 LOCAL_FRAG），频闪 / 闪电不当帧进适应
+    float lb = log2(max(dot(glare * exposure, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18) - uNightLocal.x - texture(uLocalLum, vUv).g;
     float lq = clamp(lb + 0.5, 0.0, 1.0);
     float gLoc = exp2(-uNightLocal.y * (0.5 * lq * lq + max(lb - 0.5, 0.0)) * nightLoc);
     //    T48c 机翼（TM02 的 notWing 判据，dW 上面已算好，不多采样）：落在翼面上的眩光那一份照常压，翼面自身只按 uNightLocal.z 的比例压。
     //    整个像素一起压（z = 1，T48b）时，位置灯旁的翼面（自身中等亮、紧挨极亮的灯）出现约 12–15 级的暗环（审查 P2-1）；
     //    整个像素都不压时，灯的眩光在翼面一侧比天空一侧大一圈、贴着白灯的翼面死白（1 km 低空 1256 px 的块）；
     //    只压眩光（z = 0）光晕两侧一样大、翼面单调，但死白块仍有 673 px。z = 0.7：径向剖面单调、死白块 336 px（handoff/T48c.md 扫描表）。
-    //    频闪 / 闪电不当帧进适应靠的是 uLocalLum 的时间常数，不靠这里。非机翼像素 notWing = 1，与 T48b 逐点相同
+    //    频闪 / 闪电不当帧进适应靠的是 uLocalLum 的瞬态扣除，不靠这里。非机翼像素 notWing = 1，与 T48b 逐点相同
     x *= mix(1.0 + max(glareFrac, uNightLocal.z) * (gLoc - 1.0), gLoc, notWing);
     // TM01：白天窗外的受光云在 AgX 肩部保留对比（见 dayHighlightGain）；夜里、黄昏、舱内、云里 hiGate = 0，逐位不变
     //    TM02：低通取眩光（uBloom 的 mip 链，各级加权平均，已经读过），按同一个曝光换算
@@ -569,8 +579,8 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  * T48b「夜城不连成奶白平台」（只在夜里的窗外，门控同 T48 的 nightO × 窗外遮罩）：
  *   ① AgX 之前按眩光低通亮度 b 局部适应：x ·= 2^(−0.6 · 软铰链(log2(b / 0.18) − 3))，城区的地毯光被压回 AgX 的线性段，灯点 / 路网（低通之上的细节）照原样；
  *   ② T48 色度保持的目标改成「同色相、亮度 = AgX」，放不下时向同亮度的白去饱和（旧写法按 1/max 降亮度，把所有过曝的灯压到同一亮度）。
- *   T48c：机翼上（TM02 的 dW 判据）只压眩光那一份 + 翼面自身的 0.7；① 的低通 b 改用带时间常数的版本（LOCAL_FRAG，
- *     半分辨率 ping-pong，对数域指数平滑，变亮 τ 0.25 s / 变暗 0.1 s），频闪、闪电这类瞬态不当帧把周围压暗。
+ *   T48c：机翼上（TM02 的 dW 判据）只压眩光那一份 + 翼面自身的 0.7；① 的低通 b 减去粗网格上的瞬态（LOCAL_FRAG，
+ *     1/16 屏幕的粗网格，对数域指数平滑，变亮 τ 0.25 s / 变暗 0.1 s，只扣「刚刚突然变亮」的部分），频闪、闪电这类瞬态不当帧把周围压暗，移动的灯点仍即时适应。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
  * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
  * 目标是用户给的屏幕亮度（白天舱壁 150–185、关灯夜里 25–45、窗最亮）。这是经验模型，不是视觉科学的定量结果。
@@ -666,19 +676,19 @@ export class Exposure {
     true,
   );
 
-  /** T48c 夜间局部适应的低通亮度（带时间常数，见 LOCAL_FRAG）：与眩光纹理同尺寸、同类型的单通道 ping-pong，第一次 render 时按眩光纹理建 */
+  /** T48c 夜间局部适应的瞬态扣除（见 LOCAL_FRAG）：眩光纹理 1/8 尺寸（屏幕 1/16）、同类型的 RG ping-pong，第一次 render 时按眩光纹理建 */
   private local: THREE.WebGLRenderTarget[] = [];
   private localReset = true;
   /** τ：变亮 0.25 s（频闪 50 ms、闪电 0.1–0.2 s 基本不进适应）、变暗 0.1 s（闪光过后很快复原）。1 km 低空画面移动快，τ 不宜更长（拖影） */
   readonly localMat = material(LOCAL_FRAG, {
     uBloom: { value: null },
     uPrevLocal: { value: null },
-    uBloomLevels: { value: Bloom.WEIGHT_SUM },
-    uLocalRate: { value: new THREE.Vector2(1 / 0.25, 1 / 0.1) },
+    uBloomTexel: { value: new THREE.Vector2() },
+    uLocalRate: { value: new THREE.Vector3(1 / 0.25, 1 / 0.1, 0) },
     uDt: { value: 0 },
   });
   /**
-   * 调试：覆盖局部适应这一帧用的 dt（秒）。null = 按真实 dt；冻结（dt = 0）时视为直接收敛到当帧，
+   * 调试：覆盖瞬态扣除这一帧用的 dt（秒）。null = 按真实 dt；冻结（dt = 0）时视为直接收敛（扣除量 0，与 T48b 相同），
    * 冻结对照照旧逐像素可比。设成 0 = 保持不动（冻结后钉亮频闪 / 按住闪电，模拟「瞬态还没进适应」），
    * 设成 0.05 再渲染一帧 = 模拟 50 ms 的频闪进了多少适应。
    */
@@ -694,15 +704,17 @@ export class Exposure {
     this.localReset = true;
   }
 
-  /** 局部适应的低通亮度：按眩光纹理的尺寸 / 类型（半分辨率；能线性过滤 32 位浮点时是 FloatType）建目标，时间平滑后交给最终合成 */
+  /** 瞬态扣除：按眩光纹理（半分辨率；能线性过滤 32 位浮点时是 FloatType）的 1/8 建目标，时间平滑后交给最终合成 */
   private renderLocal(bloom: THREE.Texture, dt: number) {
     const img = bloom.image as { width: number; height: number };
-    if (!this.local.length || this.local[0].width !== img.width || this.local[0].height !== img.height || this.local[0].texture.type !== bloom.type) {
+    const w = Math.max(1, Math.ceil(img.width / 8)), h = Math.max(1, Math.ceil(img.height / 8));
+    if (!this.local.length || this.local[0].width !== w || this.local[0].height !== h || this.local[0].texture.type !== bloom.type) {
       for (const t of this.local) t.dispose();
-      const opts = { type: bloom.type, format: THREE.RedFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
-      this.local = [new THREE.WebGLRenderTarget(img.width, img.height, opts), new THREE.WebGLRenderTarget(img.width, img.height, opts)];
+      const opts = { type: bloom.type, format: THREE.RGFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
+      this.local = [new THREE.WebGLRenderTarget(w, h, opts), new THREE.WebGLRenderTarget(w, h, opts)];
       this.localReset = true;
     }
+    this.localMat.uniforms.uBloomTexel.value.set(1 / img.width, 1 / img.height);
     const ld = this.localReset ? 1e9 : this.localDt ?? (dt > 0 ? dt : 1e9);
     const [prev, next] = this.local;
     const u = this.localMat.uniforms;
