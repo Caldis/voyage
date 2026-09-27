@@ -351,7 +351,16 @@ void main() {
 #endif
     vec3 p = ro + rd * (t + stepLen * jitter);
     float lod = clamp(log2(dtBase / 0.055), 0.0, 5.0);
-    gDetailRnd = fract(jitter + float(i) * 0.6180339);   // 细节噪声随机平铺给受光步进挑格点用（T32），每步、每帧都换
+    // 细节噪声随机平铺给受光步进挑格点用（T32），每步、每帧都换。
+    // 不能再由 jitter 派生（C03）：旧版 fract(jitter + i·φ) 和采样点在区间里的位置（t + stepLen·jitter）是同一个随机数，
+    // 时间累积收敛到的是 E_j[受光(深度(j), 格点(j + i·φ))]，随「在第几步进云」这个整数 i 跳变；掠射看远处云带时 i 逐行变，
+    // 受光面上就是一条条水平横纹（backlit-cu 的「梳齿」、clouds-variety 远处云带）。步长减到 1/4 横纹才消失、光照拉平或
+    // 受光 od 置 0 横纹消失、mip / 步数上限无关，都指向这里。零开销（handoff/C03.md）。两样都要换：
+    //  - 空间项用一张与 jitter 无关的 IGN（转置 + 平移）。不能用整数倍的 ign：fract(13·ign) 仍是 jitter 的函数，只换了图样，
+    //    还把 IGN 的蓝噪声邻域性质放大没了，实时单帧里是一层菱形交叉细纹（审查返工）；
+    //  - 每帧增量取 √2−1：与 jitter 的 0.618 在低阶联合谐波上漂移快（R2 的 0.7549 与 0.618 有 4·a + 6·b ≈ 7 的近有理关系，
+    //    64 帧只走 0.09 圈），单独当一维序列时分层也与 φ 相当（0.7549 在 TAA 的约 8 帧窗口里只落在约 4 个值上，闪烁偏低频）
+    gDetailRnd = fract(ign(gl_FragCoord.yx + vec2(19.0, 47.0)) + uFrame * 0.41421356 + float(i) * 0.6180339);
     float dens = cloudDensity(p, lod, t < 150.0);
 #ifdef CLOUD_WEATHER
     float stormW = gStormW;
