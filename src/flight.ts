@@ -124,25 +124,204 @@ export interface AdvanceFlightResult {
   speedKms: number;
 }
 
-/** 沿大圆航线飞：航向转向「当前位置到终点」的大圆方位角。客机转弯坡度一般不超过 25°，
- * 对应的转弯角速度 ω = g·tanφ / v（巡航时约 1°/s）；坡度随转弯角速度平滑变化，转弯时窗外的地平线会倾斜。
+// ---------- 自动驾驶：航向控制（T49） ----------
+
+/**
+ * 导航方式：
+ * - route：沿航线（preset.dest 的大圆航线；没有终点的预设保持航向直飞）。默认，到达终点交给导演接下一段；
+ * - heading：手动航向（面板航向盘 / 左右转按钮 / 方向键），飞到选定航向后保持；
+ * - direct：直飞选定的机场（导演把它设成航段预设的终点），到达后转入 hold；
+ * - hold：等待航线（跑道形：两个 180° 转弯 + 两条直边），一直在同一片空域里兜圈。
+ */
+export type NavMode = "route" | "heading" | "direct" | "hold";
+
+/** 等待航线的状态机：从进入点出发，先转 180° 到出航边，飞一条直边，再转 180° 回到入航边，飞一条直边，循环 */
+export interface HoldPattern {
+  /** 入航航向（进入等待时的航向） */
+  inbound: number;
+  /** 转弯方向：1 右转（ICAO 标准）、-1 左转（非标准，也常见于公布的等待程序） */
+  dir: 1 | -1;
+  phase: "turn-out" | "outbound" | "turn-in" | "inbound";
+  /** 当前直边还剩多少模拟秒 */
+  legLeftS: number;
+}
+
+export interface Autopilot {
+  mode: NavMode;
+  /** heading 模式的选定航向（度） */
+  selHeading: number;
+  /** 指定转向方向：-1 左、1 右、0 最短。连按左转累计超过 180° 时仍然向左转（真实的航向旋钮也是这样：转哪边飞机就往哪边转） */
+  turnDir: -1 | 0 | 1;
+  /** 模拟时间 / 真实时间的倍数（连续航程的 1 / 10 / 60×）：导演每帧写入。坡度与滚转速率按真实时间限制要用到 */
+  timeScale: number;
+  hold: HoldPattern | null;
+  /** 航线接力的提前转弯：导演预先挑好的下一段在终点处的出航方位（度）；null = 还没挑 */
+  nextCourse: number | null;
+  /** 暂停航线跟踪、机翼改平直飞（导演把大角度掉头排进遮挡队列时用，见 director.ts 的 leg-turn 请求） */
+  holdCourse: boolean;
+}
+
+const AUTOPILOTS = new WeakMap<VoyageState, Autopilot>();
+/** 取某个飞行状态的自动驾驶（没有就建一个默认的：沿航线）。放在 WeakMap 里而不是 VoyageState 上，免得改 state.ts / main.ts 的初始化 */
+export function autopilotOf(state: VoyageState): Autopilot {
+  let ap = AUTOPILOTS.get(state);
+  if (!ap) {
+    ap = { mode: "route", selHeading: state.heading, turnDir: 0, timeScale: 1, hold: null, nextCourse: null, holdCourse: false };
+    AUTOPILOTS.set(state, ap);
+  }
+  return ap;
+}
+
+/** 客机转弯坡度上限（度）：自动驾驶一般不超过 25°（ICAO 等待程序、标准仪表离场都按 25° 或标准速率取小者） */
+export const MAX_BANK_DEG = 25;
+/** 滚转速率上限（度 / 真实秒）。估值：客机自动驾驶进入 / 退出转弯的滚转速率一般只有几度每秒（照顾乘客舒适，远低于
+ *  A320 正常法则侧杆打满的 15°/s），这里取 3°/s——25° 坡度要 8 秒多才打满。按真实时间限制：时间加速时也不会一两帧打满 */
+export const ROLL_RATE_DEG_S = 3;
+/** 时间加速时窗外转动角速度的上限（度 / 真实秒）：按它反推这一流速下允许的最大坡度。1× 时 25° 坡度的转弯约 1°/s，不受影响；
+ *  10× 约 15°、60× 约 2.5°（转弯半径相应变大，真实时间里看是一个平缓的大弯，不是几秒内原地掉头） */
+export const MAX_YAW_REAL_DEG_S = 6;
+const G = 9.81;
+const R2D = 180 / Math.PI;
+
+/** 这一流速下允许的最大坡度（度） */
+export function maxBankFor(vKms: number, timeScale: number) {
+  const omega = MAX_YAW_REAL_DEG_S / Math.max(timeScale, 1) / R2D; // 模拟时间里的角速度上限（rad/s）
+  return Math.min(MAX_BANK_DEG, Math.atan((vKms * 1000 * omega) / G) * R2D);
+}
+/** 坡度 → 转弯角速度（度 / 模拟秒）：协调转弯 ω = g·tanφ / v */
+export function turnRateFor(bankDeg: number, vKms: number) {
+  return ((G * Math.tan(bankDeg / R2D)) / (vKms * 1000)) * R2D;
+}
+/** 转弯半径（km）：r = v² / (g·tanφ) */
+export function turnRadiusKm(bankDeg: number, vKms: number) {
+  return (vKms * 1000) ** 2 / (G * Math.tan(Math.max(Math.abs(bankDeg), 0.1) / R2D)) / 1000;
+}
+
+/** ICAO 等待航线：14 000 ft（约 4.3 km）以上直边 1.5 分钟，以下 1 分钟 */
+function holdLegS(altKm: number) {
+  return altKm > 4.3 ? 90 : 60;
+}
+
+/** 从当前航向进入等待航线（进入点就是等待点）。转弯方向默认朝乘客这一侧：右座右转、左座左转——
+ *  压坡度时窗户朝向圆心，一直看得到同一片地面（左转的等待程序是公布过的「非标准等待」，现实中也常见） */
+export function startHold(state: VoyageState, dir?: 1 | -1) {
+  const ap = autopilotOf(state);
+  ap.mode = "hold";
+  ap.holdCourse = false;
+  ap.hold = { inbound: state.heading, dir: dir ?? (state.seat === "right" ? 1 : -1), phase: "turn-out", legLeftS: 0 };
+}
+
+const wrap180 = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180;
+
+/** 等待航线状态机：返回这一步要飞的航向与强制转向方向 */
+function holdTarget(ap: Autopilot, heading: number, dt: number, altKm: number): { target: number; dir: -1 | 0 | 1 } {
+  const h = ap.hold!;
+  const outbound = (h.inbound + 180) % 360;
+  switch (h.phase) {
+    case "turn-out":
+      if (Math.abs(wrap180(outbound - heading)) < 1.5) {
+        h.phase = "outbound";
+        h.legLeftS = holdLegS(altKm);
+      }
+      return { target: outbound, dir: h.dir };
+    case "outbound":
+      h.legLeftS -= dt;
+      if (h.legLeftS <= 0) h.phase = "turn-in";
+      return { target: outbound, dir: 0 };
+    case "turn-in":
+      if (Math.abs(wrap180(h.inbound - heading)) < 1.5) {
+        h.phase = "inbound";
+        h.legLeftS = holdLegS(altKm);
+      }
+      return { target: h.inbound, dir: h.dir };
+    case "inbound":
+      h.legLeftS -= dt;
+      if (h.legLeftS <= 0) h.phase = "turn-out";
+      return { target: h.inbound, dir: 0 };
+  }
+}
+
+/** 航线接力要提前多远开始转（km）：转弯半径 × tan(转角 / 2)，再加上滚转建立坡度期间飞过的一段。超过 100° 的掉头不提前转
+ *  （导演借遮挡处理，见 director.ts 的 leg-turn） */
+export function leadTurnKm(turnDeg: number, vKms: number, timeScale: number) {
+  const t = Math.abs(turnDeg);
+  if (t > 100) return 0;
+  const bank = maxBankFor(vKms, timeScale);
+  const rollInKm = (vKms * timeScale * bank) / ROLL_RATE_DEG_S / 2;
+  return turnRadiusKm(bank, vKms) * Math.tan(t / 2 / R2D) + rollInKm;
+}
+
+/** 这一步的坡度：朝目标航向协调转弯。
+ *  - 目标坡度：离目标航向越近越小（按「从这个坡度改平期间还会转过的角度」反推，避免冲过头），不超过这一流速的坡度上限；
+ *  - 实际坡度按**真实时间**以 ≤ ROLL_RATE_DEG_S 的速率趋近目标坡度；航向按实际坡度对应的转弯角速度变化（模拟时间）。 */
+function steer(state: VoyageState, ap: Autopilot, diffDeg: number | null, vKms: number, dt: number) {
+  const S = Math.max(ap.timeScale, 1);
+  const realDt = dt / S;
+  const maxBank = maxBankFor(vKms, S);
+  let cmd = 0;
+  if (diffDeg !== null && Math.abs(diffDeg) > 0.01) {
+    // 改平期间还会转过的角度 ≈ ω(φ)·S·φ / (2·滚转速率)，小角度下 ω ≈ (g/v)·φ → φ_max = sqrt(2·滚转速率·|Δ| / ((g/v)·S))（φ 取度）
+    const cG = G / (vKms * 1000); // 1/s
+    const bankByRollout = Math.sqrt((2 * ROLL_RATE_DEG_S * Math.abs(diffDeg)) / (cG * S));
+    // 接近目标航向时的比例段（与原来「按角度差的 0.3 倍转」同一刻度：1× 时 ω = 0.3·Δ /s；加速时按流速放小，免得来回过冲）
+    const bankByP = Math.atan((vKms * 1000 * ((0.3 / S) * Math.abs(diffDeg)) / R2D) / G) * R2D;
+    cmd = Math.sign(diffDeg) * Math.min(maxBank, bankByRollout, bankByP);
+  }
+  // 真实时间里的一阶平滑（时间常数约 0.7 s）再按滚转速率限幅：起止都是圆滑的，不会一帧打满
+  const want = (cmd - state.bankDeg) * (1 - Math.exp(-realDt / 0.7));
+  const lim = ROLL_RATE_DEG_S * realDt;
+  state.bankDeg += THREE.MathUtils.clamp(want, -lim, lim);
+  state.heading = (((state.heading + turnRateFor(state.bankDeg, vKms) * dt) % 360) + 360) % 360;
+}
+
+/** 这一步的目标航向与角度差（度，正 = 右转）；null = 不转向（机翼改平保持航向） */
+function navDiff(state: VoyageState, ap: Autopilot, curLat: number, curLon: number, vKms: number, dt: number): number | null {
+  const preset = state.preset;
+  const pick = (target: number, dir: -1 | 0 | 1) => {
+    let d = wrap180(target - state.heading);
+    // 指定了转向方向：还差得多时走指定的那一边（哪怕超过 180°）；接近目标（< 5°）时按最短
+    if (dir !== 0 && Math.sign(d) !== dir && Math.abs(d) > 5) d += 360 * dir;
+    return d;
+  };
+  switch (ap.mode) {
+    case "heading": {
+      const d = pick(ap.selHeading, ap.turnDir);
+      if (Math.abs(d) < 5) ap.turnDir = 0;
+      return d;
+    }
+    case "hold":
+      if (!ap.hold) startHold(state);
+      {
+        const t = holdTarget(ap, state.heading, dt, state.altitudeKm);
+        return pick(t.target, t.dir);
+      }
+    case "route":
+    case "direct": {
+      if (!preset.dest || ap.holdCourse) return null;
+      const target = greatCircleBearing(curLat, curLon, preset.dest[0], preset.dest[1]);
+      const d = wrap180(target - state.heading);
+      // 终点落在转弯圆里面（时间加速时转弯半径大、目的地又近）：一直压坡度会绕着它转圈。先改平直飞出去，等它落到圆外再转
+      const dist = haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]);
+      const r = turnRadiusKm(maxBankFor(vKms, ap.timeScale), vKms);
+      if (Math.abs(d) > 30 && dist < 2 * r * Math.sin(Math.min(Math.abs(d), 90) / R2D) * 1.05) return null;
+      return d;
+    }
+  }
+}
+
+/** 沿大圆航线飞 / 按选定航向飞 / 盘旋（T49）：自动驾驶按导航方式给出目标航向，steer() 以协调转弯追上去——坡度上限 25°，
+ * 转弯角速度 ω = g·tanφ / v（巡航时约 1°/s）；坡度按真实时间的滚转速率平滑变化，转弯时窗外的地平线会倾斜。
  * 同时处理飞行阶段的高度爬升（俯仰角跟着变）和位置推进。 */
 export function advanceFlight(state: VoyageState, input: AdvanceFlightInput): AdvanceFlightResult {
   const { dt, curLat, curLon, cloudOffset, onReachDest } = input;
   const preset = state.preset;
   const vKms = speedAt(state.altitudeKm);
-  if (preset.dest) {
-    const target = greatCircleBearing(curLat, curLon, preset.dest[0], preset.dest[1]);
-    const diff = ((target - state.heading + 540) % 360) - 180;
-    const maxRate = THREE.MathUtils.radToDeg((9.81 * Math.tan(THREE.MathUtils.degToRad(25))) / (vKms * 1000));
-    const rate = THREE.MathUtils.clamp(diff * 0.3, -maxRate, maxRate); // 接近目标航向时柔和改平
-    state.heading = (state.heading + rate * dt + 360) % 360;
-    const bankTarget = THREE.MathUtils.radToDeg(Math.atan((vKms * 1000 * THREE.MathUtils.degToRad(rate)) / 9.81));
-    state.bankDeg += (bankTarget - state.bankDeg) * (1 - Math.exp(-dt * 0.7));
-    // 到达终点附近：交给调用方接下一段（T19a）
-    if (haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]) < 40) onReachDest();
-  } else {
-    state.bankDeg *= Math.exp(-dt);
+  const ap = autopilotOf(state);
+  steer(state, ap, navDiff(state, ap, curLat, curLon, vKms, dt), vKms, dt);
+  if (preset.dest && (ap.mode === "route" || ap.mode === "direct") && !ap.holdCourse) {
+    // 到达终点附近：交给调用方接下一段（T19a）。导演已经挑好下一段时，按转弯半径提前开始转（真实客机也是在航路点之前就转，不飞过头再掉头）
+    const lead = ap.mode === "route" && ap.nextCourse !== null ? leadTurnKm(wrap180(ap.nextCourse - state.heading), vKms, ap.timeScale) : 0;
+    if (haversineKm(curLat, curLon, preset.dest[0], preset.dest[1]) < Math.max(40, lead)) onReachDest();
   }
 
   // 飞机向前飞：云场按航向平移
