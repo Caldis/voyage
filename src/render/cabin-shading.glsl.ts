@@ -277,7 +277,8 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   // 经济舱：翻边上一圈 6 颗卡扣螺丝（直径约 2 mm 的圆头 + 十字槽；T06，用户：看不清才真实，大了会糊）
   float screw = 0.0;
   float screwSlot = 0.0;
-  {
+  // 螺丝在翻边上离开口约 9 mm 的那一圈；离这圈远的像素（侧壁大部分）直接跳过
+  if (abs(dBez - (FL - 0.009)) < 0.0015 + pix) {
     float ang = atan(wq.y * BEZEL_HALF.x / BEZEL_HALF.y, wq.x);
     float k = floor(ang / (M_PI / 3.0)) + 0.5;
     float a = k * (M_PI / 3.0);
@@ -311,8 +312,8 @@ vec3 shadeWall(vec3 p, vec3 rd, float t, float pixAng, vec2 wq, float dBez, floa
   float oil = hand > 0.02 ? hand * smoothstep(0.35, 0.75, 0.6 * vnoise(p.xy * 40.0 + seed) + 0.4 * vnoise(p.xy * 110.0 + seed)) : 0.0;
   albedo *= 1.0 - 0.08 * oil;
   rough = mix(rough, 0.3, clamp(oil * 1.2, 0.0, 1.0));
-  float cornerDust = lineCov(abs(dBez - (FL + 0.0035)), 0.0012, pix) * smoothstep(-0.12, -0.2, wq.y)
-                   * (0.6 + 0.4 * vnoise(p.xy * 300.0 + seed));
+  float cornerDust = lineCov(abs(dBez - (FL + 0.0035)), 0.0012, pix) * smoothstep(-0.12, -0.2, wq.y);
+  if (cornerDust > 0.0) cornerDust *= 0.6 + 0.4 * vnoise(p.xy * 300.0 + seed);
   albedo = mix(albedo, DUST_ALBEDO, cornerDust * 0.4);
   // 蹭痕：约 5 cm 一格，稀疏（T06 的一半）；越往下越多
   vec2 sc = floor(p.xy / 0.05);

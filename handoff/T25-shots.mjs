@@ -128,6 +128,7 @@ try {
           minLum: Math.min(...lums),
           maxLum: Math.max(...lums),
           around: frames.slice(Math.max(0, shownAt - 4), shownAt + 4),
+          slow: frames.map((f, i) => ({ i, ...f })).filter((f) => f.dt > 20),
         };
       }, to);
       console.log(`切换 → ${to}:`, JSON.stringify(r));
