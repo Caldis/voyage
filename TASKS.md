@@ -12,6 +12,7 @@
 | W00 | 第 6 波（主干） | 5200 | worktree | Opus（云步进奇观层接口，W02 / W03 前提） | — | 进行中 |
 | T40 | 第 6 波（用户反馈，正常排期；派出后用户说不必插队，因已开工且小，保留完成） | 5248 | worktree | Sonnet（远处飞机航线不交错、最小距离、机体按角尺寸淡出，不露「拖尾圆球」） | — | 进行中 |
 | DX-06 | 第 6 波（工具，用户需求） | 5249 | worktree | Sonnet（调试小地图：航迹、雷达回波式云图、其他飞机、奇观） | — | 进行中 |
+| T41 | 第 6 波（协调者发现，锯齿优先） | 5241 | worktree | Opus（夜景：方块星点改亚像素圆点、窗中央双亮星查因、夜间黑色块状低云只查因） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
