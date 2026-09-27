@@ -1,6 +1,6 @@
 # W-STAIR · 机翼边 2 px 阶梯 / 点阵
 
-- 分支 `worktree-agent-abbe8a37c6af3d120`（已合并 master 22a5988，含 TM02）。对照 worktree `D:\Code\opus-test\tmp\wstair-base`（master，端口 5273），本分支 5213。
+- 分支 `worktree-agent-abbe8a37c6af3d120`（已合并 master 22a5988，含 TM02）。对照 worktree `D:\Code\opus-test\tmp\wstair-base2`（master，端口 5273；原 wstair-base 已被清理），本分支 5213。
 - 归属内改动：`src/render/wing.glsl.ts`（`sdWingMain` 分段下界、`wingTrace` 擦边判定与饿死子射线）、`src/render/wing-shading.glsl.ts`（`wingView` 沿用中心颜色的条件）、README 坑点四条、本目录 `W-STAIR-*` 工具。没碰 exposure.ts / clouds / ground。
 
 ## 诊断：C11 看到的其实是两个缺陷
@@ -23,7 +23,7 @@
 
 ## 修法
 
-1. `sdWingMain`：段内截面都是完整翼型的子集，离开本段至少走 m，所以真实距离 ≥ min(本段距离, max(完整翼型距离, m))。下界 `lb` 只在两个段内分支里赋值（襟翼、缝翼收起时 lb = 1e3，`min` 后逐位不变），完整翼型距离用 `wingCoord` 已算好的量（`wingFullSectionDist`，含弦向项——只取竖直项时后缘后面会在段边界平面上打中一面不存在的墙，云里一千多个像素，已修）。
+1. `sdWingMain`：段内截面都是完整翼型的子集，离开本段至少走 m，所以真实距离 ≥ min(本段距离, max(完整翼型距离, m))。下界放在 `uFlap > 1e-3 || uSlat > 1e-3` 的 uniform 分支里（襟翼、缝翼收起时逐位不变），审查后按段分区：襟翼段边界只对 xi > 0.52、缝翼段边界只对 xi < 0.14 生效，避免在 s = 0.06 后缘之后、s = 0.72 缝翼槽里造幻影墙。完整翼型距离用 `wingCoord` 已算好的量（`wingFullSectionDist`，含弦向项——只取竖直项时后缘后面会在段边界平面上打中一面不存在的墙，云里一千多个像素，已修）。
 2. `wingTrace`：分到步数不足 `uWingSteps/4`、还在包围盒里就用完的子射线（「饿死」的）按打中算，`bumpVar = −1` 标记，不求法线不着色；`wingView` 里沿用中心射线的颜色。一律按打中算不行（商务舱正午前缘外轮廓外扩、斜边台阶变硬），只算「还在逼近」的也不行（夕阳后缘仍漏）；门槛 1/4 是与给足步数的参考图逐像素比选出来的（见下）。调试位 8192 关掉。
 3. 内轮廓擦边判定 1 → 2 像素（`rPrev < 2.0`），边缘超采样沿内轮廓连续。
 4. 边缘像素的平均加上中心射线（4 条 RGSS + 像素中心 = 5 个样本，覆盖率 /5）。夜里频闪照亮的钝后缘端面（约 4 mm 厚，一两成像素宽、比翼面亮 20 倍）
@@ -76,6 +76,10 @@
 3. **sunset-wing +5.3%** 压着 5% 线（见上）。可压的地方：`useC` 里的 `wingStarved` 判断、`done` 分支里的 break、5 样本的限幅，逐项撤回的冷编译看不出差别，GPU 上没来得及逐项在安静时段测。
 4. **T48c 提到的白色位置灯旁翼面过曝**：本任务没有评估。灯的强度在 `wing-shading.glsl.ts` 的 `wingLampIntensity`（尾灯向后 20 cd）与 `shadeWing` 的 `lampLit`，属于本归属，建议另开小任务。
 5. 夜间开灯场景（`wpac` 1320，频闪灭）机翼整体很暗，窗外放大图上看不出阶梯，也看不出改动；频闪亮时见第 2 条。
+
+### 审查后小改的复核（分区下界，合并 master 702cb98 后）
+
+同页 A/B（`ref2\`）与给足步数的参考图逐像素差和：商务舱正午 2695、sunset-wing 12857、in-cloud 2110、夜间频闪 2273（改动前 11207 / 56184 / 21683 / 20678），与分区前同量级（各次运行冻结时刻不同，参考图本身也变）。in-cloud 体内命中（dHit < −1 像素）仍为 0，副翼内端点阵未回来（`ref2\ic-dots.png`）。`check:glsl`、typecheck 通过。
 
 ## 截图
 

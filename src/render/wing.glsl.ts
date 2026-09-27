@@ -129,16 +129,22 @@ float sdWingMain(vec3 P) {
   // 外侧是完整的翼型）。上面只按「P 在哪一段」算那一段的截面，段内离副翼内端面一两毫米的点报出的是到整流罩的距离（几十厘米），
   // 球体追踪一步跨过内端面、落进翼型里面几个像素深，法线取的是翼内的梯度（常常朝下），
   // 副翼内端、整流罩后面一片逐像素乱跳的点阵阴影（穿云、襟翼放下时最明显）。
-  // 修法取下界：各段的截面（整流罩、D 形前缘）都是完整翼型的子集，离开自己这一段至少要走 m（到最近一道段边界平面的距离，
-  // 四道平面一起取最小，P 在哪一段都成立），段外的形状又都在完整翼型里面，所以 真实距离 ≥ min(d, max(完整翼型的距离, m))。
+  // 修法取下界：各段的截面（整流罩、D 形前缘）都是完整翼型的子集，离开自己这一段至少要走 m（到这一类段边界平面的距离，
+  // P 在哪一段都成立），段外的形状又都在完整翼型里面，所以 真实距离 ≥ min(d, max(完整翼型的距离, m, 离台阶所在弦向区域的距离))。
   // 完整翼型的距离（wingFullSectionDist）弦向那一项不能省：只取竖直方向时，后缘后面、和翼型同高的点下界成了 m，
   // 射线在段边界平面上「打中」一面不存在的墙（云里一千多个像素）。
   // 这里在球体追踪最内层（每条射线每步都走）：放在 uniform 分支里，襟翼、缝翼都收起的巡航画面逐位不变、一条指令都不多走
   if (uFlap > 1e-3 || uSlat > 1e-3) {
+    // 分区（W-STAIR 审查）：襟翼段两道边界只在 xi > 0.52（整流罩下表面开始上收处）以后有台阶，
+    // 缝翼段两道边界只在 xi < 0.14（D 形前缘收圆结束处）以前有台阶；各自再与「离那片弦向区域的距离」取大，
+    // 免得在没有表面的地方（s = 0.06 平面上的后缘之后、s = 0.72 平面上的缝翼槽）下界降到 0、造出幻影墙
     float z = P.z - ROOT_Z;
-    float m = min(min(abs(z - WING_FLAP_S0 * WING_SPAN), abs(z - WING_FLAP_S1 * WING_SPAN)),
-                  min(abs(z - WING_SLAT_S0 * WING_SPAN), abs(z - WING_SLAT_S1 * WING_SPAN)));
-    d = min(d, max(wingFullSectionDist(P, w), m));
+    float fd = wingFullSectionDist(P, w);
+    float cc = w.chord * cos(SWEEP);
+    if (uFlap > 1e-3)
+      d = min(d, max(max(fd, min(abs(z - WING_FLAP_S0 * WING_SPAN), abs(z - WING_FLAP_S1 * WING_SPAN))), (0.52 - w.xi) * cc));
+    if (uSlat > 1e-3)
+      d = min(d, max(max(fd, min(abs(z - WING_SLAT_S0 * WING_SPAN), abs(z - WING_SLAT_S1 * WING_SPAN))), (w.xi - 0.14) * cc));
   }
   float dz = max(ROOT_Z - P.z, P.z - (WING_MAIN_END_Z + 0.04));
   return max(d, dz);

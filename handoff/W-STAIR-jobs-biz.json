@@ -1,9 +1,0 @@
-[
-  { "name": "biz-seated-noon", "scene": { "name": "biz-seated-noon", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business" }, "head": [0, 0.02, -0.42] },
-    "variants": [
-      { "name": "new", "js": "" },
-      { "name": "aa2", "js": "v.sceneMat.uniforms.uWingEdgeAA.value = 2;" },
-      { "name": "cov", "js": "__wsPatch([['if (covSum <= 0.0) return vec4(0.0);', ''], ['return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.25);', 'return vec4(vec3(single > 0.5 ? covSum : covSum * 0.25, single, 0.0) * 1e-3 * dot(eSky, vec3(0.3333)) * 50.0 + 1e-6, 1.0);']]);" },
-      { "name": "full", "js": "v.sceneMat.uniforms.uWingDebug.value = 1024;" }
-    ] }
-]
