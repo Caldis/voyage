@@ -548,16 +548,26 @@ float layerDensity(vec3 p, float lod, bool detail) {
   float hLayer = (alt - uCloudBottom) / thick;
   if (hLayer <= 0.0 || hLayer >= 1.0) return 0.0;
   vec2 xz = p.xz + uCloudOffset;
-  Weather wx = sampleWeather(xz);
+  // 卷云的权重（云型接近 0）。uniform 算出来的数，不分支：卷云和其他云型走同一串取样，只是坐标和阈值不同（冷编译）
+  float cir = 1.0 - smoothstep(0.0, 0.2, uCloudType);
+  const vec2 HIGH_WIND = vec2(0.8, 0.6);
+  float along0 = dot(xz, HIGH_WIND);
+  // 卷云的成片范围也顺风拉长（天气图沿风向压缩 3 倍）：一条条顺风的卷云带，而不是一块块圆斑
+  Weather wx = sampleWeather(xz - HIGH_WIND * (along0 * 0.67 * cir));
   if (wx.coverage < 0.01) return 0.0;
   // 这一带的云顶：高度剖面按局部云顶重新归一
   float h = hLayer / wx.top;
   if (h >= 1.0) return 0.0;
-  // 卷云（云型接近 0）：冰晶被高空风拉成纤维状，噪声沿风向拉长 5 倍
-  float stretch = mix(5.0, 1.0, smoothstep(0.0, 0.2, uCloudType));
-  const vec2 HIGH_WIND = vec2(0.8, 0.6);
+  // 卷云（T12）：冰晶被高空风拉成纤维状的丝缕。沿风向拉长 14 倍、横向压窄 1.8 倍（丝缕只有几十到两百米宽）；
+  // 丝缕在几十公里上缓慢蜿蜒；冰晶下落拖出的「马尾」随高度被风切变甩向一侧：越往下横向偏得越多，
+  // 从下面斜着看是一条条向一侧弯下去的钩（钩卷云）。旧版只拉长 5 倍、阈值和积云一样，是一团团灰色的棉絮
+  float stretch = mix(5.0, 1.0, smoothstep(0.0, 0.2, uCloudType)) + 9.0 * cir;
   vec2 xw = xz + wx.warp;
-  vec2 xzn = vec2(dot(xw, HIGH_WIND) / stretch, dot(xw, vec2(-HIGH_WIND.y, HIGH_WIND.x)));
+  float along = dot(xw, HIGH_WIND);
+  float across = dot(xw, vec2(-HIGH_WIND.y, HIGH_WIND.x));
+  float fall = 1.0 - h;
+  across += cir * (1.3 * sin(along * 0.13 + 5.0 * wx.warp.x) + 1.6 * fall * fall * (0.6 + wx.warp.y));
+  vec2 xzn = vec2(along / stretch, across * (1.0 + 0.8 * cir));
   // 两个尺度的形状噪声，相互旋转 37°，按区域混合：有的地方是小碎云，有的地方是大云团
   vec4 nA = textureLod(uShapeNoise, vec3(xzn.x, alt * 1.3, xzn.y) / SHAPE_TILE, lod);
   vec2 xzB = rot2(xzn, 0.65);
@@ -567,17 +577,30 @@ float layerDensity(vec3 p, float lod, bool detail) {
   float baseA = remapc(nA.r, fbmA - 1.0, 1.0, 0.0, 1.0);
   float baseB = remapc(nB.r, fbmB - 1.0, 1.0, 0.0, 1.0);
   float base = mix(baseA, baseB, wx.scaleMix);
-  base *= heightProfile(h, uCloudType);
+  // 云底（T12）：抬升凝结高度处处差不多，所以积云底大体是平的，但不是一整块光滑的平面——
+  // 按约 0.4 km 的小单体（nA.a）和几公里的大起伏（fbmB）上下错开，有的地方垂下来一兜、有的地方缩上去，
+  // 云底才有明暗不一的絮团。只挪高度剖面的输入，不多取纹理
+  float hB = h + (1.0 - cir) * (0.09 * (nA.a - 0.45) + 0.05 * (fbmB - 0.5)) * (1.0 - smoothstep(0.1, 0.3, h));
+  base *= heightProfile(hB, uCloudType);
   float coverage = wx.coverage;
   float d = remapc(base, 1.0 - coverage, 1.0, 0.0, 1.0) * coverage;
+  // 卷云的丝缕要细：覆盖阈值再往上抬，只留噪声的脊
+  d = remapc(d, 0.25 * cir, 1.0, 0.0, 1.0);
   if (detail && d > 0.0) {
     float dfbm = detailFbm(vec3(xzn.x, alt, xzn.y), lod);
-    // 云底是被抽丝的絮状，云顶是翻卷的菜花状
-    float dmod = mix(dfbm, 1.0 - dfbm, clamp(h * 5.0, 0.0, 1.0));
-    d = remapc(d, dmod * 0.55, 1.0, 0.0, 1.0);
-  }
+    // 云底是被抽丝的絮状，云顶是翻卷的菜花状；卷云整层都是抽丝的
+    float hs = clamp(h * 5.0, 0.0, 1.0) * (1.0 - cir);
+    float dmod = mix(dfbm, 1.0 - dfbm, hs);
+    // 云底最下面一两百米侵蚀得更狠：碎絮挂在云底下，而不是一刀切的底面
+    d = remapc(d, dmod * (0.55 + 0.25 * (1.0 - smoothstep(0.0, 0.15, h)) + 0.2 * cir), 1.0, 0.0, 1.0);
+  } else d = remapc(d, 0.275 + 0.1 * cir, 1.0, 0.0, 1.0);
+  // 不取细节时按细节噪声的均值（约 0.5 × 0.55）侵蚀，不取纹理（T12）。旧版不侵蚀：大形比画出来的云胖一大圈、又被 ×3.5 饱和成实心，
+  // 受光步进后 3 步（0.4–3 km，不带细节）落在这些「胖影子」里。太阳低时光线平着穿过整层云，几乎每个样本都被邻居的胖大形挡住：
+  // sunset-wing 逆光的积云整团是灰褐色剪影，顶上和边缘没有一点被照亮的金边（受光光学厚度置 0 / 后 3 步也带细节，金边都回来）。
+  // 150 km 以外的远云也走这里，和近处带细节的云一样瘦，不再有「越远越胖」的接缝
   // 真实积云的边界在几十米内消光就从 0 升到 ~50/km：让密度在边缘快速饱和，轮廓才干脆
-  return min(d * 3.5, 1.0) * uCloudDensity;
+  // 卷云不饱和：冰晶云的丝缕中间浓、两边渐淡，是半透明的（T12）
+  return min(d * mix(3.5, 1.5, cir), 1.0) * uCloudDensity;
 }
 
 // ---- 雷暴（积雨云）----

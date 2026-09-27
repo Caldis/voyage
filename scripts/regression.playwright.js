@@ -60,6 +60,8 @@ async (page) => {
     // 月亮高度 −19.3°（新月相位 1%，在地平线下），不会露头
     { name: "dusk-earthshadow", p: { preset: "wpac", seat: "left", date: "2026-02-16", time: 1068, "wing-pos": "-4" } },
     { name: "clouds-variety", p: { preset: "wpac", time: 900, coverage: 0.62, altitude: 5, "wing-pos": "-4" }, offset: [37, -12] },
+    // T12：卷云（11.5–12.5 km），从 9 km 往上斜看：顺高空风拉长的丝缕、向一侧甩下去的马尾，半透明、透出蓝天
+    { name: "cirrus-noon", p: { preset: "wpac", time: 720, "cloud-preset": "cirrus", coverage: 0.5, altitude: 9, "wing-pos": "8" } },
     { name: "low-sea-glint", p: { preset: "wpac", time: 980, coverage: 0, altitude: 0.6, "wing-pos": "-4" } },
     { name: "in-cloud", p: { preset: "wpac", time: 840, "cloud-preset": "stratocumulus", coverage: 0.95, altitude: 1.35, "wing-pos": "8" }, wait: 6000 },
     { name: "storm-day", p: { preset: "wpac", time: 900, coverage: 0.3, weather: "storm", "wing-pos": "-4" } },

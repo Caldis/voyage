@@ -353,7 +353,10 @@ void main() {
       // 多次散射近似（Wrenninge 2013）：每一阶散射更弱、衰减更慢、相函数更平。
       // 原来只取 4 阶、权重每阶折半，顺光（背散射）时厚云的有效反照率只有 ~0.3，真实厚云是 0.7–0.8，
       // 所以顺光的云普遍偏灰。改成 6 阶、权重衰减放慢，补回高阶散射的能量
-      float sunScatter = 0.0;
+      // 银边（T12）：水滴的散射里约一半是几度以内的衍射峰（g ≈ 0.9），顺着光走的光几乎不偏折，按 delta 缩放
+      // （Joseph 1976）它只受约 1/4 的消光——所以朝太阳看时，云的薄边、顶上被照透的一层比「单次散射 × 全消光」亮得多。
+      // 只在前向起作用（hg(0.9) 离开太阳 30° 就只剩百分之几），顺光 / 侧光的云几乎不变
+      float sunScatter = 0.6 * hg(cosT, 0.9) * exp(-0.25 * od);
       float a = 1.0, b = 1.0, c = 1.0;
       // 雷暴的光学厚度大得多（几百），高阶散射占比更高、整体反照率更接近 1：高阶权重衰减得更慢
       float aDecay = stormW > 0.5 ? 0.7 : 0.62;
@@ -363,8 +366,9 @@ void main() {
         a *= aDecay; b *= 0.35; c *= 0.5;
       }
       // Beer-Powder：云团边缘朝向太阳的地方偏暗，看起来更有体积（Schneider 2015）
+      // 粉末效应只在背着太阳看时有（Schneider 2015 也按视角调）：逆光时薄边正是最亮的地方，不能再压暗（T12）
       float powder = 1.0 - exp(-2.0 * od - 0.5);
-      vec3 sunLight = keyLight(r, up) * sunScatter * mix(1.0, powder, 0.5);
+      vec3 sunLight = keyLight(r, up) * sunScatter * mix(1.0, powder, 0.5 * (1.0 - smoothstep(0.3, 0.9, cosT)));
 #ifdef WONDER_LAYER
       // 奇观的投影椭球挡住直射光（岛在云海上的影子）
       float tp = t + stepLen * jitter;
@@ -384,7 +388,9 @@ void main() {
       float h01 = stormW > 0.5 ? clamp((r - BOTTOM - uShellBottom) / (uShellTop - uShellBottom), 0.0, 1.0)
                                : clamp((r - BOTTOM - uCloudBottom) / max(uCloudTop - uCloudBottom, 1e-3), 0.0, 1.0);
       vec3 eSky = skyIrradiance(r, up);
-      vec3 ambient = eSky / (2.0 * M_PI) * mix(0.12, 1.0, pow(h01, 0.7));
+      // 卷云（T12）：薄冰晶云光学厚度只有零点几到几，底下照样看得到大半个天，不按厚云的「云底只剩 12%」压暗
+      float ambFloor = stormW > 0.5 ? 0.12 : mix(0.12, 0.6, 1.0 - smoothstep(0.0, 0.2, uCloudType));
+      vec3 ambient = eSky / (2.0 * M_PI) * mix(ambFloor, 1.0, pow(h01, 0.7));
       // 夜天光（T46）：skyIrradiance 只有太阳、月亮两路 LUT，没有气辉和星光；海面却经 skyRadiance 反射了它，
       // 无月夜云（≈ 0）成了比海还暗的纯黑剪影（美术总监 wave6 第 5 条：云 Y 9–12、海约 33）。
       // 量级：nightglow（lights.glsl.ts）按半球积分的水平照度 E = 2π·1.6e-7·0.743（van Rhijn 增亮）≈ 7.5e-7 klux，再加积分星光（约 30–50%）和黄道光（约 20–30%），合计约 1.7 倍 ≈ 1.3e-6；
@@ -691,7 +697,7 @@ export const CLOUD_PRESETS: CloudPreset[] = [
   { id: "towering", name: "浓积云（午后对流）", bottom: 1.4, top: 6.5, coverage: 0.35, type: 1, density: 1.2 },
   { id: "altocumulus", name: "高积云（中层，4.5–6 km）", bottom: 4.5, top: 6.0, coverage: 0.6, type: 0.45, density: 0.7 },
   { id: "deck-below", name: "云海贴着航路（云顶 9.8 km）", bottom: 8.0, top: 9.8, coverage: 0.85, type: 0.25, density: 0.8 },
-  { id: "cirrus", name: "卷云（航路上方 11.5–12.5 km）", bottom: 11.5, top: 12.5, coverage: 0.4, type: 0.0, density: 0.12 },
+  { id: "cirrus", name: "卷云（航路上方 11.5–12.5 km）", bottom: 11.5, top: 12.5, coverage: 0.5, type: 0.0, density: 0.12 },
   { id: "clear", name: "无云", bottom: 1.2, top: 3.4, coverage: 0, type: 1, density: 1 },
 ];
 
