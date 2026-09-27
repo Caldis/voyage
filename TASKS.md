@@ -11,7 +11,7 @@
 | T48b | 第 7 波（回归，BIS-7 证实） | 5215 | worktree | Opus（夜城奶白平台：保色只改色度 / 灯芯淡白、浦肯野亮度按亮度混合；场景钉无月） | — | 进行中 |
 | C12 | 第 7 波（锯齿，BIS-7 定根因） | 5214 | worktree | Opus（主步进 IGN 抖动 → 蓝噪声 / 低差异方案，细节随机数同方案去相关；C11 合并后复测云里 8 姿态） | — | 进行中 |
 | W-STAIR | 第 7 波（锯齿，C11 发现） | 5213 | worktree | Opus（机翼边 2 px 阶梯 / 点阵阴影：先诊断再修；须保持机翼 pass 无机翼处逐位照抄，TM02 依赖） | — | 进行中 |
-| G07 | 第 7 波（飞机地面） | 5207 | worktree | Opus（G06 代价：mip 按层在 Worker 生成、首载先粗后细、2048² 按 GPU 启动定档；必审） | — | 进行中 |
+| G07 | 第 7 波（地面） | 5207 | `worktree-agent-a3f4b4129ac333f16`（b09ee0a） | Opus | 审查中（5216） | 已交付：Worker 按层 mip（上传主线程 265→3.7 ms / 2 min）、暂存缓冲原子换上（修 PERF-8 起重建错位 2 帧闪烁，+45 MB）、白天首载先粗后细（fuji 28→7.5 s 可用）、按 GPU 启动定档 2048/1024（持久化手动档，改 PERF-5 行为）；>16.7 ms 帧未能证明归零，「卡顿来自 generateMipmap」已推翻 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
