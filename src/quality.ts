@@ -171,7 +171,12 @@ function autoGroundRes(): GroundResDecision {
   let gl: WebGL2RenderingContext | null = null;
   try {
     // 与主渲染器（main.ts）同一个 powerPreference：双显卡 Mac 上默认值会拿到 Intel 核显、误判 1024
-    gl = document.createElement("canvas").getContext("webgl2", { powerPreference: "high-performance" });
+    const attrs: WebGLContextAttributes = { powerPreference: "high-performance" };
+    // 优先用 OffscreenCanvas：dev-browser.mjs 的 GPU 计时钩子（installGlProbe）挂在 HTMLCanvasElement.getContext 上、
+    // 抓「页面里第一个 webgl2 上下文」，用 <canvas> 探测会让它抓到这个随即释放的临时上下文、bench 的 gpu 计时静默变成 null（G07 起，G07b 发现）。
+    // 不支持 OffscreenCanvas 的 WebGL2（Safari 16 及更早）退回 <canvas>
+    gl = typeof OffscreenCanvas !== "undefined" ? (new OffscreenCanvas(1, 1).getContext("webgl2", attrs) as WebGL2RenderingContext | null) : null;
+    gl ??= document.createElement("canvas").getContext("webgl2", attrs);
     if (gl) {
       const generic = gl.getParameter(gl.RENDERER) as string;
       const ext = /webkit webgl/i.test(generic) ? gl.getExtension("WEBGL_debug_renderer_info") : null;
