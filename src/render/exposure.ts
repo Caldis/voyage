@@ -235,7 +235,10 @@ void main() {
 //     四周却扣满，灯周围成了暗洞（P1-b）。线性域 + 腐蚀两处都修：孤立的跳变被 3×3 最小值归零，频闪的大光晕在线性域里各格相近。
 //   两个模式共用一个程序（uMode）：0 = 更新状态（RG：R = 平滑后的 log2 亮度，G = 线性瞬态），1 = 对 G 做 3×3 腐蚀（输出 R）。
 //   uDt ≥ 1e8 视为「直接收敛」（瞬态 0）：跳变（snap）与冻结（dt = 0）都走这条，冻结时与 T48b 逐位相同。
+/** 粗网格一格 = 眩光纹理（半分辨率）的多少个纹素（偶数） */
+const LOCAL_CELL = 4;
 const LOCAL_FRAG = /* glsl */ `
+#define LOCAL_CELL ${LOCAL_CELL}
 uniform sampler2D uBloom;
 uniform sampler2D uPrevLocal;
 uniform vec2 uBloomTexel; // 眩光纹理的纹素大小（uv）
@@ -247,22 +250,26 @@ uniform int uMode;        // 0 = 更新，1 = 腐蚀
 varying vec2 vUv;
 void main() {
   if (uMode == 1) {
+    // 成片判定：3×3 邻格里最小的线性瞬态 ÷ 本格的，不到 2–10% 就不算（孤立的跳变：一盏灯跨进这一格，邻格是 0 或在变暗）。
+    // 只当门控用、不直接取最小值：取最小值在频闪光晕的陡坡上会把本格的瞬态低估一大截，灯旁照样被压暗
     ivec2 p = ivec2(gl_FragCoord.xy), sz = textureSize(uPrevLocal, 0) - 1;
+    float c = texelFetch(uPrevLocal, p, 0).g;
     float m = 1e30;
     for (int i = -1; i <= 1; i++)
       for (int j = -1; j <= 1; j++) m = min(m, texelFetch(uPrevLocal, clamp(p + ivec2(i, j), ivec2(0), sz), 0).g);
-    gl_FragColor = vec4(m, 0.0, 0.0, 1.0);
+    gl_FragColor = vec4(c * smoothstep(0.02, 0.1, m / max(c, 1e-30)), 0.0, 0.0, 1.0);
     return;
   }
+  // 一格 = 眩光纹理 LOCAL_CELL × LOCAL_CELL 纹素：每次双线性取样正好是 2×2 纹素的平均（偏移 ±1、±3…个纹素）
+  const int H = LOCAL_CELL / 2;
   float s = 0.0;
-  for (int i = 0; i < 4; i++) {
-    for (int j = 0; j < 4; j++) {
-      // 偏移 ±1、±3 个纹素：每次双线性取样正好是 2×2 纹素的平均，16 次覆盖 8×8
-      vec2 o = vec2(float(i), float(j)) * 2.0 - 3.0;
+  for (int i = 0; i < H; i++) {
+    for (int j = 0; j < H; j++) {
+      vec2 o = vec2(float(i), float(j)) * 2.0 - float(H - 1);
       s += dot(texture(uBloom, vUv + o * uBloomTexel).rgb, vec3(0.2126, 0.7152, 0.0722));
     }
   }
-  float Lc = s * 0.0625 / uBloomLevels;   // 与最终合成的 glare 同单位
+  float Lc = s / float(H * H) / uBloomLevels;   // 与最终合成的 glare 同单位
   float lc = log2(max(Lc, 1e-30));
   float lp = texture(uPrevLocal, vUv).r;
   bool conv = uDt >= 1e8 || isnan(lp) || isinf(lp); // 直接收敛；状态坏了（NaN / Inf）也按收敛重来
@@ -437,6 +444,11 @@ void main() {
   vec3 c = mix(hdr, glare, uGlare);
   // T48c 这个像素里眩光（点扩散）占的亮度比例：机翼上夜间局部适应只压这一份（见下文 TONE_MAPPING 段）
   float glareFrac = clamp(uGlare * dot(glare, vec3(0.2126, 0.7152, 0.0722)) / max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12), 0.0, 1.0);
+  // T48c 粗网格上「刚刚突然变亮」的线性亮度（频闪 / 闪电，与 glare 同单位；冻结、稳态时为 0）和它在这个像素里的份额：
+  //   这一份（眩光里新增的闪光）不吃局部适应——否则常亮位置灯旁被「闪光前的适应」压着，闪光的白雾在灯周围成了暗盘（审查 P1-b：
+  //   即使按闪光前的状态适应，灯把自己周围压暗了，叠上去的闪光在那里也被压暗，径向剖面 r 15 → 55 反而上升 15–25 级）
+  float transient = texture(uLocalLum, vUv).r;
+  float transFrac = clamp(uGlare * transient / max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12), 0.0, 1.0);
   // 舱内色适应：只改色度，亮度保持（亮度适应已由上面的曝光负责）；遮罩是解析的，交界处按 alpha 过渡
   vec3 ca = max(LMS2RGB * (catGain * (RGB2LMS * c)), vec3(0.0));
   ca *= dot(c, vec3(0.2126, 0.7152, 0.0722)) / max(dot(ca, vec3(0.2126, 0.7152, 0.0722)), 1e-9);
@@ -483,9 +495,9 @@ void main() {
     //    低通之上的细节（单个灯点、路网）原样保留——压的是「地毯」不是「灯」，灯点与路网因此重新分开。
     //    黑地、星空、月夜的海（低通远低于拐点）逐位不变；白天 / 黄昏 nightLoc = 0。
     //    T48c：低通再减去粗网格上「刚刚突然变亮」的线性亮度（见 LOCAL_FRAG），频闪 / 闪电不当帧进适应
-    //    线性域扣：Lfine − 瞬态，最多扣到 Lfine 的 1/16（4 档），不出负数
+    //    线性域扣（Lfine − 瞬态，对数域扣时常亮位置灯那一格几乎扣不到，审查 P1-b），最多扣到 Lfine 的 1/16
     float lFine = dot(glare, vec3(0.2126, 0.7152, 0.0722));
-    float lb = log2(max(max(lFine - texture(uLocalLum, vUv).r, lFine * 0.0625) * exposure, 1e-9) / 0.18) - uNightLocal.x;
+    float lb = log2(max(max(lFine - transient, lFine * 0.0625) * exposure, 1e-9) / 0.18) - uNightLocal.x;
     float lq = clamp(lb + 0.5, 0.0, 1.0);
     float gLoc = exp2(-uNightLocal.y * (0.5 * lq * lq + max(lb - 0.5, 0.0)) * nightLoc);
     //    T48c 机翼（TM02 的 notWing 判据，dW 上面已算好，不多采样）：落在翼面上的眩光那一份照常压，翼面自身只按 uNightLocal.z 的比例压。
@@ -493,7 +505,7 @@ void main() {
     //    整个像素都不压时，灯的眩光在翼面一侧比天空一侧大一圈、贴着白灯的翼面死白（1 km 低空 1256 px 的块）；
     //    只压眩光（z = 0）光晕两侧一样大、翼面单调，但死白块仍有约 670 px。z = 0.85：径向剖面不再先暗后亮、死白块约 220–290 px（handoff/T48c.md 扫描表）。
     //    频闪 / 闪电不当帧进适应靠的是 uLocalLum 的瞬态扣除，不靠这里。非机翼像素 notWing = 1，与 T48b 逐点相同
-    x *= mix(1.0 + max(glareFrac, uNightLocal.z) * (gLoc - 1.0), gLoc, notWing);
+    x *= mix(mix(1.0 + max(glareFrac, uNightLocal.z) * (gLoc - 1.0), gLoc, notWing), 1.0, transFrac);
     // TM01：白天窗外的受光云在 AgX 肩部保留对比（见 dayHighlightGain）；夜里、黄昏、舱内、云里 hiGate = 0，逐位不变
     //    TM02：低通取眩光（uBloom 的 mip 链，各级加权平均，已经读过），按同一个曝光换算
     vec3 a = toneMapping(x * exp2(dayHighlightGain(x, glare * exposure) * hiGate));
@@ -732,12 +744,12 @@ export class Exposure {
   /** 瞬态扣除：按眩光纹理（半分辨率；能线性过滤 32 位浮点时是 FloatType）的 1/8 建目标，时间平滑后交给最终合成 */
   private renderLocal(bloom: THREE.Texture, dt: number) {
     const img = bloom.image as { width: number; height: number };
-    const w = Math.max(1, Math.ceil(img.width / 8)), h = Math.max(1, Math.ceil(img.height / 8));
+    const w = Math.max(1, Math.ceil(img.width / LOCAL_CELL)), h = Math.max(1, Math.ceil(img.height / LOCAL_CELL));
     if (!this.local.length || this.local[0].width !== w || this.local[0].height !== h || this.local[0].texture.type !== bloom.type) {
       for (const t of this.local) t.dispose();
       this.localEroded?.dispose();
       const opts = { type: bloom.type, format: THREE.RGFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
-      this.local = [new THREE.WebGLRenderTarget(w, h, opts), new THREE.WebGLRenderTarget(w, h, opts)];
+      this.local = [new THREE.WebGLRenderTarget(w, h, opts), new THREE.WebGLRenderTarget(w, h, opts)]; // R = 平滑 log2、G = 线性瞬态
       this.localEroded = new THREE.WebGLRenderTarget(w, h, { ...opts, format: THREE.RedFormat });
       this.localReset = true;
       // 半精度路径（没有 OES_texture_float_linear）：状态是 log2 亮度（夜城约 −10…−20），半精度一个 ULP 0.008–0.016 档，
