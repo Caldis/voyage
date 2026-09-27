@@ -151,7 +151,7 @@ function installTimer() {
   const nameOf = (mat) => {
     // PERF-10：云步进的变体材质名是 cloud-march / cloud-march-<键>（W 奇观 C 卷云 S 雷暴 T 台风）。雷暴 / 台风 / 卷云变体照旧算「云步进」，
     // 和改动前的单一程序（没有名字，按对象身份认成「云步进」）可比；带奇观层的归「云步进(奇观变体)」
-    if (mat && typeof mat.name === "string" && (mat.name === "cloud-march" || mat.name.startsWith("cloud-march-"))) return mat.name.includes("W", 12) ? "云步进(奇观变体)" : "云步进";
+    if (mat && typeof mat.name === "string" && (mat.name === "cloud-march" || mat.name.startsWith("cloud-march-"))) return mat.name.includes("W", 12) ? "云步进(奇观变体)" : mat.name === "cloud-march-C" ? "云步进(卷云变体)" : "云步进";
     if (mat && typeof mat.name === "string" && mat.name.length > 0) return mat.name;
     if (mat === v.outsideMat) return "窗外";
     if (mat === v.sceneMat) return "舱内合成";

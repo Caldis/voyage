@@ -275,6 +275,8 @@ const director = new Director({
   toLocal: (lat, lon) => ground.localFrame.toLocal(lat, lon),
   localPos: () => [cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y],
   landBelow: () => (state.floor?.known ? state.floor.reason === "land" : null),
+  // PERF-10：导演摆雷暴 / 台风之前先让云程序编好对应的天气变体（编好之前推迟摆放）
+  weatherReady: (kind) => clouds.prepareWeather(kind === "storm", kind === "typhoon"),
 });
 // ---------- 声音（T11，audio.ts）：默认静音，面板「声音」开关 / M 键在用户手势里启用 ----------
 const audio = new CabinAudio();

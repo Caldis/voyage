@@ -660,7 +660,6 @@ varying vec2 vUv;
 // 右半存 (深度 × 不透明度, 不透明度)，用时再相除：直接累积深度的话，没有云的帧深度是 400 km（gl_FragDepth = 1），
 // 稀疏的小云、云边上逐帧抖动有云 / 没云，累积出来的「深度」是 150–360 km，海面上的云被当成在海面后面整片去掉（T38 踩过）
 void main() {
-  vec2 texel = 1.0 / uCloudResolution;
   bool depthHalf = gl_FragCoord.x >= uCloudResolution.x;
   vec2 fc = gl_FragCoord.xy - vec2(depthHalf ? uCloudResolution.x : 0.0, 0.0);
   vec3 rdC = cabinRay(fc * (uResolution / uCloudResolution));
@@ -668,18 +667,22 @@ void main() {
   // 离窗板再远一点（0.025，比一个云像素在窗板平面上的尺寸大一个数量级）的像素，3×3 邻域全是 (0, 0, 0, 1)，
   // 夹取后历史也被夹成它，结果恒为 (0, 0, 0, 1)——直接写出，不再读 9 + 9 次邻域（窗外只占画面的一部分）
   if (paneDistance(uHead, rdC) > 0.025) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-  vec2 uv = fc * texel;
-  float dCur = texture(uCurrentDepth, uv).r * CLOUD_DEPTH_SCALE;
-  vec4 cur = texture(uCurrent, uv);
+  // 本帧的 raw 与这一半同分辨率、取样点正好在纹素中心：直接 texelFetch（PERF-11）。
+  // 旧版用 texture()，32 位浮点纹理的线性过滤在 NVIDIA 上是降速的，而取样点在纹素中心时过滤结果就是纹素本身；
+  // 边缘按 ClampToEdge 的效果夹到 [0, 尺寸 − 1]，结果逐位不变
+  ivec2 ip = ivec2(fc);
+  ivec2 hi = ivec2(uCloudResolution) - 1;
+  float dCur = texelFetch(uCurrentDepth, ip, 0).r * CLOUD_DEPTH_SCALE;
+  vec4 cur = texelFetch(uCurrent, ip, 0);
   if (depthHalf) cur = vec4(dCur * (1.0 - cur.a), 1.0 - cur.a, 0.0, 1.0);
   if (uReset || (depthHalf && uResetDepth)) { gl_FragColor = cur; return; }
 
   vec4 mn = cur, mx = cur;
   for (int x = -1; x <= 1; x++)
   for (int y = -1; y <= 1; y++) {
-    vec2 q = uv + vec2(x, y) * texel;
-    vec4 s = texture(uCurrent, q);
-    if (depthHalf) s = vec4(texture(uCurrentDepth, q).r * CLOUD_DEPTH_SCALE * (1.0 - s.a), 1.0 - s.a, 0.0, 1.0);
+    ivec2 q = clamp(ip + ivec2(x, y), ivec2(0), hi);
+    vec4 s = texelFetch(uCurrent, q, 0);
+    if (depthHalf) s = vec4(texelFetch(uCurrentDepth, q, 0).r * CLOUD_DEPTH_SCALE * (1.0 - s.a), 1.0 - s.a, 0.0, 1.0);
     mn = min(mn, s);
     mx = max(mx, s);
   }

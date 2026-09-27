@@ -78,6 +78,11 @@ export interface DirectorHost {
   localPos(): [number, number];
   /** 正下方是陆地 / 海（地形数据还没到时 null，天气场改用粗略海陆分布） */
   landBelow(): boolean | null;
+  /**
+   * 预告（PERF-10）：马上要摆雷暴（storm）/ 台风（typhoon）时调用——云程序立刻在后台编对应的天气变体，返回现在画不画得出来。
+   * 返回 false 时导演推迟摆放（下一次规划再问），免得摆出一个看不见的天气系统；没实现（旧接入）当作总是画得出来
+   */
+  weatherReady?(kind: "storm" | "typhoon"): boolean;
 }
 
 export interface DirectorTelemetry {

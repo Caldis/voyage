@@ -7,8 +7,8 @@ set -e
 PORT=$1; OUT=$2; shift 2
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 FUJI='"preset":"fuji","date":"2026-09-27","time":395,"altitude":4,"wing-pos":"-4"'
-FLOAT='v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"floatcity\", { forwardOffsetDeg: 0, distKm: 80, reveal: 1, seed: 0.23 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); return v.clouds.wonderLayerState;'
-CIRRUS='for (let i = 0; i < 240 && ![\"ready\", \"failed\"].includes(v.clouds.cirrusLayerState); i++) await new Promise((r) => setTimeout(r, 250)); return v.clouds.cirrusLayerState;'
+FLOAT='v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"floatcity\", { forwardOffsetDeg: 0, distKm: 80, reveal: 1, seed: 0.23 }); for (let i = 0; i < 240 && v.clouds.wonderLayerState !== \"ready\"; i++) await new Promise((r) => setTimeout(r, 250)); v.cloudUniforms.uCloudOffset.value.set(0, 0); return v.clouds.wonderLayerState;'
+CIRRUS='for (let i = 0; i < 240 && ![\"ready\", \"failed\"].includes(v.clouds.cirrusLayerState); i++) await new Promise((r) => setTimeout(r, 250)); v.cloudUniforms.uCloudOffset.value.set(0, 0); return v.clouds.cirrusLayerState;'
 node "$HERE/scripts/dev-browser.mjs" shots --port "$PORT" --out "$OUT" --freeze --settle "$@" \
   --scene '{"name":"noon-cumulus","p":{"preset":"wpac","time":720,"wing-pos":"8"},"offset":[0,0]}' \
   --scene '{"name":"sunset-wing","p":{"preset":"wpac","time":1040,"wing-pos":"8"},"offset":[0,0]}' \
