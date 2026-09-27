@@ -344,6 +344,89 @@ float remapc(float v, float a, float b, float c, float d) {
   return clamp(c + (v - a) / (b - a) * (d - c), min(c, d), max(c, d));
 }
 
+// ---- 噪声的随机平铺（T32）----
+// 细节噪声一个周期只有 0.9 km（最低一级 Worley 每周期 2 个格子），远处细的几级被 mip 滤掉后只剩这一级：
+// 同一组云团每 0.9 km 重复一次，巡航高度看中远处的云海是一排排等距的小云团（像铺瓷砖；自相关峰 0.3–0.5）。
+// 做法同海面（T21）：按世界坐标的三角格子（Mikkelsen 2022 的 TriangleGrid）做「六边形随机平铺」
+// （Heitz & Neyret 2018）——每个格点给纹理一个随机平移（水平 + 竖直）和任意角度的水平旋转，
+// 采样点取周围三个格点的样本，按重心权重做方差守恒混合（均值 + Σwᵢ(sᵢ − 均值) / √Σwᵢ²）：
+// 统计性质（均值、方差）不变，整片云海上不再有周期
+const float DETAIL_FBM_MEAN = 0.4756;   // 细节噪声 fbm（r·0.625 + g·0.25 + b·0.125）的均值（handoff/T32-noise-stats.mjs 实测）
+
+// 整数哈希 pcg3d（Jarzynski & Olano 2020）：格点编号是精确的整数
+vec3 cloudHash3(ivec3 p) {
+  uvec3 v = uvec3(p) * 1664525u + 1013904223u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  v ^= v >> 16u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  return vec3(v) * (1.0 / 4294967296.0);
+}
+
+// 三角格子：st 是以「格距」为单位的水平坐标。返回周围三个格点的整数编号、
+// 采样点相对各格点的位置（格距为单位，已换回正交坐标）和重心权重
+struct HexTaps { ivec2 id[3]; vec2 rel[3]; vec3 w; };
+HexTaps hexTaps(vec2 st) {
+  HexTaps t;
+  vec2 sk = vec2(st.x - st.y * 0.57735027, st.y * 1.15470054);
+  vec2 skF = floor(sk);
+  vec2 fr = sk - skF;
+  float zz = 1.0 - fr.x - fr.y;
+  float up = step(zz, 0.0);               // 落在菱形的上半个三角形
+  float sg = 2.0 * up - 1.0;
+  t.w = vec3(-zz * sg, up - fr.y * sg, up - fr.x * sg);   // 和为 1
+  vec2 vo0 = vec2(up, up), vo1 = vec2(up, 1.0 - up), vo2 = vec2(1.0 - up, up);
+  ivec2 base = ivec2(skF);
+  t.id[0] = base + ivec2(vo0); t.id[1] = base + ivec2(vo1); t.id[2] = base + ivec2(vo2);
+  vec2 d0 = fr - vo0, d1 = fr - vo1, d2 = fr - vo2;
+  // 反斜变换：x = a + b/2，z = b·√3/2
+  t.rel[0] = vec2(d0.x + 0.5 * d0.y, d0.y * 0.8660254);
+  t.rel[1] = vec2(d1.x + 0.5 * d1.y, d1.y * 0.8660254);
+  t.rel[2] = vec2(d2.x + 0.5 * d2.y, d2.y * 0.8660254);
+  return t;
+}
+
+// 细节噪声的一个格点的样本：rel 是采样点相对格点的位置（平铺周期为单位），h 是这个格点的随机数：
+// 纹理随机平移（水平 xy + 竖直 x + y）、水平任意角度旋转（z）
+float detailTap(vec2 rel, vec3 h, float qy, float lod) {
+  float ang = h.z * 6.2831853;
+  float ca = cos(ang), sa = sin(ang);
+  vec2 r = vec2(ca * rel.x - sa * rel.y, sa * rel.x + ca * rel.y) + h.xy;
+  vec3 dn = textureLod(uDetailNoise, vec3(r.x, qy / DETAIL_TILE + h.x + h.y, r.y), lod).rgb;
+  return dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125;
+}
+
+// 受光步进（朝太阳的一小段）的细节噪声只取随机平铺的一个格点（gDetailLight = true 时）：
+// 云步进那一点（完整三样本）顺手按权重随机挑一个格点（随机数 gDetailRnd），把它的位置和随机数记在 gDetailVert / gDetailHash，
+// 这一段受光步进的样本都沿用这个格点的变换，不再求格子和哈希。
+// 受光步进也三样本全取时，展开的受光循环里多了三份格子 / 哈希 / 取样，云步进 GPU 时间涨约 20%；
+// 固定沿用权重最大的格点又会在格子交界处突变，光照上露出一圈圈六边形的边。随机挑的期望就是按权重的平均，时间累积会把噪点抹平。
+// 受光步进用到细节的只有最近的几百米，和一个平铺周期（0.9 km）相比很短，沿用同一个格点的变换是连续的。
+// 云步进那一点没求细节（150 km 以外、或那一点只有雷暴 / 台风的云）时沿用上一个求过的格点：只是换了一个随机平移，仍然连续
+float gDetailRnd = 0.5;
+bool gDetailLight = false;
+vec2 gDetailVert = vec2(0.0);
+vec3 gDetailHash = vec3(0.0);
+
+// 细节噪声的 fbm，随机平铺。q = (水平 x, 高度, 水平 z)，km。
+// 格距 = 一个平铺周期：一个格点管的区域约一个周期大，整个周期至多完整出现一次
+float detailFbm(vec3 q, float lod) {
+  vec2 st = q.xz / DETAIL_TILE;
+  if (gDetailLight) return detailTap(st - gDetailVert, gDetailHash, q.y, lod);
+  HexTaps t = hexTaps(st);
+  // 权重取三次方再归一：过渡带变窄，两套图案叠在一起的「重影」区域少一些（方差守恒混合负责保住对比度）
+  vec3 w = t.w * t.w * t.w;
+  w /= dot(w, vec3(1.0));
+  int pick = gDetailRnd < w.x ? 0 : (gDetailRnd < w.x + w.y ? 1 : 2);
+  float s = 0.0;
+  for (int j = 0; j < 3; j++) {
+    vec3 h = cloudHash3(ivec3(t.id[j], 7));
+    if (j == pick) { gDetailVert = st - t.rel[j]; gDetailHash = h; }
+    // 权重很小的格点（三次方后 < 2%）不取样：平均每点从 3 个样本降到约 2 个，混合结果几乎不变
+    if (w[j] > 0.02) s += w[j] * (detailTap(t.rel[j], h, q.y, lod) - DETAIL_FBM_MEAN);
+  }
+  return clamp(DETAIL_FBM_MEAN + s * inversesqrt(dot(w, w)), 0.0, 1.0);
+}
+
 // 高度剖面：层积云扁而平，积云底平、顶圆
 float heightProfile(float h, float type) {
   float stratus = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(0.35, 0.7, h));
@@ -426,8 +509,7 @@ float layerDensity(vec3 p, float lod, bool detail) {
   float coverage = wx.coverage;
   float d = remapc(base, 1.0 - coverage, 1.0, 0.0, 1.0) * coverage;
   if (detail && d > 0.0) {
-    vec3 dn = textureLod(uDetailNoise, vec3(xzn.x, alt, xzn.y) / DETAIL_TILE, lod).rgb;
-    float dfbm = dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125;
+    float dfbm = detailFbm(vec3(xzn.x, alt, xzn.y), lod);
     // 云底是被抽丝的絮状，云顶是翻卷的菜花状
     float dmod = mix(dfbm, 1.0 - dfbm, clamp(h * 5.0, 0.0, 1.0));
     d = remapc(d, dmod * 0.55, 1.0, 0.0, 1.0);
