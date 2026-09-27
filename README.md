@@ -29,7 +29,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   → 机翼 pass（wing-pass.ts）：读场景 HDR，把机翼与翼尖灯合成进窗外部分
   → 眩光 mip 链 → 测光（窗外 / 舱内分开，亮度 + 色度）→ 适应 → 曝光 + 舱内色适应 + 浦肯野 + AgX + 抖动 → 屏幕
 ```
-启动时一次性计算：透射率 / 多次散射 / 天空辐照度 LUT、云噪声（GPU 生成后读回）、星图（CPU 溅射）。
+启动时一次性计算：透射率 / 多次散射 / 天空辐照度 LUT、云噪声（GPU 生成后读回）、星图（CPU 上排星表格子 + 解码银河）。
 首次打开或改了着色器后要冷编译着色器（Windows d3d11 上 SC-5 以后真冷启动约 17 秒，见坑点），期间显示加载遮罩。
 
 ## 目录与模块
@@ -41,7 +41,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进） |
 | `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步 |
 | `src/astro.ts` | 太阳 / 月亮位置、月相、当地→赤道坐标矩阵（astronomy-engine） |
-| `src/sky-assets.ts` | 星图（BSC5 溅射成 HDR；A 通道是银河）、月面贴图 |
+| `src/sky-assets.ts` | 星图（RGB：BSC5 星表格子，每格最多一颗星，T41；A 通道是银河）、月面贴图 |
 | `src/light-pollution.ts` | 城市光污染的天空背景（T09）：从地面夜光估算，只压银河的可见度 |
 | `src/traffic.ts` / `src/weather.ts` | 远处飞机的运动；天气预设、雷暴 / 台风摆放、闪电调度；天气场 `WeatherField`（T19b：按经纬度 + 时间取样云型 / 云量，雷暴系统与台风的出生、寿命、漂移，粗略东亚海陆分布） |
 | `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
@@ -60,12 +60,13 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/render/ocean.glsl.ts` | 海面：菲涅尔、12 波斜率场、风痕、`oceanRadiance` |
 | `src/render/terrain-shading.glsl.ts` | 真实地面着色 `groundRadiance` |
 | `src/render/wing-shading.glsl.ts` | 机翼着色 `shadeWing` 与航行灯 / 频闪 `wingLights` |
+| `src/render/optics.ts` / `optics.glsl.ts` | 罕见光学现象（T17）：宝光与本机影子（乘在云的辐亮度上）、幻日与 22° 晕（卷云单次散射）、太阳圆盘与绿闪（地平线亚像素裁切 + 三色色散 + 蜃景放大）；CPU 端按条件 + 分段随机决定出不出现、多强 |
 | `src/render/lightning.glsl.ts` | 闪电照度 `flashIlluminance` 与云地闪通道 `boltRadiance` |
 | `src/render/view.glsl.ts` | 相机射线、舷窗尺寸 |
 | `src/render/cabin.glsl.ts` | 窗洞内衬（漏斗）、窗板光源、划痕 / 油污 / 水痕 |
 | `src/render/wing.glsl.ts` | 机翼 SDF、材质细节、机身投影 |
 | `src/render/lights.glsl.ts` | 太阳 / 月亮 / 夜天光、直射主光源 `uKey*` |
-| `src/render/stars.glsl.ts` | 星星、银河（物理定标 + 眼睛的对比度阈值）、月亮圆盘 |
+| `src/render/stars.glsl.ts` | 银河（物理定标 + 眼睛的对比度阈值）、月亮圆盘（窗外程序）；点星的亚像素点扩散 `starPoints`（舱内程序，T41） |
 | `src/render/ground.glsl.ts` | clipmap 采样、地形求交、地形阴影 |
 | `src/render/islands.glsl.ts` | 程序生成的岛屿（仅在关闭真实地理数据时） |
 | `src/render/traffic.glsl.ts` | 航迹云与远处飞机 |
@@ -77,7 +78,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 
 ## 调试与验证
 
-- `window.__voyage`：`state`、`head`、`cloudUniforms`、`snapAll`、`clouds`、`resize`、`sceneMat`、`exposure`、`traffic`、`ground`、`weather`、`minimap`（DX-06 调试小地图，见下）。
+- `window.__voyage`：`state`、`head`、`cloudUniforms`、`snapAll`、`clouds`、`resize`、`sceneMat`、`exposure`、`traffic`、`ground`、`weather`、`minimap`（DX-06 调试小地图，见下）、`optics`（T17，见下）。
+- **罕见光学现象**（T17，`src/render/optics.ts`）：平时按条件 + 随机出现（宝光：云顶在下方且是水滴云、太阳在海平线以上、每 20 模拟分钟掷一次；幻日 / 22° 晕：卷云、每 30 分钟掷一次，常只出一侧；绿闪：每个日落都有色散，约三成日落有把它放大到看得见的逆温蜃景）。强制出现：URL `?optics=glory,halo,flash`（或 `all`），全关对照 `?optics=off`；运行时 `__voyage.optics.force = { glory: true }`、`__voyage.optics.disabled = true`；`__voyage.optics.status` 看当前强度 / 云滴半径 / 放大倍数。`__voyage.optics.pinGreenFlash(0.5)` 把模拟时间钉在绿闪那一刻（0 = 红色日像上缘刚落到海平线、1 = 绿色上缘落下；飞机在动，每帧重新对准），`pinGreenFlash(null)` 解除；`__voyage.optics.pixelOf(__voyage.sceneMat.uniforms[, 方向])` 算反日点（或任意窗外方向）落在屏幕哪个像素，找「宝光 / 幻日在窗里」的时刻用。几何上：宝光要座位背对太阳（如 wpac 左座 16:30），幻日在太阳两侧约 22°（wpac 右座 16:30 卷云）。自测场景见 `handoff/T17-shots.ps1`。
 - **调试小地图**（DX-06，`src/debug/minimap.ts`）：面板底部「调试小地图」开关，或按 `N`（不在输入框里时）；默认关，纯 2D canvas 叠层，画在左下角（约 280×300、半透明深色底，不挡舷窗中心），关着时 `update()` 第一行就返回、canvas `display:none`，零开销。内容：本机（图标固定圆心，地图始终「航向朝上」）、已飞过的轨迹、当前航线（`director.leg` 的航段或 `state.preset.dest`）、远处的其他飞机（`traffic.ts`）、奇观（`wonders.active`）、以及「云的多普勒」——仿气象雷达回波图，背景网格从 `director.weather.field.sample()`（天气场）按经纬度采样云量 / 云型换算出回波强度，叠加当前**实际渲染中**的 `weather.storms` / `weather.hurricane`（不论天气是导演按天气场摆的还是面板手选的，雷达图都和窗外一致）。点击地图本体在 50 / 200 / 800 km 三档量程间切换。雷达网格（48×48）每约 800 ms 重采样一次，且分帧算（每帧最多 4 行），避免拖帧；台风的螺旋雨带是按角度做正弦调制的近似图形（用于「看起来像螺旋回波」），不是 `clouds.glsl.ts` 里真正的密度场（CPU 侧读不到那份数据）。
 - `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
 - `window.__voyageStartup`：启动各阶段耗时。
@@ -87,13 +89,18 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - 找程序生成的岛：在浏览器里用 JS 复刻 `hash22` 列出岛心（见 WORKLOG「岛屿」）。
 
 - **私有 headless 联调**（不用共享浏览器锁）：`node scripts/dev-browser.mjs check --port <端口>`（只开页面、等启动完成、收集 console error / pageerror，有错误就打印并以非 0 退出码报告，没有就退出 0；提交前用它比跑 `shots` 快得多，不用等每个场景 2.5 s 的稳定等待）、`shots --port <端口> [--only a,b]`（跑回归场景表 + 截图 + 帧时间）、`cold --port <端口>`（真冷启动）、`bench --port <端口> --baseline <对照端口>`（批渲帧时间两端口对照，附 GPU timer query）。脚本会自动找本机 `ms-playwright` 缓存的完整版 `chrome.exe`，启动后校验渲染器不是 SwiftShader（用了 `chrome-headless-shell.exe` 或 `--use-angle=swiftshader` 会静默退化，见下面「坑点」）。GPU 被其他代理占满时可能报 `Target crashed`（等一等或换个时间再跑，`pnpm run` 套一层时偶发挂起，直接 `node scripts/dev-browser.mjs ...` 更稳，见 `handoff/DX.md`）。
+  **`shots` 的 `--out` 相对仓库根解析**（不是当前工作目录），不传就是 `tmp/screenshot/dev-<端口>`（T08 开发体验反馈踩过一次：写了 `../../tmp/...` 结果传到了仓库外面）。
+  **`shots` 默认关闪电频闪**（DX-07）：调用 `weather.ts` 本来就留的调试开关（`window.__voyage.weather.hold = true` + `heldIntensity = 0`），不然截图偶尔会撞上一大团闪电白光，糊里糊涂当成回归差异（T08 开发体验反馈）；`--allow-flash` 恢复正常按泊松过程闪（雷暴 / 台风场景想专门看闪电时用）。`shots` 现在也会打印截图期间的 console error / pageerror 数（和 `check` 共用一份收集逻辑），不用另外再跑一次 `check`。
 - **临时场景（DX-05）**：`shots` 支持 `--scene '<JSON>'`（可重复，和 `--only` 可并用），不用再为每个任务新写一个 `T0x-shots.mjs`。字段和 `scenarios.mjs` 里 `SCENES` 数组的条目一致：`name`（必填，同时是文件名）、`p`（面板控件 id → 值，如 `preset` / `time` / `wing-pos` / `cabin-class` / `altitude` / `weather` / `coverage`）、`head`（数字只设 z，或 `[x,y,z]` 三元组——`[-0.42,0.1,-0.5]` 看前方、`[0.42,0.1,-0.5]` 看后方、`[0,0.02,-0.42]` 默认坐姿）、`offset`（云的世界偏移）、`wait`、`ground`（等真实地面瓦片）。例（商务舱看后方）：
   ```bash
   node scripts/dev-browser.mjs shots --port 5247 --out tmp/screenshot/x \
     --scene "{\"name\":\"biz-behind\",\"p\":{\"preset\":\"wpac\",\"time\":720,\"wing-pos\":\"8\",\"cabin-class\":\"business\"},\"head\":[0.42,0.1,-0.5]}"
   ```
   没有 `--scene` 时行为和以前完全一样（`--only` 过滤固定场景表，或跑全量表）。
-- **截图并排对照（DX-05）**：`node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]`，把多张截图拼成一张，每张左上角标文件名（父目录/文件名，便于区分不同批次的同名场景）；不给 `--crop` 就是整图并排，给了就先裁剪再按 `--zoom` 用最近邻放大（不模糊，专门给锯齿 / 闪烁这类像素级问题用）。泛化自 `handoff/T35-crop.py`（Python + Pillow），改用 Node + Canvas2D（借一次性 headless 页面做合成，复用 `lib/chrome.mjs` 找 `chrome.exe` 的逻辑，但不需要真实 GPU）避免依赖本机 Python 环境。
+  场景还可以带 `js`（T17）：一段 async 脚本，参数 `v = window.__voyage`，在场景设好之后、截图等待之前执行，返回值附在输出 JSON 的 `info` 末尾（`js: …`）。同一次 `shots` 的场景共用一个页面，`js` 改的调试开关会带到后面的场景，**每个场景都把自己要的开关写全**（例如关的对照写 `v.optics.disabled=true; v.optics.force={}`）。
+- **回归场景的固定日期（DX-07）**：`scenarios.mjs` / `regression.playwright.js` 里依赖月相 / 星空的夜景、黄昏场景都写了固定 `date`（不写 `date` 就用「打开页面当天」，月相每天都在变，跨波对比会误判——第 6 波美术总监报告撞上过一次，见 `research/ART_REVIEW_wave6.md`）。`night-city` 系列、`route-hnd-cts-night`、`dusk-earthshadow` 用的是无月夜（月亮在地平线下，日期与高度写在场景条目的注释里）；`night-sea-milkyway`（T09）和新增的 `night-sea-fullmoon`（DX-07，满月、高度 58°、方位几乎正对左座窗外）各自固定在原来的月相上。月亮高度 / 方位都是用仓库自带的 `astronomy-engine`（`src/astro.ts` 的 `moonState`，T09 用过的同一套）算的。
+- **截图并排对照 / 量亮度（DX-05 / DX-07）**：`node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]`，把多张截图拼成一张，每张左上角标文件名（父目录/文件名，便于区分不同批次的同名场景）；不给 `--crop` 就是整图并排，给了就先裁剪再按 `--zoom` 用最近邻放大（不模糊，专门给锯齿 / 闪烁这类像素级问题用）。**`--out` 同样相对仓库根解析**。泛化自 `handoff/T35-crop.py`（Python + Pillow），改用 Node + Canvas2D（借一次性 headless 页面做合成，复用 `lib/chrome.mjs` 找 `chrome.exe` 的逻辑，但不需要真实 GPU）避免依赖本机 Python 环境。
+  `--measure x,y,w,h`（可重复，DX-07）：按原图像素（不受 `--crop` / `--zoom` 影响）输出每张图该区域的 Rec.709 luma（`0.2126R+0.7152G+0.0722B`，0–255，公式与 `handoff/T08-stats.py` 一致）均值与 p99，`--json` 改成打印 JSON；有 `--measure` 时 `--out` 不再是必填，可以只量亮度不出拼图（省得再手写 Python + PIL 脚本，见 `research/ART_REVIEW_wave6.md` 末尾「开发体验反馈」）。
 - **离线 GLSL 检查**：`pnpm --filter voyage check:glsl`，不开浏览器，几秒内跑完，能抓住 GLSL 保留字、同一程序内的同签名函数重名、场景 / 窗外程序 sampler 数超 16（已用真实 GPU 交叉验证过一次，见 `handoff/DX.md`「返工记录」；SC-5 以后 `scene-default` 3/16、`outside-default` / `outside-ground-detail` 16/16），以及 `src/` 下有没有 CRLF 行尾（DX-05；仓库靠 `.gitattributes` 统一 LF，Windows 上脚本误写 CRLF 时 git 提交才会提示，这里提前到 check:glsl 里扫一遍并列出文件，见下面坑点「Windows 上 Python 写回源文件会变成 CRLF」）。提交前跑一次比等冷编译报错快得多。`node scripts/lint-shaders.mjs --self-test` 单独测检查逻辑本身，不用起 vite。
 
 - **ANGLE 后端切换**：`dev-browser.mjs` 的 `shots` / `cold` / `bench` 都支持 `--angle d3d11|vulkan`，默认 `d3d11`（Windows 上与生产环境一致，**这是交付验收的口径，不要改**）。日常改代码想快速看效果，开一个专用的 vulkan 窗口：`node scripts/dev-browser.mjs cold --port <端口> --angle vulkan`或直接用桌面浏览器 `chrome.exe --use-angle=vulkan`（真冷启动能从约 100 秒降到几秒，见`research/DX_SHADER_COMPILE.md`）。vulkan 会藏住 D3D11 专属问题（sampler 上限 16 vs 32、FXC 编译暴涨、X3595 屏幕导数报错），**验收前一定要在默认 d3d11 上再跑一次**。
@@ -187,7 +194,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **GLSL 没有命名空间**：所有 `*.glsl.ts` 拼进同一个程序，同签名函数重名会编译失败；而且只在某个变体把相关模块凑齐时才暴露（T02 的细节变体与 T06 的 `lineCov` 撞名）。**新增 GLSL 函数一律带模块前缀**（如 `detailLineCov`、`seatSdf`）。`renderer.compileAsync` 失败也会 resolve，切换变体前要检查程序是否有效。
 - **重函数只调用一次、结果复用**：FXC 会把被多处调用的函数在每个调用点整份内联，冷编译随调用点线性变长。已知重函数：`oceanRadiance`、`cloudShadow`、`flashIlluminance`、`sampleGround`、`keyLight`、`marchFunnel`、`windowIrradiance`、`cloudDensity`（及雷暴 / 台风部分）。SC-3 把场景程序里的 `oceanRadiance`、`cloudShadow`、`flashIlluminance` 都收成一个调用点后，场景冷编译 71 → 19 s（浮点逐像素不变）。新代码需要它们时先找现成结果，不要再调一次（T02 多调一次 cloudShadow 就多约 15 s）。定位法：真冷启动脚本 + `#if 0` 逐段二分。
 - **影像瓦片取不到时不能露底色**：`clipmap.buildImagery` 预先给画布涂深海色 `rgb(8,22,40)`，某张瓦片偶发失败（网络 / 限流）就露出一块直边的「深海色陆地」，而 `loadBitmap` 还把失败永久缓存。修法：除最粗一级外缺瓦片处留透明，`sampleGround` 按透明度回退到粗一级；失败不缓存、重建时重试。识别：陆地上出现直边、颜色恰为深海底色的色块。测回退：`page.route` 拦掉一部分瓦片（`page.unroute` 必须传同一个正则对象，否则拦截不解除）。
-- **调试模式编号**：`uDebug` 1–10 原有；11 / 12 海浪（T14：白浪覆盖率、可分辨斜率）；21 地表分类、22 像素足迹、23 水体遮罩（T02）；24 只画道路灯带（T08，地面处辐亮度，不含空气透视）。新增前先查占用。
+- **调试模式编号**：`uDebug` 1–10 原有；11 / 12 海浪（T14：白浪覆盖率、可分辨斜率）；21 地表分类、22 像素足迹、23 水体遮罩（T02）；24 只画道路灯带（T08，地面处辐亮度，不含空气透视）；25 去掉道路灯带（T43）。新增前先查占用。
 - **glslang-validator-prebuilt-predownloaded 没有 `bin` 字段**：不能 `npx` 直接跑，要 `require("glslang-validator-prebuilt-predownloaded").getPath()` 拿到可执行文件路径自己 `spawn`（`apps/voyage/scripts/lint-shaders.mjs` 已经封装好）。
 - **离线校验 THREE 的 `#include <chunk>`**：不能直接展开 `THREE.ShaderChunk` 的原文喂给 `glslangValidator`——它的 `common` chunk 里的 `average()` 函数会被 glslangValidator 误报「redeclaration of existing name」（ANGLE / 真实浏览器编译完全正常，是 glslangValidator 自己符号表的问题）。`lint-shaders.mjs` 用手写的桩替换（`INCLUDE_STUBS`）绕开。
 - **按文本数 sampler 引用，光展开 `#ifdef` 还不够，要连着做「从 main() 可达性剪枝」**：一个函数即使在源码里正常定义、正常读了某个 sampler，只要这个函数本身从场景程序的 `main()` 顺着调用链走不到（比如只被另一个程序调用），真实驱动的死代码消除会把它和它读的 sampler 一起砍掉——纯文本「这个名字出现过好几次」看不出「是否真的可达」。`lint-shaders.mjs` 的 `reachableFromMain`/`pruneUnreachable` 就是为了修这个坑（撞上的真实案例：`uMultiScatteringLut` 只被 LUT 预计算程序用，场景程序的 `main()` 到不了它）。加新的静态分析工具时留意这一条。
@@ -260,9 +267,21 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **clipmap 重建时的 CPU 活要放 Worker**（T08）：一级道路几万到十几万个顶点，主线程上投影 + 逐段求距离实测每级 25–180 ms，1M 像素的浮点合成循环 15–40 ms，
   飞行中每重建一级就卡一下。现在投影、抽稀、求距离、和夜光 / 影像合成都在 `road-raster.worker.ts`，像素缓冲区转移过去再转移回来（主线程上那一遍夜光拷贝循环也省了）。
   识别：`handoff/T08-shots.mjs --longtask 30` 统计长任务。
+- **照亮宽度的解码要和编码逐位对上**（T43）：影像 A 存 `128 + 宽度 × 127 / ROAD_W_MAX`，T08 的着色器按 `A·2 − 1` 解码，「不亮」的 128 被解成 0.16 m，
+  所有没亮的路（田里的每一条乡道）都剩一根等亮的灰线，路网看上去就是一张地图。现按 `(A·255 − 128) / 127` 还原。识别：调试 24 里偏远地区的路全是一样亮的细灰线。
+- **NASA Black Marble 不能当「有没有人」的判据**（T43）：GIBS 上的是拉伸过的可视化产品，关东平原一张 z8 瓦片一半以上像素 ≥ 0.45、九成 ≥ 0.05
+  （`handoff/T43-night-hist.py`）。只按夜光决定路亮不亮，平原上所有乡道都亮。现在用「夜光² × 影像建成区」（和城市灯点同一判据）在 0.4 km 内的平均（`road-raster.ts` 的聚落地毯），
+  农田、山林里的路自然暗掉。以后给任何夜间效果定「城 / 乡」，先看这个分布。
+- **细线的解析抗锯齿要用帐篷核，不能用盒子**（T43）：盒子足迹下，比像素窄的线的剖面是「像素中心离线 < F/2 就满亮、否则全暗」，线是 1 像素的台阶，飞机一动台阶沿线爬；
+  块能量守恒，所以 `T08-flicker.py` 的块能量变异系数量不出来。换帐篷核（半宽 F）后线按距离线性分到相邻两像素。量法：`handoff/T43-crawl.py`（逐像素时间二阶差分 ÷ 亮度）。
+- **同一时刻拍「正常 / 调试」两张图做减法不可靠**（T43）：即使停掉主循环、把 uCloudOffset 拨回原点，头部 / 航向仍会漂几个像素，城市灯点整体错位，相减全是灯点。
+  道路的贡献直接拍调试 24（同一冻结曝光），调试 25 = 去掉道路灯带（`handoff/T43-shots.mjs`）。
 - **只抬高可见度阈值、不改画出来的底色，银河几乎不会变淡**（T09）：城市人工天光和舱内光幕没有画进天空，按真实背景算出的阈值只砍掉超出部分的一点点（城市里 C ≈ 0.7、阈值 0.08 → 还剩 88%），画面上的对比度照旧。修法：再乘「画出来的底色 ÷ 真实底色」，让银河相对画面底色的对比度等于真实对比度（`milkyWayVisibility`）；月光照亮的天空本来就画在底色里，这一项对它是 1。识别：强行把 `uSkyGlow` 设成几倍夜天光，截图里银河几乎不变。
 - **回归场景的日期默认是「今天」，夜景的月相每天不同**（T09）：场景只设 `time` 时日期沿用页面打开那天，月亮在不在天上、多亮随运行日期变，夜间场景的基线不可比。要稳定的夜景写 `date`（`applyScene` 对日期框发 `change`，没写 `date` 的场景恢复成页面打开时的日期）。选银河场景的办法：用 astronomy-engine 扫全年「太阳 < −18°、月亮 < −5°、人马座大星云高 4–16°、方位对着窗」，本仓库的 `night-sea-milkyway` 就是这样挑出来的（南海、左座朝东南、2026-05-15 22:30）。
 - **窗板高度只看得到仰角约 20° 以下的天**（T09）：默认头位下窗上沿约 +20°，银河要低低地在窗里才看得见；判断「银河出没出来」先算它的高度角和方位，别先怀疑着色器。
+- **循环里对纹理读出的数据做「三角函数 → 矩阵旋转 → normalize → 投影」会让 FXC 冷编译暴涨**（T41）：点星第一版在 3×3 格的循环里逐颗星算屏幕位置，窗外程序离线 FXC 5.5 → 45 s（d3d11 真冷 17 → 52 s），挪进舱内程序也一样（6.4 → 62 s）。不是循环展开（上限改成 90 时间不变）；换扁平循环、去 `continue`、单独去掉三角函数 / 矩阵 / normalize / 误差函数 / 取纹理都不管用，只有整行去掉才回到原值（二分方法：`shader-budget.mjs` 的临时目录里拿 ANGLE 翻译出的 HLSL，直接改 HLSL 用 fxc 计时，一轮一分钟，见 handoff/T41.md）。修法：在循环外按像素算一次「赤经 / 赤纬 → 屏幕像素」的雅可比，循环里只做线性组合。识别：新加的循环让 `shader-budget --only <程序>` 翻好几倍。
+- **星点不能画进等距柱状贴图再放大**（T41）：5.3′ 一格的星图在 1600×1200 下一格约 2 个像素，双线性放大后星是方块 / 菱形，高赤纬处格子在赤经方向变窄，读成短划线。现在星表存进「每行格数随赤纬减少」的格子（sky-assets.ts），按屏幕像素做高斯方格积分（σ = 0.6 像素）。窗外 alpha 现在是 1 + 能看到多少点星（水珠折射仍按 > 0.99 判断），改窗外输出时别把它写回 1。
+- **全关档窗中央的「双亮星」是阅读灯倒影**（T41）：T34 的阅读灯光点 + 双层窗板重影在全关档还留着两三盏，所有夜景同一屏幕位置都有。识别：`uDebug = 32`（关倒影）后消失。现在全关档不画光点，睡眠档按面状倒影的同一上限软限幅。
 - **`svs.gsfc.nasa.gov` 的 TLS 握手在本机经常失败**（T09）：Git Bash 的 curl（schannel）直接 `SSL/TLS connection failed`，Python 的 urllib 也会间歇 `UNEXPECTED_EOF_WHILE_READING`；重试几次就好（`build_milkyway.py` 自带重试）。
 - **云步进里加「平时不走」的分支也会让整个步进变慢一倍**（W00）：把奇观的表面追踪、介质、投影直接写进 `MARCH_FRAG`，奇观关着（uniform 分支一次都不走）时 noon-cumulus 云步进 0.35 → 0.44–0.73 ms，typhoon-bands 约 ×2；逐段删掉任何一段都不够，只有全删才回到 0.35（寄存器 / FXC 的分支与展开取舍，同一份程序小改一处就可能在 0.35 和 0.72 两档之间跳）。
   修法：可选功能做成 `#define` 变体程序（`marchWonderMat`，只在有云间层奇观时用），重活放进单独的 pass（奇观 pass 把表面 + 介质合成一层，步进只读一个 texel）；默认程序预处理后与改动前逐字相同。识别：按 pass 的 GPU 计时（`tmp/perf-cloud/passes.mjs`）加页面内逐段替换（`handoff/W00-variants-cost.mjs` + `W00-mkvar.mjs`）；普通场景（noon-cumulus）就能看出来，不要以为「分支不走就没开销」。
@@ -279,3 +298,15 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **预算内的简化交通工具模型，近距离会露出「其实是个球」的破绽**（T40，用户反馈插单）：`traffic.glsl.ts` 的远处飞机没有机翼 / 机身细节，只是按角尺寸画的一个均匀亮斑，角直径一旦超过几个像素就会被识别成「一个变大的圆点」而不是飞机；旧版航线还带 ±0.6 rad（约 ±34°）的随机交叉角、横向距离下限只有 8 km，经常斜穿我们的航迹，两架飞机的航迹也可能互相交叉。
   修法两层：①航线设计——先按目标屏幕像素数反推最小距离（1600×1200、默认视场下，`pixelAngle = 2·tan(25°)/1200`，机体角直径(px) ≈ 51.5/dist(km)，要求 ≤ 约 3 px ⟹ dist ≥ 18 km，见 `traffic.ts` 文件头），对飞只给 ≤3° 交叉角、同向慢慢超越干脆不给交叉角（相对速度小、经过时间长，一点交叉角也会累积出大幅侧向漂移），出生时的横向距离下限按「最坏交叉角 × 最大出生距离」的漂移量再加出来；两条「车道」留够间隙防止互相交叉。②着色器兜底（与航线设计无关，防任何路径下露馅）：机体显示半径按像素数夹住（超过阈值只留一个不再变大的小亮点，`BODY_MAX_PX`）、航迹云按「离我们最近的一点」整体安全淡出（`TRAFFIC_MIN_DIST_KM`，需要和 `traffic.ts` 的 `MIN_DIST_KM` 保持一致）。
   识别 / 验证：`handoff/T40.md` 里的推算和离线抽样脚本（10000 次 spawn 模拟，统计最近距离最小值和两机相互最近距离，同类改动可以复用这个思路）；以后再给别的远处简化模型（船、车）设计运动路径，先按这个套路算「肉眼能看出简化痕迹」对应的像素阈值。
+- **从巡航高度看海平线，绿闪在物理上几乎看不见，不是着色器没生效**（T17）：色散只让绿色日像比红色高约 20 角秒（一个像素约 2.7 角分），而最后那一丝阳光贴着海面擦过整个低层大气两次（进、出各一次，Rayleigh 光学厚度约 7.6，加气溶胶），绿光透射率只有红光的约 1%。10.7 km 上即使放大 8 倍，那一个像素也只是很暗的一点绿；1 km 高度时就是看得出的一点绿。
+  真实的「看得见的绿闪」靠近地逆温层的蜃景把地平线附近竖直放大（Young 的 mock mirage）——放大的是角尺寸，不是时间，所以 `opticsSunDisk` 做的是「视高度 → 真高度」的映射，而不是把色散量乘大（乘大会让绿闪持续十几秒）。
+  识别：`__voyage.optics.pinGreenFlash(-3)` 时能看到白亮的日边，`0.5` 时只剩一点绿，`disabled` 时什么都没有；想确认机制在工作，临时把 `uOpticsFlash.y` 调到 10 看绿边是否变高。
+- **晕和幻日的份额要按「单次散射 × 归一化相函数」定标，别凭感觉给 0.05**（T17）：幻日的角分布很集中（约 1°×1.3°，峰值约 1000 /sr），份额给 0.05 时幻日比太阳周围的天空亮上千倍、22° 晕成了一道彩虹。按「卷云约一半是前向衍射、水平片状冰晶约 1%、每个幻日分到约 10%」估到 5e-4（晕 5e-3），幻日才是「比周围卷云亮几倍」。三原色通道的晕颜色会比真实的连续光谱纯得多，各通道内缘往中间收一半才像「红色内缘、往外发白」。
+- **窗外程序里新加的小函数也会让离线 FXC 明显变慢**（T17）：本机影子最初用 5 个四边形的多边形距离场（每个 4 条边）+ 两层展开的循环，窗外程序离线 FXC 多约 1 s；改成一个 `6 + uLoopGuard` 的循环里算 6 段带厚度的线段后回落。整组光学现象最后让窗外程序离线 FXC 约 +20%（5.6–6.2 s → 7.2 s），但浏览器真冷启动总时长不变（约 16.2–16.5 s），因为并行编译的关键路径是云程序。以后往窗外程序加东西，两个口径都要看：`shader-budget.mjs --only outside-default` 与主分支交替测两轮（单次噪声可到 +50%），再用 `dev-browser.mjs cold` 看总时长。
+- **窗外程序要用机翼程序的 uniform（如 `uSeatSign`）得自己再声明一次**（T17）：两个程序共用同一个 uniforms 对象，值会自动同步，但 GLSL 声明只在 `wing.glsl.ts` 里，窗外程序不拼它；`check:glsl` 会报 undeclared identifier。
+- **远处的暗色细线白天物理上就看不见，要靠「比天空亮」的东西被注意到**（W01b）：几百 km 外的天梯 / 建木，视线上的天空亮度几乎全来自它前面的空气（高处那段身后是太空），反照率 3.5% 的线挡掉的那一点背景光在 8 位里被舍掉（W00 实测对比 < 1/255）；正午太阳在头顶，竖直的柱面侧面也几乎不受光。提高线的反照率会让黄昏晕成光柱（W01 的取舍）。
+  修法：白天的可见性交给反照率高、朝向好的东西——扁平台（中继站，反照率 0.3，底面被下方地球的反光照亮、边缘被阳光照亮）、舱体、云气（反照率 0.8），以及真实存在的「白天可见」机制：金属面板的镜面闪光（像铱星闪光，半角向量对上某块面板的方位与倾角才亮）、高强度白色频闪（真实的高塔白天白闪、夜里红闪）。识别：白天看不见时先算「它比天空亮还是暗」，暗的东西别指望调亮线本身。
+- **暮色里被照亮的远处细线按物理算会截成激光 / 霓虹**（W01b 返工）：暮色天空比阳光暗 4–5 个数量级，被照到的缆 / 枝亮上千倍、截白，又没有被空气冲淡的感觉；同时「背景 × 线前面空气比例」这个月光近似在黄昏也生效，地影里那段和天空一样亮，上段像悬在半空。修法：太阳落下后按同方向天空亮度封顶（1.3–2 倍，`wonderCap`，保留色相），月光近似只在太阳 < −12° 用，地影里的一段画成挡掉约 22% 天光的淡剪影一路接到地平线。识别：黄昏截图里奇观是一根纯白、边缘锐利的线，或者被照亮的一段下面什么都没有。
+- **像面上解「撑杆」的高度时，别用 u^p（p < 1）做弯曲**（W01b）：根部导数无穷，牛顿法 + clamp 之后枝根离开树干几 km，出现一截台阶或小钩。修法：`g(u) = u + bend·u·(1 − u)`（bend = 1 时根部斜出、梢部竖直，导数处处有限）。识别：黄昏的亮枝在分叉处有小横钩。
+- **早退半径（reach）必须盖住最宽的部件，而且部件要在半径以内先渐隐到 0**（W01b）：建木云气的高斯尾巴伸到 reach（原 22 km）以外，被截成一道竖直的硬边。修法：reach 放宽到 40 km，云气在离轴线 28–38 km 渐隐。识别：云絮 / 光晕的一侧是竖直的直边。
+- **`regression.playwright.js` 的 applyScene 与 `scenarios.mjs` 要逐项同步，check:glsl 只比场景数组**（W01b）：T17 只在 `scenarios.mjs` 里加了 `js` 字段，MCP 版回归脚本的 applyScene 没有，写了 `js` 的场景（召唤奇观、调试开关）在 MCP 回归里静默不生效、截图里什么都没有，同步检查照样通过。W01b 已补上；以后给 applyScene 加字段两边一起改。识别：MCP 回归截图里缺了 `js` 应该打开的东西，而 `dev-browser.mjs shots` 里有。

@@ -9,12 +9,13 @@ import { LIGHTNING_COMMON } from "./lightning.glsl";
 import { LIGHTS_COMMON } from "./lights.glsl";
 import { NOISE_COMMON } from "./noise.glsl";
 import { OCEAN_COMMON } from "./ocean.glsl";
-import { STARS_COMMON } from "./stars.glsl";
+import { STAR_MAP_COMMON, STARS_COMMON } from "./stars.glsl";
 import { TERRAIN_SHADING_COMMON } from "./terrain-shading.glsl";
 import { TRAFFIC_COMMON } from "./traffic.glsl";
 import { VIEW_COMMON } from "./view.glsl";
 import { HAZE_COMMON } from "./haze.glsl";
 import { WONDER_SKY_COMMON } from "./wonder-sky.glsl";
+import { OPTICS_COMMON } from "./optics.glsl";
 
 /**
  * 窗外 pass（SC-5）：只算「穿过本窗窗板看出去」的 HDR 辐亮度（天空、太阳月亮星星、云的合成、真实地面、海面、
@@ -40,6 +41,7 @@ ${VIEW_COMMON}
 ${CLOUD_COMMON}
 ${NOISE_COMMON}
 ${LIGHTS_COMMON}
+${STAR_MAP_COMMON}
 ${STARS_COMMON}
 ${ISLANDS_COMMON}
 ${GROUND_COMMON}
@@ -62,11 +64,13 @@ ${INLAND_WATER_COMMON}
 ${TERRAIN_SHADING_COMMON}
 ${HAZE_COMMON}
 ${WONDER_SKY_COMMON}
+${OPTICS_COMMON}
 
 // 窗外辐亮度。重函数在这里各只有一个调用点（SC-3）：真实地面上的海洋和开阔海面共用同一个 oceanRadiance，
 // 命中点的云影、水面照度、闪光照度也只算一次，陆地、湖河、海面共用。FXC 会把每个调用点整份内联，
 // 原来地面水体和开阔海面各调一次 oceanRadiance，场景程序冷编译多出约 50 s。以后加分支时不要再在别处调这些函数，
 // 把输入交给这里唯一的调用点
+float gStarVis = 0.0; // 这个像素是天空（看得到点星）时由 outsideRadiance 置 1（T41，点星在舱内程序画）
 vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   vec3 ro = vec3(0.0, uCamR, 0.0);
   // 真实地面：先求交（打不到或还没有数据时退回原来的海平面球）
@@ -140,24 +144,11 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
       if (uDebug == 7) L = inscatter;
     }
   } else {
-    // 太阳圆盘：辐亮度 = 照度 / 立体角，带临边昏暗
-    float c = dot(rd, uSunDir);
-    if (c > 0.0) {
-      float ang = asin(min(length(cross(rd, uSunDir)), 1.0));
-      float x = ang / SUN_ANGULAR_RADIUS;
-      if (x < 1.2) {
-        float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
-        float coverage = clamp((SUN_ANGULAR_RADIUS - ang) / pixelAngle + 0.5, 0.0, 1.0);
-        float mu = sqrt(max(0.0, 1.0 - x * x));
-        float limb = (1.0 - 0.6 * (1.0 - mu)) / (1.0 - 0.6 / 3.0);
-        vec3 disk = uSunIlluminance / (M_PI * SUN_ANGULAR_RADIUS * SUN_ANGULAR_RADIUS) * limb;
-        L += disk * coverage * sunTransmittance(uCamR, rd.y);
-      }
-    }
     // 月亮圆盘（白天也在，只是很淡）、星星和银河；都要穿过相机上方的大气。
     // 银河的可见度按它对这个方向天空底色（此时的 L：月光照亮的天空 + 夜天光）的对比度判断（T09，stars.glsl.ts）
     vec3 tUp = sunTransmittance(uCamR, rd.y);
     L += moonDisk(rd) * tUp + starRadiance(rd, tUp, L);
+    gStarVis = 1.0; // 点星由舱内程序画（T41），这里只标出「这个像素是天空」
   }
   // 【大气合成接入点】到这里 L 是云层背后的背景辐亮度：地面 / 海面已含空气透视，天空含内散射。
   // T18 的边界层霾不在这里叠：它是大气里的一层气溶胶，已经进了透射率 / 天空视图 / 空气透视 LUT（atmosphere/haze.ts），
@@ -166,8 +157,10 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   // 天幕层奇观（W01 天梯 / 建木，render/wonder-sky.glsl.ts）：画在背景上、云之前合成，所以会被云挡住；
   // 线在地面 / 海面之前才可见（下半截沉到地平线以下时由 tGround 截掉）。奇观模式关时第一行就返回
   L = wonderSky(L, rd, hitGround ? tGround : 1e9);
-  // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光
-  return L * cloud.a + cloud.rgb;
+  // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
+  L += opticsSunDisk(rd, hitGround);
+  // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光（T17：云的光乘宝光 / 本机影子，再加卷云里的幻日和晕）
+  return opticsComposite(L, cloud, rd);
 }
 
 void main() {
@@ -191,10 +184,12 @@ void main() {
   vec3 rdW = uCabinToWorld * rd;
   vec4 cloud = texture(uClouds, gl_FragCoord.xy / uResolution);
   vec3 view = outsideRadiance(rdW, cloud);
+  float starVis = gStarVis * cloud.a;
   // 远处的飞机和航迹云在云层之上，挡在海面和云前面
   vec4 tr = trafficRadiance(rdW);
   view = (view * tr.a + tr.rgb + boltRadiance(rdW)) * PANE_TRANSMITTANCE;
-  gl_FragColor = vec4(min(view, vec3(uHdrMax)), 1.0);
+  // alpha：1 = 这个像素算过（舱内程序的水珠折射按 > 0.99 判断），再加上能看到多少点星（T41，舱内程序画点星时乘它）
+  gl_FragColor = vec4(min(view, vec3(uHdrMax)), 1.0 + starVis * tr.a);
 }
 `;
 

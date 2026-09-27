@@ -80,15 +80,23 @@ vec4 sampleGroundAlbedo(vec2 g, float lod) {
 const float ROAD_SD_RANGE = 4.0;
 const float ROAD_W_MAX = 40.0;
 
+// 帐篷核（半宽 F，面积 1）的累积分布
+float groundRoadTentCdf(float x, float F) {
+  float u = clamp(x / F, -1.0, 1.0);
+  return u < 0.0 ? 0.5 * (1.0 + u) * (1.0 + u) : 1.0 - 0.5 * (1.0 - u) * (1.0 - u);
+}
 // 一个取样点：这个子足迹（横跨道路方向宽 F 米）里被照亮路面占的比例。
-// 线按真实宽度 W 的带子、足迹按宽 F 的盒子求重叠（解析抗锯齿）：路比像素窄时是一条 1 像素、亮度 W/F 的细线，能量和真实宽度一致
+// 线按真实宽度 W 的带子、和半宽 F 的帐篷核卷积（解析抗锯齿，T43）：能量和真实宽度一致（逐列求和 = W/F），
+// 细线按离像素中心的距离线性地分到相邻两个像素上。T08 用的是宽 F 的盒子：路比像素窄时剖面是「像素中心在 F/2 以内就满亮、否则全暗」，
+// 细线成了 1 像素的阶梯，飞机前进时阶梯沿线爬
 float groundRoadTap(int L, vec2 q, float texM, float F) {
   vec3 uv = levelUv(L, q);
   float dc = abs(textureLod(uGroundWater, uv, 0.0).a - 0.5) * (2.0 * ROAD_SD_RANGE) * texM;
-  if (dc > 0.5 * (F + ROAD_W_MAX)) return 0.0;
-  float W = clamp(textureLod(uGroundAlbedo, uv, 0.0).a * 2.0 - 1.0, 0.0, 1.0) * ROAD_W_MAX;
-  float ov = max(0.0, min(dc + 0.5 * W, 0.5 * F) - max(dc - 0.5 * W, -0.5 * F));
-  return ov / F;
+  if (dc > F + 0.5 * ROAD_W_MAX) return 0.0;
+  // 编码是 128 + 宽度 × 127 / ROAD_W_MAX（road-raster.ts）。T08 按 A·2 − 1 解码，「不亮」的 128 被解成 1/255 × 40 m ≈ 0.16 m，
+  // 所有没亮的路（包括田里的每一条乡道）都剩一根等亮的灰线（T43 发现），这里按原编码精确还原，0 就是 0
+  float W = clamp((textureLod(uGroundAlbedo, uv, 0.0).a * 255.0 - 128.0) / 127.0, 0.0, 1.0) * ROAD_W_MAX;
+  return groundRoadTentCdf(dc + 0.5 * W, F) - groundRoadTentCdf(dc - 0.5 * W, F);
 }
 
 // 这个像素里被照亮路面占的比例（已含每条路的照明强度与「亮不亮」）。
