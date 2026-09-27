@@ -19,6 +19,7 @@ function hurricaneDensityGlsl(name: string, bands: string): string {
   return /* glsl */ `
 float ${name}(vec2 xz, float alt, float lod, bool detail, out float ao) {
   ao = 1.0;
+  gHurSoft = false;
   if (alt > HUR_TOP + 4.2) return 0.0;
   vec2 d2 = xz - uHurricane.xy;
   float r = length(d2);
@@ -115,7 +116,7 @@ float ${name}(vec2 xz, float alt, float lod, bool detail, out float ao) {
       // 冰云：靠近眼壁厚，往外越来越薄、越来越丝缕状
       float thin = smoothstep(Re * 3.5, Re * 10.0, r);
       float canopy = vert * edge * mix(0.9, 0.3 * smoothstep(0.25, 0.75, fib), thin);
-      if (canopy > d) { d = canopy; wallW = 0.0; ao = 1.0; }
+      if (canopy > d) { d = canopy; wallW = 0.0; ao = 1.0; gHurSoft = true; }
     }
   }
 ${bands}
@@ -229,6 +230,7 @@ const HUR_BANDS_FULL = /* glsl */ `
       if (bd > d) {
         d = bd;
         bool isAnvil = anv > towerD && anv > skirt;
+        gHurSoft = isAnvil;
         // 砧是半透明的冰晶云，不做表面侵蚀（侵蚀会把 0.1–0.4 的稀薄外缘整片削掉）
         wallW = isAnvil ? 0.0 : 1.0;
         ao = isAnvil ? mix(0.5, 1.0, smoothstep(9.0, 12.0, alt))
@@ -438,6 +440,7 @@ const float STORM_OVERSHOOT = 0.9;   // 上冲云顶高出 uStorms.w（砧顶）
 // cloudDensity 的副产物（最近一次求值的点）：是否属于雷暴、雷暴的环境光遮蔽（隆起之间的凹处、砧底、雨幡里看到的天空少）
 float gStormW = 0.0;
 float gStormAO = 1.0;
+float gStormSoft = 0.0;   // 1：属于软边的部分（雷暴的砧和雨幡、台风的卷云盖和砧），见 gStormSoftHit / gHurSoft
 
 vec2 stormHash22(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
@@ -579,8 +582,12 @@ float rainDensity(vec2 xz, float alt, vec2 center, float R, float lod) {
   return sigma / CLOUD_EXTINCTION;
 }
 
+// stormDensity 的副产物：这一点取的是「软边」的部分（砧、雨幡），见 gStormSoft
+bool gStormSoftHit = false;
+
 float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float ao) {
   ao = 1.0;
+  gStormSoftHit = true;
   float top = c.w;
   float R = c.z;
   if (alt > top + STORM_OVERSHOOT + 0.7) return 0.0;
@@ -612,7 +619,9 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
   vec3 geo;
   float anvil = anvilDensity(xz, alt, c.xy, R, top, lod, aoA, geo);
   float mam = mammatusDensity(xz, alt, geo);
-  if (mam > anvil) { anvil = mam; aoA = 0.5; }
+  // 乳状云的口袋有清楚的圆底，按硬边处理（要表面细化）
+  bool isMam = mam > anvil;
+  if (isMam) { anvil = mam; aoA = 0.5; }
   if (tower <= 0.0 && anvil <= 0.0) return rain;
   if (detail) {
     vec3 dn = textureLod(uDetailNoise, vec3(xz.x, alt, xz.y) / DETAIL_TILE, lod).rgb;
@@ -623,9 +632,11 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
   }
   if (tower >= anvil) {
     ao = aoT;
+    gStormSoftHit = rain > tower;
     return max(tower, rain);
   }
   ao = aoA;
+  gStormSoftHit = !isMam || rain > anvil;
   return max(anvil, rain);
 }
 
@@ -664,6 +675,9 @@ float hurCap(float w) {
 // 台风的密度（0..1）。ao：环境光遮蔽（眼底、眼壁下部、隆起之间的凹处看到的天空少）
 // 完整版雨带求值时顺手记下「离采样点最近的那座塔」（格子号 xy、coreC）：受光步进直接用它，不再在循环里找
 vec3 gHurCell = vec3(0.0);
+// 台风密度的副产物：最近一次求值的点属于「软边」的冰晶云（卷云盖、雨带塔顶的砧）。这类云边缘本来就是渐变的，
+// 云步进对它们不做表面细化、稀薄处放大步长（PERF-2）
+bool gHurSoft = false;
 ${hurricaneDensityGlsl("hurricaneDensity", HUR_BANDS_FULL)}
 // 受光步进（朝太阳）用：雨带只算最近的一座塔（见 HUR_BANDS_LIGHT）
 ${hurricaneDensityGlsl("hurricaneDensityLight", HUR_BANDS_LIGHT)}
@@ -748,6 +762,7 @@ float cloudDensity(vec3 p, float lod, bool detail) {
   float d = layerDensity(p, lod, detail);
   gStormW = 0.0;
   gStormAO = 1.0;
+  gStormSoft = 0.0;
   if (uStormCount > 0 || uHurricane.w > 0.5) {
     vec2 xz = p.xz + uCloudOffset;
     // 台风内部不要普通的层状云（和雷暴取最大之前先乘，与改动前的顺序等价：雷暴、台风不会同时出现）
@@ -761,13 +776,13 @@ float cloudDensity(vec3 p, float lod, bool detail) {
       if (dot(dd, dd) > c.z * c.z * 56.0) continue; // 砧状云加上下风偏移最远约 7 倍塔身半径（1.5R + 2.6R × 1.7 × 1.25）
       float ao;
       float sd = stormDensity(c, xz, alt, lod, detail, ao) * uCloudDensity;
-      if (sd > d) { d = sd; gStormW = 1.0; gStormAO = ao; }
+      if (sd > d) { d = sd; gStormW = 1.0; gStormAO = ao; gStormSoft = gStormSoftHit ? 1.0 : 0.0; }
     }
     if (uHurricane.w > 0.5) {
       // 台风的受光和雷暴一样处理（凹处遮蔽、下方反射光、表面细化）
       float hao;
       float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;
-      if (hd > d) { d = hd; gStormW = 1.0; gStormAO = hao; }
+      if (hd > d) { d = hd; gStormW = 1.0; gStormAO = hao; gStormSoft = gHurSoft ? 1.0 : 0.0; }
     }
   }
   return d;

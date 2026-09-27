@@ -31,6 +31,12 @@ varying vec2 vUv;
 // 交错梯度噪声：每个像素的步进起点错开，时间累积后抹平成平滑结果
 float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 
+// 软边的云（雷暴的砧和雨幡、台风的卷云盖和砧）的省步数（PERF-2）：不做表面细化，稀薄处（一步的光学厚度 < SOFT_THIN_OD）走 2 倍步长。
+// 这两处在台风外围 / 雨带里占云步进的约三成：往上看时整片卷云盖都是稀薄的有云采样点，每个都要走 8 步受光步进。
+// 对照开关：SOFT_SKIP 设 false 回到改动前的走法
+const bool SOFT_SKIP = true;
+const float SOFT_THIN_OD = 0.5;
+
 // 眼里逆光看眼壁时额外压掉的空气透视内散射比例（美术取向，见 main 里的说明）
 const float HUR_BACKLIT_AP_CUT = 0.5;
 
@@ -135,6 +141,7 @@ void main() {
   int fine = 0;
   float fineDt = 0.03;
   bool wasEmpty = true;
+  bool wasThin = false;       // 上一个采样点是稀薄的软边冰晶云（下一步走 2 倍步长，见 SOFT_SKIP）
   float hurVis = 1.0;         // 台风长影的缓存（见下）
   float hurVisT = -1e9;
   float lastEmpty = seg.x;   // 最近一个空白采样点的位置：表面一定在它和第一个有云的采样点之间
@@ -166,14 +173,15 @@ void main() {
     float dt = fine > 0 ? fineDt : dtBase;
     // 这一步代表的区间长度：空白处走 2 倍步长。抖动必须覆盖整个区间——旧版只抖动 dt、却走 2dt，
     // 每个区间的后一半永远采不到，远处的薄云被「同心球壳」切成一条条水平细纹（T13）
-    float stepLen = (fine > 0 || !wasEmpty) ? dt : 2.0 * dt;
+    float stepLen = (fine > 0 || (!wasEmpty && !wasThin)) ? dt : 2.0 * dt;
     vec3 p = ro + rd * (t + stepLen * jitter);
     float lod = clamp(log2(dtBase / 0.055), 0.0, 5.0);
     float dens = cloudDensity(p, lod, t < 150.0);
     float stormW = gStormW;
     float stormAO = gStormAO;
+    bool soft = SOFT_SKIP && gStormSoft > 0.5;
     // 只在进入雷暴 / 台风时细化（层状云不必，保持原样）；这段会被小步重新采样，进云那一步的密度并没有丢
-    if (dens > 0.002 && stormW > 0.5 && wasEmpty && fine == 0 && dtBase > 0.1 && t > seg.x) {
+    if (dens > 0.002 && stormW > 0.5 && !soft && wasEmpty && fine == 0 && dtBase > 0.1 && t > seg.x) {
       // 表面夹在「上一个空白采样点」和「这个有云的采样点」之间：退回到上一个空白采样点，8 小步走完这段。
       // 旧版一：固定退回一个区间 [t − 2dt, t]，那里是空的，8 小步白走后又回到空白状态，下一步再次撞上同一处表面、
       //   再退回……反复直到用完步数上限，远处的云出现一圈圈等高线似的条纹。
@@ -189,6 +197,7 @@ void main() {
     if (fine > 0) fine--;
     if (dens > 0.002) {
       wasEmpty = false;
+      wasThin = soft && dens * CLOUD_EXTINCTION * dt < SOFT_THIN_OD;
       float sigma = dens * CLOUD_EXTINCTION;
       float r = length(p);
       vec3 up = p / r;
@@ -281,6 +290,7 @@ void main() {
     } else {
       // 空白区域大步走（细化时仍用小步）
       wasEmpty = true;
+      wasThin = false;
       lastEmpty = t + stepLen * jitter;
       t += stepLen;
     }
