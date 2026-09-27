@@ -124,6 +124,8 @@ export interface RoadJob {
   mips?: boolean;
   /** G07b：影像 mip 的浮点临时缓冲是否复用（默认复用；false = G07 的每级新分配，同页 A/B 用） */
   mipScratch?: boolean;
+  /** G07b 调查用：水体画布用 CPU 栅格（willReadFrequently），getImageData 不走 GPU 读回 */
+  waterCpu?: boolean;
 }
 
 /** 一级的像素数据（RES² × RGBA，getImageData 的结果）：在 Worker 里就地写入道路，再原样转移回主线程 */
@@ -364,8 +366,9 @@ export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo"> & {
   /** G07：第 1 级起的 mip 链（按级连续存放，见 mips.ts）；job.mips 为假时是 null */
   albedoMips: Uint8Array | null;
   waterMips: Uint8Array | null;
-  /** G07b：各阶段耗时（毫秒），归因帧尖峰用：read = 位图读回像素（影像 + 细节），mips = 两张 mip 链 */
-  phases?: { readMs: number; mipMs: number };
+  /** G07b：各阶段耗时（毫秒），归因帧尖峰用：read = 位图读回像素（影像 + 细节），mips = 两张 mip 链；
+   * marks = 各阶段结束时刻（离开始多少毫秒）：read / water（水体栅格化）/ waterRead（水体 getImageData）/ detail / night / roads / mips */
+  phases?: { readMs: number; mipMs: number; marks: [string, number][] };
 };
 
 /**
@@ -389,8 +392,10 @@ export function buildGroundLevel(
   const albedo = readBitmap(albedoBmp, RES);
   const detail = detailBmp ? readBitmap(detailBmp, RES) : null;
   const readMs = performance.now() - tRead;
+  const marks: [string, number][] = [["read", readMs]];
+  const mark = (name: string) => marks.push([name, performance.now() - tRead]);
   const canvas = new OffscreenCanvas(RES, RES);
-  const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
+  const ctx = canvas.getContext("2d", job.waterCpu ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
   ctx.fillStyle = "black";
   ctx.fillRect(0, 0, RES, RES);
   const frame = new LocalFrame(job.lat0, job.lon0);
@@ -436,21 +441,27 @@ export function buildGroundLevel(
       ctx.globalAlpha = 1;
     }
   }
+  mark("water");
   const water = ctx.getImageData(0, 0, RES, RES).data;
+  mark("waterRead");
   // 高清细节（G03）：只改影像 RGB（要用上面刚栅格化的水体遮罩挡掉水面），必须在 packRoads 之前——
   // packRoads 读影像 alpha 判缺影像、再把 A 改写成道路照亮宽度编码
   const urbanAlbedo = detail ? albedo.slice() : undefined;
   const detailCoverage = detail ? blendDetail(albedo, detail, water, RES).coverage : 0;
+  mark("detail");
   const night = upsample(darkenNight(nightRaw), job.nightRes, RES);
+  mark("night");
   const px: LevelPixels = { water, albedo, night, urbanAlbedo };
   packRoads(job, px);
+  mark("roads");
   // G07：mip 必须在 packRoads 之后算（影像 A 的覆盖比例要按最终编码解）
   const tMip = performance.now();
   mipScratch.reuse = job.mipScratch !== false;
   const albedoMips = job.mips ? buildMipChain(px.albedo, RES, "albedo") : null;
   const waterMips = job.mips ? buildMipChain(px.water, RES, "water") : null;
   const mipMs = performance.now() - tMip;
-  return { water: px.water, albedo: px.albedo, detailCoverage, albedoMips, waterMips, phases: { readMs, mipMs } };
+  mark("mips");
+  return { water: px.water, albedo: px.albedo, detailCoverage, albedoMips, waterMips, phases: { readMs, mipMs, marks } };
 }
 
 /** ImageBitmap → RES² RGBA 像素（非预乘：getImageData 的约定，和原来主线程 canvas 读回的一样），读完关掉位图 */

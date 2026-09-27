@@ -551,6 +551,7 @@ export class GroundClipmap {
       // G07：直传路径可用时让 Worker 顺带算这一层的 mip 链（没接 GL 时 three 按层上传、整组 generateMipmap，算了也用不上）
       vec.job.mips = this.gl !== null && !this.gpuMips;
       vec.job.mipScratch = this.mipScratchReuse;
+      vec.job.waterCpu = this.waterCanvasCpu;
       const { water, albedo, detailCoverage, albedoMips, waterMips } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailDone ? detailPx.px : null);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
@@ -610,6 +611,8 @@ export class GroundClipmap {
   gpuMips = false;
   /** 调试开关（G07b）：false = G07 的 mip 浮点临时缓冲每级新分配（mips.ts），同页 A/B 用 */
   mipScratchReuse = true;
+  /** 调试开关（G07b 调查）：true = 水体画布走 CPU 栅格（getImageData 不读回 GPU） */
+  waterCanvasCpu = false;
   attachGl(renderer: THREE.WebGLRenderer) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
     this.gl = gl;
@@ -1005,7 +1008,7 @@ export class GroundClipmap {
 let roadWorker: Worker | null | undefined;
 /** Worker 每级合成耗时（G06 诊断：`__voyage.ground.imageryStats.worker`）。
  * recent（G07b）：最近 WORKER_RECENT 次任务的起止时刻（主线程 performance.now() 时间轴）与分阶段耗时，归因帧尖峰用 */
-type WorkerTask = { start: number; end: number; ms: number; readMs: number; mipMs: number };
+type WorkerTask = { start: number; end: number; ms: number; readMs: number; mipMs: number; marks: [string, number][] };
 const WORKER_RECENT = 64;
 const workerStats = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0, recent: [] as WorkerTask[] };
 let roadReq = 0;
@@ -1026,7 +1029,7 @@ function buildGroundLevelAsync(
         workerStats.maxMs = Math.max(workerStats.maxMs, e.data.ms);
         workerStats.lastMs = e.data.ms;
         const start = e.data.t0Abs - performance.timeOrigin;
-        workerStats.recent.push({ start, end: start + e.data.ms, ms: e.data.ms, readMs: e.data.phases?.readMs ?? 0, mipMs: e.data.phases?.mipMs ?? 0 });
+        workerStats.recent.push({ start, end: start + e.data.ms, ms: e.data.ms, readMs: e.data.phases?.readMs ?? 0, mipMs: e.data.phases?.mipMs ?? 0, marks: e.data.phases?.marks ?? [] });
         if (workerStats.recent.length > WORKER_RECENT) workerStats.recent.shift();
         const req = roadPending.get(e.data.id);
         roadPending.delete(e.data.id);
