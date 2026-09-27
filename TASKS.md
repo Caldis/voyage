@@ -8,6 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| DX-23/24 | 第 7 波（开发体验） | 5231 | worktree | Opus（收编同页 A/B `dev-browser ab`、确定性航迹 `flight`、compare 斜纹 / HSV / 光晕 / 连通块指标、freeze 保留冻结时刻、shots 默认高档、EOX 报错聚合、GPU 计时钩子警告等） | — | 进行中 |
 | C10 | 第 7 波（云锐度，用户主诉求） | 5227 | worktree | Opus（云表皮消光：先诊断剖面与原型——密度 remap / 侵蚀 / 近表面细步——再做成品；不改 resolve） | — | 进行中 |
 | T48c | 第 7 波（T48b 审查 P2-1） | 5224 | `worktree-agent-a2abd849f48161621`（307f782） | Opus | 审查中（5229） | 已交付：1/16 粗网格对数域时间平滑 pass（τ 0.25 / 0.1 s）扣瞬态；机翼只压眩光、翼面 ×0.85；频闪变暗像素 ~6000→≤49、闪电被压像素 13653→0、翼面暗环消失；遗留：贴白灯翼面死白块 220–290 px、运动抖动在噪声内；发现 master 夜城相邻差 18→13.5（审查顺带二分） |
 | W-STAIR | 第 7 波（锯齿，C11 发现） | 5213 | `worktree-agent-abbe8a37c6af3d120`（693ceeb） | Opus | 审查中（5230） | 已交付第一版：分段距离场取下界（命中落体内像素 0.58%→0，云里点阵消失）、子射线步数不足按打中、擦边 2 px、边缘 5 样本；与参考图差和降 4–10 倍；sunset 帧时间 +5.3%（压线）；遗留：商务舱正午前缘略硬、夜间频闪钝后缘虚线、白位置灯旁翼面过曝（W-LAMP） |
@@ -25,8 +26,6 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | --- | --- | --- | --- | --- | --- |
 | W-LAMP | 白色位置灯旁翼面色调映射前即过曝（≥250 块 220–290 px，T48c 发现）：调 `wingLampIntensity` / `lampLit` 的强度或衰减 | 中 | render/wing* | wing | 1 km 低空夜城、night-city-off 翼尖 |
 | G08-STITCH | 瓦片拼接整个挪进 Worker（消除影像位图在 Worker 同步读回的约 1 次/分 >16.7 ms 尖峰；主线程 CPU 拼接已试、出 59 ms 长任务否决；方案见 handoff/G07b.md） | 中 | ground/* | ground | 1× 巡航 20 分钟同页交替尖峰数 |
-| DX-24 | dev-browser GPU 计时钩子只抓第一个 webgl2 上下文、被抢时静默返回 null → 跳过已丢失上下文并打印警告；Vite HMR 纳入测量锁或提供 --no-hmr；G07-diffs 目录参数与 shots --out 基准不一致 | 中 | scripts/* | — | bench 出 gpu= 列 |
-| DX-23 | `freeze()` 每次调用重设冻结时刻，uTime / 云偏移 / whiteout 跳一帧（同着色器两次测量平均差 0.6）→ 加「沿用原冻结时刻」选项并核对 `shots --pair --base-shader --cloud-live`；收编 C11-ab.mjs / C09 审查的 c09rev-ab.mjs / TM01-measure.mjs 为正式同页换材质工具；shots 默认高画质档 + 降档警告；EOX 瓦片跨域报错聚合；shader-budget --baseline 缺依赖时提示 | 中 | scripts/* | — | 同代码两次测量差为 0 |
 | C-TYPH | 台风外围卷云盖过曝白平板（中位数 235、一半以上 ≥235，底面水平直线 + 规则水波纹；TM02 量化证实非色调映射所致，属 clouds 台风段，T44 遗留；ART-7 #5） | 中高 | clouds（台风段） | clouds | typhoon-outer-11、typhoon-bands |
 | C-TAIL | C11 合并后重定 `CLOUD_MS_TAIL.y`（C01 为压棋盘纹定成 2，约束已解除，按观感重调） | 低 | clouds | clouds | in-cloud |
 | SC-4 | 云程序与场景并行编译 | 最高 | main.ts 启动段、boot/* | 碰 main | 冷启动 −约 6 s，无 ≥1 s 冻结 |
