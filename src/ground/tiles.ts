@@ -96,8 +96,8 @@ const ROAD_CLASS: Record<string, { highway: boolean; width: number; weight: numb
   trunk: { highway: true, width: 16, weight: 0.9 },
   primary: { highway: false, width: 14, weight: 0.7 },
   secondary: { highway: false, width: 12, weight: 0.45 },
-  tertiary: { highway: false, width: 10, weight: 0.28 },
-  minor: { highway: false, width: 8, weight: 0.14 },
+  tertiary: { highway: false, width: 10, weight: 0.2 },
+  minor: { highway: false, width: 8, weight: 0.08 },
 };
 
 /**

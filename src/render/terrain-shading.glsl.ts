@@ -168,26 +168,29 @@ vec3 groundRoadLights(GroundHit gh) {
   float cov = groundRoadCoverage(gh.g, shortM, longM, dirH);
   if (cov <= 1e-4) return vec3(0.0);
   vec2 gm = gh.g * 1000.0; // 米
-  // 沿线的明暗起伏：几百米尺度（换了灯型 / 灯距、车流）× 几公里尺度（不同路段、不同管理单位）。
-  // 足迹比起伏的尺度还大时淡出到均值，免得噪声本身在远处闪
+  // 沿线的明暗起伏：一两百米尺度（一段段街道的灯多灯少、有没有店面）× 几百米（换了灯型 / 灯距、车流）×
+  // 几公里（不同路段、不同管理单位）。足迹比起伏的尺度还大时淡出到均值，免得噪声本身在远处闪
+  float v0 = mix(vnoise(gm / 170.0 + 5.9), 0.5, smoothstep(60.0, 170.0, longM));
   float v1 = mix(vnoise(gm / 650.0), 0.5, smoothstep(200.0, 700.0, longM));
   float v2 = vnoise(gm / 2900.0 + 7.3);
-  float vary = (0.45 + 1.1 * v1) * (0.65 + 0.7 * v2);
+  float vary = (0.3 + 1.4 * v0) * (0.45 + 1.1 * v1) * (0.65 + 0.7 * v2);
   // 色温：按片区混合钠灯和 LED（很多城市正在把钠灯换成 LED，所以是成片的，不是逐盏随机）
   float sodium = smoothstep(0.35, 0.65, vnoise(gm / 4300.0 + 19.1));
   vec3 col = mix(ROAD_LED / dot(ROAD_LED, vec3(0.2126, 0.7152, 0.0722)),
                  ROAD_SODIUM / dot(ROAD_SODIUM, vec3(0.2126, 0.7152, 0.0722)), sodium);
-  // 近处能分出一盏盏路灯：每 32 m 格子里一个光斑（半径约 9 m），按能量归一（平均值 1）。按足迹的长轴淡出成连续的线：
-  // 光斑只在像素中心取一次，斜看时长轴方向上它比像素还密就会成一串闪动的单像素亮点（按短轴淡出时实测如此）
+  // 近处能分出一盏盏路灯：每 32 m 格子里一个光斑（半径约 9 m），按能量归一（平均值 1），足迹变大时淡出成连续的线。
+  // 光斑按像素足迹的椭圆展宽（沿视线方向用长轴、横向用短轴）：只按短轴展宽时，斜看的长轴方向上光斑比像素还密，
+  // 成了一串闪动的单像素亮点。展宽超过约半个格子后只算本格一盏灯会丢能量，所以在那之前（sA 12→20 m）淡出
   float beads = 1.0;
-  if (longM < 16.0) {
+  float sA = max(9.0, longM * 0.7), sB = max(9.0, shortM * 0.7);
+  if (sA < 15.0) {
     vec2 cm = gm / 32.0;
     vec2 cell = floor(cm);
     vec2 jit = hash22(cell * 1.3 + 5.7);
-    float dM = length(cm - cell - (0.2 + 0.6 * jit)) * 32.0;
-    float r = max(9.0, shortM * 0.7);
-    float pool = exp(-dM * dM / (r * r)) * (32.0 * 32.0) / (M_PI * r * r);
-    beads = mix(pool * (0.7 + 0.6 * jit.y), 1.0, smoothstep(6.0, 16.0, longM));
+    vec2 off = (cm - cell - (0.2 + 0.6 * jit)) * 32.0;
+    float qa = dot(off, dirH) / sA, qb = dot(off, vec2(-dirH.y, dirH.x)) / sB;
+    float pool = exp(-(qa * qa + qb * qb)) * (32.0 * 32.0) / (M_PI * sA * sB);
+    beads = mix(pool * (0.7 + 0.6 * jit.y), 1.0, smoothstep(10.0, 15.0, sA));
   }
   // 黄昏按片区先后开灯（太阳高度约 0°–3°），片区边界是平滑的噪声，不是方块
   float th = 0.05 * vnoise(gm / 5000.0 + 3.1);

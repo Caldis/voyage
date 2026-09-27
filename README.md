@@ -49,7 +49,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/clouds/noise.ts` | 云的形状 / 细节噪声、天气图（GPU 生成） |
 | `src/clouds/clouds.glsl.ts` | 云密度：层状云（天气场驱动）、雷暴（`towerShape`）、台风；云影 |
 | `src/clouds/clouds.ts` | 云的光线步进、时间累积、云预设、密度探针 |
-| `src/ground/geo.ts` / `tiles.ts` / `clipmap.ts` | 经纬度换算；瓦片加载（影像、地形、水体、夜光）；6 级 clipmap |
+| `src/ground/geo.ts` / `tiles.ts` / `clipmap.ts` | 经纬度换算；瓦片加载（影像、地形、水体、道路、夜光）；7 级 clipmap |
+| `src/ground/road-raster.ts` / `road-raster.worker.ts` | 夜间道路灯带（T08）：OSM 道路栅格成有向距离场 + 照亮宽度，在 Web Worker 里算；着色见 `ground.glsl.ts` 的 `groundRoadCoverage`、`terrain-shading.glsl.ts` 的 `groundRoadLights` |
 | `src/render/scene.ts` | 场景（舱内合成）着色器：舱内 uniform 声明、主函数（舱壁 / 内衬 / 遮光板 / 座椅 / 窗板效果、alpha 打包）、`createSceneMaterial`（持有所有 pass 共用的 uniforms） |
 | `src/render/outside-pass.ts` | 窗外着色器（SC-5）：`outsideRadiance`（地面 / 海面 / 天空的唯一调用点）、交通、闪电；`createOutsideMaterial` / `createOutsideTarget`；低空细节变体 `GroundDetailVariant` |
 | `src/render/noise.glsl.ts` | 窗外与舱内共用的小噪声（hash12 / vnoise / hash22 / fbm2）和 `uLoopGuard`；改它两个程序都重编 |
@@ -108,7 +109,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `public/data/moon_2k.jpg` | Solar System Scope「2k_moon」（基于 NASA LRO 数据） | CC BY 4.0，需署名：Solar System Scope |
 | 卫星影像（运行时拉取） | EOX Sentinel-2 cloudless 2020（`tiles.maps.eox.at`） | CC BY-NC-SA 4.0，需署名；仅限非商业 |
 | 地形（运行时拉取） | AWS Terrain Tiles，Terrarium 编码（`elevation-tiles-prod`） | 开放数据，各来源署名见其说明 |
-| 水体（运行时拉取） | OpenFreeMap 矢量瓦片的 water / waterway 图层 | © OpenStreetMap contributors，ODbL |
+| 水体、道路（运行时拉取） | OpenFreeMap 矢量瓦片的 water / waterway / transportation 图层（同一张瓦片、同一次请求） | © OpenStreetMap contributors，ODbL |
 
 **经验近似（不是物理量，后续要替换）**：舱内受窗外光的系数、夜间自动曝光的目标中灰曲线、水体反射率取值。代码里都标了注释。
 
@@ -172,7 +173,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **GLSL 没有命名空间**：所有 `*.glsl.ts` 拼进同一个程序，同签名函数重名会编译失败；而且只在某个变体把相关模块凑齐时才暴露（T02 的细节变体与 T06 的 `lineCov` 撞名）。**新增 GLSL 函数一律带模块前缀**（如 `detailLineCov`、`seatSdf`）。`renderer.compileAsync` 失败也会 resolve，切换变体前要检查程序是否有效。
 - **重函数只调用一次、结果复用**：FXC 会把被多处调用的函数在每个调用点整份内联，冷编译随调用点线性变长。已知重函数：`oceanRadiance`、`cloudShadow`、`flashIlluminance`、`sampleGround`、`keyLight`、`marchFunnel`、`windowIrradiance`、`cloudDensity`（及雷暴 / 台风部分）。SC-3 把场景程序里的 `oceanRadiance`、`cloudShadow`、`flashIlluminance` 都收成一个调用点后，场景冷编译 71 → 19 s（浮点逐像素不变）。新代码需要它们时先找现成结果，不要再调一次（T02 多调一次 cloudShadow 就多约 15 s）。定位法：真冷启动脚本 + `#if 0` 逐段二分。
 - **影像瓦片取不到时不能露底色**：`clipmap.buildImagery` 预先给画布涂深海色 `rgb(8,22,40)`，某张瓦片偶发失败（网络 / 限流）就露出一块直边的「深海色陆地」，而 `loadBitmap` 还把失败永久缓存。修法：除最粗一级外缺瓦片处留透明，`sampleGround` 按透明度回退到粗一级；失败不缓存、重建时重试。识别：陆地上出现直边、颜色恰为深海底色的色块。测回退：`page.route` 拦掉一部分瓦片（`page.unroute` 必须传同一个正则对象，否则拦截不解除）。
-- **调试模式编号**：`uDebug` 1–10 原有；11 / 12 海浪（T14：白浪覆盖率、可分辨斜率）；21 地表分类、22 像素足迹、23 水体遮罩（T02）。新增前先查占用。
+- **调试模式编号**：`uDebug` 1–10 原有；11 / 12 海浪（T14：白浪覆盖率、可分辨斜率）；21 地表分类、22 像素足迹、23 水体遮罩（T02）；24 只画道路灯带（T08，地面处辐亮度，不含空气透视）。新增前先查占用。
 - **glslang-validator-prebuilt-predownloaded 没有 `bin` 字段**：不能 `npx` 直接跑，要 `require("glslang-validator-prebuilt-predownloaded").getPath()` 拿到可执行文件路径自己 `spawn`（`apps/voyage/scripts/lint-shaders.mjs` 已经封装好）。
 - **离线校验 THREE 的 `#include <chunk>`**：不能直接展开 `THREE.ShaderChunk` 的原文喂给 `glslangValidator`——它的 `common` chunk 里的 `average()` 函数会被 glslangValidator 误报「redeclaration of existing name」（ANGLE / 真实浏览器编译完全正常，是 glslangValidator 自己符号表的问题）。`lint-shaders.mjs` 用手写的桩替换（`INCLUDE_STUBS`）绕开。
 - **按文本数 sampler 引用，光展开 `#ifdef` 还不够，要连着做「从 main() 可达性剪枝」**：一个函数即使在源码里正常定义、正常读了某个 sampler，只要这个函数本身从场景程序的 `main()` 顺着调用链走不到（比如只被另一个程序调用），真实驱动的死代码消除会把它和它读的 sampler 一起砍掉——纯文本「这个名字出现过好几次」看不出「是否真的可达」。`lint-shaders.mjs` 的 `reachableFromMain`/`pruneUnreachable` 就是为了修这个坑（撞上的真实案例：`uMultiScatteringLut` 只被 LUT 预计算程序用，场景程序的 `main()` 到不了它）。加新的静态分析工具时留意这一条。
@@ -220,4 +221,24 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   修法：量 CPU 时用 `ctx.suspend(t)` 每 0.25 s 停一下再 `update`，和实时一样滚动排程（`scripts/audio-check.mjs` 的 `cpu()`）。
 - **面板雷暴摆在 55–75 km 外**（T11）：雷声按 340 m/s 延迟近三分钟，隔着机舱本来也听不见。声音把打雷的距离上限放到 90 km，远雷只剩 90 Hz 以下、低于底噪约 11 dB 的闷响（一片断续的低沉滚动）；想听清楚的雷要导演把雷暴摆近（10 km 内雷声在 150 Hz 以下与底噪相当或更响）。
 - **headless 里听不见声音，但可以离线分析**（T11）：`node scripts/audio-check.mjs [--port 5211]`（没有开发服务器会自己起 vite）直接打开 `/src/audio.ts` 这个地址（同源、不启动渲染器）再动态 import，用 OfflineAudioContext 渲染各状态并输出倍频程表 / A 计权 / 峰值 / 左右相干度到 `tmp/audio-check/spectra.json`。页面上那条 404 是 favicon，无关。
-
+- **clipmap 里的细线（道路）不能存覆盖率，要存有向距离**（T08）：clipmap 纹素在巡航高度的中远处是 60–250 m，比屏幕像素在地面上的宽度大 2–3 倍，
+  覆盖率图双线性放大后每条路是 2 个纹素宽的软带子（4–6 个屏幕像素，糊）。改存「到最近中心线的有向距离」（`road-raster.ts`），双线性能在纹素内还原线位，
+  着色器按像素足迹解析抗锯齿，线细到 1 像素。坑一：**无符号**距离（或帐篷形剖面）双线性后线会被吸到纹素中心、线上最小值在 0–0.5 纹素之间跳，
+  亮度沿线一节一节地变（锯齿），必须有符号。坑二：有符号距离在两条路之间、在路的负侧与「无路」之间会跳变，插值出假零点 = 假线；
+  用「照亮宽度」只写在中心线 2 纹素内当遮罩 + 中心处梯度 |∇sd| ≫ 1 判假线挡掉。识别：`uDebug = 24` 里路中间或路旁平行多出一条线。
+- **斜看时细线 / 点状图案要按足迹的长轴过滤**（T08）：像素在地面上的足迹沿视线方向是横向的 1/cosθ 倍（贴近地平线几十倍）。只按横向足迹选级、取一个点，
+  和视线垂直的路（屏幕上横着的路）会断成虚线、飞机一动就闪。`groundRoadCoverage` 沿长轴取 1–6 个点，每点只负责长轴的 1/n。
+  实测（`handoff/T08-flicker.mjs` + `T08-flicker.py`，亚像素步进 20 帧，块能量变异系数）：各向异性 中位 0.021 / p98 0.074，只取一点 0.059 / 0.18。
+  近处路灯光斑、城市灯点这类「每格一个点」的图案同理：光斑要按足迹的椭圆展宽（长轴方向用长轴），否则成串的单像素横向短划。
+  **已知未修**：城市灯点（`groundLand` 里 30 m 一格的光点）仍只按短轴展宽，斜看时是横向短划（base 截图里就有）；展宽超过半格后只算本格一盏灯，
+  远处城市按 1/r² 变暗。T08 试过按椭圆展宽 + 远处换成期望值，城区在中距离变成过曝的平涂白斑（城区遮罩的形状露出来），观感更差，已撤回，留给单独的任务。
+- **细线过曝会丢掉抗锯齿**（T08）：解析抗锯齿靠边上像素的灰阶，线的亮度一旦超过夜间曝光的白点，边上像素也被截成同一个平色，看起来就是台阶。
+  道路灯带的亮度（`ROAD_LUMINANCE`）按「低空 4 km 看城市时满覆盖的路也不过曝」定。识别：放大看线全是一个颜色、边缘是像素台阶。
+- **矢量瓦片的线有贴着缓冲区边走的段**（T08）：瓦片外有 64 单位缓冲，裁剪后有些线沿缓冲区的边走一段（每张 z9–z12 瓦片 2–19 段），画出来是沿经线 / 纬线
+  笔直几十公里的假线。道路（`RoadTileBuilder`）和河道（`tiles.ts` 的 `insideTile`）都删掉整段在瓦片以外的线段。识别：从舷窗斜看有横贯画面的笔直水平亮线。
+- **影像纹理的 A 通道兼存道路照亮宽度**（T08）：水体纹理 RGBA 已满（R 水面、G 海洋、B 夜光、A 道路有向距离），照亮宽度放进影像的 A：
+  < 0.5 表示「缺影像的比例 / 2」（原来的缺瓦片回退语义），≥ 0.5 表示有影像、其余 7 位是宽度。读影像 alpha 判断缺瓦片一律用 `min(A·2, 1)`
+  （`sampleGroundAlbedo`）；水体纹理不能走带缺瓦片回退的采样（`sampleGround` 已拆成两个入口）。
+- **clipmap 重建时的 CPU 活要放 Worker**（T08）：一级道路几万到十几万个顶点，主线程上投影 + 逐段求距离实测每级 25–180 ms，1M 像素的浮点合成循环 15–40 ms，
+  飞行中每重建一级就卡一下。现在投影、抽稀、求距离、和夜光 / 影像合成都在 `road-raster.worker.ts`，像素缓冲区转移过去再转移回来（主线程上那一遍夜光拷贝循环也省了）。
+  识别：`handoff/T08-shots.mjs --longtask 30` 统计长任务。
