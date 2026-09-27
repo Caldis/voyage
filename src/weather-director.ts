@@ -33,12 +33,16 @@ const HEIGHT_RATE = 3 / 3600;
 const SHAPE_RATE = 1 / (30 * 60);
 /** 推给云着色器的最小间隔（真实秒）：每次推进是一小步，云影图按分片重建 */
 const PUSH_MIN_REAL_S = 0.25;
-/** 雷暴系统进入这个范围（km）就准备摆放，离开 STORM_DROP_KM 或消散后移除 */
-const STORM_RANGE_KM = 380;
-const STORM_DROP_KM = 480;
-/** 台风：中心进入这个范围（km）就准备摆放（卷云盖半径约 16 × 眼半径 ≈ 300 km） */
-const TY_RANGE_KM = 750;
-const TY_DROP_KM = 950;
+/**
+ * 雷暴系统进入这个范围（km）就准备摆放，离开 STORM_DROP_KM 或消散后移除。
+ * 不放得更远：占据网格只覆盖 ±128 km，网格外的雷暴照样按点求值，4 个单体在 300 km 外仍要 +1–1.5 ms / 帧（T19b-storm-cost.mjs），
+ * 而那么远只剩地平线上的一小块砧顶
+ */
+const STORM_RANGE_KM = 280;
+const STORM_DROP_KM = 340;
+/** 台风：中心进入这个范围（km）就准备摆放（卷云盖半径约 16 × 眼半径 ≈ 300 km）；远处的台风也要 +2–3 ms / 帧 */
+const TY_RANGE_KM = 600;
+const TY_DROP_KM = 720;
 /** 窗外视野：窗户左右各约 25°，再留余量。物体的角范围完全落在「离窗外方向 55° 以外」才算看不见 */
 const OUT_OF_VIEW_DEG = 55;
 /** 远到这个程度（km，扣掉物体半径）就算看不见 */
@@ -47,6 +51,8 @@ const OUT_OF_VIEW_FAR_KM = 450;
 const stormPassKm = (radius: number) => radius * 5 + 8;
 /** 台风中心离航线至少多远（km）：外围雨带、卷云盖外缘（「台风外围」预设是 220 km） */
 const TY_PASS_KM = 220;
+/** 构图：机头前方离航线这么近（km）的雷暴系统挪到窗外一侧（composeForWindow） */
+const COMPOSE_CROSS_KM = 200;
 /** 奇观之门演示：间隔（模拟秒） */
 const GATE_DEMO_EVERY_SIM_S = 2 * 3600;
 
@@ -309,7 +315,7 @@ export class WeatherDirector {
     this.pendingCells.set(id, sys.cells.length);
     // 强度随生命周期：成熟期的单体更大更高
     const cellsGeo = sys.cells.map((c) => ({ ...c, radius: c.radius * (0.75 + 0.25 * sys.strength), top: c.top - 1.2 * (1 - sys.strength) }));
-    const placement = () => this.nudgeOffTrack(cellsGeo.map((c) => this.toLocalCell(c)), (c) => stormPassKm(c.radius));
+    const placement = () => this.nudgeOffTrack(this.composeForWindow(cellsGeo.map((c) => this.toLocalCell(c))), (c) => stormPassKm(c.radius));
     this.d.request({
       id,
       covers: ["cloud", "night"],
@@ -451,6 +457,25 @@ export class WeatherDirector {
   private toLocalCell(c: { id: string; lat: number; lon: number; radius: number; top: number }): LocalCell {
     const [x, z] = this.host.toLocal(c.lat, c.lon);
     return { id: c.id, x, z, radius: c.radius, top: c.top };
+  }
+
+  /**
+   * 构图（导演的取舍）：机头前方、离航线 ±COMPOSE_CROSS_KM 以内的雷暴系统，整组横移到窗外这一侧 40–90 km（原来越远、挪过去也越远），
+   * 让「远远路过雷暴区」真的从窗前经过；不在这个范围的保持天气场给的位置。只在摆放那一刻算（摆放时它在视野外），摆好后不再动。
+   * 天气场本来就是示意性的气候倾向，位置差一两百公里不影响「哪里有雷暴」的倾向
+   */
+  private composeForWindow(cells: LocalCell[]): LocalCell[] {
+    const [px, pz] = this.host.localPos();
+    const [fx, fz] = this.fwd();
+    const rx = -fz, rz = fx;
+    const cx = cells.reduce((a, c) => a + c.x, 0) / cells.length - px;
+    const cz = cells.reduce((a, c) => a + c.z, 0) / cells.length - pz;
+    const along = cx * fx + cz * fz;
+    const cross = cx * rx + cz * rz;
+    if (along < 60 || Math.abs(cross) > COMPOSE_CROSS_KM) return cells;
+    const side = this.host.state.seat === "right" ? 1 : -1;
+    const shift = side * (40 + (50 * Math.abs(cross)) / COMPOSE_CROSS_KM) - cross;
+    return cells.map((c) => ({ ...c, x: c.x + rx * shift, z: c.z + rz * shift }));
   }
 
   /** 整组横移到航线一侧：机头前方（或刚到正侧方）的单体离航线（沿当前航向的直线）不够 pass(c) 就整组推开 */

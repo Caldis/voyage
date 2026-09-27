@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // T19b 天气演变验证（由 T19a-voyage.mjs 改来）：开连续航程（默认 60×），连续播放若干分钟（真实时间），按间隔截图成时间序列，
-// 每 2 秒采样位置 / 高度 / 航段 / 天气（云型、云量、云顶、雷暴单体的本地坐标、台风）与帧间隔，
+// 每 1 秒采样位置 / 高度 / 航段 / 天气（云型、云量、云顶、雷暴单体的本地坐标、台风）与帧间隔，
 // 最后读导演的连续性遥测、天气日志（每次生成 / 移除 / 换云型借的是哪种遮挡）与天气遥测（渐变单步的最大台阶）。
 // 用法：node handoff/T19b-voyage.mjs --port 5239 [--angle vulkan] [--rate 60] [--minutes 30] [--every 30] [--time 930] [--preset hnd-cts]
-//       [--seed 20260927] [--gate]（奇观之门演示） [--out tmp/screenshot/T19b]
+//       [--seed 20260927] [--gate]（奇观之门演示） [--noweather]（关掉天气驱动做 A/B） [--out tmp/screenshot/T19b]
 import { chromium } from "playwright-core";
 import fs from "node:fs";
 import path from "node:path";
@@ -54,7 +54,14 @@ const sample = () => {
     coverage: +v.cloudUniforms.uCoverage.value.toFixed(4),
     top: +v.cloudUniforms.uCloudTop.value.toFixed(3),
     bottom: +v.cloudUniforms.uCloudBottom.value.toFixed(3),
-    storms: v.weather.storms.map((st) => ({ id: st.id ?? "manual", x: +st.x.toFixed(2), z: +st.z.toFixed(2), d: +Math.hypot(st.x - v.cloudUniforms.uCloudOffset.value.x, st.z - v.cloudUniforms.uCloudOffset.value.y).toFixed(1) })),
+    storms: v.weather.storms.map((st) => {
+      const o = v.cloudUniforms.uCloudOffset.value;
+      const dx = st.x - o.x, dz = st.z - o.y;
+      const h = (s.heading * Math.PI) / 180, sg = s.seat === "right" ? 1 : -1;
+      // 离窗外方向的夹角（度）：< 30 就在窗前
+      const ang = (Math.acos((dx * Math.cos(h) * sg + dz * Math.sin(h) * sg) / Math.hypot(dx, dz)) * 180) / Math.PI;
+      return { id: st.id ?? "manual", x: +st.x.toFixed(2), z: +st.z.toFixed(2), d: +Math.hypot(dx, dz).toFixed(1), ang: +ang.toFixed(0) };
+    }),
     hurricane: v.weather.hurricane ? { id: v.weather.hurricane.id ?? "manual", d: +Math.hypot(v.weather.hurricane.x - v.cloudUniforms.uCloudOffset.value.x, v.weather.hurricane.z - v.cloudUniforms.uCloudOffset.value.y).toFixed(0) } : null,
     frame: (() => {
       const f = window.__t19bFrames.splice(0);
@@ -98,11 +105,12 @@ try {
     requestAnimationFrame(loop);
   });
   // 天气场种子 / 奇观之门演示
-  await page.evaluate(({ seed, gate }) => {
+  await page.evaluate(({ seed, gate, noWeather }) => {
     const w = window.__voyage.director.weather;
     if (seed) w.field.seed = seed;
     w.gateDemo = gate;
-  }, { seed: args.seed ? Number(args.seed) : 0, gate: !!args.gate });
+    w.enabled = !noWeather;
+  }, { seed: args.seed ? Number(args.seed) : 0, gate: !!args.gate, noWeather: !!args.noweather });
   // 开连续航程并设流速
   await page.evaluate((r) => {
     const box = document.getElementById("voyage-on");
@@ -116,10 +124,20 @@ try {
   const t0 = Date.now();
   let shot = 0;
   let nextShot = 0;
+  let lastStormShot = 0;
+  let stormShot = 0;
   while (Date.now() - t0 < minutes * 60e3) {
     const el = (Date.now() - t0) / 1000;
     const s = await page.evaluate(sample);
     samples.push(s);
+    // 雷暴在窗前（离窗外方向 < 28°、200 km 内）：额外截一张（每 4 秒最多一张）——60× 时一次路过只在窗前停留几秒
+    const inView = s.storms.find((st) => st.ang < 28 && st.d < 200 && st.id !== "gate");
+    if (inView && Date.now() - lastStormShot > 4000) {
+      lastStormShot = Date.now();
+      const name = `storm-${String(stormShot++).padStart(2, "0")}-${s.local.slice(0, 5).replace(":", "")}-${inView.id.replace(/[#]/g, "_")}-${Math.round(inView.d)}km.png`;
+      await page.screenshot({ path: path.join(outDir, name), timeout: 60000 });
+      console.log(`[${el.toFixed(0)} s] ${name}  ${s.wx}`);
+    }
     if (el >= nextShot) {
       const name = `${String(shot).padStart(2, "0")}-${s.local.slice(0, 5).replace(":", "")}-${s.leg}-${s.regime}${s.storms.length ? `-storm${s.storms.length}` : ""}${s.hurricane ? "-ty" : ""}.png`;
       await page.screenshot({ path: path.join(outDir, name), timeout: 60000 });
@@ -127,7 +145,7 @@ try {
       shot++;
       nextShot += everyS;
     }
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 1000));
   }
   const telemetry = await page.evaluate(() => JSON.parse(JSON.stringify(window.__voyage.director.telemetry)));
   const wx = await page.evaluate(() => JSON.parse(JSON.stringify({ log: window.__voyage.director.weather.log, telemetry: window.__voyage.director.weather.telemetry })));
