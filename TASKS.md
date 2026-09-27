@@ -9,6 +9,7 @@
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | T38 | 第 6 波（主干） | 5238 | worktree | Opus（富士山顶悬在薄云带上 + T44 遗留台风近塔圆桶） | — | 进行中 |
+| TR02 | P8 第一期（主干） | 5260 | worktree | Opus（火车模式与列车运动；碰 main / ui → 交付后必派独立审查） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
@@ -93,7 +94,6 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | DX-12 | shots 增强：`--scenes-file`、`--set` / `--uniform`、同页冻结 A/B（`--ab`）、截图附面板值 / 日月高度 JSON、默认固定日期 | 中 | scripts | — | — |
 | DX-13 | 常驻调试开关（舱内置黑、关倒影 / 日盘 / bloom / TAA、奇观介质 / 表面 / 事件单独开关），重程序用按需编译变体而非 uniform 分支 | 中（Opus，占 main.ts 热点名额） | main / 各 pass | 碰 main | — |
 | DX-15..21 | 共享主分支对照基线脚本、passes 归类 bloom、probe 坐标注释 / 屏幕坐标、cpu-profile.mjs、handoff 脚本治理、merge-gate.mjs（越界 / 热点检查 + 是否需审查提示 + WORKLOG 摘要）、pixelOf / 舷窗孔径 / sky.mjs（详见 DX_REPORT_wave6 §4） | 低–中 | scripts | — | — |
-| TR02 | 火车模式与列车运动：走廊坐标、超高侧倾、车体振动、面板开关；飞机默认程序预处理后必须逐字不变 | P8 第一期（TR01 后） | 新 src/rail/*、main / ui 少量接入 | 需接入 | 火车模式开关 |
 | TR03 | 远景接入：窗外程序 `#define RAIL` 变体、相机贴地、最近求交约 300 m | P8 第一期（TR02 后） | outside-pass 变体 | 否 | 大糸线白天 |
 | TR04 | 近景解析层：接触网支柱、馈线、道砟与枕木，解析运动模糊（快门位移预过滤） | P8 第一期（TR02 后） | 新近景层 | 否 | 90 km/h 近景不频闪 |
 | TR05a / TR05b | 中景：夏季稻田 / 畦畔 / 稻浪；民居 / 树 / 配电杆实例化 + 电线 | P8 第一期（TR03、TR04 后） | 新中景 | 否 | 安昙野稻田 |
