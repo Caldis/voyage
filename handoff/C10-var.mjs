@@ -54,6 +54,7 @@ const OLD = [["(bis > 0 || (dens > 0.002 && wasEmpty && t < 60.0))", "(bis > 0)"
 
 export const VARIANTS = {
   old: OLD, old2: OLD, new: [], new2: [],
+  newT: [["(dens > 0.002 && wasEmpty && t < 60.0)", "(dens > 0.002 && wasEmpty && T > 0.5 && t < 60.0)"]],
   newK35: [["return min(d * mix(4.5, 1.5, cir), 1.0) * uCloudDensity;", RET]],
   base: [],
   base2: [],
