@@ -35,6 +35,7 @@ uniform sampler3D uAerialTransmittance;
 uniform float uFrame;
 uniform vec2 uCloudResolution;
 uniform float uWeatherCull;   // 1：够不着雷暴 / 台风的视线走普通云的快路径（T33）；0：对照
+uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；和曝光的 uWhiteout 是同一个 uniform 对象，C01 返工）
 varying vec2 vUv;
 
 // 交错梯度噪声：每个像素的步进起点错开，时间累积后抹平成平滑结果
@@ -186,8 +187,12 @@ float hg(float c, float g) {
 // 多次散射近似的能量标定（C01）：少阶的八度近似把高阶散射的能量截掉了，受光厚云的有效反照率 πL / E（水平面照度）
 // 只有约 0.2（noon-cumulus 读回，c01-albedo），真实厚云是 0.7–0.8。单次散射是精确的，缺的是多次散射那一份，
 // 所以只给高阶乘一个与光学厚度无关的常数，标定到受光云顶的 p90 ≈ 0.75（见 handoff/C01-02.md）。
-// 它不改变高阶之间的比例，a ≤ b 的守恒结构不变；乘在 od 无关的常数上，也不会让薄云比厚云亮
+// 注意这是一个**不守恒的经验增益**：乘完以后高阶的绝对权重是 3.0 / 1.5，已不满足 a ≤ b；光学上很薄的地方（薄幕、卷云、碎云边，
+// od → 0）多次散射的源项是单次散射的 3–4.5 倍（粉末 0.7–1），物理上那里几乎只有单次散射（已知问题，cirrus-noon 实测只亮 +4/255）
 const float CLOUD_MS_ALBEDO = 6.0;
+// 扩散尾巴的强度（C01 返工，见受光段）：x = 从外面看的积云（取小值，保住受光 / 背光的对比），y = 飞机在云里（按 uCloudImmersion 过渡；
+// 取 2：云里窗外的 2×2 棋盘纹在 1 时仍略高于 master），z = 雷暴 / 台风的塔身（只在天气宏里用）
+const vec3 CLOUD_MS_TAIL = vec3(0.2, 2.0, 1.0);
 
 void main() {
   // 深度写进深度附件（单输出，见文件头）。写了 gl_FragDepth 的程序每条路径都要写，否则深度未定义
@@ -435,13 +440,16 @@ void main() {
       // 多次散射近似（Wrenninge 2013 的八度法）：第 k 阶 = a^k · p(g·c^k) · exp(−b^k · od)，每一阶更弱、衰减更慢、相函数更平。
       // C01：**a ≤ b 才守恒**（散射权重衰减不能慢于消光衰减，Wrenninge 2013；Hillaire 2016 Frostbite 沿用，常取 a = b = c = 0.5；
       // UE Volumetric Cloud 的默认值同为 0.5，八度数最多加到 2）。原来是 a = 0.62 > b = 0.35、6 阶（T12 为补「顺光的云偏灰」加的）：
-      // od = 5 处高阶合计是单次散射的约 100 倍，背光面被灌满，受光 / 背光抹平，云芯亮度起伏只有均值的 ±6%，菜花读不出来
-      // （research/CLOUD_SHARPNESS.md §1.6）。现在 a = b = c = 0.5、共 3 阶（单次 + 2 个高阶）。
+      // 第 3–5 阶的 b^k 趋近 0，几乎是一份不随 od 变的常数光，高阶合计从 od = 0 到 5 只降到一半，受光 / 背光抹平，
+      // 云芯亮度起伏只有均值的 ±6%，菜花读不出来（research/CLOUD_SHARPNESS.md §1.6）。现在 a = b = c = 0.5、共 3 阶
+      // （单次 + 2 个高阶），od 0 → 5 降到约 1/6.7：对比提高来自这条曲线变陡（审查更正：不是「od = 5 处高阶是单次的 100 倍」——改后仍是约 100 倍）。
       // 雷暴光学厚度几百、高阶占比更高，取 a = b = 0.6（同样守恒）
 #ifdef CLOUD_WEATHER
       float msDecay = stormW > 0.5 ? 0.6 : 0.5;
+      float tailK = stormW > 0.5 ? CLOUD_MS_TAIL.z : mix(CLOUD_MS_TAIL.x, CLOUD_MS_TAIL.y, uCloudImmersion);
 #else
       const float msDecay = 0.5;
+      float tailK = mix(CLOUD_MS_TAIL.x, CLOUD_MS_TAIL.y, uCloudImmersion);
 #endif
       float msScatter = 0.0;
       float a = msDecay, b = msDecay, c = 0.5;
@@ -450,10 +458,18 @@ void main() {
         msScatter += a * phase * exp(-b * od);
         a *= msDecay; b *= msDecay; c *= 0.5;
       }
-      // Beer-Powder（Schneider 2015）：刚进云的那一薄层里多次散射还没「攒」起来，所以只压多次散射（C01）——单次散射在受光表面本来就是满的。
+      // Beer-Powder（Schneider 2015，原文是经验性的）：按其物理含义的解读——刚进云的那一薄层里多次散射还没「攒」起来，
+      // 所以只压多次散射（C01）；单次散射在受光表面本来就是满的。
       // 原来整项一起压，顺光时把受光的云边也压暗了，和真实云朵受光面的亮边相反。逆光时薄边正是最亮的地方，淡出（T12）
       float powder = 1.0 - exp(-2.0 * od - 0.5);
       sunScatter += CLOUD_MS_ALBEDO * msScatter * mix(1.0, powder, 0.5 * (1.0 - smoothstep(0.3, 0.9, cosT)));
+      // 扩散尾巴（C01 返工）：上面三阶都按 e^(−b^k·od) 衰减，od ≳ 10 时全部归零——厚云深处（雷暴 / 台风的背光塔身、飞机在云里）
+      // 只剩蓝色的天空光，塔身成了深蓝剪影；云里每个样本的受光全靠对受光 od 极敏感的那一项，受光步进的随机细节被放大成 2×2 棋盘纹。
+      // 真实厚云深处是扩散区，漫射光按二流近似慢慢衰减：总透射 ≈ 1 / (1 + 0.75(1 − g)·od)（g = 0.85，和 keyVisibility 同一式），
+      // 扣掉直射 e^−od 就是「已被散射、没被吸收」的那一份（上界 1、od = 0 时为 0，薄边自然还没攒起来），按各向同性相函数散出。
+      // 强度 tailK：尾巴在 od 3–10 就有 0.3–0.6，会把从外面看的积云背光面抬平（K = 1 时 clouds-variety 云芯对比掉回改前的 −26%），
+      // 所以晴天积云只取 0.2；飞机在云里（uCloudImmersion，看到的全是云体深处）取 2，雷暴 / 台风塔身（stormW，只在天气宏里）取 1
+      sunScatter += (tailK / (4.0 * M_PI)) * (1.0 / (1.0 + 0.1125 * od) - exp(-od));
       vec3 sunLight = keyLight(r, up) * sunScatter;
 #ifdef WONDER_LAYER
       // 奇观的投影椭球挡住直射光（岛在云海上的影子）
@@ -1134,6 +1150,8 @@ export class Clouds {
     this.marchWonderMat = this.marchVariant("WC").mat;
     this.marchCirrusMat = this.marchVariant("C").mat;
     this.marchMat.uniforms.uWonderSurf = { value: this.wonderSurf.texture };
+    // 扩散尾巴的强度（C01 返工）：直接共用曝光的「在云里」uniform 对象，keyVisibility 每帧写一次
+    this.marchMat.uniforms.uCloudImmersion = EXPOSURE_WHITEOUT;
     this.wonderSurfMat = new THREE.ShaderMaterial({
       ...common,
       fragmentShader: WONDER_SURF_FRAG,
