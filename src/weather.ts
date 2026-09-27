@@ -57,6 +57,8 @@ export class WeatherSystem {
   readonly bolt = Array.from({ length: MAX_BOLT_POINTS }, () => new THREE.Vector3());
   boltCount = 0;
   boltIntensity = 0;
+  /** 闪电事件回调（T11 声音：按距离延迟打雷）。start / end 是放电通道两端（本地坐标 km，y 为海拔），cg：云地闪 */
+  onFlash: ((start: THREE.Vector3, end: THREE.Vector3, cg: boolean) => void) | null = null;
   private time = 0;
 
   constructor(private readonly u: CloudUniforms) {}
@@ -220,6 +222,7 @@ export class WeatherSystem {
     for (let i = 0; i < n; i++) this.strokes.push({ t0: this.time + i * (0.05 + Math.random() * 0.08), intensity: 300 * (i === 0 ? 1 : 0.5 + Math.random() * 0.5) });
     this.boltCount = 0;
     if (cg) this.makeBolt(fx, fz);
+    this.onFlash?.(this.flashPos, this.flashEnd, cg);
   }
 
   /** 云地闪主通道：从云底往下走的折线，每段随机偏折；中途分出一条短分叉（用剩余的点） */

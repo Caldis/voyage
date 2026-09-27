@@ -23,6 +23,7 @@ import { BootProgress } from "./boot/progress";
 import { Director } from "./director";
 import { WonderSystem } from "./wonders/system";
 import { createQualityController, DEFAULT_DPR_CAP } from "./quality";
+import { CabinAudio, audioInputFrom } from "./audio";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
@@ -260,6 +261,15 @@ const director = new Director({
   localPos: () => [cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y],
   landBelow: () => (state.floor?.known ? state.floor.reason === "land" : null),
 });
+// ---------- 声音（T11，audio.ts）：默认静音，面板「声音」开关 / M 键在用户手势里启用 ----------
+const audio = new CabinAudio();
+// 闪电 → 按到放电通道较近一端的距离延迟打雷
+weather.onFlash = (a, b, cg) => {
+  const o = cloudUniforms.uCloudOffset.value;
+  const dist = (p: THREE.Vector3) => Math.hypot(p.x - o.x, p.y - state.altitudeKm, p.z - o.y);
+  audio.lightning(Math.min(dist(a), dist(b)), cg);
+};
+
 // 奇观之门演示开关（T19b）：URL 带 ?gateDemo 时，连续航程每 2 模拟小时在航线前方放一道云墙
 if (new URLSearchParams(location.search).has("gateDemo")) director.weather.gateDemo = true;
 
@@ -292,7 +302,7 @@ resize();
 // 重新应用一次分辨率 / DPR——上面的初始 renderer.setPixelRatio + resize() 已经把状态摆对了
 const quality = createQualityController({ renderer, clouds, resize });
 
-setupUi({ state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, quality });
+setupUi({ state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, quality, audio });
 // 奇观之门（W01 预留、T19b 接入）：遮挡开始时通知奇观系统；只有 wonders.preferGate = true 时才会借遮挡出现
 director.onCover((kind) => wonders.onCover(kind));
 
@@ -375,6 +385,7 @@ function renderFrame(now: number) {
   updateHighLift(state, simDt);
   traffic.update(simDt, flightResult.ownDir, flightResult.speedKms, flightResult.outwardW);
   weather.update(dt);
+  audio.update(audioInputFrom(state, inCloud, flightResult.speedKms, flightResult.climbing)); // 声音（T11），内部节流到 10 Hz
   const off = cloudUniforms.uCloudOffset.value;
   for (let i = 0; i < 16; i++) {
     const b = weather.bolt[i];
@@ -412,6 +423,7 @@ function renderFrame(now: number) {
   u.uHead.value.set(head.x, head.y + bump, head.z);
   u.uWetness.value = state.wetness;
   u.uCameraFog.value = clouds.cameraDensity * 60; // 与云着色器的 CLOUD_EXTINCTION 一致
+  clouds.keyVisibility(dt, u.uKeyCloud.value); // 飞机周围的云对舱内 / 机翼光照的影响（T31）
   const camBasis = cameraBasis();
   const c2w = cabinToWorld();
   u.uCamBasis.value = camBasis;
@@ -607,4 +619,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, cabinClass, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio };

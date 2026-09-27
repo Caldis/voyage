@@ -10,6 +10,7 @@ import type { Director } from "./director";
 import { WONDERS } from "./wonders/catalog";
 import { RARITY_LEVELS, type WonderSystem } from "./wonders/system";
 import { isHeavyWeather, type QualityController, type QualityTier } from "./quality";
+import type { CabinAudio } from "./audio";
 
 /**
  * 面板：DOM 绑定、信息栏文字、方位文字（COMPASS）。从 main.ts 拆出（T01 纯重构，未改动任何取值或绑定顺序）。
@@ -116,6 +117,8 @@ export interface UiDeps {
   wonders: WonderSystem;
   /** 画质档位（PERF-5）：自动 / 高 / 中 / 低 */
   quality: QualityController;
+  /** 声音（T11） */
+  audio: CabinAudio;
 }
 
 /** 绑定面板上的所有控件。调用一次，顺序和原来 main.ts 里一致。 */
@@ -281,6 +284,7 @@ export function setupUi(deps: UiDeps) {
   });
   setupVoyageUi(director);
   setupWonderUi(deps.wonders);
+  setupSoundUi(deps.audio);
 
   // 画质（PERF-5）：面板只负责挑档位（自动 / 高 / 中 / 低），具体分辨率 / DPR 上限与自适应逻辑都在 quality.ts
   const qualitySel = $<HTMLSelectElement>("quality");
@@ -391,5 +395,38 @@ function setupWonderUi(wonders: WonderSystem) {
     const t = wonders.describe();
     if (t !== last) status.textContent = last = t;
   }, 500);
+  sync();
+}
+
+// ---------- 声音（T11） ----------
+
+/** 「声音」开关（默认关；勾选 / 按 M 是用户手势，浏览器才允许 AudioContext 出声）、音量、空调气流、提示音。
+ *  背景板模式下面板隐藏，但声音照常；M 键在背景板模式里也能开关 */
+function setupSoundUi(audio: CabinAudio) {
+  const box = $<HTMLInputElement>("sound-on");
+  const controls = $("sound-controls");
+  const vol = $<HTMLInputElement>("sound-volume");
+  const volOut = $("sound-volume-out");
+  const ac = $<HTMLInputElement>("sound-aircon");
+  const chime = $<HTMLInputElement>("sound-chime");
+  const sync = () => {
+    box.checked = audio.enabled;
+    controls.hidden = !audio.enabled;
+    vol.value = String(Math.round(audio.volume * 100));
+    volOut.textContent = `${Math.round(audio.volume * 100)}%`;
+    ac.checked = audio.options.aircon;
+    chime.checked = audio.options.chime;
+  };
+  audio.onChange = sync;
+  box.addEventListener("change", () => (box.checked ? void audio.enable() : audio.disable()));
+  vol.addEventListener("input", () => {
+    audio.setVolume(Number(vol.value) / 100);
+    volOut.textContent = `${vol.value}%`;
+  });
+  ac.addEventListener("change", () => audio.setOption("aircon", ac.checked));
+  chime.addEventListener("change", () => audio.setOption("chime", chime.checked));
+  window.addEventListener("keydown", (e) => {
+    if ((e.key === "m" || e.key === "M") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) audio.toggle();
+  });
   sync();
 }

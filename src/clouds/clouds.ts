@@ -26,6 +26,7 @@ uniform sampler3D uAerialInscatter;
 uniform sampler3D uAerialTransmittance;
 uniform float uFrame;
 uniform vec2 uCloudResolution;
+uniform float uWeatherCull;   // 1：够不着雷暴 / 台风的视线走普通云的快路径（T33）；0：对照
 varying vec2 vUv;
 
 // 交错梯度噪声：每个像素的步进起点错开，时间累积后抹平成平滑结果
@@ -105,6 +106,38 @@ vec3 hurricaneShadowedInscatter(vec3 ro, vec3 rd, float depth, vec3 full) {
   return acc;
 }
 
+// 视线段 [t0, t1] 的水平投影离世界坐标 c（km）最近多远。视线从相机出发（ro.xz = 0），水平投影 = rd.xz · t，是一条直线
+float cloudRayDist2D(vec3 rd, vec2 seg, vec2 c) {
+  vec2 rel = c - uCloudOffset;
+  float t = clamp(dot(rel, rd.xz) / max(dot(rd.xz, rd.xz), 1e-8), seg.x, seg.y);
+  return length(rd.xz * t - rel);
+}
+
+// T33：这条视线够得着雷暴 / 台风吗（x：任一雷暴或台风，y：台风）。
+// 包围半径和密度函数里的提前退出一致（雷暴 √56 ≈ 7.5 倍塔身半径，台风 18 倍眼半径），再加受光步进够得着的 15 km。
+// 以前只要场上有雷暴 / 台风，所有像素都走「天气模式」（256 步、8 步不展开的受光步进、逐点查天气），
+// 雷暴在几百公里外、甚至在身后也要多 1–1.2 ms/帧（T19b 报告），与距离无关
+const float WEATHER_LIGHT_REACH = 15.0;
+bvec2 cloudRayNearWeather(vec3 rd, vec2 seg) {
+  bool nearAny = false;
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 c = uStorms[i];
+    if (cloudRayDist2D(rd, seg, c.xy) < c.z * 7.5 + WEATHER_LIGHT_REACH) nearAny = true;
+  }
+  bool nearHur = uHurricane.w > 0.5 && cloudRayDist2D(rd, seg, uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
+  return bvec2(nearAny || nearHur, nearHur);
+}
+// 同样的判断，对一个点（世界坐标 xz）：受光步进按采样点选路径。只按视线选的话，视线够得着的那片像素里
+// 离雷暴很远的普通云也走雷暴的受光步进（8 步、15 km），和旁边够不着的像素差一点，包围圆柱的轮廓会在普通云上露出一条缝
+bool cloudPointNearWeather(vec2 xz) {
+  bool nearAny = uHurricane.w > 0.5 && length(xz - uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 c = uStorms[i];
+    if (length(xz - c.xy) < c.z * 7.5 + WEATHER_LIGHT_REACH) nearAny = true;
+  }
+  return nearAny;
+}
+
 float hg(float c, float g) {
   float g2 = g * g;
   return (1.0 - g2) / (4.0 * M_PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
@@ -124,6 +157,18 @@ void main() {
   vec2 seg = cloudShellInterval(ro, rd);
   seg.y = min(seg.y, AERIAL_MAX_DISTANCE);
   if (seg.y <= seg.x) return;
+  // 这条视线够不着雷暴 / 台风：整条按普通云走（T33）。uWeatherCull = 0 时关掉（对照用）
+  bvec2 nearW = uWeatherCull > 0.5 ? cloudRayNearWeather(rd, seg) : bvec2(uStormCount > 0 || uHurricane.w > 0.5, uHurricane.w > 0.5);
+  gWeatherOn = nearW.x;
+  bool nearHur = nearW.y;
+  // 够不着时只走层状云自己的高度范围：有雷暴 / 台风时外壳被撑到 0–15 km（台风 0.5–20.5 km），巡航高度就在壳里，
+  // 近水平的视线要空走几百公里（这是远处雷暴开销的大头）
+  if (!nearW.x) {
+    if (uCoverage <= 0.0) return;
+    seg = cloudShellIntervalH(ro, rd, uCloudBottom, uCloudTop);
+    seg.y = min(seg.y, AERIAL_MAX_DISTANCE);
+    if (seg.y <= seg.x) return;
+  }
 
   // 直射主光源：白天是太阳，夜里是月亮（月光照亮云海）
   float cosT = dot(rd, uKeyDir);
@@ -137,7 +182,7 @@ void main() {
   // 否则远处步长几百米、云的消光又高（60 /km），第一个采样点可能已经在云里几百米深处，
   // 被阳光照亮的那层表面被跳过，受光面发灰、菜花状的隆起也看不出来
   // 台风的眼壁同理（远处的眼壁表面同样会被大步长跳过）
-  bool refineOn = uStormCount > 0 || uHurricane.w > 0.5;
+  bool refineOn = nearW.x;
   int fine = 0;
   float fineDt = 0.03;
   bool wasEmpty = true;
@@ -152,7 +197,7 @@ void main() {
   // 下方（海面 / 低云）反射上来的光的反照率：有低云时明显更亮
   // 台风眼里脚下是眼底的云，不是海面（晴天取 0.35），再按眼底受光的比例打折（见下）
   float albedoBelow = 0.06 + 0.5 * uCoverage;
-  if (uHurricane.w > 0.5) {
+  if (nearHur) {
     // 反射光来自眼底和对面的眼壁，随受光几何变：太阳低的时候眼底大半在向阳一侧眼壁的影子里（「井底」），
     // 反射光跟着变弱，背光的眼壁不再被统一提亮到天空的亮度（T26）。取眼底中心和沿太阳方位前后各一点的平均
     vec2 hc = uHurricane.xy - uCloudOffset;
@@ -164,8 +209,12 @@ void main() {
     }
     albedoBelow = 0.35 * mix(0.25, 1.0, fv / 3.0);
   }
-  // 次数上限：从相机空步走到 60 km 外本身就要约 190 步，细化还要额外的步数（每进一次云 9 步）
-  for (int i = 0; i < 256; i++) {
+  // 次数上限：从相机空步走到 60 km 外本身就要约 190 步，细化还要额外的步数（每进一次云 9 步）。
+  // 雷暴 / 台风时 448（原来 256）：台风外围在卷云盖下面近水平地看出去，稀薄的卷云盖采样点不走 2 倍步长、
+  // 一路上的塔还要细化，走到约 100 km 就用完 256 步；在哪一步用完随每像素的抖动变，远处的塔成了一格一格的
+  // 「纱窗点阵」半透明幽灵，步数用完处的边还连成直边的「透明方盒」（美术总监 wave5 第 2 处；和占据网格无关，
+  // 关掉网格照旧）。只有用完预算的那些像素会多走，typhoon-outer 云步进 +0.2 ms（约 5%）
+  for (int i = 0; i < 448; i++) {
     // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）
     if (t >= seg.y || T < 0.005 || (!refineOn && i >= 192)) break;
     // 步长随距离变长：近处 60 m，远处 2 km
@@ -207,7 +256,7 @@ void main() {
       float od = 0.0;
       float ls = 0.06;
       float lt = 0.0;
-      int lightSteps = (uStormCount > 0 || uHurricane.w > 0.5) ? 8 : 6;
+      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;
       // 受光步进的细节噪声只沿用上面那一点随机挑中的一个随机平铺格点（见 clouds.glsl.ts 的 gDetailLight，T32）
       gDetailLight = true;
       if (lightSteps == 6) {
@@ -252,7 +301,10 @@ void main() {
         sunLight *= hurVis;
       }
       // 环境光：上半球的天空光，云顶亮、云底暗
-      float h01 = clamp((r - BOTTOM - uShellBottom) / (uShellTop - uShellBottom), 0.0, 1.0);
+      // 云顶亮、云底暗的归一化：雷暴 / 台风按整个外壳，普通云按它自己那一层（T33：以前场上一有雷暴，
+      // 外壳被撑到 0–15 km，远处普通积云的 h01 只剩 0.1–0.2，整体被压暗）
+      float h01 = stormW > 0.5 ? clamp((r - BOTTOM - uShellBottom) / (uShellTop - uShellBottom), 0.0, 1.0)
+                               : clamp((r - BOTTOM - uCloudBottom) / max(uCloudTop - uCloudBottom, 1e-3), 0.0, 1.0);
       vec3 eSky = skyIrradiance(r, up);
       vec3 ambient = eSky / (2.0 * M_PI) * mix(0.12, 1.0, pow(h01, 0.7));
       if (stormW > 0.5) {
@@ -309,7 +361,7 @@ void main() {
   // 下午逆光看远处眼壁时，40 km 的空气透视内散射是眼壁自身亮度的约 10 倍（T26 实测：0.9/1.9/4.5 对 0.2/0.2/0.24），
   // 背光的眼壁整面被刷成天空蓝；而真实的眼里，靠近向阳一侧眼壁的空气正处在它的影子里。
   // 分段累加：L(0, b) − L(0, a) ≈ 段 [a, b] 的内散射（已含到相机的透射），乘这一段中点的受光比例
-  if (uHurricane.w > 0.5 && uSunDir.y > 0.02) {
+  if (nearHur && uSunDir.y > 0.02) {
     apL = hurricaneShadowedInscatter(ro, rd, depth, apL);
     // 美术取向（有意偏离物理，T26 协调者 / 美术总监的要求）：物理上从 10.7 km 隔 40 km 看逆光的眼壁，空气透视
     // 和眼壁顶上方 8° 的天空几乎一样亮（两条视线穿过的空气柱相当），背光的眼壁整面融进天空；
@@ -371,18 +423,36 @@ void main() {
 }
 `;
 
-// 探针：算飞机位置和前方几百米的云密度，异步读回给 CPU（判断是否在云里：窗上起水痕、颠簸）
+// 探针：异步读回给 CPU。
+//  R：飞机位置和前方几百米的云密度（判断是否在云里：窗上起水痕、颠簸）
+//  G：从飞机朝直射主光源方向的云透射率（T31）：舱内的直射光斑、窗板上的直射项、机翼受光都要乘它；B：同一段的光学厚度。
+//     以前只乘了大气透射率，穿云时舱壁上照样有一块硬边的阳光斑。
+//     沿主光源方向取 PROBE_SUN_STEPS 个点，步长从 30 m 起每步 ×1.2（约 25 km，够穿过雷暴的砧），层状云带细节侵蚀
+//     （和画出来的云一样瘦；只是一个像素，不在乎开销）。两段样本放进同一个循环：cloudDensityLite 只内联一处
 const PROBE_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
 ${CLOUD_COMMON}
 uniform float uCamR;
 uniform vec3 uProbeDir;   // 航向（窗外坐标）
+uniform vec3 uKeyDir;     // 直射主光源方向
 varying vec2 vUv;
+const int PROBE_FWD = 4;
+const int PROBE_SUN_STEPS = 28;
 void main() {
   vec3 p0 = vec3(0.0, uCamR, 0.0);
   float d = 0.0;
-  for (int k = 0; k < 4; k++) d += cloudDensityLite(p0 + uProbeDir * (float(k) * 0.12), 1.0, false, false);
-  gl_FragColor = vec4(d * 0.25, 0.0, 0.0, 1.0);
+  float od = 0.0;
+  float ls = 0.03, lt = 0.0;
+  for (int k = 0; k < PROBE_FWD + PROBE_SUN_STEPS + min(uStormCount, 0); k++) {
+    bool fwd = k < PROBE_FWD;
+    vec3 q;
+    if (fwd) q = p0 + uProbeDir * (float(k) * 0.12);
+    else { q = p0 + uKeyDir * (lt + 0.5 * ls); lt += ls; }
+    float dk = cloudDensityLite(q, 1.0, !fwd, false);
+    if (fwd) d += dk;
+    else { od += dk * ls; ls *= 1.2; }
+  }
+  gl_FragColor = vec4(d * 0.25, exp(-od * CLOUD_EXTINCTION), od * CLOUD_EXTINCTION, 1.0);
 }
 `;
 
@@ -572,6 +642,9 @@ const SHADOW_SUN_COS = Math.cos(THREE.MathUtils.degToRad(0.01));
 /** 云影图中心对齐到最粗一级的格距：重建前后三级的格点位置都不变，影子不会因为重新取样而跳一下 */
 const SHADOW_SNAP_KM = (CLOUD_SHADOW_EXT[2] * 2) / CLOUD_SHADOW_RES;
 
+/** 直射光云透射率的平滑时间常数（秒）：真实穿云时阳光也是在零点几秒到一两秒里暗下去 / 亮起来 */
+const KEY_VIS_TAU = 0.35;
+
 /** 飞机离网格中心超过这么远就重建（网格覆盖 ±128 km，步进最远约 170 km，网格外照旧逐点求值） */
 const OCC_RECENTER_KM = 24;
 /**
@@ -597,6 +670,11 @@ export class Clouds {
   private probeBusy = false;
   /** 飞机所在位置的云密度（0..1，几帧前的值） */
   cameraDensity = 0;
+  /** 从飞机朝直射主光源的云透射率、光学厚度（几帧前的值，没平滑；T31） */
+  keyTransmittanceRaw = 1;
+  keyOpticalDepthRaw = 0;
+  /** 平滑后的舱内光照乘子（keyVisibility 每帧推进，见那里） */
+  private readonly keyVis = new THREE.Vector3(1, 0, 1);
   private readonly resolveMat: THREE.ShaderMaterial;
   // ---- 雷暴 / 台风的占据网格（PERF-2）----
   private readonly occMat: THREE.ShaderMaterial;
@@ -649,6 +727,7 @@ export class Clouds {
         uAerialTransmittance: { value: atmosphere.aerialTransmittance.texture },
         uFrame: { value: 0 },
         uCloudResolution: { value: new THREE.Vector2(1, 1) },
+        uWeatherCull: { value: 1 },
         uOcc: { value: this.occ[0].texture },
         uOccOrigin: { value: new THREE.Vector2() },
         uOccAlt: { value: new THREE.Vector2(0, 1) },
@@ -856,8 +935,36 @@ export class Clouds {
     this.probeBusy = true;
     renderer
       .readRenderTargetPixelsAsync(this.probeTarget, 0, 0, 1, 1, this.probePixel)
-      .then(() => (this.cameraDensity = this.probePixel[0]))
+      .then(() => {
+        this.cameraDensity = this.probePixel[0];
+        this.keyTransmittanceRaw = this.probePixel[1];
+        this.keyOpticalDepthRaw = this.probePixel[2];
+      })
       .finally(() => (this.probeBusy = false));
+  }
+
+  /**
+   * 舱内 / 机翼光照的云乘子（场景 uniform uKeyCloud，T31），每帧调用一次，写进 out：
+   *  x：直射主光源的云透射率 e^−τ（τ 是飞机朝主光源的云光学厚度）；
+   *  y：被云散射成漫射光的那部分，占「主光源在水平面上的照度」的比例；
+   *  z：天空光的乘子。
+   * 在云里（探针密度 > 0）才算漫射：云几乎不吸收，挡掉的直射光变成四面八方的白光，舱内被窗外的白雾照亮，
+   * 而不是只剩天空的蓝光（只乘直射透射率时舱内整个发蓝、发暗）。漫射量用守恒散射的二流近似：
+   * 总透射 ≈ 1 / (1 + 0.75(1 − g)τ)，g = 0.85，扣掉直射那部分；天空光同样按总透射衰减。
+   * 在云下（被云影挡住但人不在云里）：漫射照样加（头顶的云底 / 卷云盖被照亮，是白灰色的光源），
+   * 天空光不衰减（四周仍是蓝天）。只去掉直射时，台风卷云盖下面的舱内整个发蓝、发暗。
+   * 探针每 4 帧一个值、单条光线，穿过碎云边缘时会抖：按时间常数 KEY_VIS_TAU 秒指数平滑
+   */
+  keyVisibility(dt: number, out: THREE.Vector3) {
+    const tau = Math.max(this.keyOpticalDepthRaw, 0);
+    const tDir = this.keyTransmittanceRaw;
+    const tTot = 1 / (1 + 0.1125 * tau);
+    const immersed = THREE.MathUtils.smoothstep(this.cameraDensity, 0.01, 0.08);
+    const k = 1 - Math.exp(-dt / KEY_VIS_TAU);
+    this.keyVis.x += (tDir - this.keyVis.x) * k;
+    this.keyVis.y += (Math.max(tTot - tDir, 0) - this.keyVis.y) * k;
+    this.keyVis.z += (1 + (tTot - 1) * immersed - this.keyVis.z) * k;
+    return out.copy(this.keyVis);
   }
 
   get texture() {

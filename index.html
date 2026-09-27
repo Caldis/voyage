@@ -68,6 +68,13 @@
         </div>
         <p id="wonder-status" class="hint"></p>
       </div>
+      <!-- 声音（T11，src/audio.ts）：默认关；勾选后才创建 AudioContext（浏览器的自动播放限制）。M 键开关，背景板模式下也有效 -->
+      <label class="check"><input id="sound-on" type="checkbox" />声音（舱内底噪、发动机、雷声；按 M 开关）</label>
+      <div id="sound-controls" hidden>
+        <label>音量 <output id="sound-volume-out"></output><input id="sound-volume" type="range" min="0" max="100" step="1" value="60" /></label>
+        <label class="check"><input id="sound-aircon" type="checkbox" checked />空调出风（很轻）</label>
+        <label class="check"><input id="sound-chime" type="checkbox" />偶尔的客舱提示音（很少、很轻）</label>
+      </div>
       <label>座位
         <select id="seat">
           <option value="right">右侧靠窗</option>
