@@ -8,8 +8,10 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PERF-5 | 第 6 波（主干） | 5245 | worktree | Sonnet（画质自动档，默认） | — | 进行中 |
+| PERF-5 | 第 6 波（主干） | 5245 | worktree | Sonnet（画质自动档，默认） | — | 已交付，合并 master 解冲突中 |
 | T37 | 第 6 波（美术总监发现） | 5237 | worktree | Opus（雷暴 / 台风去道具感造型） | — | 进行中 |
+| T35 | 第 6 波（美术总监发现） | 5235 | worktree | Opus（看前 / 看后舱内去白模感，两舱可分辨） | — | 进行中 |
+| T08 | 第 6 波（主干） | 5208 | worktree | Opus（夜间道路灯带） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
