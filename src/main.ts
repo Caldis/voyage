@@ -64,7 +64,7 @@ tick("云噪声");
 boot.finish("cloudNoise");
 // 高度纹理：支持浮点线性过滤时 32 位，否则半精度（TR03 审查 B1）
 const ground = new GroundClipmap(PRESETS[0].lat, PRESETS[0].lon, renderer.extensions.has("OES_texture_float_linear"));
-ground.attachGl(renderer.getContext() as WebGL2RenderingContext); // G06：2048² 地面纹理分块直传（见 clipmap.ts uploadDirect）
+ground.attachGl(renderer); // G06 / G07：地面纹理分块直传 + 按层按级传 mip（见 clipmap.ts uploadDirect）
 const sceneMat = createSceneMaterial(atmosphere, cloudUniforms, ground);
 // 低空障眼法（T18）：边界层霾进大气 LUT，谷地雾的 uniform 进场景 / 窗外共用的 uniforms（只有窗外程序用到）
 const haze = new HazeModel(atmosphere);

@@ -1,0 +1,7 @@
+[
+  { "name": "fuji-day", "p": { "preset": "fuji", "time": 930, "altitude": 6, "coverage": 0.05, "wing-pos": "-4" }, "offset": [-20, 0.2], "ground": true, "wait": 1500 },
+  { "name": "route-hnd-cts", "p": { "preset": "hnd-cts", "time": 990, "coverage": 0.05, "wing-pos": "8" }, "ground": true, "wait": 1500 },
+  { "name": "night-city", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 4, "coverage": 0.05, "cabin-light": false }, "offset": [0, -25], "ground": true, "head": -0.25, "wait": 1500 },
+  { "name": "route-hnd-cts-night", "p": { "preset": "hnd-cts", "date": "2026-01-16", "time": 1290, "coverage": 0.05, "seat": "left", "cabin-light": false, "wing-pos": "8" }, "ground": true, "wait": 1500 },
+  { "name": "fuji-low-detail", "p": { "preset": "fuji", "time": 930, "altitude": 2, "coverage": 0.05, "wing-pos": "-4" }, "offset": [-20, 0.2], "ground": true, "wait": 1500 }
+]
