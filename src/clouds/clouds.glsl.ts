@@ -14,6 +14,12 @@ export const OCC_SPACING = 0.5;     // 水平格距，km：覆盖 ±128 km
 export const OCC_LAYERS = 84;       // 竖直层数：均分 [uShellBottom, uShellTop]
 export const OCC_MIP = 2.0;
 
+// ---- 云影图（T27）----
+// 海面 / 地面的云影不再在窗外程序里逐像素步进，改查一张按世界坐标铺开的图（clouds.ts 建图）：
+// 三级，每级 CLOUD_SHADOW_RES² 个格点，半边长 CLOUD_SHADOW_EXT km（格距约 62 m / 312 m / 1.6 km）
+export const CLOUD_SHADOW_RES = 512;
+export const CLOUD_SHADOW_EXT = [16, 80, 400];
+
 // 台风密度的两个版本共用同一段眼壁 / 眼底 / 卷云盖代码，只有雨带不同（见 CLOUD_COMMON 里的两处展开）
 function hurricaneDensityGlsl(name: string, bands: string): string {
   return /* glsl */ `
@@ -301,6 +307,10 @@ uniform vec2 uUpperWind;        // 高空风方向（砧状云被吹向下风方
 uniform vec4 uHurricane;        // 台风：(本地 x, 本地 z, 风眼半径 km, 是否启用)
 uniform vec4 uFlash;            // 闪电放电通道的一端（低端）：(本地 x, 高度 km, 本地 z, 强度)
 uniform vec3 uFlashB;           // 放电通道的另一端：(本地 x, 高度 km, 本地 z)；云内闪电是几公里长的一段
+// 云影图（T27，见 cloudShadow 和 clouds.ts 的 SHADOW_FRAG）：三级并排，RGBA = 从 0 / 1 / 2 / 3 km 高度出发朝光源的透射率
+uniform sampler2D uCloudShadowMap;
+uniform vec3 uCloudShadowSun;     // 建图时的主光源方向
+uniform vec3 uCloudShadowCenter;  // xy：建图时的中心（世界坐标 km）；z：1 = 图已建好
 
 // 雷暴 / 台风的占据网格（见文件头 OCC_*）。只有云步进程序定义 CLOUD_OCC：窗外程序的 sampler 已满 16/16，
 // 云影、探针照旧逐点求值
@@ -819,40 +829,57 @@ vec2 cloudShellInterval(vec3 ro, vec3 rd) {
   return vec2(0.0, t1);
 }
 
-// 海面等处的云影：沿太阳方向穿过云壳，取几个点粗略估计光学厚度
+// 海面、地面的云影（T27）：查 clouds.ts 预先算好的云影图（见 CLOUD_SHADOW_*）。
+// 旧版在窗外程序里逐像素沿太阳方向取 5 个固定点（点距约 4 km、不抖动、每个点按 4 km 的弦长算光学厚度）：
+// 太阳低时相邻像素的采样点落在云的有 / 无两侧，影子是一刀切的二值边，被它剪出来的 HDR 耀斑成了带阶梯的硬边色块，
+// 飞机前进时这条边还会逐像素开关。现在云影图按世界坐标铺开（与云一起不动），每个格点沿太阳方向取 48 个点，
+// 查的时候双线性插值透射率：边缘至少有一个格距的渐变，也不再随像素闪
+// 第 k 级（半边长 ext km）在相对坐标 rel 处的值：三次 B 样条插值（4 次双线性取样）。
+// 只用双线性时，格点之间的高对比边缘会露出一格一格的菱形台阶（远处一格约 0.3–1.6 km）
+vec4 cloudShadowTexel(vec2 rel, float k, float ext) {
+  const float N = ${CLOUD_SHADOW_RES.toFixed(1)};
+  // 夹到本级内 2 个格子：三级并排在一张纹理里，取样不会串到隔壁一级
+  vec2 st = clamp(rel / ext * 0.5 + 0.5, vec2(2.0 / N), vec2(1.0 - 2.0 / N)) * N - 0.5;
+  vec2 i = floor(st);
+  vec2 f = st - i;
+  vec2 f2 = f * f, f3 = f2 * f;
+  vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+  vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+  vec2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+  vec2 w3 = f3 / 6.0;
+  vec2 g0 = w0 + w1, g1 = w2 + w3;
+  vec2 c0 = (i - 0.5 + w1 / g0) / N;   // 两组双线性取样点（纹理坐标）
+  vec2 c1 = (i + 1.5 + w3 / g1) / N;
+  vec4 a = textureLod(uCloudShadowMap, vec2((c0.x + k) / 3.0, c0.y), 0.0);
+  vec4 b = textureLod(uCloudShadowMap, vec2((c1.x + k) / 3.0, c0.y), 0.0);
+  vec4 c = textureLod(uCloudShadowMap, vec2((c0.x + k) / 3.0, c1.y), 0.0);
+  vec4 d = textureLod(uCloudShadowMap, vec2((c1.x + k) / 3.0, c1.y), 0.0);
+  return g0.y * (g0.x * a + g1.x * b) + g1.y * (g0.x * c + g1.x * d);
+}
 float cloudShadow(vec3 p, vec3 sunDir) {
   if (sunDir.y < -0.2 || (uCoverage <= 0.0 && uStormCount == 0 && uHurricane.w < 0.5)) return 1.0;
-  // 起点抬高 10 m：正好落在海面球面上时，地面求交会在 0 附近正负抖动，云影随机丢失
-  p += normalize(p) * 0.01;
-  vec2 seg = cloudShellInterval(p, sunDir);
-  if (seg.y <= seg.x) return 1.0;
-  // 有雷暴时砧状云在 10–14 km：斜着穿过去要 20–40 km，点也要多一些，否则砧的影子被截掉、边缘一格一格的
-  bool storms = uStormCount > 0;
-  seg.y = min(seg.y, seg.x + (storms ? 40.0 : 20.0));
-  float N = storms ? 12.0 : 5.0;
-  float od = 0.0;
-  float dt = (seg.y - seg.x) / N;
-  if (!storms) {
-    // 普通云：和改动前一样的常量 5 点（展开后最快），只带层状云（展开的每一份都带雷暴 / 台风密度的话冷编译很慢）
-    // 台风另走一个不展开的循环（台风密度较重，展开 5 份会拖慢场景着色器的冷编译）
-    if (uHurricane.w < 0.5) {
-      for (float i = 0.0; i < 5.0; i += 1.0) od += layerDensity(p + sunDir * (seg.x + (i + 0.5) * dt), 2.0, false);
-    } else {
-      for (int i = 0; i < 5 + min(uStormCount, 0); i++) {
-        vec3 q = p + sunDir * (seg.x + (float(i) + 0.5) * dt);
-        vec2 xz = q.xz + uCloudOffset;
-        float d = layerDensity(q, 2.0, false) * hurricaneLayerMask(xz);
-        float alt = length(q) - BOTTOM;
-        if (alt >= uShellBottom && alt <= uShellTop) d = max(d, hurricaneShadowDensity(xz, alt) * uCloudDensity);
-        od += d;
-      }
-    }
+  if (uCloudShadowCenter.z < 0.5) return 1.0;   // 云影图还没建好（程序在后台编译）
+  // 沿（建图时的）光线方向退回到海平面上：高处的地面点和它下方海平面那一点在同一条光线上，
+  // 按这一点的高度在四个起点高度（0 / 1 / 2 / 3 km）之间插值（只算这一点以上的云）
+  float h = max(length(p) - BOTTOM, 0.0);
+  vec3 s = uCloudShadowSun;
+  vec2 rel = p.xz + uCloudOffset - s.xz * (h / max(s.y, 0.05)) - uCloudShadowCenter.xy;
+  float r = max(abs(rel.x), abs(rel.y));
+  // 由近到远三级（±${CLOUD_SHADOW_EXT[0]} / ±${CLOUD_SHADOW_EXT[1]} / ±${CLOUD_SHADOW_EXT[2]} km），每级外缘 15% 与下一级交叉过渡，没有接缝
+  vec4 T;
+  if (r < ${CLOUD_SHADOW_EXT[0].toFixed(1)}) {
+    T = cloudShadowTexel(rel, 0.0, ${CLOUD_SHADOW_EXT[0].toFixed(1)});
+    float f = smoothstep(${(CLOUD_SHADOW_EXT[0] * 0.85).toFixed(2)}, ${CLOUD_SHADOW_EXT[0].toFixed(1)}, r);
+    if (f > 0.0) T = mix(T, cloudShadowTexel(rel, 1.0, ${CLOUD_SHADOW_EXT[1].toFixed(1)}), f);
+  } else if (r < ${CLOUD_SHADOW_EXT[1].toFixed(1)}) {
+    T = cloudShadowTexel(rel, 1.0, ${CLOUD_SHADOW_EXT[1].toFixed(1)});
+    float f = smoothstep(${(CLOUD_SHADOW_EXT[1] * 0.85).toFixed(2)}, ${CLOUD_SHADOW_EXT[1].toFixed(1)}, r);
+    if (f > 0.0) T = mix(T, cloudShadowTexel(rel, 2.0, ${CLOUD_SHADOW_EXT[2].toFixed(1)}), f);
   } else {
-    // 雷暴：点数依赖 uniform，不让 FXC 展开 12 份
-    for (int i = 0; i < 12 + min(uStormCount - 1, 0); i++) {
-      od += cloudDensityLite(p + sunDir * (seg.x + (float(i) + 0.5) * dt), 2.0, false, false);
-    }
+    // 最外一级以外（离飞机 ${CLOUD_SHADOW_EXT[2]} km 以上，已经在地平线附近的霾里）不算云影
+    T = mix(cloudShadowTexel(rel, 2.0, ${CLOUD_SHADOW_EXT[2].toFixed(1)}), vec4(1.0), smoothstep(${(CLOUD_SHADOW_EXT[2] * 0.85).toFixed(2)}, ${CLOUD_SHADOW_EXT[2].toFixed(1)}, r));
   }
-  return exp(-od * dt * CLOUD_EXTINCTION);
+  vec4 w = max(1.0 - abs(vec4(0.0, 1.0, 2.0, 3.0) - min(h, 3.0)), 0.0);
+  return dot(T, w);
 }
 `;
