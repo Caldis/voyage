@@ -8,14 +8,28 @@
 // （开发体验官实测结论，见 apps/voyage/research/DX_REPORT_wave2.md §1.1）。
 //
 // 用法：
-//   node scripts/dev-browser.mjs check --port 5230 [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//   node scripts/dev-browser.mjs check --port 5230 [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--query '<url参数>']
 //   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--scene '<JSON>' ...]
+//                                       [--scenes-file 路径.json] [--query '<url参数>']
 //                                       [--out tmp/screenshot/dev-5230] [--allow-flash] [--freeze] [--settle]
+//                                       [--pair '<js1>' --pair '<js2>' | --base-shader <端口|目录|提交> [--material sceneMat]]
 //                                       [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
-//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--baseline 5181] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs flicker --port 5230 --only <场景> [--step 0.06] [--frames 20] [--crop x,y,w,h] [--debug N]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
+//
+// --scenes-file（DX-12）：一个场景数组的 JSON 文件（字段和 --scene 一致），免去命令行 JSON 转义——一个带
+//   js 字段的场景拼成命令行参数经常因为 PowerShell / Git Bash 各自的引号规则不同而转义出错。可以和
+//   --only / --scene 一起用，都不传就是原来的行为。
+// --query '<url参数>'（DX-12）：附加到导航 URL 的额外查询参数（如 "eox=2024"、"?optics=all"），验证只受
+//   URL 控制、面板上没有对应控件的行为（例如地面影像年份切换）。
+// --pair/--ab + --base-shader（DX-12，PERF-12/TR07 反馈）：仅 shots，同一页面同一机位冻结后先后拍两张，
+//   解决「批量截图时飞机一直在飞，只拨一个开关的同机位对照拍不成」。--pair '<js1>' --pair '<js2>' 时两张
+//   各自跑一段任意 js；--base-shader <端口|目录|提交> 时第二张换成「换上另一棵树的着色器原文」（PERF-12-ab.mjs
+//   的三段式对照：a → 换基线着色器拍 b → 换回原文拍 a2 当噪声底），--pair 此时至多给一段「拍 a 之前」的
+//   预设置 js。冻结前会先 pinGeometry（钉回场景该有的头部 / 云偏移，见 scenarios.mjs），并把翼尖频闪钉死
+//   为灭（PERF-13 反馈，避免夜景冻结截图撞上全白窗）。详见 README「调试与验证」。
 //
 // --freeze（DX-08，仅 shots）：截图前调用 __voyage.freeze(true)（main.ts 的调试句柄）钉住位置 / 航向 / 头部 /
 //   模拟时间 / 曝光适应 / 闪电 / 翼尖航行灯频闪相位，冻结后连续渲染逐像素一致，可以拿两次 shots 的截图相减
@@ -67,13 +81,17 @@
 //   不用再另外跑一次 check 才知道有没有炸。
 
 import { chromium } from "playwright-core";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULTS, applyScene, pickScenes } from "./scenarios.mjs";
+import { createServer } from "vite";
+import { DEFAULTS, applyScene, pickScenes, pinGeometry } from "./scenarios.mjs";
 import { launchBrowser as launchBrowserAngle, closeBrowserSafely, resolveRepoPath } from "./lib/chrome.mjs";
 import { sampleAndWarn, waitForQuiet } from "./lib/cpu-load.mjs";
 import { tryAcquire, readLock, noticeIfLocked, waitForRelease } from "./lib/measure-lock.mjs";
+import { resolveExistingDirRoot, resolveCommitRoot } from "./lib/baseline-root.mjs";
+import { collectPrograms } from "./lint-shaders.mjs";
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
@@ -135,13 +153,96 @@ function parseAdhocScenes(args) {
   });
 }
 
-/** 合并 --only（挑 scenarios.mjs 里的固定场景）与 --scene（临时场景）：两边都给就拼在一起，
- * 都不给就是原来的行为（pickScenes(null) 返回全量表）。 */
+/** --scenes-file <路径.json>（DX-12）：文件里放一个场景数组（字段和 --scene 的 JSON、SCENES 条目
+ * 一致），免去命令行 JSON 转义——Windows 上 PowerShell / Git Bash 各自的引号规则不一样，一个稍微复杂点
+ * 的场景（带 js 字段）拼成命令行参数经常因为转义错误直接报「不是合法 JSON」。路径相对仓库根解析
+ * （和 --out 一致），也接受绝对路径。 */
+function parseScenesFile(args) {
+  if (!args["scenes-file"]) return [];
+  const raw = resolveRepoPath(REPO_ROOT, String(args["scenes-file"]));
+  if (!fs.existsSync(raw)) throw new Error(`--scenes-file 找不到文件：${args["scenes-file"]}`);
+  let list;
+  try {
+    list = JSON.parse(fs.readFileSync(raw, "utf8"));
+  } catch (err) {
+    throw new Error(`--scenes-file "${args["scenes-file"]}" 不是合法 JSON：${err.message}`);
+  }
+  if (!Array.isArray(list)) throw new Error(`--scenes-file "${args["scenes-file"]}" 应该是一个场景数组`);
+  list.forEach((sc, i) => {
+    if (!sc || typeof sc !== "object" || !sc.name) throw new Error(`--scenes-file 第 ${i + 1} 个场景缺少必填的 "name" 字段`);
+    if (sc.p === undefined) sc.p = {};
+  });
+  return list;
+}
+
+/** 合并 --only（挑 scenarios.mjs 里的固定场景）、--scene（临时场景）与 --scenes-file（场景数组文件，
+ * DX-12）：三者都给就拼在一起，都不给就是原来的行为（pickScenes(null) 返回全量表）。 */
 function resolveScenes(args) {
   const only = args.only ? String(args.only).split(",") : null;
-  const adhoc = parseAdhocScenes(args);
+  const adhoc = [...parseAdhocScenes(args), ...parseScenesFile(args)];
   if (adhoc.length === 0) return pickScenes(only);
   return [...(only ? pickScenes(only) : []), ...adhoc];
+}
+
+/** --query '<url 参数>'（DX-12）：附加到导航 URL 的额外查询参数，例如 "?eox=2024" 或 "optics=all"
+ * （带不带开头的 "?" 都可以）。用来验证「地面影像年份切换」「强制罕见光学现象」这类只受 URL 参数控制、
+ * 面板上没有对应控件的行为，不用每次都手改 openPage 里写死的 "dev=<时间戳>"。 */
+function parseExtraQuery(args) {
+  if (!args.query) return "";
+  const q = String(args.query).replace(/^\?/, "");
+  return q ? `&${q}` : "";
+}
+
+/** --pair '<js1>' --pair '<js2>'（或 --ab，同样重复传两次；DX-12）：同一页面、同一机位，冻结后先后跑两段
+ * js、各拍一张——解决「批量截图飞机一直在飞，只拨一个开关的同机位对照拍不成」（任务背景，见 cmdShots）。
+ * 两段 js 必须都给（正好两次），和 --scene 一样靠重复同名 flag 传参，不必再教 parseArgs 认「一个 flag 后面
+ * 跟两个位置参数」这种新语法。 */
+// DX-12（PERF-12/TR07 反馈）：给了 --base-shader 时，第二张不再是任意 js，而是「同一机位换上另一棵树的
+// 着色器原文」，此时 --pair/--ab 至多给一段「拍 a 之前」的预设置 js（0 或 1 个都行）；没给 --base-shader
+// 还是原来的规矩——必须正好两段 js。
+function parsePairJs(args) {
+  const raw = args.pair !== undefined ? args.pair : args.ab;
+  if (raw === undefined) return null;
+  if (args.pair !== undefined && args.ab !== undefined) throw new Error("--pair 和 --ab 是同一个功能的两个名字，只传其中一个");
+  const arr = Array.isArray(raw) ? raw : [raw];
+  if (args["base-shader"]) {
+    if (arr.length > 1) throw new Error(`--base-shader 模式下 --pair/--ab 至多给一段 js（拍 a 之前的预设置），收到 ${arr.length} 个`);
+    return arr;
+  }
+  if (arr.length !== 2) {
+    throw new Error(
+      `--pair/--ab 需要正好两段 js（把这个参数重复传两次，如 --pair 'a' --pair 'b'），收到 ${arr.length} 个；` +
+        "换上另一棵树的着色器做对照时改传 --base-shader <端口|目录|提交>，那种模式下 --pair 至多给一段预设置 js",
+    );
+  }
+  return arr;
+}
+
+// --scenes-file / --scene 里的场景可能带 "view-preset"（DX-12，见 scenarios.mjs 头部注释），quality / date /
+// time 没有对应的 DEFAULTS 键，一并加进要读的面板控件列表里
+const PANEL_META_IDS = [...Object.keys(DEFAULTS), "view-preset", "quality", "date", "time"];
+
+/** 截图 JSON 附面板值 / 日期 / 太阳 / 月亮高度 / 画质档（DX-12）：面板值按 PANEL_META_IDS 逐个读控件的
+ * 当前值（老版本页面缺某个控件就跳过，不中断——和 applyScene 的 set() 同一套容错），太阳 / 月亮高度靠
+ * main.ts 新加的 __voyage.sunAltDeg()/moonAltDeg()（老版本页面没有就是 null），画质档直接读已经暴露在
+ * __voyage 上的 quality 对象。 */
+async function collectShotMeta(page) {
+  return page.evaluate((ids) => {
+    const panel = {};
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      panel[id] = el.type === "checkbox" ? el.checked : el.value;
+    }
+    const v = window.__voyage;
+    return {
+      panel,
+      date: document.getElementById("date")?.value ?? null,
+      sunAltDeg: v && typeof v.sunAltDeg === "function" ? +v.sunAltDeg().toFixed(2) : null,
+      moonAltDeg: v && typeof v.moonAltDeg === "function" ? +v.moonAltDeg().toFixed(2) : null,
+      quality: v && v.quality ? { tier: v.quality.tier, level: v.quality.level, describe: v.quality.describe() } : null,
+    };
+  }, PANEL_META_IDS);
 }
 
 // ---------- 定位并启动本机缓存的完整版 chrome.exe（两个脚本共用，见 lib/chrome.mjs） ----------
@@ -230,7 +331,7 @@ async function cmdCheck(args) {
 
   const browser = await launchBrowser(angle);
   try {
-    const { renderer, errors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true });
+    const { renderer, errors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true, extraQuery: parseExtraQuery(args) });
     // 启动完成（__voyageStartup 出现）后再等一小段时间，抓头几帧才触发的异常（例如某个 pass 首次
     // draw 才暴露的问题），不然掐着 waitForFunction 一 resolve 就关页面，可能漏掉这类错误。
     await new Promise((r) => setTimeout(r, 1500));
@@ -262,7 +363,8 @@ async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr =
   }
   await installGlProbe(page);
   const renderer = await assertRealGpu(page);
-  await page.goto(`${originFor(port)}/?dev=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
+  // --query（DX-12）：附加到导航 URL 的额外查询参数（例如 "&eox=2024"），不传就是原来的行为
+  await page.goto(`${originFor(port)}/?dev=${Date.now()}${opts.extraQuery || ""}`, { waitUntil: "commit", timeout: 180000 });
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 180000, polling: 500 });
   return { context, page, renderer, angle, viewport, dpr, errors };
@@ -286,6 +388,121 @@ async function setFlashDisabled(page, disabled) {
   }, disabled);
 }
 
+/** DX-12（PERF-13 反馈）：冻结截图时把翼尖航行灯频闪也钉死为「灭」，不只是冻结相位。__voyage.freeze(true)
+ * 本身已经把频闪相位钉在冻结那一刻（main.ts 的 uStrobe 按相位算），但那一刻可能恰好落在「亮」的窗口
+ * （main.ts：ph < 0.05 或 0.14–0.19 时 uStrobe=1，机翼贴着整片窗，夜景冻结截图偶尔会撞上一整块过曝
+ * 白光，误判成回归）。main.ts 本来就留了 wingDebug.strobe 这个调试句柄（数字时频闪固定在这个亮度，
+ * null 按正常节奏闪，见其注释「截『闪亮瞬间』用」），这里只是调用，不改 src/。 */
+async function setWingStrobe(page, value) {
+  return page.evaluate((value) => {
+    const w = window.__voyage && window.__voyage.wingDebug;
+    if (!w) return false;
+    w.strobe = value;
+    return true;
+  }, value);
+}
+
+// ---------- --pair/--ab + --base-shader（DX-12，PERF-12/TR07 反馈追加）----------
+// --pair/--ab 本身（parsePairJs / collectShotMeta，见上）已经解决「同一页面同一机位，冻结后先后跑两段
+// js 各拍一张」；这里补的是 --base-shader <端口|目录|提交> [--material sceneMat]：把第二张换成「同一机位、
+// 换上另一棵树的着色器原文」而不是任意 js——PERF-12-ab.mjs 的三段式对照手法（拍 a → 换上基线着色器拍 b →
+// 换回原文拍 a2 当噪声底，a2 应该和 a 几乎逐像素一致，不一致说明「换材质」这个动作本身有副作用，不能只信
+// a/b 的差异），收进 cmdShots 的 pairJs 分支（见下）。
+
+/** --material 点号路径 -> collectPrograms（lint-shaders.mjs）枚举出的程序 id，只有这张表里的材质
+ * 才能用「目录 / 提交」当 --base-shader（离线枚举，不用真起开发服务器）；传端口号不受此限制（直接读
+ * 那个端口页面上材质此刻的 fragmentShader，见 resolveBaseShaderSource）。 */
+const MATERIAL_TO_PROGRAM_ID = {
+  sceneMat: "scene-default",
+  outsideMat: "outside-default",
+  wingMat: "wing",
+  "clouds.marchMat": "cloud-march",
+  "clouds.resolveMat": "cloud-resolve",
+};
+
+/** 解析 --base-shader 的值，返回目标材质的 fragmentShader 原文。
+ *   看起来像端口号（纯数字）：起一个短命页面，直接读那个端口此刻页面上这个材质的 fragmentShader
+ *     （最贴近「真的跑起来长什么样」，要求那个端口的开发服务器正在跑，和 handoff/PERF-12-ab.mjs 的
+ *     --base <端口> 一致）。
+ *   否则当「目录（另一个 voyage 应用根 / 含 apps/voyage 的仓库根）或 git 提交」处理：离线用
+ *     vite ssrLoadModule 枚举程序（collectPrograms，和 shader-budget.mjs --baseline/--chain 同一套
+ *     手法），不用真起开发服务器；--material 必须在 MATERIAL_TO_PROGRAM_ID 表里有映射。 */
+async function resolveBaseShaderSource(spec, materialPath, { browser, angle }) {
+  const trimmed = String(spec).trim();
+  if (/^\d{2,5}$/.test(trimmed) && !fs.existsSync(path.isAbsolute(trimmed) ? trimmed : path.join(REPO_ROOT, trimmed))) {
+    const { context, page } = await openPage(browser, trimmed, angle);
+    try {
+      const src = await page.evaluate((materialPath) => {
+        const resolvePath = (root, p) => p.split(".").reduce((o, k) => (o == null ? o : o[k]), root);
+        const m = resolvePath(window.__voyage, materialPath);
+        if (!m || typeof m.fragmentShader !== "string") throw new Error(`端口 ${materialPath} 解析不到材质`);
+        return m.fragmentShader;
+      }, materialPath);
+      console.log(`[dev-browser] --base-shader 端口 ${trimmed}：读到材质 "${materialPath}" 的 fragmentShader（${src.length} 字符）`);
+      return src;
+    } finally {
+      await context.close();
+    }
+  }
+  const programId = MATERIAL_TO_PROGRAM_ID[materialPath];
+  if (!programId) {
+    throw new Error(
+      `--base-shader 传目录 / 提交时，--material "${materialPath}" 没有对应的离线程序 id（见 dev-browser.mjs 的 ` +
+        `MATERIAL_TO_PROGRAM_ID）。可以改传一个端口号（另起一个跑着该版本代码的开发服务器），或者换一个已知映射的 --material。`,
+    );
+  }
+  let root = resolveExistingDirRoot(REPO_ROOT, trimmed);
+  if (!root) {
+    const workdir = resolveRepoPath(REPO_ROOT, "tmp/dev-browser-base-shader");
+    root = resolveCommitRoot(REPO_ROOT, trimmed, workdir, { log: (s) => console.log(`[dev-browser] ${s}`) });
+  }
+  const server = await createServer({ root, server: { middlewareMode: true }, appType: "custom", logLevel: "error" });
+  try {
+    const programs = await collectPrograms(server, {
+      lenient: true,
+      onSkip: (id, err) => console.warn(`[dev-browser] --base-shader：${id} 跳过（${err.message}）`),
+    });
+    const prog = programs.find((p) => p.id === programId);
+    if (!prog) throw new Error(`--base-shader "${spec}" 这棵树上枚举不到程序 "${programId}"（对应 --material "${materialPath}"）`);
+    console.log(`[dev-browser] --base-shader "${spec}"：离线枚举到程序 "${programId}" 的 fragmentShader（${prog.fragmentShader.length} 字符）`);
+    return prog.fragmentShader;
+  } finally {
+    await server.close();
+  }
+}
+
+/** 把 window.__voyage 下某个材质的 fragmentShader 换成 src（null 换回原文），等 renderer.compileAsync
+ * 真正编完再返回，并做一次真正的 render() 强制切换（compileAsync 只保证编译完成，不保证已经切换，见
+ * probe.mjs / passes.mjs --variants 同一套手法）。原文缓存在页面自己的 window.__pairOrigShaders，
+ * 同一个材质多次换只缓存第一次（从未改动过的原文），和 probe.mjs 的 origShaders 是同一个设计。 */
+async function swapMaterialShader(page, materialPath, src) {
+  return page.evaluate(
+    async ({ materialPath, src }) => {
+      const v = window.__voyage;
+      const resolvePath = (root, p) => p.split(".").reduce((o, k) => (o == null ? o : o[k]), root);
+      const m = resolvePath(v, materialPath);
+      if (!m || typeof m.fragmentShader !== "string") throw new Error(`--material 解析不到 "${materialPath}"（或它不是 ShaderMaterial）`);
+      window.__pairOrigShaders ??= new Map();
+      if (!window.__pairOrigShaders.has(m)) window.__pairOrigShaders.set(m, m.fragmentShader);
+      m.fragmentShader = src ?? window.__pairOrigShaders.get(m);
+      m.needsUpdate = true;
+      const passObj = v.clouds.pass;
+      const renderer = passObj.renderer;
+      const prevMat = passObj.mesh.material;
+      const prevTarget = renderer.getRenderTarget();
+      const tgt = v.cabinClass && v.cabinClass.mats && Object.values(v.cabinClass.mats).includes(m) ? v.cabinClass.target : v.hdrOutside;
+      passObj.mesh.material = m;
+      renderer.setRenderTarget(tgt);
+      await renderer.compileAsync(passObj.scene, passObj.camera);
+      passObj.render(m, tgt); // 强制真正 acquire 程序（compileAsync 只保证编译完成，不保证已经切换）
+      passObj.mesh.material = prevMat;
+      renderer.setRenderTarget(prevTarget);
+      return true;
+    },
+    { materialPath, src },
+  );
+}
+
 // ---------- shots：跑回归场景表，截图 + 每场景一份同名 JSON ----------
 async function cmdShots(args) {
   const port = args.port;
@@ -298,12 +515,17 @@ async function cmdShots(args) {
   const allowFlash = Boolean(args["allow-flash"]);
   const freeze = Boolean(args.freeze);
   const settle = Boolean(args.settle);
+  // --pair/--ab（DX-12）：批量截图时飞机一直在飞（applyScene 里等地面瓦片 / 舱等 / 云变体编译好那几秒到
+  // 几十秒，位置一直按真实挂钟推进），只拨一个调试开关想拍「同一机位」的前后对照根本拍不成——两次分开跑
+  // shots，第二次开始时飞机已经不在同一个地方了。这里同一页面里把场景摆好一次，pin 回场景该有的位置再冻结，
+  // 先后跑两段 js、各拍一张，机位保证一致。见下面 parsePairJs 与 scenarios.mjs 的 pinGeometry。
+  const pairJs = parsePairJs(args);
   await noticeOrRespectLock(args, "shots");
 
   const browser = await launchBrowser(angle);
   try {
     // collectErrors：截图期间的 console error / pageerror 数一并打印出来（DX-07），不用另外跑一次 check
-    const { page, renderer, errors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true });
+    const { page, renderer, errors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true, extraQuery: parseExtraQuery(args) });
     console.log(`[dev-browser] --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
     if (!allowFlash) {
       const applied = await setFlashDisabled(page, true);
@@ -313,20 +535,85 @@ async function cmdShots(args) {
     const results = [];
     for (const sc of scenes) {
       const info = await page.evaluate(applyScene, { sc, defaults: DEFAULTS, settle });
+
+      if (pairJs) {
+        // pin：把头部 / 云偏移钉回场景 JSON 写的值（pinGeometry，和 applyScene 里对应逻辑一致，见
+        // scenarios.mjs 文件头注释）——不然 applyScene 设场景到这里之间的等待时间里飞机已经飘走了一截，
+        // 冻结的就不是场景原本该有的那个机位。钉完再冻结，两段 js 才是真正「同一机位」的对照。
+        await page.evaluate(pinGeometry, sc);
+        await page.evaluate(() => window.__voyage.freeze(true));
+        await setWingStrobe(page, 0); // PERF-13 反馈：冻结截图钉死翼尖频闪为灭，不撞上全白窗
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+        const shootOne = async (label, extraFields) => {
+          const pngPath = path.join(outDir, `${sc.name}.${label}.png`);
+          await page.screenshot({ path: pngPath, timeout: 60000 });
+          const frameMs = await page.evaluate((n) => window.__voyage.benchFrame(n), 30);
+          const head = await page.evaluate(() => window.__voyage.head);
+          const extra = await collectShotMeta(page);
+          const meta = { scene: sc.name, pair: label, info, head, viewport, dpr, angle, renderer, frameMs: +frameMs.toFixed(3), origin: originFor(port), ...extraFields, ...extra };
+          fs.writeFileSync(path.join(outDir, `${sc.name}.${label}.json`), JSON.stringify(meta, null, 2));
+          results.push(meta);
+          console.log(`  ${sc.name}.${label}: frameMs=${meta.frameMs}`);
+        };
+
+        if (args["base-shader"]) {
+          // DX-12（PERF-12/TR07 反馈）：第二张不是任意 js，是同一机位换上另一棵树的着色器原文——
+          // 拍 a（可选先跑 pairJs[0] 做预设置）→ 换上 --base-shader 拍 b → 换回原文拍 a2（噪声底）
+          const materialPath = args.material || "sceneMat";
+          const preJs = pairJs[0];
+          let preOut;
+          if (preJs) {
+            preOut = await page.evaluate((code) => new (async () => {}).constructor("v", code)(window.__voyage), preJs);
+            await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+          }
+          await shootOne("a", { pairJs: preJs ?? null, jsOut: preOut === undefined ? null : preOut, baseShader: args["base-shader"], material: materialPath });
+
+          const baseSrc = await resolveBaseShaderSource(args["base-shader"], materialPath, { browser, angle });
+          const errBefore = errors.length;
+          await swapMaterialShader(page, materialPath, baseSrc);
+          const shaderError = errors.length > errBefore;
+          if (shaderError) console.error(`[dev-browser] --base-shader 换上的着色器编译 / 链接时报了错（见上面的 console.error），"${sc.name}.b.png" 很可能是垃圾画面，不要当真`);
+          await shootOne("b", { baseShader: args["base-shader"], material: materialPath, shaderError });
+
+          await swapMaterialShader(page, materialPath, null);
+          await shootOne("a2", { baseShader: args["base-shader"], material: materialPath, note: "换回原文的噪声底：理论上应与 a 逐像素一致（compare.mjs --diff a2 对照 a）" });
+        } else {
+          for (let i = 0; i < 2; i++) {
+            const label = i === 0 ? "a" : "b";
+            const jsOut = await page.evaluate((code) => new (async () => {}).constructor("v", code)(window.__voyage), pairJs[i]);
+            // 等两帧让 js 改动的状态真正画出来（同 flicker 的手法）
+            await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+            await shootOne(label, { pairJs: pairJs[i], jsOut: jsOut === undefined ? null : jsOut });
+          }
+        }
+        await page.evaluate(() => window.__voyage.freeze(false));
+        await setWingStrobe(page, null);
+        continue;
+      }
+
       // --freeze（DX-08）：截图前钉住位置 / 航向 / 头部 / 模拟时间 / 曝光适应 / 闪电 / 翼尖频闪相位
       // （__voyage.freeze，见 main.ts），冻结后连续渲染逐像素一致，可用来做两图相减定位。
       // 多等两帧让第一帧的残留 dt 归零（freeze 那一刻可能刚好在两次 rAF 中间）；截图后立刻解冻，
       // 不影响紧接着的 benchFrame 计时（那条路本来就不经过 frame()，freeze 状态对它没有实际影响，
       // 这里解冻只是让后续场景恢复正常节奏）。
+      // PERF-13 反馈：freeze 只钉住频闪的「相位」，冻结那一刻可能恰好落在亮的窗口，夜景冻结截图偶尔会
+      // 撞上一整块过曝白光；这里额外把 wingDebug.strobe 钉死为灭（0），解冻后恢复正常节奏。
       if (freeze) {
         await page.evaluate(() => window.__voyage.freeze(true));
+        await setWingStrobe(page, 0);
         await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       }
       const pngPath = path.join(outDir, `${sc.name}.png`);
       await page.screenshot({ path: pngPath, timeout: 60000 });
-      if (freeze) await page.evaluate(() => window.__voyage.freeze(false));
+      if (freeze) {
+        await page.evaluate(() => window.__voyage.freeze(false));
+        await setWingStrobe(page, null);
+      }
       const frameMs = await page.evaluate((n) => window.__voyage.benchFrame(n), 30);
       const head = await page.evaluate(() => window.__voyage.head);
+      // 面板值 / 日期 / 太阳月亮高度 / 画质档（DX-12），见 collectShotMeta
+      const extra = await collectShotMeta(page);
       const meta = {
         scene: sc.name,
         info,
@@ -337,6 +624,7 @@ async function cmdShots(args) {
         renderer,
         frameMs: +frameMs.toFixed(3),
         origin: originFor(port),
+        ...extra,
       };
       fs.writeFileSync(path.join(outDir, `${sc.name}.json`), JSON.stringify(meta, null, 2));
       results.push(meta);
@@ -357,6 +645,40 @@ async function cmdShots(args) {
 
 // ---------- cold：真冷启动（nonce 破缓存 + 每次独立浏览器上下文） ----------
 // DX-10：真冷启动对机器负载敏感（编译在 CPU 上做），持测量锁 + 每轮前采样 CPU 占用；--wait-quiet 先等安静再测。
+// DX-12（PERF-13 反馈）：--baseline <端口> 时 --repeat 轮交替测 port / baseline 两侧（同一轮先测当前端口
+// 再测基线，和 bench 的交替顺序一致），不用每个代理各自手写一份 PowerShell 交替脚本；不传 --baseline
+// 就是原来的行为（只测 port，重复 repeat 次）。
+async function coldOnce(browser, origin, angle, viewport, dpr) {
+  // 每次独立浏览器上下文：非持久化 context 本身不共享磁盘 profile，加上 nonce 破缓存双重保险
+  // （手法抄自 tmp/review-t02/cold.js，开发体验官已实测端到端跑通，见 DX_REPORT_wave2.md §1.2）
+  const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
+  try {
+    const page = await context.newPage();
+    const nonce = Date.now() % 100000;
+    await page.addInitScript((n) => {
+      const P = WebGL2RenderingContext.prototype;
+      const orig = P.shaderSource;
+      P.shaderSource = function (sh, src) {
+        if (src.includes("void main")) {
+          src = src.replace(/void\s+main\s*\(\s*\)\s*\{/, (m) => `float nonceF_${n}(){ return ${n}.0; }\n` + m + `\n if (nonceF_${n}() < -1.0) return;\n`);
+        }
+        return orig.call(this, sh, src);
+      };
+    }, nonce);
+    const renderer = await assertRealGpu(page);
+    const t0 = Date.now();
+    await page.goto(`${origin}/?cold=${t0}`, { waitUntil: "commit", timeout: 180000 });
+    await page.bringToFront();
+    await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 250 });
+    const startup = await page.evaluate(() => window.__voyageStartup);
+    const totalMs = Date.now() - t0;
+    return { origin, angle, viewport, dpr, nonce, totalMs, startup, renderer };
+  } finally {
+    // 只是关掉这一轮的 context，浏览器进程留给外层 finally 统一处理；这里超时同样不硬等
+    await Promise.race([context.close(), new Promise((r) => setTimeout(r, 5000))]).catch(() => {});
+  }
+}
+
 async function cmdCold(args) {
   const port = args.port;
   if (!port) throw new Error("cold 需要 --port <端口>");
@@ -365,9 +687,11 @@ async function cmdCold(args) {
   const viewport = parseViewport(args);
   const dpr = parseDpr(args);
   const origin = originFor(port);
+  const baseline = args.baseline ? String(args.baseline) : null;
+  const baseOrigin = baseline ? originFor(baseline) : null;
 
   if (args["wait-quiet"]) await waitForQuiet({ log: (s) => console.log(`[dev-browser] ${s}`) });
-  const releaseLock = tryAcquire(REPO_ROOT, `dev-browser.mjs cold（端口 ${port}, pid ${process.pid}, ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}）`);
+  const releaseLock = tryAcquire(REPO_ROOT, `dev-browser.mjs cold（端口 ${port}${baseline ? ` vs ${baseline}` : ""}, pid ${process.pid}, ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}）`);
   if (!releaseLock) {
     const lock = readLock(REPO_ROOT);
     console.warn(`[dev-browser] 测量锁被占用（持有者：${lock ? lock.owner.split("\n")[0] : "未知"}），继续测量但结果可能被对方的负载污染（反之亦然）`);
@@ -378,42 +702,24 @@ async function cmdCold(args) {
   try {
     for (let i = 0; i < repeat; i++) {
       const cpuLoad = sampleAndWarn(`cold 第 ${i + 1}/${repeat} 轮之前`);
-      // 每次独立浏览器上下文：非持久化 context 本身不共享磁盘 profile，加上 nonce 破缓存双重保险
-      // （手法抄自 tmp/review-t02/cold.js，开发体验官已实测端到端跑通，见 DX_REPORT_wave2.md §1.2）
-      const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
-      try {
-        const page = await context.newPage();
-        const nonce = Date.now() % 100000;
-        await page.addInitScript((n) => {
-          const P = WebGL2RenderingContext.prototype;
-          const orig = P.shaderSource;
-          P.shaderSource = function (sh, src) {
-            if (src.includes("void main")) {
-              src = src.replace(/void\s+main\s*\(\s*\)\s*\{/, (m) => `float nonceF_${n}(){ return ${n}.0; }\n` + m + `\n if (nonceF_${n}() < -1.0) return;\n`);
-            }
-            return orig.call(this, sh, src);
-          };
-        }, nonce);
-        const renderer = await assertRealGpu(page);
-        const t0 = Date.now();
-        await page.goto(`${origin}/?cold=${t0}`, { waitUntil: "commit", timeout: 180000 });
-        await page.bringToFront();
-        await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 250 });
-        const startup = await page.evaluate(() => window.__voyageStartup);
-        const totalMs = Date.now() - t0;
-        const entry = { origin, angle, viewport, dpr, nonce, totalMs, startup, renderer, cpuLoadPercent: cpuLoad };
-        results.push(entry);
+      const entry = { ...(await coldOnce(browser, origin, angle, viewport, dpr)), side: baseline ? "current" : undefined, cpuLoadPercent: cpuLoad };
+      results.push(entry);
+      console.log(`[dev-browser] cold #${i + 1}/${repeat}${baseline ? ` [当前 ${port}]` : ""}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  totalMs=${entry.totalMs}  renderer=${entry.renderer}`);
+      console.log(
+        Object.entries(entry.startup)
+          .map(([k, v]) => `    ${k}: ${v}`)
+          .join("\n"),
+      );
+      if (baseOrigin) {
+        const baseEntry = { ...(await coldOnce(browser, baseOrigin, angle, viewport, dpr)), side: "baseline", cpuLoadPercent: cpuLoad };
+        results.push(baseEntry);
+        const delta = baseEntry.totalMs ? (((entry.totalMs - baseEntry.totalMs) / baseEntry.totalMs) * 100).toFixed(1) : null;
+        console.log(`[dev-browser] cold #${i + 1}/${repeat} [基线 ${baseline}]: totalMs=${baseEntry.totalMs}  renderer=${baseEntry.renderer}${delta !== null ? `  Δ=${delta}%` : ""}`);
         console.log(
-          `[dev-browser] cold #${i + 1}/${repeat}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  totalMs=${totalMs}  renderer=${renderer}`,
-        );
-        console.log(
-          Object.entries(startup)
+          Object.entries(baseEntry.startup)
             .map(([k, v]) => `    ${k}: ${v}`)
             .join("\n"),
         );
-      } finally {
-        // 只是关掉这一轮的 context，浏览器进程留给外层 finally 统一处理；这里超时同样不硬等
-        await Promise.race([context.close(), new Promise((r) => setTimeout(r, 5000))]).catch(() => {});
       }
     }
   } finally {
@@ -669,7 +975,7 @@ async function main() {
   else if (sub === "flicker") result = await cmdFlicker(args);
   else {
     console.error(
-      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--out 路径] [--allow-flash] [--freeze] [--settle] [--baseline 端口] [--frames N] [--rounds N] [--repeat N] [--wait-quiet] [--respect-lock]",
+      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--scenes-file 路径.json] [--query '<url参数>'] [--out 路径] [--allow-flash] [--freeze] [--settle] [--pair '<js1>' --pair '<js2>' | --base-shader <端口|目录|提交>] [--baseline 端口] [--frames N] [--rounds N] [--repeat N] [--wait-quiet] [--respect-lock]",
     );
     console.error("  check           只开页面、等启动完成、收集 console error / pageerror，有错误就非 0 退出");
     console.error("  --wait-quiet    仅 cold（DX-10）：测量前先等 CPU 占用降到 50% 以下再开始");
@@ -677,15 +983,20 @@ async function main() {
     console.error("  --viewport WxH  浏览器视口尺寸，默认 1600x1200（如 --viewport 2400x1800）");
     console.error("  --dpr N         deviceScaleFactor，默认 1（和 --viewport 组合模拟高分屏 / 弱 GPU）");
     console.error("  --scene '<JSON>'  仅 shots / flicker：临时场景，字段同 scenarios.mjs 的 SCENES 条目，可重复（shots 可与 --only 并用）");
+    console.error("  --scenes-file 路径.json  仅 shots（DX-12）：场景数组文件，免去命令行 JSON 转义，可与 --only/--scene 并用");
+    console.error("  --query '<url参数>'      附加到导航 URL 的额外查询参数（DX-12），如 --query 'eox=2024' 或 '?optics=all'");
     console.error("  --out 路径      shots / cold / bench / flicker 的输出路径：绝对路径原样使用，相对路径按仓库根解析");
     console.error("                  （worktree 里就是 worktree 根；shots 不传是 tmp/screenshot/dev-<端口>）");
     console.error("  --allow-flash   仅 shots：不关闭雷电频闪（默认关，见 weather.ts 的 hold / heldIntensity 开关）");
     console.error("  --freeze        仅 shots（DX-08）：截图前 __voyage.freeze(true)——位置 / 航向 / 头部 / 模拟时间 /");
-    console.error("                  曝光适应 / 闪电 / 翼尖频闪相位全部钉住，连续渲染逐像素一致，适合两图相减找回归");
+    console.error("                  曝光适应 / 闪电 / 翼尖频闪相位全部钉住（PERF-13：另把翼尖频闪钉死为灭），连续渲染逐像素一致，适合两图相减找回归");
     console.error("  --settle        仅 shots（DX-08）：等 ground.pending === 0 再截（而不是默认的 pending<5），逐像素对比用");
+    console.error("  --pair '<js1>' --pair '<js2>'（或 --ab，DX-12）  仅 shots：同一机位冻结后先后跑两段 js 各拍一张（<场景>.a.png / .b.png）");
+    console.error("                  --base-shader <端口|目录|提交> [--material sceneMat]：第二张换成换上另一棵树着色器原文的对照（另拍 a2 噪声底）");
     console.error("  flicker         冻结后按亚像素步进（--step 毫米，默认 0.06）微移相机（head.x）连拍 --frames 帧（默认 20），");
     console.error("                  输出块能量变异系数（T08 法）与爬行指标（T43 法）；--crop x,y,w,h 限定统计区域，");
     console.error("                  --block N 块边长（默认 48），--debug N 设 uDebug，一次只测一个场景（--only 单选或单个 --scene）");
+    console.error("  cold --baseline 端口（DX-12）：--repeat 轮交替测 port / baseline 两侧真冷启动，不用手写交替脚本");
     process.exit(1);
   }
   // playwright-core 有时会留一些内部句柄没清干净（尤其是 GPU 争用导致渲染进程中途崩溃过一次的情况），
