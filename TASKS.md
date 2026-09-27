@@ -10,6 +10,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | T19b | 第 5 波（主干） | 5239 | worktree | Opus（天气场随位置 / 时间演变、导演插值与遮挡切换、奇观之门接口） | — | 进行中 |
 | W01 | 第 5 波（路线图：奇观首批） | 5260 | worktree | Opus（奇观系统骨架 + 天梯 / 建木） | — | 进行中 |
+| T32 | 第 5 波（用户插单） | 5232 | worktree | Opus（云海规则重复：自相关定位 + 随机平铺 / 元胞抖动） | — | 进行中 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
