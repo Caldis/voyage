@@ -14,7 +14,10 @@ export const VARIANTS = {
   hi: { exp: { ...OFF, uDayHiLook: HI } },
   final: { exp: {} },
   // 返工对照：prev = 第一次交付（收回到 +4.0、整窗都给）；noCloud = 收回到 +5.0 但不看云
-  prev: { exp: { uDayHiLook: [0.5, 2.5, 4.0, 1.4], uDayHiCloud: [0.05, 0.35, 0] } },
+  prev: { exp: { uDayHiLook: [0.5, 2.5, 4.0, 1.4], uDayHiCloud: [0.05, 0.35, 0], uDayHiSatRoll: 0 } },
+  // 斜率取舍：拉开云体与压扁最亮一段是同一件事的两面（见 handoff/TM01.md「返工」）
+  s13: { exp: { uDayHiLook: [0.5, 2.5, 5.0, 1.3] } },
+  s12: { exp: { uDayHiLook: [0.5, 2.5, 5.0, 1.2] } },
   noCloud: { exp: { uDayHiCloud: [0.05, 0.35, 0] } },
   // 顶点前移（离线模型：顶点越低，215–235 段被压得越少，云体拉开得也越少）
   t225: { exp: { uDayHiLook: [0.5, 2.25, 5.0, 1.4] } },
