@@ -48,6 +48,15 @@
         <button type="button" data-rate="60">60×</button>
         <button type="button" data-rate="600">600×</button>
       </div>
+      <!-- 连续航程 / 背景板模式（T19a）：到达终点上空直接接下一段航线，时间与飞行按航程流速一起走 -->
+      <label class="check"><input id="voyage-on" type="checkbox" />连续航程（自动接续东亚航线、时间流逝）</label>
+      <div id="voyage-rates" class="row rates" hidden>
+        <span>航程流速</span>
+        <button type="button" data-voyage-rate="1">1×</button>
+        <button type="button" data-voyage-rate="10">10×</button>
+        <button type="button" data-voyage-rate="60">60×</button>
+      </div>
+      <button id="backdrop-on" type="button">背景板模式（隐藏面板，按 Esc 或 B 退出）</button>
       <label>座位
         <select id="seat">
           <option value="right">右侧靠窗</option>
@@ -116,6 +125,22 @@
       <p class="hint">移动鼠标 = 挪动头部，滚轮 = 靠近 / 远离舷窗</p>
       <p class="credits">影像：Sentinel-2 cloudless 2020 by EOX IT Services GmbH（含修改过的 Copernicus Sentinel 数据，CC BY-NC-SA 4.0）· 地形：AWS Terrain Tiles · 水体：© OpenStreetMap contributors（OpenFreeMap）<br />关闭真实地理数据时，岛屿为程序生成的示例，不对应真实地理。<br />星表：耶鲁亮星表 BSC5（CDS V/50）· 月面贴图 © Solar System Scope（CC BY 4.0）</p>
     </aside>
+    <!-- 背景板模式：只在鼠标移动后的几秒内显示的提示与退出按钮 -->
+    <div id="backdrop-hint" hidden>背景板模式 · 连续航程播放中 <button id="backdrop-exit" type="button">退出</button></div>
+    <style>
+      /* 背景板模式（T19a）：面板隐藏（#panel.hidden），鼠标静止后光标与提示一起隐去 */
+      #backdrop-hint {
+        position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+        padding: 8px 14px; border-radius: 10px; background: var(--panel-bg); color: var(--muted);
+        backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+        opacity: 0; pointer-events: none; transition: opacity .4s;
+      }
+      #backdrop-hint button { margin-left: 8px; font: inherit; color: var(--text); background: transparent; border: 1px solid var(--muted); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+      body.backdrop #backdrop-hint { opacity: 1; pointer-events: auto; }
+      body.backdrop.backdrop-idle #backdrop-hint { opacity: 0; pointer-events: none; }
+      body.backdrop.backdrop-idle, body.backdrop.backdrop-idle * { cursor: none; }
+      #panel button:disabled { opacity: .4; cursor: default; }
+    </style>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

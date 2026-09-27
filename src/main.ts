@@ -20,6 +20,7 @@ import { $, CRUISE_PITCH_DEG, type Preset, type VoyageState } from "./state";
 import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
 import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets";
 import { BootProgress } from "./boot/progress";
+import { Director } from "./director";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
@@ -212,6 +213,49 @@ function setPreset(id: string) {
   ground.reset(state.preset.lat, state.preset.lon);
   snapAll();
   syncTimeUi(state);
+  director.onPresetChanged();
+}
+
+// ---------- 导演：连续航程 / 背景板模式（T19a，director.ts） ----------
+let lastSunAlt = 0;
+let groundMinLevel = 0;
+const director = new Director({
+  state,
+  geo: () => ground.localFrame.toGeo(cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y),
+  offsetKm: () => cloudUniforms.uCloudOffset.value.length(),
+  cloudDensity: () => clouds.cameraDensity,
+  sunAltDeg: () => lastSunAlt,
+  rebase: rebaseFrame,
+  setCabinLight: (mode) => {
+    const sel = $<HTMLSelectElement>("cabin-light");
+    sel.value = mode;
+    sel.dispatchEvent(new Event("change"));
+  },
+});
+
+/** 本地坐标换原点（导演借穿云 / 深夜调用）：原点挪到飞机正下方，位置（经纬度）、高度、航向都不变。
+ *  地面 clipmap 按新原点重建；云场、海浪的噪声原点跟着 uCloudOffset 跳一下（所以要借遮挡）；雷暴、台风、闪电通道平移到新坐标 */
+function rebaseFrame() {
+  const off = cloudUniforms.uCloudOffset.value;
+  const [lat, lon] = ground.localFrame.toGeo(off.x, off.y);
+  const dx = off.x, dz = off.y;
+  for (const s of weather.storms) {
+    s.x -= dx;
+    s.z -= dz;
+  }
+  if (weather.hurricane) {
+    weather.hurricane.x -= dx;
+    weather.hurricane.z -= dz;
+  }
+  for (const b of weather.bolt) {
+    b.x -= dx;
+    b.z -= dz;
+  }
+  // weather.ts 的 uniform 同步是私有方法（本任务不碰 weather.ts），按运行时属性调用
+  (weather as unknown as { syncUniforms(): void }).syncUniforms();
+  off.set(0, 0);
+  ground.reset(lat, lon);
+  clouds.snap();
 }
 
 // ---------- 尺寸 ----------
@@ -228,7 +272,7 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-setupUi({ state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id });
+setupUi({ state, setPreset, snapAll, resize, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director });
 
 // ---------- 主循环 ----------
 setPreset(state.preset.id);
@@ -244,7 +288,12 @@ function frame(now: number) {
 function renderFrame(now: number) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
-  if (state.playRate > 0) {
+  // 连续航程（T19a）：时间与飞行一起按航程流速走；否则沿用「时间流速」按钮（只推太阳月亮，飞行按真实时间）
+  const simDt = director.simDt(dt);
+  if (director.active) {
+    state.simTime += simDt * 1000;
+    syncTimeUi(state);
+  } else if (state.playRate > 0) {
     state.simTime += dt * 1000 * state.playRate;
     syncTimeUi(state);
   }
@@ -252,6 +301,7 @@ function renderFrame(now: number) {
   // 飞机当前的经纬度：起点 + 累计位移
   const [curLat, curLon] = ground.localFrame.toGeo(cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y);
   const sun = sunPosition(new Date(state.simTime), curLat, curLon, state.altitudeKm * 1000);
+  lastSunAlt = sun.altitude;
   const sunDir = directionFromAzAlt(sun.azimuth, sun.altitude);
   const camR = 6360 + state.altitudeKm;
 
@@ -276,16 +326,12 @@ function renderFrame(now: number) {
   atmosphere.updateSkyView(camR, sunDir[1], moonDir[1]);
   atmosphere.updateAerialPerspective(camR, sunDir[1]);
 
-  const flightResult = advanceFlight(state, {
-    dt,
-    curLat,
-    curLon,
-    cloudOffset: cloudUniforms.uCloudOffset.value,
-    onReachDest: () => setPreset(state.preset.id),
-  });
+  // 加速时拆成不超过 0.5 模拟秒的小步：航向控制器（按角度差的 0.3 倍转）步长太大会来回过冲
+  const flightResult = stepFlight(simDt, curLat, curLon);
+  director.update(dt, simDt, flightResult.speedKms);
   if (flightResult.climbing) syncAltitudeUi(state);
-  updateHighLift(state, dt);
-  traffic.update(dt, flightResult.ownDir, flightResult.speedKms, flightResult.outwardW);
+  updateHighLift(state, simDt);
+  traffic.update(simDt, flightResult.ownDir, flightResult.speedKms, flightResult.outwardW);
   weather.update(dt);
   const off = cloudUniforms.uCloudOffset.value;
   for (let i = 0; i < 16; i++) {
@@ -336,6 +382,13 @@ function renderFrame(now: number) {
   // 真实地理数据开着时，程序生成的岛屿关掉（真实海岸线里自有岛屿）
   u.uIslandDensity.value = state.groundOn ? 0 : state.preset.islands;
   u.uGroundOn.value = state.groundOn ? 1 : 0;
+  // 加速播放（T19a）：最细的地面级别停用，免得瓦片请求随流速暴涨被影像服务器限流（见 ground/clipmap.ts setMinLevel）。
+  // 请求量约 ∝ 流速 × 2^(1−最细级)：10× 停 1 级、30× 以上停 3 级（最细 64 km 级，约 60 m/像素，巡航高度侧看够用）
+  const minLevel = !director.active || director.rate < 10 ? 0 : director.rate < 30 ? 1 : 3;
+  if (minLevel !== groundMinLevel) {
+    groundMinLevel = minLevel;
+    ground.setMinLevel(minLevel);
+  }
   if (state.groundOn) ground.update(cloudUniforms.uCloudOffset.value.x, cloudUniforms.uCloudOffset.value.y);
   u.uTerrainMax.value = ground.maxHeightKm;
   u.uWingRootLE.value = state.wingRootLE;
@@ -364,7 +417,24 @@ function renderFrame(now: number) {
   pass.render(wingMat, hdrWing);
   exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
 
-  updateInfo(now, sun, moon, state, curLat, curLon, ground.pending);
+  updateInfo(now, sun, moon, state, curLat, curLon, ground.pending, director.describe());
+}
+
+/** 推进飞行 simDt 模拟秒（按 0.5 s 拆步）；到达终点上空交给导演接下一段航线（T19a：不再瞬移回起点） */
+function stepFlight(simDt: number, lat0: number, lon0: number) {
+  const n = Math.max(1, Math.ceil(simDt / 0.5));
+  const off = cloudUniforms.uCloudOffset.value;
+  let lat = lat0, lon = lon0;
+  let climbing = false;
+  const motion = new THREE.Vector3();
+  let r: ReturnType<typeof advanceFlight> | null = null;
+  for (let i = 0; i < n; i++) {
+    if (i > 0) [lat, lon] = ground.localFrame.toGeo(off.x, off.y);
+    r = advanceFlight(state, { dt: simDt / n, curLat: lat, curLon: lon, cloudOffset: off, onReachDest: () => director.relay() });
+    climbing ||= r.climbing;
+    motion.add(r.motion);
+  }
+  return { ...r!, climbing, motion };
 }
 // 先让浏览器把加载遮罩画出来，再画第一帧：第一帧要编译所有着色器，首次打开时会阻塞很久
 requestAnimationFrame(() =>
@@ -519,4 +589,4 @@ function benchFrame(n = 10) {
 }
 
 // 调试句柄：浏览器控制台里可以看 / 改状态，自动化截图也靠它
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, outsideMat, hdrOutside, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, benchScene, benchWing, benchFrame, boot, director, setPreset };
