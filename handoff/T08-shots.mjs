@@ -33,6 +33,11 @@ try {
   const page = await context.newPage();
   page.on("console", (m) => { if (m.type() === "error" || m.text().includes("[T08-timing]")) console.log(`[控制台 ${m.type()}] ${m.text()}`); });
   page.on("pageerror", (e) => console.log(`[页面异常] ${e.message}`));
+  // 瓦片请求失败统计（夜光 / 矢量瓦片取不到时，那一级的城市灯点和道路灯带整块消失，边界是直的）
+  const tileFail = {};
+  const host = (u) => (u.match(/^https?:\/\/([^/]+)/) || [])[1] || "?";
+  page.on("response", (r) => { if (!r.ok() && /^https?:\/\/(?!127\.0\.0\.1)/.test(r.url())) tileFail[host(r.url())] = (tileFail[host(r.url())] || 0) + 1; });
+  page.on("requestfailed", (r) => { if (/^https?:\/\/(?!127\.0\.0\.1)/.test(r.url())) tileFail[host(r.url()) + "(失败)"] = (tileFail[host(r.url()) + "(失败)"] || 0) + 1; });
   await page.goto(`http://127.0.0.1:${port}/?t08=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 500 });
   await page.waitForTimeout(2000);
@@ -47,7 +52,7 @@ try {
     await page.evaluate(() => (window.__voyage.wingDebug.strobe = 0));
     await page.waitForTimeout(800);
     await page.screenshot({ path: path.join(outDir, `${name}.png`), timeout: 60000 });
-    console.log(`[T08-shots] ${name}`);
+    console.log(`[T08-shots] ${name}  外部请求失败：${JSON.stringify(tileFail)}`);
   }
   // --longtask 秒数：截图之后继续飞，统计主线程长任务（≥50 ms）。clipmap 每飞过一级边长的 1/8 就重建这一级，
   // 60× 加速时细级别每一两秒重建一次，能看出重建时主线程卡不卡（道路栅格化是否真的都在 Worker 里）
