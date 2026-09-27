@@ -124,15 +124,15 @@ float ${name}(vec2 xz, float alt, float lod, bool detail, out float ao) {
     // 卷云盖的底往外抬升（外缘只剩 14 km 附近薄薄一层卷云，巡航高度可以在它下面俯看雨带）
     float canopyBase = 11.8 + 2.4 * smoothstep(Re * 4.0, Re * 12.0, r);
     float canopyTop = hurricaneCanopyTop(theta, r);
-    if (alt > canopyBase - 1.0 && alt < canopyTop + 0.8) {
+    if (alt > canopyBase - 0.3 && alt < canopyTop + 0.3) {
       // 流出气流：高空的丝缕沿反气旋弯曲的螺线向外，坐标 (θ − 1.1 ln r) 沿丝缕不变
       float lr = log(max(r, 1.0));
       vec4 nC = textureLod(uShapeNoise, vec3((theta - 1.1 * lr) / HUR_TWO_PI * 16.0, lr * 1.6, alt / 6.0), lod);
       float fib = nC.g * 0.7 + nC.b * 0.3;
       float edge = 1.0 - smoothstep(Re * 9.0, Re * 16.0, r + Re * 4.0 * (fib - 0.5));
-      // 顶面不是一刀切的水平面：丝缕噪声让顶面软化、起伏半公里（T37）
-      // 底面同样被丝缕噪声打散：从卷云盖下面看，底不是一张光滑的天花板、边缘不是一条直线
-      float vert = smoothstep(canopyBase - 0.5, canopyBase + 0.5, alt - 1.0 * (fib - 0.5)) * (1.0 - smoothstep(canopyTop - 0.8, canopyTop + 0.3, alt + 0.9 * (fib - 0.5)));
+      // 试过用丝缕噪声把顶面、底面打散（±0.5 km）：typhoon-outer（13 km，就在卷云盖底下）云步进 +0.7 ms（+15%），
+      // 相机附近多了一大片稀薄的云要细走；眼壁附近的卷云盖顶已压到顶沿以下、从眼里看不到，所以不做（T37）
+      float vert = smoothstep(canopyBase - 0.3, canopyBase + 0.4, alt) * (1.0 - smoothstep(canopyTop - 0.4, canopyTop + 0.2, alt));
       // 冰云：靠近眼壁厚，往外越来越薄、越来越丝缕状
       float thin = smoothstep(Re * 3.5, Re * 10.0, r);
       float canopy = vert * edge * mix(0.9, 0.3 * smoothstep(0.25, 0.75, fib), thin);
@@ -168,11 +168,12 @@ const HUR_BANDS_FULL = /* glsl */ `
     // 高过这一带最高的塔顶（含隆起、砧）就不必进单体循环：从 13 km 俯看时相机附近的大段视线都在这里，
     // 不加这道判断 typhoon-outer 的帧时间是原来的近 3 倍
     float topHere = mix(13.0, 8.5, smoothstep(Re * 3.5, Re * 15.0, r)) + 1.5;
-    // 离最近的带轴（相位差）够不够得着：塔只长在格子中心相位差 < 1 rad 的地方，塔和砧离塔心最远约 13 km，
-    // 按相位梯度折成相位差。旧的判断（cb > 0.45）在内圈（相位梯度大）会把离带轴远一点的塔和砧截出直边
+    // 离最近的带轴（相位差）够不够得着：塔只长在格子中心相位差 < 1 rad 的地方，塔和砧离塔心最远约 13 km
+    // （7 km 以下没有砧、塔也不怎么歪，约 10 km），按相位梯度折成相位差。
+    // 旧的判断（cb > 0.45）在内圈（相位梯度大）会把离带轴远一点的塔和砧截出直边
     float pd = abs(mod(phB + 3.1415927, HUR_TWO_PI) - 3.1415927);
     float phGradLen = 19.4 / r;   // |∇φ| = √(6² + 18.5²) / r
-    if (pd < 1.0 + phGradLen * 13.0 && alt < topHere) {
+    if (pd < 1.0 + phGradLen * mix(10.0, 13.0, smoothstep(6.0, 8.0, alt)) && alt < topHere) {
       // 塔身表面的菜花状隆起（约 2 km / 1 km），3D 噪声，只作为表面起伏，不当高度场
       vec4 nU = textureLod(uShapeNoise, vec3(xz.x / 9.0, alt / 7.0, xz.y / 9.0) + 0.29, max(lod - 0.7, 0.0));
       float bump = 1.0 * hurCap(nU.g) + 0.45 * hurCap(nU.b);
@@ -198,8 +199,10 @@ const HUR_BANDS_FULL = /* glsl */ `
         vec2 hc = c - uHurricane.xy;
         float rcc = length(hc);
         // 格子中心落在带轴附近才长塔；带轴上也有约 1/4 的格子空着（塔与塔之间的缝）。
-        // 相位按格子中心精确求（不从采样点线性外推）：外推的误差随距离平方增长，同一座塔在不同采样点上高矮不一，形状会扭
-        float phC = 6.0 * atan(hc.y, hc.x) - 18.5 * log(max(rcc, 1.0));
+        // 相位按格子中心求（不从采样点线性外推）：外推的误差随距离平方增长（内圈 0.4 rad），同一座塔在不同采样点上高矮不一、形状会扭。
+        // 方位角差用 atan 的有理近似（夹角 < 0.4 rad，误差 < 0.005 rad）：每格一个完整的 atan 在 typhoon-bands 上约 +0.35 ms
+        float ta = (d2.x * hc.y - d2.y * hc.x) / dot(d2, hc);
+        float phC = phB + 6.0 * ta / (1.0 + 0.28 * ta * ta) - 9.25 * log(dot(hc, hc) / (r * r));
         float coreC = smoothstep(0.55, 0.92, cos(phC))
                     * smoothstep(Re * 3.0, Re * 4.2, rcc) * (1.0 - smoothstep(Re * 12.0, Re * 16.0, rcc)) * step(0.25, h2.x);
         if (coreC <= 0.0) continue;
