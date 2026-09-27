@@ -122,6 +122,15 @@ vec4 wonderSpheroid(vec3 w0, vec3 rd, vec3 a, float sc, float R, float H, float 
   return vec4(albedo / M_PI * E, cov);
 }
 
+float wonderLum(vec3 v) { return dot(v, vec3(0.2126, 0.7152, 0.0722)); }
+
+// 奇观表面（满覆盖时）的辐亮度封顶（W01b 返工）：亮度不超过同方向天空（背景）的 capLum，保留色相；
+// 也不比背景暗过 40%（地影里的一段是略暗于天空的剪影，而不是一道黑缝）。scale 返回封顶的比例（光晕跟着缩）
+vec3 wonderCap(vec3 v, vec3 bg, float capLum, out float scale) {
+  scale = min(1.0, capLum / max(wonderLum(v), 1e-9));
+  return max(v * scale, bg * 0.6);
+}
+
 // 从轴线伸出去的一根「撑杆」（天梯的稳定缆 / 建木的枝）：在水平方位 h（垂直于轴线的单位向量）上，
 // 高度 σ ∈ [sa, sb] 处离轴线 r(σ) = rA + (rB − rA)·g(u)，u = (σ − sa)/(sb − sa)，g(u) = u + bend·u·(1 − u)
 // （bend = 0 直线；bend = 1 时根部斜着长出、梢部转成竖直，导数处处有限），半径从 thA 渐变到 thB（km）。
@@ -215,7 +224,22 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   // （气辉在 90 km 高的一层，大多在线后面，所以无月的夜里线确实是一道比天空略暗的剪影）
   vec3 frontFrac = 1.0 - apT;
   if (tLimit > 1e8) frontFrac = clamp(frontFrac / max(1.0 - transmittanceToTop(uCamR, rd.y), vec3(1e-4)), 0.0, 1.0);
-  vec3 lFront = max(apL, L * frontFrac);
+  // 「背景 × 线前面空气的比例」只用来补月光那一路（太阳在 −12° 以下才生效）。黄昏太阳那一路交给空气透视 LUT：
+  // 暮色里低处的天光多半来自奇观身后远处仍被照亮的高层空气，线前面近处的空气已在地影里，所以地影里的一段应是淡淡的剪影
+  // （W01b 返工：原来黄昏也按几何比例补，树干 / 缆在地影里那段和天空一样亮，整棵树像悬在半空）
+  float moonW = 1.0 - smoothstep(-0.21, -0.14, uSunDir.y);
+  vec3 lFront = max(apL, L * frontFrac * moonW);
+  // 太阳落到地平线以下后，地影里的那段按「挡住身后至少 22% 的天光」画成淡剪影，一路接到地平线的霾里
+  // （否则被照亮的上段像悬在半空；白天不动，正午的样子不变）
+  float duskW = 1.0 - smoothstep(-0.02, 0.06, uSunDir.y);
+  lFront = mix(lFront, min(lFront, L * 0.78), duskW);
+  // 亮度封顶（W01b 返工）：被照亮的部分最亮只到同方向天空的 1.3（贴地平线）–2 倍（高处）。
+  // 暮色天空比阳光暗 4–5 个数量级，按物理算被照亮的缆 / 枝会截成一根过曝的光柱（像激光、霓虹灯），
+  // 眼睛（和相机）看远处暮色里的亮物体也会被空气的散射光冲淡，这里直接按天空亮度封顶，保留色温
+  vec3 Lbg = L;
+  // 白天（太阳在地平线以上）放宽到 4 倍：正午的中继站、云气本来就只比天空亮一点，不受影响
+  float capLum = mix(4.0, mix(1.3, 2.0, smoothstep(10.0, 150.0, s)), duskW) * wonderLum(Lbg);
+  float capScale;
 
   float x = X / wPix;                            // 横向像素偏移（有符号）
   float T = uTime;
@@ -263,11 +287,11 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
     covS += wonderStrut(X, s, sn, b, nh, rd, h, wPix, sa, sb, rA, rB, bend, thA, thB);
   }
   float c = min(cov + covS, 1.0) * vis;
-  L = mix(L, lFront + apT * Lt, c);
+  L = mix(L, wonderCap(lFront + apT * Lt, Lbg, capLum, capScale), c);
 
   // 光晕：被照亮的那段在空气里的一点前向散射（能量按线的覆盖宽度折算，很弱，只在暮色、夜里的暗背景上看得出）
   float lineW = min(2.0 * radius / wPix, 1.0);
-  L += apT * direct * vis * lineW * 0.012 * exp(-x * x / (2.0 * haloPx * haloPx));
+  L += capScale * apT * direct * vis * lineW * 0.012 * exp(-x * x / (2.0 * haloPx * haloPx));
 
   // ---- 点光源：累加「光强 × 像素权重」（kcd），最后统一换成辐亮度
   vec3 lamp = vec3(0.0);
@@ -303,7 +327,8 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
     float objVis = kind > 1.5 ? visF : vis;
     if (dist < R + 2.0 * wPix) {
       vec4 o = wonderSpheroid(w0, rd, a, sc, R, H, x, s, wPix, sn, b, eSun, eMoon, eSkyUp, eUp, alb);
-      L = mix(L, lFront + apT * o.rgb, o.a * objVis);
+      float capO;
+      L = mix(L, wonderCap(lFront + apT * o.rgb, Lbg, capLum, capO), o.a * objVis);
     }
     float y = (s - sc) * sn / wPix;
     float ax = R / wPix;
@@ -374,7 +399,8 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       // 云：反照率约 0.8；朝太阳看时前向散射更亮
       float fwd = 1.0 + 1.5 * pow(max(dot(rd, uSunDir), 0.0), 4.0);
       vec3 Lc = 0.8 / M_PI * (eSun * 0.8 * fwd + eMoon * 0.8 + eSkyUp + 0.5 * eUp);
-      L = mix(L, lFront + apT * Lc, (1.0 - exp(-tau)) * visF);
+      float capC;
+      L = mix(L, wonderCap(lFront + apT * Lc, Lbg, capLum, capC), (1.0 - exp(-tau)) * visF);
     }
     // 众帝上下：沿树干升降的暖色光团（夜里才看得见）
     if (hasPod) lamp += vec3(1.0, 0.8, 0.5) * 40.0 * (1.0 - dayF) * wonderPoint(x, (s - sPod) * sn / wPix);
@@ -384,11 +410,11 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       vec2 cell = floor(vec2(X / 2.6, sd / 3.4));
       vec2 hc = hash22(cell + 71.0);
       float near = exp(-abs(cell.x * 2.6) / 14.0) * smoothstep(45.0, 70.0, s);
-      if (hc.x < 0.35 * near) {
+      if (hc.x < 0.2 * near) {
         vec2 pc = (cell + 0.5 + (hc - 0.5) * 0.5) * vec2(2.6, 3.4);
         float tw = 0.5 + 0.5 * sin(T * (0.5 + hc.y) + hc.x * 40.0);
         float spark = pow(max(sin(T * (0.3 + 0.5 * hc.y) + hc.y * 60.0), 0.0), 24.0);
-        vec3 glow = vec3(1.0, 0.78, 0.4) * (15.0 * tw * tw * (1.0 - dayF) + 1.2e6 * spark * dot(tS, vec3(0.333)));
+        vec3 glow = vec3(1.0, 0.78, 0.4) * (6.0 * tw * tw * (1.0 - dayF) + 6e5 * spark * dot(tS, vec3(0.333)));
         lamp += glow * wonderPoint(x - pc.x / wPix, (sd - pc.y) * sn / wPix);
       }
     }
