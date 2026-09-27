@@ -2,12 +2,60 @@ import * as THREE from "three";
 
 /**
  * 夜空的数据资源：
- * - 星图：public/data/bsc5.json（耶鲁亮星表，由 scripts/build_stars.py 生成）溅射成 J2000 赤道坐标的等距柱状 HDR 图
+ * - 星图：public/data/bsc5.json（耶鲁亮星表，由 scripts/build_stars.py 生成）溅射成 J2000 赤道坐标的等距柱状 HDR 图（RGB）
+ * - 银河（T09）：public/data/milkyway_4k.jpg（NASA SVS Deep Star Maps 2020 的「milkyway」图，只含比约 11.5 等更暗的
+ *   Gaia DR2 星的积分光，由 scripts/build_milkyway.py 生成），解码后放进同一张图的 A 通道——窗外程序的 sampler 已满 16/16，
+ *   不能再加纹理；A 通道原来空着，和点星共用一次采样。图里没有亮星，和 BSC5 的点星不会重复成「双重星」。
+ *   6.5–11.5 等之间的星两边都没有（肉眼看不见单颗，积分光在银河带外约占一半，带内是少数），已知偏差见 handoff/T09.md。
  * - 月面：public/data/moon_2k.jpg（Solar System Scope，CC BY 4.0，基于 NASA LRO 数据）
  */
 
 const STAR_MAP_W = 4096;
 const STAR_MAP_H = 2048;
+/** milkyway_4k.jpg 的对数编码下限（和 build_milkyway.py 的 LOG_MIN 一致）：code 1..255 ↔ log10(亮度) ∈ [LOG_MIN, 0] */
+const MILKY_WAY_LOG_MIN = -3.5;
+
+/**
+ * 解码银河图，返回按星图行序（第 0 行 = 赤纬 −90°）排好的相对亮度（原图单位 0..1，绝对定标在 stars.glsl.ts 的 MILKY_WAY_UNIT）。
+ * 8 位对数编码一级约 3%：解码时加 ±半级的确定性抖动，免得平滑的星云边缘出现等高线（同一张图每次加载都一样，截图可对比）。
+ * 取不到就返回 null（没有银河，其它照常）。
+ */
+async function loadMilkyWay(): Promise<Float32Array | null> {
+  try {
+    const resp = await fetch("data/milkyway_4k.jpg");
+    if (!resp.ok) return null;
+    // 灰度 JPEG 不做色彩管理，原样拿到编码值
+    const bmp = await createImageBitmap(await resp.blob(), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+    if (bmp.width !== STAR_MAP_W || bmp.height !== STAR_MAP_H) return null;
+    const c = document.createElement("canvas");
+    c.width = STAR_MAP_W;
+    c.height = STAR_MAP_H;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close();
+    const px = ctx.getImageData(0, 0, STAR_MAP_W, STAR_MAP_H).data;
+    const out = new Float32Array(STAR_MAP_W * STAR_MAP_H);
+    const step = -MILKY_WAY_LOG_MIN / 254;
+    let seed = 0x9e3779b9;
+    for (let y = 0; y < STAR_MAP_H; y++) {
+      const row = (STAR_MAP_H - 1 - y) * STAR_MAP_W; // 图片上北下南，星图第 0 行是南天极
+      for (let x = 0; x < STAR_MAP_W; x++) {
+        const code = px[(y * STAR_MAP_W + x) * 4];
+        // xorshift32，每个像素一个 [-0.5, 0.5) 的抖动
+        seed ^= seed << 13;
+        seed ^= seed >>> 17;
+        seed ^= seed << 5;
+        if (code === 0) continue;
+        const jitter = (seed >>> 0) / 4294967296 - 0.5;
+        out[row + x] = Math.pow(10, MILKY_WAY_LOG_MIN + (code - 1 + jitter) * step);
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
 
 /** B−V 色指数 → 色温（Ballesteros 2012） */
 function bvToKelvin(bv: number) {
@@ -30,6 +78,7 @@ function kelvinToRgb(k: number): [number, number, number] {
 }
 
 export async function buildStarMap(): Promise<THREE.DataTexture> {
+  const milkyWayJob = loadMilkyWay();
   const stars: [number, number, number, number][] = await (await fetch("data/bsc5.json")).json();
   const acc = new Float32Array(STAR_MAP_W * STAR_MAP_H * 4);
   const dLon = (2 * Math.PI) / STAR_MAP_W;
@@ -58,9 +107,12 @@ export async function buildStarMap(): Promise<THREE.DataTexture> {
       }
     }
   }
-  // 存 ×1e4 的值，半精度浮点才装得下 6.5 等的暗星
+  // RGB 存 ×1e4 的值，半精度浮点才装得下 6.5 等的暗星；A 存银河的相对亮度（0..1，最暗处约 3e-4，半精度的正规数够用）
+  const milkyWay = await milkyWayJob;
   const half = new Uint16Array(acc.length);
-  for (let k = 0; k < acc.length; k++) half[k] = THREE.DataUtils.toHalfFloat(k % 4 === 3 ? 1 : Math.min(acc[k] * 1e4, 65000));
+  for (let k = 0; k < acc.length; k++) {
+    half[k] = THREE.DataUtils.toHalfFloat(k % 4 === 3 ? (milkyWay ? milkyWay[k >> 2] : 0) : Math.min(acc[k] * 1e4, 65000));
+  }
   const tex = new THREE.DataTexture(half, STAR_MAP_W, STAR_MAP_H, THREE.RGBAFormat, THREE.HalfFloatType);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;

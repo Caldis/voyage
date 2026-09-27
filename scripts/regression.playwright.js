@@ -66,6 +66,8 @@ async (page) => {
     { name: "night-city-off", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": "off" }, offset: [0, -25], ground: true, head: -0.25 },
     { name: "route-hnd-cts", p: { preset: "hnd-cts", time: 990, coverage: 0.25, "wing-pos": "8" }, ground: true },
     { name: "economy-ahead", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "economy" }, head: [-0.42, 0.1, -0.5] },
+    // T09：夜间无月（2026-05-15 22:30，残月在地平线下 53°）、关舱灯（全关）、南海上空、左座朝东南：人马座大星云低低地在窗正中
+    { name: "night-sea-milkyway", p: { preset: "scs", seat: "left", date: "2026-05-15", time: 1350, coverage: 0.15, "cabin-light": "off", "wing-pos": "-4" } },
   ];
 
   await page.goto(`${origin}/?regression=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
@@ -93,13 +95,17 @@ async (page) => {
           el.dispatchEvent(new Event("change"));
         } else {
           el.value = String(val);
-          el.dispatchEvent(new Event(el.tagName === "SELECT" ? "change" : "input"));
+          // 日期框只响应 change（ui.ts）
+          el.dispatchEvent(new Event(el.tagName === "SELECT" || el.type === "date" ? "change" : "input"));
         }
       };
       // 默认状态
       const defaults = { preset: "wpac", seat: "right", weather: "fair", "cloud-preset": "cumulus", "cabin-light": true, "cabin-class": "business", altitude: 10.7, shade: 0, wind: 7, "wing-pos": "8", "ground-on": true };
       for (const [id, val] of Object.entries({ ...defaults, ...sc.p })) set(id, val);
       if (sc.p.coverage === undefined) set("coverage", 0.42);
+      // 日期（T09）：场景没写 date 时恢复成页面打开时的日期，免得上一个写了 date 的场景把后面的场景也带到那一天
+      window.__voyageInitialDate ??= document.getElementById("date").value;
+      if (sc.p.date === undefined) set("date", window.__voyageInitialDate);
       if (sc.p.time !== undefined) set("time", sc.p.time);
       // 上一个场景留下的状态也要清掉（例如穿云后的窗上水痕、颠簸）
       v.state.wetness = 0;

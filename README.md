@@ -40,7 +40,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进） |
 | `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步 |
 | `src/astro.ts` | 太阳 / 月亮位置、月相、当地→赤道坐标矩阵（astronomy-engine） |
-| `src/sky-assets.ts` | 星图（BSC5 溅射成 HDR）、月面贴图 |
+| `src/sky-assets.ts` | 星图（BSC5 溅射成 HDR；A 通道是银河）、月面贴图 |
+| `src/light-pollution.ts` | 城市光污染的天空背景（T09）：从地面夜光估算，只压银河的可见度 |
 | `src/traffic.ts` / `src/weather.ts` | 远处飞机的运动；天气预设、雷暴 / 台风摆放、闪电调度；天气场 `WeatherField`（T19b：按经纬度 + 时间取样云型 / 云量，雷暴系统与台风的出生、寿命、漂移，粗略东亚海陆分布） |
 | `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
@@ -61,7 +62,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/render/cabin.glsl.ts` | 窗洞内衬（漏斗）、窗板光源、划痕 / 油污 / 水痕 |
 | `src/render/wing.glsl.ts` | 机翼 SDF、材质细节、机身投影 |
 | `src/render/lights.glsl.ts` | 太阳 / 月亮 / 夜天光、直射主光源 `uKey*` |
-| `src/render/stars.glsl.ts` | 星星、月亮圆盘 |
+| `src/render/stars.glsl.ts` | 星星、银河（物理定标 + 眼睛的对比度阈值）、月亮圆盘 |
 | `src/render/ground.glsl.ts` | clipmap 采样、地形求交、地形阴影 |
 | `src/render/islands.glsl.ts` | 程序生成的岛屿（仅在关闭真实地理数据时） |
 | `src/render/traffic.glsl.ts` | 航迹云与远处飞机 |
@@ -106,6 +107,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | 机翼 | A320 量级的尺寸估计（后掠、上反、弦长、鲨鳍小翼），不是官方图纸 |
 | 月亮 | astronomy-engine 算位置、视星等、相位；Lommel-Seeliger 反射 |
 | 星星 | 耶鲁亮星表 BSC5（Hoffleit & Warren 1991），CDS V/50 |
+| 银河 | NASA SVS Deep Star Maps 2020 的银河背景（Gaia DR2 中比约 11.5 等更暗的星，不含亮星）；绝对亮度按人马座大星云 ≈ 20.7 V 等/角秒² 定标（估算，见 `stars.glsl.ts`）；可见度按 Blackwell 大目标对比度阈值的近似拟合（估算） |
 | 舱内声音 | 巡航客舱噪声的典型形状（非计权 63–500 Hz 最高、500 Hz 以上每倍频程 −6～−8 dB、A 计权峰值 500 Hz–1 kHz，按表约 78 dBA）是按公开测量的量级近似，不是某机型实测；气流噪声随动压 q = ½ρv²（ISA 密度）变化；左右声道按扩散声场相干函数 sinc(kd) 去相关；雷声延迟按 340 m/s |
 
 ## 数据来源与许可
@@ -114,6 +116,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | --- | --- | --- |
 | `public/data/bsc5.json` | 耶鲁亮星表第 5 版，CDS VizieR V/50，`scripts/build_stars.py` 生成 | 公有领域 |
 | `public/data/moon_2k.jpg` | Solar System Scope「2k_moon」（基于 NASA LRO 数据） | CC BY 4.0，需署名：Solar System Scope |
+| `public/data/milkyway_4k.jpg` | NASA SVS「Deep Star Maps 2020」（ID 4851）的 `milkyway_2020_4k.exr`（4096×2048，J2000 等距柱状），`scripts/build_milkyway.py` 转成 8 位对数编码灰度 JPEG（3.3 MB） | NASA 作品可自由使用，需署名：NASA/Goddard Space Flight Center Scientific Visualization Studio；其中 Gaia DR2 数据署名 ESA/Gaia/DPAC（CC BY-SA 3.0 IGO） |
 | 卫星影像（运行时拉取） | EOX Sentinel-2 cloudless 2020（`tiles.maps.eox.at`） | CC BY-NC-SA 4.0，需署名；仅限非商业 |
 | 地形（运行时拉取） | AWS Terrain Tiles，Terrarium 编码（`elevation-tiles-prod`） | 开放数据，各来源署名见其说明 |
 | 水体（运行时拉取） | OpenFreeMap 矢量瓦片的 water / waterway 图层 | © OpenStreetMap contributors，ODbL |
@@ -232,6 +235,10 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   修法：量 CPU 时用 `ctx.suspend(t)` 每 0.25 s 停一下再 `update`，和实时一样滚动排程（`scripts/audio-check.mjs` 的 `cpu()`）。
 - **面板雷暴摆在 55–75 km 外**（T11）：雷声按 340 m/s 延迟近三分钟，隔着机舱本来也听不见。声音把打雷的距离上限放到 90 km，远雷只剩 90 Hz 以下、低于底噪约 11 dB 的闷响（一片断续的低沉滚动）；想听清楚的雷要导演把雷暴摆近（10 km 内雷声在 150 Hz 以下与底噪相当或更响）。
 - **headless 里听不见声音，但可以离线分析**（T11）：`node scripts/audio-check.mjs [--port 5211]`（没有开发服务器会自己起 vite）直接打开 `/src/audio.ts` 这个地址（同源、不启动渲染器）再动态 import，用 OfflineAudioContext 渲染各状态并输出倍频程表 / A 计权 / 峰值 / 左右相干度到 `tmp/audio-check/spectra.json`。页面上那条 404 是 favicon，无关。
+- **只抬高可见度阈值、不改画出来的底色，银河几乎不会变淡**（T09）：城市人工天光和舱内光幕没有画进天空，按真实背景算出的阈值只砍掉超出部分的一点点（城市里 C ≈ 0.7、阈值 0.08 → 还剩 88%），画面上的对比度照旧。修法：再乘「画出来的底色 ÷ 真实底色」，让银河相对画面底色的对比度等于真实对比度（`milkyWayVisibility`）；月光照亮的天空本来就画在底色里，这一项对它是 1。识别：强行把 `uSkyGlow` 设成几倍夜天光，截图里银河几乎不变。
+- **回归场景的日期默认是「今天」，夜景的月相每天不同**（T09）：场景只设 `time` 时日期沿用页面打开那天，月亮在不在天上、多亮随运行日期变，夜间场景的基线不可比。要稳定的夜景写 `date`（`applyScene` 对日期框发 `change`，没写 `date` 的场景恢复成页面打开时的日期）。选银河场景的办法：用 astronomy-engine 扫全年「太阳 < −18°、月亮 < −5°、人马座大星云高 4–16°、方位对着窗」，本仓库的 `night-sea-milkyway` 就是这样挑出来的（南海、左座朝东南、2026-05-15 22:30）。
+- **窗板高度只看得到仰角约 20° 以下的天**（T09）：默认头位下窗上沿约 +20°，银河要低低地在窗里才看得见；判断「银河出没出来」先算它的高度角和方位，别先怀疑着色器。
+- **`svs.gsfc.nasa.gov` 的 TLS 握手在本机经常失败**（T09）：Git Bash 的 curl（schannel）直接 `SSL/TLS connection failed`，Python 的 urllib 也会间歇 `UNEXPECTED_EOF_WHILE_READING`；重试几次就好（`build_milkyway.py` 自带重试）。
 
 - **掠射的侧壁不能用一个各向同性的像素足迹淡出纹理**（T35）：「看前方 / 看后方」时视线贴着侧壁，像素只在「视线在墙面上的投影方向」被拉长 1/cos，垂直方向不拉长。原来的 `t·pixAng / max(cos, 0.2)` 让所有细纹一起被抹平（画面上是一整片平灰墙），而在 cos < 0.2 的地方又欠估足迹、会闪。修法：`shadeWall` 算出 `pixX` / `pixY` 两个方向的足迹，沿 x、沿 y 变化的纹理和缝各按自己的淡出。识别：斜看的墙面上横纹、竖纹同时消失，或者只在极掠射处出现摩尔纹。
 - **座椅几何往正面长，就会挤进默认坐姿的画面**（T35）：本排头枕的正面离眼睛的横向视角只比视场边缘多 2°，商务舱头枕往前加厚 1 cm、护翼再鼓 2.8 cm，画面右下角就多出一大块模糊的浅色皮。修法：加厚改成往背后，护翼只往前 2 cm。识别：改了 `seatSection` / `sdSeatBack` 以后，默认坐姿（head = [0, 0.02, −0.42]）拍一张，和 master 对照（`handoff/T35-shots.mjs --only biz-seated,econ-seated`）。
