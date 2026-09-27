@@ -176,6 +176,8 @@ async (page) => {
       for (let i = 0; i < 480 && v.cabinClass && v.cabinClass.shown !== wantClass; i++) await new Promise((r) => setTimeout(r, 250));
       // js（T17，W01b 同步到这里）：一段脚本，参数 v = window.__voyage，在 snapAll 与截图等待之前执行（例如召唤奇观）
       const jsOut = sc.js ? await new (async () => {}).constructor("v", sc.js)(v) : undefined;
+      // 云步进变体（PERF-10，与 scenarios.mjs 的 applyScene 同步）：雷暴 / 台风 / 卷云 / 奇观变体编好之前不截图（最多 120 s）
+      for (let i = 0; i < 480 && v.clouds && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250));
       v.snapAll();
       await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
       const info = document.getElementById("info").textContent;

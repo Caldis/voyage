@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { haversineKm, speedAt } from "./flight";
+import { autopilotOf, greatCircleBearing, haversineKm, speedAt, startHold, type Autopilot } from "./flight";
 import { AIRPORTS, airportAhead, makeLeg, nearestAirport, pickNextLeg, type Airport, type Leg } from "./routes";
 import type { Preset, VoyageState } from "./state";
 import type { CloudParams } from "./clouds/clouds";
@@ -37,6 +37,15 @@ const CLOUD_COVER_DENSITY = 0.35;
 const NIGHT_SUN_ALT = -12;
 /** 航程流速档位 */
 export const VOYAGE_RATES = [1, 10, 60] as const;
+/** 航线接力（T49）：离终点这么近时预先挑好下一段，让飞机按转弯半径提前开始转（60× 时 90° 转弯要提前约 180 km） */
+const PREVIEW_KM = 400;
+/** 接力后要掉头超过这个角度，就不当着乘客转：机翼改平继续直飞，等穿云（在云里直接换到新航向）或入夜（夜里照常转）；
+ *  等太久（BIG_TURN_WAIT_S 模拟秒，巡航约 120 km）仍没遮挡就照常转弯 */
+const BIG_TURN_DEG = 90;
+const BIG_TURN_WAIT_S = 480;
+/** 同时不超过这么多真实秒（T49 审查 P1）：等待时限只用导演自己累加的时钟，不看 state.simTime——
+ *  不开连续航程时 simTime 只随「时间流速」走（默认暂停），拖时间滑块还会倒退，靠它放行会永远卡住 */
+const BIG_TURN_WAIT_REAL_S = 45;
 
 /** 遮挡种类：穿云（窗外全白）、深夜 */
 export type CoverKind = "cloud" | "night";
@@ -78,6 +87,11 @@ export interface DirectorHost {
   localPos(): [number, number];
   /** 正下方是陆地 / 海（地形数据还没到时 null，天气场改用粗略海陆分布） */
   landBelow(): boolean | null;
+  /**
+   * 预告（PERF-10）：马上要摆雷暴（storm）/ 台风（typhoon）时调用——云程序立刻在后台编对应的天气变体，返回现在画不画得出来。
+   * 返回 false 时导演推迟摆放（下一次规划再问），免得摆出一个看不见的天气系统；没实现（旧接入）当作总是画得出来
+   */
+  weatherReady?(kind: "storm" | "typhoon"): boolean;
 }
 
 export interface DirectorTelemetry {
@@ -106,6 +120,8 @@ export class Director {
   autoCabin = true;
   private cabinNight: boolean | null = null;
   leg: Leg | null = null;
+  /** 预先挑好的下一段（T49：离终点 PREVIEW_KM 内挑，供提前转弯；到达时 relay() 直接用它） */
+  nextLeg: Leg | null = null;
   phase: Phase = "cruise";
   readonly visits = new Map<string, number>();
   readonly telemetry: DirectorTelemetry = { frames: 0, maxJumpRatio: 0, maxJumpKm: 0, maxAltRate: 0, maxTurnRate: 0, legs: [], switches: [] };
@@ -117,6 +133,8 @@ export class Director {
   private coverSince: Record<CoverKind, number> = { cloud: -1, night: -1 };
   private coverListeners: ((kind: CoverKind) => void)[] = [];
   private realTime = 0;
+  /** 导演自己累加的模拟秒（只随飞行推进，不受时间滑块影响） */
+  private simClock = 0;
   private prevGeo: [number, number] | null = null;
   private prevAlt = 0;
   private prevHeading = 0;
@@ -127,10 +145,17 @@ export class Director {
     this.weather = new WeatherDirector(this, host);
   }
 
+  /** 自动驾驶（T49，flight.ts）：导航方式、选定航向、等待航线状态 */
+  get ap(): Autopilot {
+    return autopilotOf(this.host.state);
+  }
+
   // ---------- 时间 ----------
 
   /** 这一帧的模拟时间步（秒）：连续航程时按流速加速，否则就是真实时间 */
   simDt(dtReal: number) {
+    // 自动驾驶按真实时间限制坡度与滚转速率（T49），要知道这一帧的时间倍数；main.ts 每帧先调这里、再推进飞行
+    this.ap.timeScale = this.active ? this.rate : 1;
     return this.active ? dtReal * this.rate : dtReal;
   }
 
@@ -218,6 +243,9 @@ export class Director {
     const s = this.host.state;
     this.prevGeo = null;
     this.haze = -1;
+    // 换地点 = 用户的跳变：回到「沿航线」，手动航向 / 盘旋 / 排队中的掉头都作废
+    this.clearNav();
+    this.ap.mode = "route";
     const p = s.preset;
     if (p.dest) {
       // 航线预设的 id 就是「起点-终点」的 IATA 代码（hnd-cts）；认不出时按最近的机场（起点在爬升结束处，离机场几十公里）
@@ -262,17 +290,153 @@ export class Director {
     this.beginLeg(leg, { lat, lon, name: `当前位置 → ${to.name}` });
   }
 
-  /** 到达终点上空（flight.ts 的 onReachDest）：接下一段。不管连续航程开没开都接力，不再瞬移回起点 */
+  /** 到达终点上空（flight.ts 的 onReachDest）：接下一段。不管连续航程开没开都接力，不再瞬移回起点。
+   *  T49：优先用预先挑好的「继续向前」的一段（飞机已按转弯半径提前开始转）；要掉头超过 90° 时排进遮挡队列（leg-turn）。
+   *  直飞（direct）到达时转入等待航线；手动航向 / 盘旋时不接力 */
   relay() {
+    const ap = this.ap;
+    if (ap.mode === "direct") {
+      startHold(this.host.state);
+      return;
+    }
+    if (ap.mode !== "route") return;
+    const s = this.host.state;
     const cur = this.leg?.to ?? nearestAirport(...this.host.geo()).airport;
     this.markVisit(cur);
-    const next = pickNextLeg(cur, this.leg?.from ?? null, this.visits);
+    const next = this.nextLeg && this.nextLeg.from.code === cur.code ? this.nextLeg : pickNextLeg(cur, this.leg?.from ?? null, this.visits, Math.random, s.heading);
+    this.nextLeg = null;
+    ap.nextCourse = null;
     this.beginLeg(next);
+    const [lat, lon] = this.host.geo();
+    const turn = Math.abs(((greatCircleBearing(lat, lon, next.to.lat, next.to.lon) - s.heading + 540) % 360) - 180);
+    // 1× 时直接照常转（25° 坡度约 3 分钟掉头，真实客机就是这样）；只有时间加速时才借遮挡，免得几秒内原地掉头
+    if (turn > BIG_TURN_DEG && ap.timeScale > 1) this.queueBigTurn();
   }
 
-  private markVisit(a: Airport) {
-    this.visits.set(a.code, (this.visits.get(a.code) ?? 0) + 1);
-    this.visits.set(a.region, (this.visits.get(a.region) ?? 0) + 1);
+  /** 调试（T49）：立即触发「到达」——航线模式接下一段（与真实到达走同一条路，包括大角度掉头的遮挡排队），直飞模式转入盘旋 */
+  forceArrive() {
+    this.relay();
+  }
+
+  /** 大角度掉头借遮挡：机翼改平继续直飞；穿云持续 1 秒时在云里直接换到新航向（窗外一片白，看不到转动），
+   *  入夜时照常转（夜里地平线几乎看不见），等 BIG_TURN_WAIT_S 模拟秒仍没有遮挡就照常转弯 */
+  private queueBigTurn() {
+    const s = this.host.state;
+    const ap = this.ap;
+    const sim0 = this.simClock;
+    const real0 = this.realTime;
+    ap.holdCourse = true;
+    this.request({
+      id: "leg-turn",
+      covers: ["cloud", "night"],
+      minCoverS: 1.0,
+      force: () => this.simClock - sim0 > BIG_TURN_WAIT_S || this.realTime - real0 > BIG_TURN_WAIT_REAL_S,
+      run: (how) => {
+        ap.holdCourse = false;
+        if (how === "cloud" && s.preset.dest) {
+          const [lat, lon] = this.host.geo();
+          s.heading = greatCircleBearing(lat, lon, s.preset.dest[0], s.preset.dest[1]);
+          s.bankDeg = 0;
+          this.prevHeading = s.heading; // 遮挡下的换向不算进转弯率遥测
+        }
+      },
+    });
+  }
+
+  /** 撤掉自动接力的中间状态（预挑的下一段、排队中的掉头、等待航线） */
+  private clearNav() {
+    const ap = this.ap;
+    this.cancel("leg-turn");
+    ap.holdCourse = false;
+    ap.nextCourse = null;
+    ap.hold = null;
+    ap.turnDir = 0;
+    this.nextLeg = null;
+  }
+
+  // ---------- 手动导航（T49）：用户的指令立即执行，不借遮挡延迟 ----------
+
+  /** 手动航向：飞到 deg 后保持。dir 指定转向方向（-1 左、1 右、0 最短） */
+  setHeading(deg: number, dir: -1 | 0 | 1 = 0) {
+    this.holdAltitude();
+    this.clearNav();
+    const ap = this.ap;
+    ap.mode = "heading";
+    ap.selHeading = ((deg % 360) + 360) % 360;
+    ap.turnDir = dir;
+  }
+
+  /** 在「还要转多少」的基础上再转 delta 度（左负右正）：连按左转会一直往左累计，超过 180° 也不会掉头改向右转 */
+  turnBy(delta: number) {
+    const s = this.host.state;
+    const ap = this.ap;
+    let remaining = 0;
+    if (ap.mode === "heading") {
+      remaining = ((ap.selHeading - s.heading + 540) % 360) - 180;
+      if (ap.turnDir !== 0 && Math.sign(remaining) !== ap.turnDir && Math.abs(remaining) > 5) remaining += 360 * ap.turnDir;
+    }
+    remaining = THREE.MathUtils.clamp(remaining + delta, -359, 359);
+    this.setHeading(s.heading + remaining, remaining === 0 ? 0 : (Math.sign(remaining) as -1 | 1));
+  }
+
+  /** 盘旋：以当前位置为等待点，飞跑道形等待航线（转弯朝乘客这一侧，见 flight.ts 的 startHold） */
+  hold() {
+    this.holdAltitude();
+    this.clearNav();
+    startHold(this.host.state);
+  }
+
+  /** 从自动航线 / 直飞切到手动航向或盘旋时，高度就停在此刻（航段剖面暂停；否则会接着执行下降段的目标高度一路降到 3 km）。
+   *  不开连续航程时高度本来就不归导演管（面板的飞行阶段按钮设的目标照旧） */
+  private holdAltitude() {
+    const ap = this.ap;
+    if (!this.active || !(ap.mode === "route" || ap.mode === "direct")) return;
+    const s = this.host.state;
+    s.targetAltKm = s.altitudeKm;
+  }
+
+  /** 直飞某个机场（routes.ts 的 AIRPORTS）：从当前位置沿大圆飞过去，到达后在它上空盘旋。连续航程开着时照常走爬升—巡航—下降剖面 */
+  directTo(code: string) {
+    const to = AIRPORTS[code];
+    if (!to) return;
+    this.clearNav();
+    const s = this.host.state;
+    const [lat, lon] = this.host.geo();
+    const here: Airport = { ...nearestAirport(lat, lon).airport };
+    const leg = makeLeg(here, to);
+    leg.distKm = haversineKm(lat, lon, to.lat, to.lon);
+    leg.cruiseKm = Math.max(s.targetAltKm, 7.6);
+    this.beginLeg(leg, { lat, lon, name: `当前位置 → ${to.name}（直飞）` });
+    this.ap.mode = "direct";
+    if (leg.distKm < ARRIVE_KM) startHold(s);
+  }
+
+  /** 回到自动航线：有航段就继续飞它的终点（可能要转一个大弯——这是用户的指令，立即转）；没有航段而连续航程开着时接入航线网 */
+  resumeRoute() {
+    this.clearNav();
+    this.ap.mode = "route";
+    const s = this.host.state;
+    if (this.leg && s.preset.dest) {
+      this.phase = s.altitudeKm < this.leg.cruiseKm - 0.2 ? "climb" : "cruise";
+    } else if (this.active) this.joinNetwork();
+  }
+
+  /** 离终点 PREVIEW_KM 内预先挑好下一段（给提前转弯用）：按到达时的航向优先挑继续向前的 */
+  private previewNext(lat: number, lon: number) {
+    const ap = this.ap;
+    const leg = this.leg;
+    if (ap.mode !== "route" || !leg || this.nextLeg || !this.host.state.preset.dest) return;
+    if (haversineKm(lat, lon, leg.to.lat, leg.to.lon) > PREVIEW_KM) return;
+    const inbound = (greatCircleBearing(leg.to.lat, leg.to.lon, lat, lon) + 180) % 360;
+    const visits = new Map(this.visits);
+    this.markVisit(leg.to, visits);
+    this.nextLeg = pickNextLeg(leg.to, leg.from, visits, Math.random, inbound);
+    ap.nextCourse = this.nextLeg.bearing;
+  }
+
+  private markVisit(a: Airport, visits = this.visits) {
+    visits.set(a.code, (visits.get(a.code) ?? 0) + 1);
+    visits.set(a.region, (visits.get(a.region) ?? 0) + 1);
   }
 
   private beginLeg(leg: Leg, origin?: { lat: number; lon: number; name: string }) {
@@ -312,6 +476,8 @@ export class Director {
     const s = this.host.state;
     const leg = this.leg;
     if (!leg) return;
+    // 手动航向 / 盘旋（T49）：不按航段剖面爬升下降，高度保持（直飞到达后的盘旋就停在到达高度，看得清下面的城市）
+    if (this.ap.mode === "heading" || this.ap.mode === "hold") return;
     const dist = haversineKm(lat, lon, leg.to.lat, leg.to.lon);
     const descentKm = ((leg.cruiseKm - ARRIVAL_ALT_KM) / DESCENT_RATE_KMS) * ((speedAt(leg.cruiseKm) + speedAt(ARRIVAL_ALT_KM)) / 2) + ARRIVE_KM + 15;
     if (this.phase !== "descent" && dist < descentKm) this.phase = "descent";
@@ -350,8 +516,10 @@ export class Director {
   /** 每帧调用（advanceFlight 之后）：dtReal 真实秒，simDt 模拟秒，speedKms 地速 */
   update(dtReal: number, simDt: number, speedKms: number) {
     this.realTime += dtReal;
+    this.simClock += simDt;
     const [lat, lon] = this.host.geo();
     this.recordContinuity(lat, lon, simDt, speedKms);
+    this.previewNext(lat, lon);
     this.updateCovers();
     if (!this.active) return;
     this.updateProfile(lat, lon);
@@ -381,10 +549,28 @@ export class Director {
 
   /** 面板信息栏的一行 */
   describe(): string {
-    if (!this.leg) return "";
+    const nav = this.describeNav();
+    if (!this.leg) return nav;
     const l = this.leg;
     const phase = { climb: "爬升", cruise: "巡航", descent: "下降" }[this.phase];
-    return `航段 ${l.from.code} → ${l.to.code}（${l.from.name} → ${l.to.name}，${Math.round(l.distKm)} km）` + (this.active ? `，${phase}，${this.rate}×；${this.weather.describe()}` : "");
+    const legLine = `航段 ${l.from.code} → ${l.to.code}（${l.from.name} → ${l.to.name}，${Math.round(l.distKm)} km）` + (this.active ? `，${phase}，${this.rate}×；${this.weather.describe()}` : "");
+    return nav ? `${nav}\n${legLine}` : legLine;
+  }
+
+  /** 导航方式的一行（T49）：沿航线且没有排队中的掉头时不显示，保持原来的信息栏 */
+  describeNav(): string {
+    const ap = this.ap;
+    const h = ap.hold;
+    switch (ap.mode) {
+      case "heading":
+        return `手动航向 ${Math.round(ap.selHeading)}°` + (ap.turnDir ? `（${ap.turnDir < 0 ? "向左" : "向右"}转）` : "");
+      case "hold":
+        return `盘旋等待（${h?.dir === -1 ? "左" : "右"}转跑道形，${h ? { "turn-out": "转向出航边", outbound: "出航边", "turn-in": "转向入航边", inbound: "入航边" }[h.phase] : ""}）`;
+      case "direct":
+        return `直飞 ${this.leg?.to.name ?? ""}，到达后盘旋`;
+      default:
+        return ap.holdCourse ? "接下一段：要掉头，等穿云或入夜再转" : "";
+    }
   }
 }
 
