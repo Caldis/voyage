@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | C09 | 第 7 波（云锐度，用户需求） | 5209 | worktree | Opus（逆光银边：backlit-close 场景 + 银边指标，比较前向峰加宽瓣 / 受光首步缩短；必审） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
-| G06 | 第 7 波（飞机地面） | 5206 | worktree | Opus（clipmap 地面纹理精度 + mipmap / 各向异性：巡航纹素 / 屏幕像素比 ~3 → 1–1.5；先实验比较方案；必审） | — | 进行中 |
+| G06 | 第 7 波（飞机地面） | 5206 | `worktree-agent-a1c121a158e5469bd`（cc0ec6b） | Opus | 审查中（重点：夜间道路爬行 +21%、首次加载 13→34 s、显存 ~315 MB） | 已交付：纹素 / 屏幕像素 2.4–2.95 → 1.2–1.47 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
 
