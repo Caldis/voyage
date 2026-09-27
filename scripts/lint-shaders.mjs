@@ -79,7 +79,7 @@ function capturingPass() {
 
 // ---------- 枚举全部程序 ----------
 
-export async function collectPrograms(server) {
+export async function collectPrograms(server, opts = {}) {
   const programs = [];
   const add = (id, mat) => {
     if (!mat || typeof mat.fragmentShader !== "string") throw new Error(`${id}：拿到的不是一个 ShaderMaterial`);
@@ -118,14 +118,32 @@ export async function collectPrograms(server) {
     const m = await server.ssrLoadModule("/src/clouds/clouds.ts");
     const { pass } = capturingPass();
     const clouds = new m.Clouds(pass, deepMock(), {}, {});
+    // 带 three defines 的材质（变体）：把 defines 补成源码开头的 #define（three 在运行时注入，这里没有 renderer）
+    const addDef = (id, mat) => {
+      const defs = Object.entries(mat.defines ?? {}).map(([k, v]) => `#define ${k} ${v}\n`).join("");
+      programs.push({ id, fragmentShader: defs + mat.fragmentShader, vertexShader: mat.vertexShader });
+    };
+    // PERF-10：云步进按天气拆成变体（默认程序不含雷暴 / 台风代码）。键：W 奇观层、C 卷云、S 雷暴、T 台风（见 clouds.ts 的 MARCH_FEATURES）
+    const march = (key) => clouds.marchVariant(key).mat;
     add("cloud-march", clouds.marchMat);
-    add("cloud-occupancy", clouds.occMat);
+    addDef("cloud-march-storm", march("S"));
+    addDef("cloud-march-typhoon", march("T"));
+    addDef("cloud-march-severe", march("ST"));
+    // 占据网格只有天气版；云影图 / 探针各有默认版和天气版
+    addDef("cloud-occupancy", clouds.occMat);
     add("cloud-shadow-map", clouds.shadowMat);
+    addDef("cloud-shadow-map-weather", clouds.shadowWeatherMat);
     add("cloud-probe", clouds.probeMat);
+    addDef("cloud-probe-weather", clouds.probeWeatherMat);
     // 奇观云间层（W00）：步进变体 + 奇观表面 pass；W00_PROBE=1 时连测试体一起校验
-    programs.push({ id: "cloud-march-wonder", fragmentShader: "#define WONDER_LAYER 1\n#define CLOUD_CIRRUS 1\n" + clouds.marchWonderMat.fragmentShader, vertexShader: clouds.marchWonderMat.vertexShader });
+    addDef("cloud-march-wonder", clouds.marchWonderMat);
     // 卷云变体（T12）
-    programs.push({ id: "cloud-march-cirrus", fragmentShader: "#define CLOUD_CIRRUS 1\n" + clouds.marchCirrusMat.fragmentShader, vertexShader: clouds.marchCirrusMat.vertexShader });
+    addDef("cloud-march-cirrus", clouds.marchCirrusMat);
+    // 其余按需组合（卷云 / 奇观 × 天气）：只在真的出现时才编，离线只做语法检查（opts.allCloudCombos，check:glsl 用；
+    // shader-budget 不传，免得一轮离线 FXC 多出十来个十几秒的程序）
+    if (opts.allCloudCombos) {
+      for (const key of ["CS", "CT", "CST", "WCS", "WCT", "WCST"]) addDef(`cloud-march-${key}`, march(key));
+    }
     add("wonder-layer", clouds.wonderSurfMat);
     add("cloud-resolve", clouds.resolveMat);
   }
@@ -686,7 +704,7 @@ async function main() {
   const server = await createServer({ root: VOYAGE_ROOT, server: { middlewareMode: true }, appType: "custom", logLevel: "error" });
   let programs;
   try {
-    programs = await collectPrograms(server);
+    programs = await collectPrograms(server, { allCloudCombos: true });
   } finally {
     await server.close();
   }

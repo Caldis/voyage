@@ -150,6 +150,9 @@ export async function applyScene(arg) {
   const wantClass = sc.p["cabin-class"] ?? "business";
   for (let i = 0; i < 480 && v.cabinClass && v.cabinClass.shown !== wantClass; i++) await new Promise((r) => setTimeout(r, 250));
   const jsOut = sc.js ? await new (async () => {}).constructor("v", sc.js)(v) : undefined;
+  // 云步进变体（PERF-10）：雷暴 / 台风 / 卷云 / 奇观及其组合第一次需要时在后台编译，编好之前画的是替代的变体（天气系统暂时不画）；
+  // 等它编好再截图（最多 120 s；老版本没有 cloudVariantPending 就不等）。放在 js 之后：奇观是在 js 里召唤的
+  for (let i = 0; i < 480 && v.clouds && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250));
   v.snapAll();
   await new Promise((r) => setTimeout(r, sc.wait ?? 2500));
   const info = document.getElementById("info").textContent;

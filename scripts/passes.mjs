@@ -110,8 +110,12 @@ function installTimer() {
     if (mat === v.wingMat) return "机翼";
     if (v.clouds.marchMat && mat === v.clouds.marchMat) return "云步进";
     if (v.clouds.marchWonderMat && mat === v.clouds.marchWonderMat) return "云步进(奇观变体)";
+    // PERF-10：雷暴 / 台风 / 卷云等步进变体（材质名 cloud-march-<键>）照旧算「云步进」，和改动前的单一程序可比；
+    // 带奇观层的（键含 W）归「云步进(奇观变体)」
+    if (typeof mat.name === "string" && mat.name.startsWith("cloud-march-")) return mat.name.includes("W", 12) ? "云步进(奇观变体)" : "云步进";
     if (v.clouds.resolveMat && mat === v.clouds.resolveMat) return "云resolve";
     if (v.clouds.shadowMat && mat === v.clouds.shadowMat) return "云影图";
+    if (v.clouds.shadowWeatherMat && mat === v.clouds.shadowWeatherMat) return "云影图";
     if (v.clouds.wonderSurfMat && mat === v.clouds.wonderSurfMat) return "奇观表面";
     if (v.exposure.meterMat && mat === v.exposure.meterMat) return "测光";
     if (v.exposure.adaptMat && mat === v.exposure.adaptMat) return "曝光适应";

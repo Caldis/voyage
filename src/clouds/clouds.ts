@@ -20,7 +20,9 @@ import type { CloudNoise } from "./noise";
 const MARCH_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
 ${VIEW_COMMON}
+#ifdef CLOUD_WEATHER
 #define CLOUD_OCC 1
+#endif
 ${CLOUD_COMMON}
 ${LIGHTS_COMMON}
 #ifdef WONDER_LAYER
@@ -43,6 +45,7 @@ float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00
 const bool SOFT_SKIP = true;
 const float SOFT_THIN_OD = 0.5;
 
+#ifdef CLOUD_TYPHOON
 // 眼里逆光看眼壁时额外压掉的空气透视内散射比例（美术取向，见 main 里的说明）
 const float HUR_BACKLIT_AP_CUT = 0.5;
 
@@ -118,7 +121,9 @@ vec3 hurricaneShadowedInscatter(vec3 ro, vec3 rd, float depth, vec3 full) {
   }
   return acc;
 }
+#endif
 
+#ifdef CLOUD_WEATHER
 // 视线段 [t0, t1] 的水平投影离世界坐标 c（km）最近多远。视线从相机出发（ro.xz = 0），水平投影 = rd.xz · t，是一条直线
 float cloudRayDist2D(vec3 rd, vec2 seg, vec2 c) {
   vec2 rel = c - uCloudOffset;
@@ -131,25 +136,46 @@ float cloudRayDist2D(vec3 rd, vec2 seg, vec2 c) {
 // 以前只要场上有雷暴 / 台风，所有像素都走「天气模式」（256 步、8 步不展开的受光步进、逐点查天气），
 // 雷暴在几百公里外、甚至在身后也要多 1–1.2 ms/帧（T19b 报告），与距离无关
 const float WEATHER_LIGHT_REACH = 15.0;
+// 天气变体（PERF-10）只认自己带的那种天气：雷暴变体里的台风、台风变体里的雷暴当作不存在（编好对应变体之前的过渡，见 clouds.ts）
+// （函数体里分 #ifdef，不写两份同名函数：check:glsl 的重名检查不展开条件编译）
+bool cloudStormsOn() {
+#ifdef CLOUD_STORM
+  return uStormCount > 0;
+#else
+  return false;
+#endif
+}
+bool cloudHurOn() {
+#ifdef CLOUD_TYPHOON
+  return uHurricane.w > 0.5;
+#else
+  return false;
+#endif
+}
 bvec2 cloudRayNearWeather(vec3 rd, vec2 seg) {
   bool nearAny = false;
+#ifdef CLOUD_STORM
   for (int i = 0; i < uStormCount; i++) {
     vec4 c = uStorms[i];
     if (cloudRayDist2D(rd, seg, c.xy) < c.z * 7.5 + WEATHER_LIGHT_REACH) nearAny = true;
   }
-  bool nearHur = uHurricane.w > 0.5 && cloudRayDist2D(rd, seg, uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
+#endif
+  bool nearHur = cloudHurOn() && cloudRayDist2D(rd, seg, uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
   return bvec2(nearAny || nearHur, nearHur);
 }
 // 同样的判断，对一个点（世界坐标 xz）：受光步进按采样点选路径。只按视线选的话，视线够得着的那片像素里
 // 离雷暴很远的普通云也走雷暴的受光步进（8 步、15 km），和旁边够不着的像素差一点，包围圆柱的轮廓会在普通云上露出一条缝
 bool cloudPointNearWeather(vec2 xz) {
-  bool nearAny = uHurricane.w > 0.5 && length(xz - uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
+  bool nearAny = cloudHurOn() && length(xz - uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
+#ifdef CLOUD_STORM
   for (int i = 0; i < uStormCount; i++) {
     vec4 c = uStorms[i];
     if (length(xz - c.xy) < c.z * 7.5 + WEATHER_LIGHT_REACH) nearAny = true;
   }
+#endif
   return nearAny;
 }
+#endif
 
 float hg(float c, float g) {
   float g2 = g * g;
@@ -192,16 +218,29 @@ void main() {
     if (!hasW) return;
     seg = NO_SEG;
   }
-  bvec2 nearW = !cloudsHere ? bvec2(false) : uWeatherCull > 0.5 ? cloudRayNearWeather(rd, seg) : bvec2(uStormCount > 0 || uHurricane.w > 0.5, uHurricane.w > 0.5);
+#ifdef CLOUD_WEATHER
+  bvec2 nearW = !cloudsHere ? bvec2(false) : uWeatherCull > 0.5 ? cloudRayNearWeather(rd, seg) : bvec2(cloudStormsOn() || cloudHurOn(), cloudHurOn());
+#else
+  const bvec2 nearW = bvec2(false);
+#endif
 #else
   vec2 seg = cloudShellInterval(ro, rd);
   seg.y = min(seg.y, AERIAL_MAX_DISTANCE);
   if (seg.y <= seg.x) return;
+#ifdef CLOUD_WEATHER
   // 这条视线够不着雷暴 / 台风：整条按普通云走（T33）。uWeatherCull = 0 时关掉（对照用）
-  bvec2 nearW = uWeatherCull > 0.5 ? cloudRayNearWeather(rd, seg) : bvec2(uStormCount > 0 || uHurricane.w > 0.5, uHurricane.w > 0.5);
+  bvec2 nearW = uWeatherCull > 0.5 ? cloudRayNearWeather(rd, seg) : bvec2(cloudStormsOn() || cloudHurOn(), cloudHurOn());
+#else
+  // 默认程序（PERF-10）：没有雷暴 / 台风代码，所有视线都按普通云走
+  const bvec2 nearW = bvec2(false);
 #endif
+#endif
+#ifdef CLOUD_WEATHER
   gWeatherOn = nearW.x;
+#endif
+#ifdef CLOUD_TYPHOON
   bool nearHur = nearW.y;
+#endif
   // 够不着时只走层状云自己的高度范围：有雷暴 / 台风时外壳被撑到 0–15 km（台风 0.5–20.5 km），巡航高度就在壳里，
   // 近水平的视线要空走几百公里（这是远处雷暴开销的大头）
 #ifdef WONDER_LAYER
@@ -240,21 +279,28 @@ void main() {
   // 否则远处步长几百米、云的消光又高（60 /km），第一个采样点可能已经在云里几百米深处，
   // 被阳光照亮的那层表面被跳过，受光面发灰、菜花状的隆起也看不出来
   // 台风的眼壁同理（远处的眼壁表面同样会被大步长跳过）
+  bool wasEmpty = true;
+#ifdef CLOUD_WEATHER
   bool refineOn = nearW.x;
   int fine = 0;
   float fineDt = 0.03;
-  bool wasEmpty = true;
   bool wasThin = false;       // 上一个采样点是稀薄的软边冰晶云（下一步走 2 倍步长，见 SOFT_SKIP）
-  float hurVis = 1.0;         // 台风长影的缓存（见下）
-  float hurVisT = -1e9;
   float lastEmpty = seg.x;   // 最近一个空白采样点的位置：表面一定在它和第一个有云的采样点之间
   // 闪电放电通道（线段）：两端换到相机坐标
   vec3 fA = vec3(uFlash.x - uCloudOffset.x, BOTTOM + uFlash.y, uFlash.z - uCloudOffset.y);
   vec3 fAB = vec3(uFlashB.x - uCloudOffset.x, BOTTOM + uFlashB.y, uFlashB.z - uCloudOffset.y) - fA;
   float flashI = uFlash.w / (1.0 + 0.25 * length(fAB)); // 总能量摊到整条通道上
+#endif
+#ifdef CLOUD_TYPHOON
+  float hurVis = 1.0;         // 台风长影的缓存（见下）
+  float hurVisT = -1e9;
+#endif
+#ifdef CLOUD_WEATHER
   // 下方（海面 / 低云）反射上来的光的反照率：有低云时明显更亮
   // 台风眼里脚下是眼底的云，不是海面（晴天取 0.35），再按眼底受光的比例打折（见下）
   float albedoBelow = 0.06 + 0.5 * uCoverage;
+#endif
+#ifdef CLOUD_TYPHOON
   if (nearHur) {
     // 反射光来自眼底和对面的眼壁，随受光几何变：太阳低的时候眼底大半在向阳一侧眼壁的影子里（「井底」），
     // 反射光跟着变弱，背光的眼壁不再被统一提亮到天空的亮度（T26）。取眼底中心和沿太阳方位前后各一点的平均
@@ -267,6 +313,7 @@ void main() {
     }
     albedoBelow = 0.35 * mix(0.25, 1.0, fv / 3.0);
   }
+#endif
   // 次数上限：从相机空步走到 60 km 外本身就要约 190 步，细化还要额外的步数（每进一次云 9 步）。
   // 雷暴 / 台风时 448（原来 256）：台风外围在卷云盖下面近水平地看出去，稀薄的卷云盖采样点不走 2 倍步长、
   // 一路上的塔还要细化，走到约 100 km 就用完 256 步；在哪一步用完随每像素的抖动变，远处的塔成了一格一格的
@@ -274,17 +321,27 @@ void main() {
   // 关掉网格照旧）。只有用完预算的那些像素会多走，typhoon-outer 云步进 +0.2 ms（约 5%）
   for (int i = 0; i < 448; i++) {
     // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）
+#ifdef CLOUD_WEATHER
     if (t >= seg.y || T < 0.005 || (!refineOn && i >= 192)) break;
+#else
+    if (t >= seg.y || T < 0.005 || i >= 192) break;
+#endif
     // 步长随距离变长：近处 60 m，远处 2 km
     float dtBase = clamp(t * 0.008, 0.06, 2.0);
-    float dt = fine > 0 ? fineDt : dtBase;
     // 这一步代表的区间长度：空白处走 2 倍步长。抖动必须覆盖整个区间——旧版只抖动 dt、却走 2dt，
     // 每个区间的后一半永远采不到，远处的薄云被「同心球壳」切成一条条水平细纹（T13）
+#ifdef CLOUD_WEATHER
+    float dt = fine > 0 ? fineDt : dtBase;
     float stepLen = (fine > 0 || (!wasEmpty && !wasThin)) ? dt : 2.0 * dt;
+#else
+    float dt = dtBase;
+    float stepLen = wasEmpty ? 2.0 * dt : dt;
+#endif
     vec3 p = ro + rd * (t + stepLen * jitter);
     float lod = clamp(log2(dtBase / 0.055), 0.0, 5.0);
     gDetailRnd = fract(jitter + float(i) * 0.6180339);   // 细节噪声随机平铺给受光步进挑格点用（T32），每步、每帧都换
     float dens = cloudDensity(p, lod, t < 150.0);
+#ifdef CLOUD_WEATHER
     float stormW = gStormW;
     float stormAO = gStormAO;
     bool soft = SOFT_SKIP && gStormSoft > 0.5;
@@ -303,6 +360,7 @@ void main() {
       continue;
     }
     if (fine > 0) fine--;
+#endif
 #ifdef WONDER_LAYER
     // 奇观层在这一步的采样点之前：先插进去（它前面的云已经累积过，这一步和之后的云在它后面）
     if (wPending && t + stepLen * jitter >= tW) {
@@ -316,7 +374,9 @@ void main() {
 #endif
     if (dens > 0.002) {
       wasEmpty = false;
+#ifdef CLOUD_WEATHER
       wasThin = soft && dens * CLOUD_EXTINCTION * dt < SOFT_THIN_OD;
+#endif
       float sigma = dens * CLOUD_EXTINCTION;
       float r = length(p);
       vec3 up = p / r;
@@ -325,14 +385,17 @@ void main() {
       float od = 0.0;
       float ls = 0.06;
       float lt = 0.0;
-      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;
       // 受光步进的细节噪声只沿用上面那一点随机挑中的一个随机平铺格点（见 clouds.glsl.ts 的 gDetailLight，T32）
       gDetailLight = true;
+#ifdef CLOUD_WEATHER
+      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;
       if (gStormSoft > 1.5) {
         // 台风卷云盖（T44）：外围变薄以后视线要在它里面走很长一段，每个采样点都走 8 步受光步进太贵（typhoon-bands 云步进 +2 ms）。
         // 它上面只有天，朝太阳的光学厚度 ≈ 本点消光 × 到卷云盖顶（约 15 km）的斜程的一半（密度往上变淡）
         od = dens * 0.5 * clamp(15.0 - (r - BOTTOM), 0.2, 3.0) / max(uKeyDir.y, 0.1);
-      } else if (lightSteps == 6) {
+      } else if (lightSteps == 6)
+#endif
+      {
         // 普通云（没有雷暴、台风）：只有层状云，常量上界，编译器展开后最快（和改动前一致）。
         // 这里只能调用层状云密度：展开的每一份都带上雷暴密度的话，冷编译会从 55 s 涨到 90 s
         for (int j = 0; j < 6; j++) {
@@ -340,7 +403,9 @@ void main() {
           od += layerDensity(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3) * ls;
           ls *= 1.9;
         }
-      } else {
+      }
+#ifdef CLOUD_WEATHER
+      else {
         // 雷暴 / 台风：上界依赖 uniform，FXC 不展开（展开成 8 份雷暴密度时冷编译很慢）
         for (int j = 0; j < lightSteps; j++) {
           lt += ls;
@@ -351,8 +416,9 @@ void main() {
           ls *= 2.0;
         }
       }
-      gDetailLight = false;
       gLightLen = 0.0;
+#endif
+      gDetailLight = false;
       od *= CLOUD_EXTINCTION;
       // 多次散射近似（Wrenninge 2013）：每一阶散射更弱、衰减更慢、相函数更平。
       // 原来只取 4 阶、权重每阶折半，顺光（背散射）时厚云的有效反照率只有 ~0.3，真实厚云是 0.7–0.8，
@@ -363,7 +429,11 @@ void main() {
       float sunScatter = 0.6 * hg(cosT, 0.9) * exp(-0.25 * od);
       float a = 1.0, b = 1.0, c = 1.0;
       // 雷暴的光学厚度大得多（几百），高阶散射占比更高、整体反照率更接近 1：高阶权重衰减得更慢
+#ifdef CLOUD_WEATHER
       float aDecay = stormW > 0.5 ? 0.7 : 0.62;
+#else
+      float aDecay = 0.62;
+#endif
       for (int k = 0; k < 6; k++) {
         float phase = mix(hg(cosT, -0.25 * c), hg(cosT, 0.8 * c), 0.7);
         sunScatter += a * phase * exp(-b * od);
@@ -382,21 +452,31 @@ void main() {
       // 上亮下暗，「体育场」的碗形靠这个读出来
       // 只在眼和眼壁附近算（外围雨带头顶的卷云盖由受光步进负责，这里再算一遍会重复压暗）
       // 长影在空间上变化很慢（半影几公里）：同一条视线上离上次求值不到 2 km 就沿用，省掉大部分求值（帧时间）
+#ifdef CLOUD_TYPHOON
       if (uHurricane.w > 0.5 && stormW > 0.5 && length(p.xz + uCloudOffset - uHurricane.xy) < uHurricane.z * 3.5) {
         if (abs(t - hurVisT) > 2.0) { hurVis = hurricaneSunVis(p, uKeyDir, 3.0); hurVisT = t; }
         sunLight *= hurVis;
       }
+#endif
       // 环境光：上半球的天空光，云顶亮、云底暗
       // 云顶亮、云底暗的归一化：雷暴 / 台风按整个外壳，普通云按它自己那一层（T33：以前场上一有雷暴，
       // 外壳被撑到 0–15 km，远处普通积云的 h01 只剩 0.1–0.2，整体被压暗）
+#ifdef CLOUD_WEATHER
       float h01 = stormW > 0.5 ? clamp((r - BOTTOM - uShellBottom) / (uShellTop - uShellBottom), 0.0, 1.0)
                                : clamp((r - BOTTOM - uCloudBottom) / max(uCloudTop - uCloudBottom, 1e-3), 0.0, 1.0);
+#else
+      float h01 = clamp((r - BOTTOM - uCloudBottom) / max(uCloudTop - uCloudBottom, 1e-3), 0.0, 1.0);
+#endif
       vec3 eSky = skyIrradiance(r, up);
       float ambFloor = 0.12;
 #ifdef CLOUD_CIRRUS
       // 卷云（T12）：薄冰晶云光学厚度只有零点几到几，底下照样看得到大半个天，不按厚云的「云底只剩 12%」压暗
-      if (stormW < 0.5) ambFloor = mix(0.12, 0.6, 1.0 - smoothstep(0.0, 0.2, uCloudType));
+#ifdef CLOUD_WEATHER
+      if (stormW < 0.5)
 #endif
+      ambFloor = mix(0.12, 0.6, 1.0 - smoothstep(0.0, 0.2, uCloudType));
+#endif
+#ifdef CLOUD_TYPHOON
       if (nearHur && stormW > 0.5) {
         // 台风眼外的雨带塔（T38，T44 遗留）：「按整个外壳高度（0–20 km）压暗、底部只剩 12%」是给眼壁下部（井底，只看得到头顶一块天）的。
         // 雨带上一座 3 km 高处的塔身，周围是开阔的天和被照亮的裙边云，却被压到约 35%，再乘隆起遮蔽，
@@ -406,6 +486,7 @@ void main() {
         h01 = mix(h01, clamp((r - BOTTOM) / 10.0, 0.0, 1.0), outK);
         ambFloor = mix(ambFloor, 0.4, outK);
       }
+#endif
       vec3 ambient = eSky / (2.0 * M_PI) * mix(ambFloor, 1.0, pow(h01, 0.7));
       // 夜天光（T46）：skyIrradiance 只有太阳、月亮两路 LUT，没有气辉和星光；海面却经 skyRadiance 反射了它，
       // 无月夜云（≈ 0）成了比海还暗的纯黑剪影（美术总监 wave6 第 5 条：云 Y 9–12、海约 33）。
@@ -414,6 +495,7 @@ void main() {
       // 不能照搬上一行的 E/(2π) 和云底 0.12：那是白天的经验取值（按厚云反照率算少了 1.6 倍，云底再压到 0.12），
       // T41 实验只补物理量级的 E、套用这套系数时云几乎不变（仍比海暗约 5 倍）。白天这一项比天空光小 7–8 个数量级，不影响
       ambient += vec3(0.8, 1.0, 0.85) * (1.3e-6 * 0.8 / M_PI) * mix(0.35, 1.0, pow(h01, 0.7));
+#ifdef CLOUD_WEATHER
       if (stormW > 0.5) {
         // 雷暴：隆起之间的凹处、砧底、雨幡里看到的天空少（菜花状的明暗）；
         // 塔身下半截还被下方的海面 / 低云反射的光照着（中性的灰白，冲淡天空光的蓝）
@@ -421,11 +503,14 @@ void main() {
         // 台风眼外（T44）：脚下是海面和雨带的裙边低云，不是眼底的云（albedoBelow 按眼底受光算，太阳低时会很小）。
         // 取 0.25（海面 0.06 + 雨带裙边约三成覆盖）。试过取 0.17：塔身下半截失去下方反射光，读成一个深色的拱洞
         float albB = albedoBelow;
+#ifdef CLOUD_TYPHOON
         if (nearHur) albB = mix(albedoBelow, 0.25, smoothstep(uHurricane.z * 2.5, uHurricane.z * 4.0, length(p.xz + uCloudOffset - uHurricane.xy)));
+#endif
         vec3 eBelow = albB * keyLight(BOTTOM + 1.0, up) * max(dot(up, uKeyDir), 0.0);
         // 台风眼里，背光的眼壁对面就是被太阳直射的眼壁和眼底：反射光在各个高度都很强，不只是下半截
-        float hBelow = uHurricane.w > 0.5 ? 1.0 - 0.4 * h01 : 1.0 - h01;
+        float hBelow = cloudHurOn() ? 1.0 - 0.4 * h01 : 1.0 - h01;
         ambient += eBelow / (2.0 * M_PI) * 0.5 * hBelow * stormAO;
+#ifdef CLOUD_TYPHOON
         if (uHurricane.w > 0.5) {
           // 眼里的互相照亮：向阳一侧的眼壁（内表面背着太阳）对面就是被太阳直射的眼壁，占了它小半个视野，
           // 补光是中性的灰白。只按「内表面朝向」算：朝太阳的受光面对面是背光的暗壁，几乎没有补光。
@@ -436,8 +521,11 @@ void main() {
           float opp = smoothstep(-0.2, 0.6, away) * (1.0 - smoothstep(uHurricane.z * 2.2, uHurricane.z * 3.0, rc));
           ambient += keyLight(r, uKeyDir) * 0.035 * opp * mix(0.15, 1.0, stormAO) * smoothstep(0.02, 0.2, uKeyDir.y);
         }
+#endif
       }
+#endif
       vec3 S = sunLight + ambient;
+#ifdef CLOUD_WEATHER
       // 闪电：云里一段几公里长的放电通道，光在云里多次散射后向外扩散（扩散长度约 2 km），
       // 整团云从内部亮起来，离通道越远越暗。凹处（ao 小）被周围的云挡住，也暗一些
       if (uFlash.w > 0.0) {
@@ -447,6 +535,7 @@ void main() {
         // 强度按观感标定：白天只在通道附近隐约可见，夜里通道周围几公里亮起来、十公里外的云只被照亮一点
         S += vec3(0.8, 0.85, 1.0) * flashI * 0.005 * exp(-fd / 1.5) / (1.0 + fd * fd) * mix(1.0, stormAO, 0.5);
       }
+#endif
       float stepT = exp(-sigma * stepLen);
       // 云的反照率接近 1：散射系数 ≈ 消光系数，积分式里 σ 被约掉
       L += T * S * (1.0 - stepT);
@@ -457,8 +546,10 @@ void main() {
     } else {
       // 空白区域大步走（细化时仍用小步）
       wasEmpty = true;
+#ifdef CLOUD_WEATHER
       wasThin = false;
       lastEmpty = t + stepLen * jitter;
+#endif
       t += stepLen;
     }
   }
@@ -488,6 +579,7 @@ void main() {
   // 下午逆光看远处眼壁时，40 km 的空气透视内散射是眼壁自身亮度的约 10 倍（T26 实测：0.9/1.9/4.5 对 0.2/0.2/0.24），
   // 背光的眼壁整面被刷成天空蓝；而真实的眼里，靠近向阳一侧眼壁的空气正处在它的影子里。
   // 分段累加：L(0, b) − L(0, a) ≈ 段 [a, b] 的内散射（已含到相机的透射），乘这一段中点的受光比例
+#ifdef CLOUD_TYPHOON
   if (nearHur && uSunDir.y > 0.02) {
     apL = hurricaneShadowedInscatter(ro, rd, depth, apL);
     // 美术取向（有意偏离物理，T26 协调者 / 美术总监的要求）：物理上从 10.7 km 隔 40 km 看逆光的眼壁，空气透视
@@ -499,6 +591,7 @@ void main() {
     float toward = max(dot(normalize(rd.xz + vec2(1e-6)), normalize(uSunDir.xz + vec2(1e-6))), 0.0);
     apL *= 1.0 - HUR_BACKLIT_AP_CUT * inEye * toward * toward * (1.0 - smoothstep(0.35, 0.8, uSunDir.y));
   }
+#endif
   apL *= uSunIlluminance;
   // 夜天光的空气透视（T46）：LUT 只有太阳一路，夜里远处的云只剩「自身 × 透射率」（掠射几百公里、透射率偏红），
   // 读成比海面、地平线天空都暗的红褐色斑。远处的云应当和白天一样淡进地平线的天光：按同方向的夜天光补上 (1 − 透射率) 那部分。
@@ -559,6 +652,7 @@ uniform mat3 uPrevCamBasis;
 uniform mat3 uPrevCabinToWorld;
 uniform vec3 uMotion;
 uniform bool uReset;
+uniform bool uResetDepth;   // 右半（深度）这一帧从停用变回启用：右半不取历史（PERF-11）
 uniform vec2 uCloudResolution;
 varying vec2 vUv;
 // 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半是云的深度——窗外程序要拿它判断云在山前还是山后
@@ -569,11 +663,16 @@ void main() {
   vec2 texel = 1.0 / uCloudResolution;
   bool depthHalf = gl_FragCoord.x >= uCloudResolution.x;
   vec2 fc = gl_FragCoord.xy - vec2(depthHalf ? uCloudResolution.x : 0.0, 0.0);
+  vec3 rdC = cabinRay(fc * (uResolution / uCloudResolution));
+  // 窗板以外（PERF-11）：步进程序在 paneDistance > 0.02 处只写 (0, 0, 0, 1)、深度 1，右半折算出来也是 (0, 0, 0, 1)。
+  // 离窗板再远一点（0.025，比一个云像素在窗板平面上的尺寸大一个数量级）的像素，3×3 邻域全是 (0, 0, 0, 1)，
+  // 夹取后历史也被夹成它，结果恒为 (0, 0, 0, 1)——直接写出，不再读 9 + 9 次邻域（窗外只占画面的一部分）
+  if (paneDistance(uHead, rdC) > 0.025) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
   vec2 uv = fc * texel;
   float dCur = texture(uCurrentDepth, uv).r * CLOUD_DEPTH_SCALE;
   vec4 cur = texture(uCurrent, uv);
   if (depthHalf) cur = vec4(dCur * (1.0 - cur.a), 1.0 - cur.a, 0.0, 1.0);
-  if (uReset) { gl_FragColor = cur; return; }
+  if (uReset || (depthHalf && uResetDepth)) { gl_FragColor = cur; return; }
 
   vec4 mn = cur, mx = cur;
   for (int x = -1; x <= 1; x++)
@@ -585,7 +684,7 @@ void main() {
     mx = max(mx, s);
   }
 
-  vec3 rd = uCabinToWorld * cabinRay(fc * (uResolution / uCloudResolution));
+  vec3 rd = uCabinToWorld * rdC;
   vec3 prevDir = normalize(rd * dCur + uMotion);
   vec3 v = transpose(uPrevCamBasis) * (transpose(uPrevCabinToWorld) * prevDir);
   float blend = 0.12;
@@ -755,6 +854,8 @@ export function createCloudUniforms(noise: CloudNoise) {
     uCloudShadowMap: { value: null as THREE.Texture | null },
     uCloudShadowSun: { value: new THREE.Vector3(0, 1, 0) },
     uCloudShadowCenter: { value: new THREE.Vector3(0, 0, 0) },
+    // 云缓冲右半（深度）这一帧写了没有（PERF-11）：Clouds.render 每帧设，窗外程序的 cloudBufferDepth 读
+    uCloudDepthOn: { value: 0 },
   };
 }
 export type CloudUniforms = ReturnType<typeof createCloudUniforms>;
@@ -836,6 +937,36 @@ const OCC_RECENTER_KM = 24;
  */
 const OCC_LAYERS_PER_FRAME = 12;
 
+type VariantState = "idle" | "compiling" | "ready" | "failed";
+
+/**
+ * 云步进变体的特性（PERF-10），按这个顺序拼成变体键。weight：编好之前挑「已编好的子集」时的优先级
+ * （缺了台风 / 雷暴是整个天气系统没了，缺了卷云只是卷云画成普通层状云），W 奇观层必须带 C（W00 起奇观变体就带卷云）
+ */
+const MARCH_FEATURES = [
+  { id: "W", define: "WONDER_LAYER", weight: 2 },
+  { id: "C", define: "CLOUD_CIRRUS", weight: 1 },
+  { id: "S", define: "CLOUD_STORM", weight: 4 },
+  { id: "T", define: "CLOUD_TYPHOON", weight: 8 },
+] as const;
+
+/** 变体键 → three 的 defines；有 S 或 T 时另加 CLOUD_WEATHER（两者共用的代码，见 clouds.glsl.ts） */
+function marchDefines(key: string): Record<string, number> {
+  const d: Record<string, number> = {};
+  for (const f of MARCH_FEATURES) if (key.includes(f.id)) d[f.define] = 1;
+  if (key.includes("S") || key.includes("T")) d.CLOUD_WEATHER = 1;
+  return d;
+}
+
+/** 雷暴 + 台风都带的小程序（占据网格、云影图、探针的天气版）的 defines */
+const WEATHER_DEFINES = { CLOUD_STORM: 1, CLOUD_TYPHOON: 1, CLOUD_WEATHER: 1 };
+
+/** 启动后第几次 probe（每 4 帧一次）开始后台预编雷暴 / 台风变体：约 1–4 s，首帧早已画完 */
+const WEATHER_PREWARM_PROBES = 60;
+
+/** 云缓冲右半（深度，T38）只在附近有高于这个值（km）的真实地形时写（PERF-11）：海面、平原上云不可能在「地面后面」 */
+const DEPTH_TERRAIN_MIN_KM = 0.05;
+
 export class Clouds {
   private raw = rawTarget(1, 1);
   /** 云间层奇观的表面（W00，WONDER_SURF_FRAG 的输出，和 raw 同尺寸） */
@@ -861,16 +992,32 @@ export class Clouds {
    * 奇观代码就算分支不走也会让步进变慢（寄存器，W00 实测 noon-cumulus 云步进 0.35 → 0.44–0.73 ms），冷编译也不加。
    * 第一次需要时在后台编译（d3d11 约 10–15 s，有磁盘缓存后不到 1 s），编好之前奇观不画（云照常）
    */
-  private readonly marchWonderMat: THREE.ShaderMaterial;
+  // 下面两个字段 = marchVariants 里的 "WC" / "C"，留着给离线检查（lint-shaders）和按 pass 计时（passes.mjs）按名字取
+  readonly marchWonderMat: THREE.ShaderMaterial;
   /**
    * 卷云变体（T12）：加 #define CLOUD_CIRRUS，只在云型 < 0.2（卷云）时用它画。卷云的丝缕代码就算按 uniform 分支、平时不走，
    * 也让积云场景的云步进慢一档（noon-cumulus +25%、typhoon-bands +20%），所以和奇观一样做成变体。
    * 启动后第一次 probe 就在后台编译（不在启动的编译批次里，不拖冷启动），编好之前卷云按普通层状云画
    */
-  private readonly marchCirrusMat: THREE.ShaderMaterial;
-  private cirrusState: "idle" | "compiling" | "ready" | "failed" = "idle";
+  readonly marchCirrusMat: THREE.ShaderMaterial;
+  /**
+   * 云步进的全部变体（PERF-10），键是特性字母按固定顺序拼起来（见 MARCH_FEATURES）：W 奇观层、C 卷云、S 雷暴、T 台风；W 总带着 C。
+   * "" 是默认程序（晴天 / 普通云，不含任何雷暴 / 台风代码，启动批次里编），"C" / "WC" 就是上面两个字段。
+   * 雷暴 / 台风变体（"S"、"T"）在启动后不久后台预编（prewarmWeather）；其他组合（"ST"、"CS"、"WCS"……）只在真的需要时才编，
+   * 编好之前画「已编好的、特性最多的那个子集」（pickMarch），不会画空、不会同步编译卡住
+   */
+  private readonly marchVariants = new Map<string, { mat: THREE.ShaderMaterial; state: VariantState }>();
+  /** 这一帧想画的 / 实际画的步进变体键（调试、回归脚本等它编好：cloudVariantPending） */
+  private marchWanted = "";
+  private marchShown = "";
+  /** 云影图、探针的天气版（CLOUD_STORM + CLOUD_TYPHOON 都带，都是小程序），和占据网格一起在后台编（weatherAuxState） */
+  private readonly shadowWeatherMat: THREE.ShaderMaterial;
+  private readonly probeWeatherMat: THREE.ShaderMaterial;
+  private weatherAuxState: VariantState = "idle";
+  /** 启动后第几次 probe 开始预编雷暴 / 台风变体（首帧之后，不和首帧的同步编译抢线程） */
+  private prewarmCount = 0;
   private readonly wonderSurfMat: THREE.ShaderMaterial;
-  private wonderState: "idle" | "compiling" | "ready" | "failed" = "idle";
+  private wonderState: VariantState = "idle";
   /** 预热：设成 true 后，下一次 probe() 就在后台编译奇观变体（奇观模式打开时由 main.ts 设，召唤时不用再等） */
   wonderPrewarm = false;
   private readonly probeMat: THREE.ShaderMaterial;
@@ -896,8 +1043,6 @@ export class Clouds {
   private occBuildKey = "";
   private readonly occBuildCenter = new THREE.Vector2();
   private occBuildLayer = -1;
-  /** 网格程序是否已编译好（后台编译，没好之前步进照旧逐点求值，不卡主线程） */
-  private occState: "idle" | "compiling" | "ready" = "idle";
   /** 调试 / 对照：false 时步进不查占据网格（逐点求完整密度，等于改动前的行为） */
   occEnabled = true;
   // ---- 云影图（T27）----
@@ -910,8 +1055,14 @@ export class Clouds {
   /** 后台正在建到第几片（-1 = 没在建） */
   private shadowSlice = -1;
   private shadowState: "idle" | "compiling" | "ready" = "idle";
+  /** 上一次建云影图用的程序（默认版 / 天气版，PERF-10） */
+  private shadowProg: THREE.ShaderMaterial | null = null;
   /** 主光源方向（场景 uniform uKeyDir 的值对象） */
   private readonly keyDir: THREE.Vector3;
+  /** 场景 uniform（读 uGroundOn / uTerrainMax 决定云缓冲右半要不要写，PERF-11） */
+  private readonly view: Record<string, THREE.IUniform>;
+  /** 云缓冲右半（深度，T38）这一帧写了没有；上一帧的值（从停用变回启用时右半不取历史） */
+  private depthOn = false;
 
   constructor(
     private readonly pass: FullscreenPass,
@@ -956,25 +1107,13 @@ export class Clouds {
         uOccValid: { value: 0 },
       },
     });
-    this.marchWonderMat = new THREE.ShaderMaterial({
-      ...common,
-      depthTest: true,
-      depthWrite: true,
-      depthFunc: THREE.AlwaysDepth,
-      fragmentShader: MARCH_FRAG,
-      // 奇观变体本来就慢一档，卷云代码一起带上（不再多一个「奇观 × 卷云」的组合）
-      defines: { WONDER_LAYER: 1, CLOUD_CIRRUS: 1 },
-      uniforms: this.marchMat.uniforms,
-    });
-    this.marchCirrusMat = new THREE.ShaderMaterial({
-      ...common,
-      depthTest: true,
-      depthWrite: true,
-      depthFunc: THREE.AlwaysDepth,
-      fragmentShader: MARCH_FRAG,
-      defines: { CLOUD_CIRRUS: 1 },
-      uniforms: this.marchMat.uniforms,
-    });
+    this.marchMat.name = "cloud-march";
+    this.view = viewUniforms;
+    // 默认程序在启动批次里编（main.ts 的 compileTargets），一开始就当作可用：真没编好时 three 会在首帧同步编，和改动前一样
+    this.marchVariants.set("", { mat: this.marchMat, state: "ready" });
+    // 奇观变体本来就慢一档，卷云代码一起带上（不再多一个「奇观 × 卷云」的组合）
+    this.marchWonderMat = this.marchVariant("WC").mat;
+    this.marchCirrusMat = this.marchVariant("C").mat;
     this.marchMat.uniforms.uWonderSurf = { value: this.wonderSurf.texture };
     this.wonderSurfMat = new THREE.ShaderMaterial({
       ...common,
@@ -984,6 +1123,8 @@ export class Clouds {
     this.occMat = new THREE.ShaderMaterial({
       ...common,
       fragmentShader: OCC_FRAG,
+      // 占据网格只在有雷暴 / 台风时有意义，只有天气版（PERF-10：不进启动批次，和天气变体一起后台预编）
+      defines: WEATHER_DEFINES,
       uniforms: {
         ...atmosphere.sharedUniforms,
         ...this.uniforms,
@@ -1003,6 +1144,8 @@ export class Clouds {
         uBuildSun: { value: new THREE.Vector3(0, 1, 0) },
       },
     });
+    // 天气版（PERF-10）：同一份源码加雷暴 + 台风，共用同一批 uniform；有雷暴 / 台风且编好时代替默认版
+    this.shadowWeatherMat = new THREE.ShaderMaterial({ ...common, fragmentShader: SHADOW_FRAG, defines: WEATHER_DEFINES, uniforms: this.shadowMat.uniforms });
     this.keyDir = viewUniforms.uKeyDir?.value as THREE.Vector3;
     // 窗外程序通过同一个 uniform 对象读云影图（lint 的 mock 里没有这些 uniform）
     if (this.uniforms.uCloudShadowMap) this.uniforms.uCloudShadowMap.value = this.shadow[0].texture;
@@ -1011,6 +1154,7 @@ export class Clouds {
       fragmentShader: PROBE_FRAG,
       uniforms: { ...viewUniforms, ...this.uniforms, uProbeDir: { value: new THREE.Vector3(1, 0, 0) } },
     });
+    this.probeWeatherMat = new THREE.ShaderMaterial({ ...common, fragmentShader: PROBE_FRAG, defines: WEATHER_DEFINES, uniforms: this.probeMat.uniforms });
     this.resolveMat = new THREE.ShaderMaterial({
       ...common,
       fragmentShader: RESOLVE_FRAG,
@@ -1023,6 +1167,7 @@ export class Clouds {
         uPrevCabinToWorld: { value: this.prevCabinToWorld },
         uMotion: { value: new THREE.Vector3() },
         uReset: { value: true },
+        uResetDepth: { value: false },
         uCloudResolution: this.marchMat.uniforms.uCloudResolution,
       },
     });
@@ -1030,27 +1175,111 @@ export class Clouds {
 
   /**
    * 需要和其他着色器一起后台并行编译的材质与它们真正画进去的目标（启动时 main.ts 的 compileAsync 批次用）。
-   * 占据网格程序不在这批里也行：第一次需要时 ensureOccCompiled 会自己在后台编译，编好之前步进照旧逐点求值
+   * 前两项固定是默认步进、resolve（main.ts 按位置取来数程序数）。
+   * 雷暴 / 台风的程序（步进天气变体、占据网格、云影图 / 探针的天气版）不在这批里（PERF-10：它们曾是启动的唯一关键路径），
+   * 启动后不久在后台预编；只有一打开就有雷暴 / 台风时（以后若有这种入口）才把用得上的一起放进来，免得首屏缺天气
    */
   compileTargets(): Array<readonly [THREE.ShaderMaterial, THREE.WebGLRenderTarget]> {
-    return [
+    const list: Array<readonly [THREE.ShaderMaterial, THREE.WebGLRenderTarget]> = [
       [this.marchMat, this.raw],
       [this.resolveMat, this.history[0]],
-      [this.occMat, this.occ[1]],
       [this.shadowMat, this.shadow[1]],
     ];
+    const key = this.weatherKey();
+    if (key) {
+      list.push([this.marchVariant(key).mat, this.raw], [this.occMat, this.occ[1]], [this.shadowWeatherMat, this.shadow[1]]);
+    }
+    return list;
   }
 
   /**
-   * 占据网格、云影图两个程序的后台编译（KHR_parallel_shader_compile），不阻塞主线程。
-   * main.ts 已经把它们放进启动时的编译批次（compileTargets）的话，这里几乎立刻就好
+   * 云影图（默认版）的后台编译（KHR_parallel_shader_compile），不阻塞主线程。
+   * main.ts 已经把它放进启动时的编译批次（compileTargets），这里几乎立刻就好
    */
   private ensureAuxCompiled(renderer: THREE.WebGLRenderer) {
-    if (this.occState !== "idle") return;
-    this.occState = "compiling";
+    if (this.shadowState !== "idle") return;
     this.shadowState = "compiling";
-    this.compileInBackground(renderer, this.occMat, this.occ[1], () => (this.occState = "ready"));
     this.compileInBackground(renderer, this.shadowMat, this.shadow[1], () => (this.shadowState = "ready"));
+  }
+
+  /** 程序编好且可用（compileAsync 失败也会 resolve，要检查 diagnostics） */
+  private runnable(renderer: THREE.WebGLRenderer, mat: THREE.ShaderMaterial) {
+    const program = (renderer.properties.get(mat) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
+    program?.getUniforms();
+    return !!program && program.diagnostics?.runnable !== false;
+  }
+
+  /** 取（没有就建）一个云步进变体的材质，和 marchMat 共用同一批 uniform 对象（PERF-10） */
+  private marchVariant(key: string) {
+    let v = this.marchVariants.get(key);
+    if (!v) {
+      const mat = new THREE.ShaderMaterial({
+        depthTest: true,
+        depthWrite: true,
+        depthFunc: THREE.AlwaysDepth,
+        toneMapped: false,
+        vertexShader: FULLSCREEN_VERT,
+        fragmentShader: MARCH_FRAG,
+        defines: marchDefines(key),
+        uniforms: this.marchMat.uniforms,
+      });
+      mat.name = `cloud-march-${key}`;
+      v = { mat, state: "idle" };
+      this.marchVariants.set(key, v);
+    }
+    return v;
+  }
+
+  /** 后台编译一个云步进变体（已经在编 / 编好了就什么都不做），返回它此刻的状态 */
+  private requestMarch(key: string): VariantState {
+    const v = this.marchVariant(key);
+    const renderer = this.pass.renderer;
+    if (v.state === "idle" && renderer) {
+      v.state = "compiling";
+      this.compileInBackground(renderer, v.mat, this.raw, () => (v.state = this.runnable(renderer, v.mat) ? "ready" : "failed"));
+    }
+    return v.state;
+  }
+
+  /** 此刻场上的天气要哪种天气变体："" 没有雷暴 / 台风，"S" / "T" / "ST" */
+  private weatherKey() {
+    const u = this.uniforms;
+    return (u.uStormCount?.value > 0 ? "S" : "") + (u.uHurricane?.value.w > 0.5 ? "T" : "");
+  }
+
+  /**
+   * 天气版的小程序（占据网格、云影图 / 探针的天气版）和雷暴、台风两个步进变体的后台预编（PERF-10）。
+   * 启动后约 WEATHER_PREWARM_PROBES 次 probe 自动开始（首帧早已画完；天气导演随时可能摆出雷暴 / 台风，而且它们本来就摆在视野外，
+   * 有时间等编译）；场上一出现雷暴 / 台风、或导演预告（prepareWeather）时立刻开始
+   */
+  private prewarmWeather(renderer: THREE.WebGLRenderer, now = false) {
+    if (!now && ++this.prewarmCount < WEATHER_PREWARM_PROBES) return;
+    if (this.weatherAuxState === "idle") {
+      this.weatherAuxState = "compiling";
+      let left = 3;
+      let ok = true;
+      const done = (mat: THREE.ShaderMaterial) => () => {
+        if (!this.runnable(renderer, mat)) ok = false;
+        if (--left === 0) this.weatherAuxState = ok ? "ready" : "failed";
+      };
+      this.compileInBackground(renderer, this.occMat, this.occ[1], done(this.occMat));
+      this.compileInBackground(renderer, this.shadowWeatherMat, this.shadow[1], done(this.shadowWeatherMat));
+      this.compileInBackground(renderer, this.probeWeatherMat, this.probeTarget, done(this.probeWeatherMat));
+    }
+    this.requestMarch("S");
+    this.requestMarch("T");
+  }
+
+  /**
+   * 导演的「预告」钩子（PERF-10）：马上要摆雷暴（storm）/ 台风（typhoon）时调用，立刻后台编需要的变体（连同场上已有的另一种天气），
+   * 返回现在能不能画出来。导演据此推迟摆放，直到变体编好（摆放本来就等遮挡 / 视野外，推迟几秒看不出来）
+   */
+  prepareWeather(storm: boolean, typhoon: boolean): boolean {
+    const renderer = this.pass.renderer;
+    if (renderer) this.prewarmWeather(renderer, true);
+    const cur = this.weatherKey();
+    const key = (storm || cur.includes("S") ? "S" : "") + (typhoon || cur.includes("T") ? "T" : "");
+    return !key || this.requestMarch(key) === "ready";
   }
 
   private compileInBackground(renderer: THREE.WebGLRenderer, mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget, done: () => void) {
@@ -1077,12 +1306,15 @@ export class Clouds {
     let left = 2;
     let ok = true;
     const done = (mat: THREE.ShaderMaterial) => () => {
-      const program = (renderer.properties.get(mat) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
-      program?.getUniforms();
-      if (!program || program.diagnostics?.runnable === false) ok = false;
+      if (!this.runnable(renderer, mat)) ok = false;
       if (--left === 0) this.wonderState = ok ? "ready" : "failed";
     };
-    this.compileInBackground(renderer, this.marchWonderMat, this.raw, done(this.marchWonderMat));
+    const wc = this.marchVariant("WC");
+    wc.state = "compiling";
+    this.compileInBackground(renderer, wc.mat, this.raw, () => {
+      wc.state = this.runnable(renderer, wc.mat) ? "ready" : "failed";
+      done(wc.mat)();
+    });
     this.compileInBackground(renderer, this.wonderSurfMat, this.wonderSurf, done(this.wonderSurfMat));
   }
 
@@ -1091,20 +1323,64 @@ export class Clouds {
    * 以后导演换到卷云时不用等。编好之前卷云按普通层状云画
    */
   private cirrusProbeCount = 0;
-  private ensureCirrusCompiled(renderer: THREE.WebGLRenderer) {
-    if (this.cirrusState !== "idle") return;
+  private ensureCirrusCompiled() {
+    if (this.marchVariant("C").state !== "idle") return;
     if (this.uniforms.uCloudType.value >= 0.2 && ++this.cirrusProbeCount < 300) return;
-    this.cirrusState = "compiling";
-    this.compileInBackground(renderer, this.marchCirrusMat, this.raw, () => {
-      const program = (renderer.properties.get(this.marchCirrusMat) as { currentProgram?: { getUniforms(): unknown; diagnostics?: { runnable: boolean } } }).currentProgram;
-      program?.getUniforms();
-      this.cirrusState = !program || program.diagnostics?.runnable === false ? "failed" : "ready";
-    });
+    this.requestMarch("C");
   }
 
   /** 卷云变体的状态（调试 / 回归场景等它编好用）：idle / compiling / ready / failed */
   get cirrusLayerState() {
-    return this.cirrusState;
+    return this.marchVariant("C").state;
+  }
+
+  /**
+   * 想画的步进变体还没编好、正在用替代的变体画（PERF-10：雷暴 / 台风 / 组合变体第一次需要时后台编译）。
+   * 回归脚本（scripts/scenarios.mjs 的 applyScene）等它变成 false 再截图；编译失败的变体不算（不会再等到它）
+   */
+  get cloudVariantPending() {
+    // 有雷暴 / 台风时，云影图 / 探针的天气版也要等（它们编好后云影图还要按分片节奏重建一次，约 16 帧）
+    if (this.weatherKey() && (this.weatherAuxState === "idle" || this.weatherAuxState === "compiling")) return true;
+    if (this.marchShown === this.marchWanted) return false;
+    return this.marchVariant(this.marchWanted).state !== "failed";
+  }
+
+  /** 调试：各个步进变体的编译状态（键见 MARCH_FEATURES）、这一帧想画 / 实际画的变体、天气小程序的状态 */
+  get variantStatus() {
+    const march: Record<string, VariantState> = {};
+    for (const [k, v] of this.marchVariants) march[k || "default"] = v.state;
+    return { march, wanted: this.marchWanted, shown: this.marchShown, weatherAux: this.weatherAuxState, depthOn: this.depthOn };
+  }
+
+  /**
+   * 这一帧用哪个步进变体画（PERF-10）：想要的特性（奇观层、卷云、雷暴、台风）里，挑已经编好的、权重最大的子集；
+   * 想要的组合没编好就顺手开始后台编。默认程序（空集）总是可用，所以最坏是「天气系统暂时不画，普通云照常」，不会画空或同步卡住
+   */
+  private pickMarch(): string {
+    const u = this.uniforms;
+    const wonder = this.wonderState === "ready" && this.marchMat.uniforms.uWonderVol.value > 0.5;
+    const cirrus = u.uCloudType.value < 0.2;
+    const want = (wonder ? "WC" : cirrus ? "C" : "") + this.weatherKey();
+    this.marchWanted = want;
+    if (want) {
+      // 卷云单独要（"C"）时照旧按 T12 的节奏（ensureCirrusCompiled，probe 里），这里只管其余组合
+      if (want !== "C") this.requestMarch(want);
+    }
+    let best = "";
+    let bestW = -1;
+    const feats = MARCH_FEATURES.filter((f) => want.includes(f.id));
+    for (let mask = 0; mask < 1 << feats.length; mask++) {
+      const sub = feats.filter((_, i) => mask & (1 << i));
+      const key = sub.map((f) => f.id).join("");
+      if (key.includes("W") && !key.includes("C")) continue;
+      if (this.marchVariants.get(key)?.state !== "ready") continue;
+      const w = sub.reduce((s, f) => s + f.weight, 0);
+      if (w > bestW) {
+        bestW = w;
+        best = key;
+      }
+    }
+    return best;
   }
 
   /** 云间层奇观变体的状态（调试 / 面板用）：idle 没编过、compiling 后台编译中、ready 可用、failed 编译失败 */
@@ -1119,11 +1395,18 @@ export class Clouds {
   private updateShadow() {
     const u = this.uniforms;
     if (this.shadowState !== "ready" || !this.keyDir) return;
+    // 有雷暴 / 台风时用天气版（PERF-10）；天气版还没编好时先用默认版（天气系统暂时没有影子），编好后按分片节奏重建一次
+    const mat = this.weatherKey() && this.weatherAuxState === "ready" ? this.shadowWeatherMat : this.shadowMat;
+    if (mat !== this.shadowProg) {
+      this.shadowProg = mat;
+      this.shadowGradual = true;
+    }
     const key = [
       u.uCloudBottom.value, u.uCloudTop.value, u.uCoverage.value, u.uCloudType.value, u.uCloudDensity.value,
       u.uShellBottom.value, u.uShellTop.value,
       u.uStorms.value.slice(0, u.uStormCount.value).map((v) => v.toArray().join(",")).join(";"),
       u.uHurricane.value.toArray().join(","), u.uUpperWind.value.toArray().join(","),
+      mat === this.shadowWeatherMat ? "w" : "d",
     ].join("|");
     const bu = this.shadowMat.uniforms;
     const c = u.uCloudShadowCenter.value;
@@ -1152,7 +1435,7 @@ export class Clouds {
     const end = now ? SHADOW_SLICES : this.shadowSlice + 1;
     back.scissorTest = !now;
     back.scissor.set(0, this.shadowSlice * rows, CLOUD_SHADOW_RES * 3, (end - this.shadowSlice) * rows);
-    this.pass.render(this.shadowMat, back);
+    this.pass.render(mat, back);
     back.scissorTest = false;
     this.shadowSlice = end;
     if (end < SHADOW_SLICES) return;
@@ -1173,7 +1456,7 @@ export class Clouds {
     const u = this.uniforms;
     const mu = this.marchMat.uniforms;
     const hasWeather = u.uStormCount.value > 0 || u.uHurricane.value.w > 0.5;
-    if (!hasWeather || this.occState !== "ready" || !this.occEnabled) {
+    if (!hasWeather || this.weatherAuxState !== "ready" || !this.occEnabled) {
       mu.uOccValid.value = 0;
       return;
     }
@@ -1222,10 +1505,14 @@ export class Clouds {
   probe(renderer: THREE.WebGLRenderer, heading: THREE.Vector3) {
     this.ensureAuxCompiled(renderer);
     this.ensureWonderCompiled(renderer);
-    this.ensureCirrusCompiled(renderer);
+    this.ensureCirrusCompiled();
+    // 雷暴 / 台风变体：启动后不久预编；场上已经有雷暴 / 台风（面板手选）就立刻开始
+    const weather = this.weatherKey() !== "";
+    this.prewarmWeather(renderer, weather);
     if (this.probeBusy) return;
     this.probeMat.uniforms.uProbeDir.value.copy(heading);
-    this.pass.render(this.probeMat, this.probeTarget);
+    // 有雷暴 / 台风时用天气版探针（穿进雷暴时的颠簸、窗上的水、舱内光照）；没编好之前用默认版（只看得到层状云）
+    this.pass.render(weather && this.weatherAuxState === "ready" ? this.probeWeatherMat : this.probeMat, this.probeTarget);
     this.probeBusy = true;
     renderer
       .readRenderTargetPixelsAsync(this.probeTarget, 0, 0, 1, 1, this.probePixel)
@@ -1321,12 +1608,12 @@ export class Clouds {
     this.updateOccupancy();
     this.updateShadow();
     this.marchMat.uniforms.uFrame.value = this.frame++ % 64;
-    // 有云间层奇观在场、且奇观变体已编好时用变体画（W00）；否则照旧（编好之前奇观不画）
-    const wonder = this.wonderState === "ready" && this.marchMat.uniforms.uWonderVol.value > 0.5;
-    if (wonder) this.pass.render(this.wonderSurfMat, this.wonderSurf);
-    // 卷云（云型 < 0.2）用卷云变体画（T12），没编好之前照旧
-    const cirrus = this.cirrusState === "ready" && this.uniforms.uCloudType.value < 0.2;
-    this.pass.render(wonder ? this.marchWonderMat : cirrus ? this.marchCirrusMat : this.marchMat, this.raw);
+    // 步进变体（PERF-10，pickMarch）：奇观层（W00，奇观 pass 编好且奇观在场）、卷云（T12，云型 < 0.2）、雷暴、台风，
+    // 想要的组合没编好之前画已编好的子集（编好之前奇观不画 / 卷云按普通层状云画 / 天气系统暂时不画，普通云照常）
+    const key = this.pickMarch();
+    this.marchShown = key;
+    if (key.includes("W")) this.pass.render(this.wonderSurfMat, this.wonderSurf);
+    this.pass.render(this.marchVariant(key).mat, this.raw);
 
     const [prev, next] = this.history;
     const r = this.resolveMat.uniforms;
@@ -1335,7 +1622,19 @@ export class Clouds {
     r.uHistory.value = prev.texture;
     r.uMotion.value.copy(motion);
     r.uReset.value = this.reset;
+    // 云缓冲右半（云的平均深度，T38）只在附近有高出海面的真实地形时写（PERF-11）：它只用来判断「云在山前还是山后」，
+    // 海面 / 没开真实地理时用不上，却让 resolve 多一倍像素。停用期间右半不更新（窗外按 uCloudDepthOn = 0 不读），
+    // 重新启用的那一帧右半不取历史（旧内容早已过时）
+    const v = this.view;
+    const depthOn = (v.uGroundOn?.value ?? 0) > 0.5 && (v.uTerrainMax?.value ?? 0) > DEPTH_TERRAIN_MIN_KM;
+    r.uResetDepth.value = depthOn && !this.depthOn;
+    this.depthOn = depthOn;
+    if (this.uniforms.uCloudDepthOn) this.uniforms.uCloudDepthOn.value = depthOn ? 1 : 0;
+    const w = this.marchMat.uniforms.uCloudResolution.value;
+    next.scissorTest = !depthOn;
+    next.scissor.set(0, 0, w.x, w.y);
     this.pass.render(this.resolveMat, next);
+    next.scissorTest = false;
     this.history = [next, prev];
     this.reset = false;
     this.prevCamBasis.copy(camBasis);
