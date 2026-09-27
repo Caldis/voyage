@@ -44,8 +44,23 @@
 //   meanSaturation       HSL 饱和度（0–100）的均值——判断「灰蒙蒙」还是「过饱和」
 //   adjacentDiff         相邻像素 luma 绝对差的均值（水平 + 垂直各算一遍一起平均）：棋盘纹 / 锯齿的
 //                        指标——高频跳变多的地方这个数字会明显偏高，平滑渐变（天空、雾）应该接近 0
+//   adjDiffH / adjDiffV / adjDiffDiag（DX-22）  按方向拆开的相邻像素差：横（右邻）、纵（下邻）、对角
+//                        （"\" 右下邻 + "/" 左下邻一起平均）。十字纹 / 菱形纹（交叉图案）在横 / 纵方向上
+//                        经常和正常纹理的高频混在一起量不出来，只有对角方向会明显偏高——DEV_SOP「测量约定」
+//                        记过这条：「交叉 / 菱形纹用对角高频能量占比量，相邻像素差量不出（与横纹此消彼长）」，
+//                        此前只能靠 handoff/C03-hf.py 的 FFT 频谱才能看出来，这里给一个不用离开 Node 的近似。
 //   pctBright / pctDark  luma ≥ 250 / ≤ 5 的像素占比（%）——判断「死白過曝」或「死黑欠曝」的面积
 //   maskedPixels         被 --mask 排除、没计入以上统计的像素数
+//
+// --mask-image <图.png> [--mask-channel alpha|luma] [--mask-threshold 128] [--mask-labels 高组,低组]（DX-22）：
+// 用另一张图（和被测图同分辨率）的某个通道当逐像素分组依据，把每个 --measure 区域拆成两组分别统计——
+// 例如拿 云缓冲不透明度的可视化图当 mask-image，能分别看「云区」和「非云区」各自的 adjDiffDiag，不至于
+// 两边数字混在一起把问题冲淡；或者拿手绘 / probe.mjs 读出的「窗外 vs 舱内」剪影图做 mask-image，只统计
+// 窗外那一部分。channel 默认 luma（0.2126R+0.7152G+0.0722B），threshold 默认 128（≥ 阈值算 --mask-labels
+// 第一个名字那组，默认 "high"，< 阈值算第二个，默认 "low"；例如 --mask-labels cloud,sky）。原有的（不分组）
+// 那一行统计照常输出，分组结果作为**额外**的两行追加（group 字段标出是哪一组），不影响旧脚本按字段名读数。
+// mask-image 分辨率必须和被测图完全一致（不受 --crop / --zoom 影响，和 --mask 矩形同一套坐标系），
+// 不一致就跳过那张图的分组统计并打印警告，不中断其余图片。
 // 默认打印成人读的表格；--json 时改成打印一份 JSON（数组，每张图每个区域一条）到 stdout，不额外写文件。
 //
 // --mask x,y,w,h（可重复，原图像素坐标，和 --measure / --diff 同一套坐标系）：这个矩形内的像素从
@@ -161,7 +176,7 @@ function thumbPathFor(imgPath, size, outDirArg) {
 
 function usage() {
   console.error("用法：node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]");
-  console.error("      node scripts/compare.mjs --measure x,y,w,h [--measure ...] [--mask x,y,w,h ...] [--json] <图1> [<图2> ...]");
+  console.error("      node scripts/compare.mjs --measure x,y,w,h [--measure ...] [--mask x,y,w,h ...] [--mask-image 图.png [--mask-channel alpha|luma] [--mask-threshold 128] [--mask-labels cloud,sky]] [--json] <图1> [<图2> ...]");
   console.error("      node scripts/compare.mjs --diff <图2> [--threshold 8] [--heatmap 差异.png] [--mask x,y,w,h ...] [--json] <图1>");
   console.error("      node scripts/compare.mjs --row y [--row ...] [--col x ...] [--json] <图1> [<图2> ...]");
   console.error("      node scripts/compare.mjs --thumb 64 [--thumb-out 目录] [--json] <图1> [<图2> ...]");
@@ -197,6 +212,19 @@ async function main() {
   if (!Number.isFinite(threshold) || threshold < 0) throw new Error(`--threshold 应为非负数，收到 "${args.threshold}"`);
   const heatmapPath = args.heatmap ? resolveRepoPath(REPO_ROOT, args.heatmap) : null;
   if (heatmapPath) fs.mkdirSync(path.dirname(heatmapPath), { recursive: true });
+  // --mask-image（DX-22）：用一张图的某个通道当逐像素分组依据（例如云缓冲的不透明度、或手绘的「窗外 / 舱内」
+  // 剪影遮罩），把 --measure 的每个区域按这张图分成两组分别统计——不是从统计里整体排除（那是 --mask 矩形的
+  // 语义），而是「云区一份、非云区一份」都要看，才知道横纹 / 交叉纹之类的问题是不是只出在云区（见文件头注释）。
+  const maskImagePath = args["mask-image"] ? resolveRepoPath(REPO_ROOT, String(args["mask-image"])) : null;
+  const maskChannel = args["mask-channel"] ? String(args["mask-channel"]) : "luma";
+  if (maskImagePath && maskChannel !== "luma" && maskChannel !== "alpha") throw new Error(`--mask-channel 只接受 luma | alpha，收到 "${maskChannel}"`);
+  const maskThreshold = args["mask-threshold"] !== undefined ? Number(args["mask-threshold"]) : 128;
+  if (maskImagePath && (!Number.isFinite(maskThreshold) || maskThreshold < 0 || maskThreshold > 255)) throw new Error(`--mask-threshold 应为 0–255，收到 "${args["mask-threshold"]}"`);
+  const maskLabelsRaw = args["mask-labels"] ? String(args["mask-labels"]).split(",") : ["high", "low"];
+  if (maskLabelsRaw.length !== 2) throw new Error(`--mask-labels 应为两个用逗号分开的名字（如 cloud,sky），收到 "${args["mask-labels"]}"`);
+  const [maskLabelHigh, maskLabelLow] = maskLabelsRaw;
+  if (maskImagePath && !fs.existsSync(maskImagePath)) throw new Error(`--mask-image 找不到图片：${args["mask-image"]}`);
+  const maskImageDataUrl = maskImagePath ? `data:image/png;base64,${fs.readFileSync(maskImagePath).toString("base64")}` : null;
 
   const tiles = images.map((p) => {
     const abs = path.isAbsolute(p) ? p : path.join(REPO_ROOT, p);
@@ -214,8 +242,8 @@ async function main() {
   const browser = await launchBrowser(chromium, {});
   try {
     const page = await (await browser.newContext()).newPage();
-    const { outDataUrl, measurements, diffStats, rowCurves, colCurves, thumbs } = await page.evaluate(
-      async ({ tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap }) => {
+    const { outDataUrl, measurements, diffStats, rowCurves, colCurves, thumbs, maskImageWarnings } = await page.evaluate(
+      async ({ tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap, maskImageDataUrl, maskChannel, maskThreshold, maskLabelHigh, maskLabelLow }) => {
         const loadImg = (src) =>
           new Promise((resolve, reject) => {
             const img = new Image();
@@ -225,92 +253,151 @@ async function main() {
           });
         const imgs = await Promise.all(tiles.map((t) => loadImg(t.dataUrl)));
 
+        // --mask-image（DX-22）：只解码一次，取满分辨率的 luma 或 alpha 通道当分组依据，和 --measure 各图
+        // 各自比对分辨率（不要求和 crop/zoom 一致，要求和原图本身同尺寸，因为分组坐标系是原图像素坐标）
+        let maskImg = null;
+        if (maskImageDataUrl) {
+          const img = await loadImg(maskImageDataUrl);
+          const c = document.createElement("canvas");
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          const ctx = c.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          const raw = ctx.getImageData(0, 0, c.width, c.height).data;
+          const chan = new Uint8ClampedArray(c.width * c.height);
+          for (let p = 0, j = 0; j < chan.length; p += 4, j++) {
+            chan[j] = maskChannel === "alpha" ? raw[p + 3] : Math.round(0.2126 * raw[p] + 0.7152 * raw[p + 1] + 0.0722 * raw[p + 2]);
+          }
+          maskImg = { width: c.width, height: c.height, chan };
+        }
+
         // --mask：某个原图绝对像素坐标是否落在任意一个排除区里（DX-11，--measure / --diff 共用）
         const inAnyMask = (ax, ay) => masks.some((m) => ax >= m.x && ax < m.x + m.w && ay >= m.y && ay < m.y + m.h);
 
-        // --measure（DX-07，DX-11 补齐平均 RGB / 饱和度 / 相邻像素差 / 亮暗像素比例）：按原图像素
-        // （不受 crop/zoom 影响）算每个区域的统计；--mask 命中的像素整体排除，不计入任何一项。
+        // --mask-image（DX-22）：某个原图绝对像素坐标在 maskImg 上的通道值是否 ≥ 阈值（"high" 组，例如云缓冲
+        // 不透明度高 = 云区；或窗外遮罩里「窗外」那一侧画得更亮）；< 阈值是 "low" 组。maskImg 为 null 时不用管
+        // （调用方只在 maskImg 存在且分辨率匹配时才会用到这个函数）。
+        const maskHighAt = (ax, ay) => maskImg.chan[ay * maskImg.width + ax] >= maskThreshold;
+
+        // --measure（DX-07，DX-11 补齐平均 RGB / 饱和度 / 相邻像素差 / 亮暗像素比例；DX-22 补分方向高频
+        // 指标与 --mask-image 分组统计）：按原图像素（不受 crop/zoom 影响）算每个区域的统计；--mask 命中的
+        // 像素整体排除，不计入任何一项（--mask-image 分组时也一样先排除，两者是「与」的关系）。
+        // extraTest(ax, ay)：--mask-image 分组用的额外筛选（null 表示不筛，即「全部」这一组，向后兼容原有行为）。
+        function statsForRegion(img, r, extraTest) {
+          const sx = Math.max(0, r.x);
+          const sy = Math.max(0, r.y);
+          const sw = Math.max(1, Math.min(r.w - (sx - r.x), img.naturalWidth - sx));
+          const sh = Math.max(1, Math.min(r.h - (sy - r.y), img.naturalHeight - sy));
+          const c = document.createElement("canvas");
+          c.width = sw;
+          c.height = sh;
+          const ctx = c.getContext("2d");
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+          const data = ctx.getImageData(0, 0, sw, sh).data;
+          const lum = new Float64Array(sw * sh);
+          const included = new Uint8Array(sw * sh);
+          let sumR = 0, sumG = 0, sumB = 0, sumSat = 0, nIncluded = 0, nBright = 0, nDark = 0;
+          for (let ly = 0, j = 0, p = 0; ly < sh; ly++) {
+            for (let lx = 0; lx < sw; lx++, j++, p += 4) {
+              const rr = data[p];
+              const gg = data[p + 1];
+              const bb = data[p + 2];
+              const l = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+              lum[j] = l;
+              if (masks.length > 0 && inAnyMask(sx + lx, sy + ly)) continue; // included[j] 保持 0
+              if (extraTest && !extraTest(sx + lx, sy + ly)) continue;
+              included[j] = 1;
+              nIncluded++;
+              sumR += rr;
+              sumG += gg;
+              sumB += bb;
+              const mx = Math.max(rr, gg, bb) / 255;
+              const mn = Math.min(rr, gg, bb) / 255;
+              const L = (mx + mn) / 2;
+              sumSat += L === 0 || L === 1 ? 0 : (mx - mn) / (1 - Math.abs(2 * L - 1));
+              if (l >= 250) nBright++;
+              if (l <= 5) nDark++;
+            }
+          }
+          const n = Math.max(1, nIncluded);
+          const lumIncluded = [];
+          for (let j = 0; j < lum.length; j++) if (included[j]) lumIncluded.push(lum[j]);
+          lumIncluded.sort((a, b) => a - b);
+          const mean = lumIncluded.length ? lumIncluded.reduce((a, b) => a + b, 0) / lumIncluded.length : 0;
+          const p99 = lumIncluded.length ? lumIncluded[Math.min(lumIncluded.length - 1, Math.floor(0.99 * lumIncluded.length))] : 0;
+          // 相邻像素差（棋盘纹 / 锯齿指标，DX-22 按方向拆开）：横（同一行，右邻）、纵（同一列，下邻）、
+          // 对角（"\" 右下邻 + "/" 左下邻，两个方向合并平均——十字纹 / 菱形纹在横 / 纵上量不出来，只有对角
+          // 方向的相邻差会明显偏高，DEV_SOP「测量约定」记过这条：交叉 / 菱形纹用对角高频量，相邻像素差
+          // 量不出（与横纹此消彼长），此前只能靠 handoff/C03-hf.py 的 FFT 才能看到）；adjacentDiff 保留原来
+          // 「横 + 纵各算一遍一起平均」的口径不变（向后兼容，历史场景 / 脚本都按这个数判断过棋盘纹）。
+          // 两端有一个被排除（--mask 矩形或 --mask-image 分组）就跳过这一对，不让排除区边界人为拉高数字。
+          let sumH = 0, nH = 0, sumV = 0, nV = 0, sumD = 0, nD = 0;
+          for (let ly = 0; ly < sh; ly++) {
+            for (let lx = 0; lx < sw; lx++) {
+              const j = ly * sw + lx;
+              if (!included[j]) continue;
+              if (lx + 1 < sw && included[j + 1]) {
+                sumH += Math.abs(lum[j] - lum[j + 1]);
+                nH++;
+              }
+              if (ly + 1 < sh && included[j + sw]) {
+                sumV += Math.abs(lum[j] - lum[j + sw]);
+                nV++;
+              }
+              if (lx + 1 < sw && ly + 1 < sh && included[j + sw + 1]) {
+                sumD += Math.abs(lum[j] - lum[j + sw + 1]); // "\"
+                nD++;
+              }
+              if (lx - 1 >= 0 && ly + 1 < sh && included[j + sw - 1]) {
+                sumD += Math.abs(lum[j] - lum[j + sw - 1]); // "/"
+                nD++;
+              }
+            }
+          }
+          const nAdj = nH + nV;
+          const sumAdjDiff = sumH + sumV;
+          return {
+            mean: +mean.toFixed(1),
+            p99: +p99.toFixed(1),
+            meanR: +(sumR / n).toFixed(1),
+            meanG: +(sumG / n).toFixed(1),
+            meanB: +(sumB / n).toFixed(1),
+            meanSaturation: +((sumSat / n) * 100).toFixed(1),
+            adjacentDiff: nAdj ? +(sumAdjDiff / nAdj).toFixed(2) : 0,
+            adjDiffH: nH ? +(sumH / nH).toFixed(2) : 0,
+            adjDiffV: nV ? +(sumV / nV).toFixed(2) : 0,
+            adjDiffDiag: nD ? +(sumD / nD).toFixed(2) : 0,
+            pctBright: +((nBright / n) * 100).toFixed(2),
+            pctDark: +((nDark / n) * 100).toFixed(2),
+            maskedPixels: lum.length - nIncluded,
+          };
+        }
+
+        const maskImageWarnings = [];
         const measurements = [];
         if (regions.length > 0) {
           for (let i = 0; i < imgs.length; i++) {
             const img = imgs[i];
             for (const r of regions) {
-              const sx = Math.max(0, r.x);
-              const sy = Math.max(0, r.y);
-              const sw = Math.max(1, Math.min(r.w - (sx - r.x), img.naturalWidth - sx));
-              const sh = Math.max(1, Math.min(r.h - (sy - r.y), img.naturalHeight - sy));
-              const c = document.createElement("canvas");
-              c.width = sw;
-              c.height = sh;
-              const ctx = c.getContext("2d");
-              ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-              const data = ctx.getImageData(0, 0, sw, sh).data;
-              const lum = new Float64Array(sw * sh);
-              const included = new Uint8Array(sw * sh);
-              let sumR = 0, sumG = 0, sumB = 0, sumSat = 0, nIncluded = 0, nBright = 0, nDark = 0;
-              for (let ly = 0, j = 0, p = 0; ly < sh; ly++) {
-                for (let lx = 0; lx < sw; lx++, j++, p += 4) {
-                  const rr = data[p];
-                  const gg = data[p + 1];
-                  const bb = data[p + 2];
-                  const l = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
-                  lum[j] = l;
-                  if (masks.length > 0 && inAnyMask(sx + lx, sy + ly)) continue; // included[j] 保持 0
-                  included[j] = 1;
-                  nIncluded++;
-                  sumR += rr;
-                  sumG += gg;
-                  sumB += bb;
-                  const mx = Math.max(rr, gg, bb) / 255;
-                  const mn = Math.min(rr, gg, bb) / 255;
-                  const L = (mx + mn) / 2;
-                  sumSat += L === 0 || L === 1 ? 0 : (mx - mn) / (1 - Math.abs(2 * L - 1));
-                  if (l >= 250) nBright++;
-                  if (l <= 5) nDark++;
-                }
-              }
-              const n = Math.max(1, nIncluded);
-              const lumIncluded = [];
-              for (let j = 0; j < lum.length; j++) if (included[j]) lumIncluded.push(lum[j]);
-              lumIncluded.sort((a, b) => a - b);
-              const mean = lumIncluded.length ? lumIncluded.reduce((a, b) => a + b, 0) / lumIncluded.length : 0;
-              const p99 = lumIncluded.length ? lumIncluded[Math.min(lumIncluded.length - 1, Math.floor(0.99 * lumIncluded.length))] : 0;
-              // 相邻像素差（棋盘纹 / 锯齿指标）：水平 + 垂直相邻 luma 的绝对差均值；两端有一个被 mask
-              // 排除就跳过这一对（不让排除区边界人为拉高这个数字）
-              let sumAdjDiff = 0;
-              let nAdj = 0;
-              for (let ly = 0; ly < sh; ly++) {
-                for (let lx = 0; lx < sw; lx++) {
-                  const j = ly * sw + lx;
-                  if (!included[j]) continue;
-                  if (lx + 1 < sw && included[j + 1]) {
-                    sumAdjDiff += Math.abs(lum[j] - lum[j + 1]);
-                    nAdj++;
-                  }
-                  if (ly + 1 < sh && included[j + sw]) {
-                    sumAdjDiff += Math.abs(lum[j] - lum[j + sw]);
-                    nAdj++;
-                  }
-                }
-              }
+              const base = statsForRegion(img, r, null);
               measurements.push({
                 image: tiles[i].label,
                 region: { x: r.x, y: r.y, w: r.w, h: r.h },
-                mean: +mean.toFixed(1),
-                p99: +p99.toFixed(1),
-                meanR: +(sumR / n).toFixed(1),
-                meanG: +(sumG / n).toFixed(1),
-                meanB: +(sumB / n).toFixed(1),
-                meanSaturation: +((sumSat / n) * 100).toFixed(1),
-                adjacentDiff: nAdj ? +(sumAdjDiff / nAdj).toFixed(2) : 0,
-                pctBright: +((nBright / n) * 100).toFixed(2),
-                pctDark: +((nDark / n) * 100).toFixed(2),
-                maskedPixels: lum.length - nIncluded,
+                ...base,
               });
+              if (maskImg) {
+                if (maskImg.width !== img.naturalWidth || maskImg.height !== img.naturalHeight) {
+                  maskImageWarnings.push(`${tiles[i].label}：--mask-image 分辨率 ${maskImg.width}x${maskImg.height} 与该图 ${img.naturalWidth}x${img.naturalHeight} 不一致，跳过这张图的分组统计`);
+                } else {
+                  const high = statsForRegion(img, r, (ax, ay) => maskHighAt(ax, ay));
+                  const low = statsForRegion(img, r, (ax, ay) => !maskHighAt(ax, ay));
+                  measurements.push({ image: tiles[i].label, region: { x: r.x, y: r.y, w: r.w, h: r.h }, group: maskLabelHigh, ...high });
+                  measurements.push({ image: tiles[i].label, region: { x: r.x, y: r.y, w: r.w, h: r.h }, group: maskLabelLow, ...low });
+                }
+              }
             }
           }
         }
-
         // --row / --col（DX-11）：整条像素曲线，找地平线 / 天空渐变的色带台阶
         const rowCurves = [];
         const colCurves = [];
@@ -448,7 +535,7 @@ async function main() {
           };
         }
 
-        if (!outPath) return { outDataUrl: null, measurements, diffStats, rowCurves, colCurves, thumbs };
+        if (!outPath) return { outDataUrl: null, measurements, diffStats, rowCurves, colCurves, thumbs, maskImageWarnings };
 
         const tileCanvases = imgs.map((img, i) => {
           const sx = crop ? crop.x : 0;
@@ -488,9 +575,9 @@ async function main() {
           fctx.drawImage(c, cx, 0);
           cx += c.width + gap;
         }
-        return { outDataUrl: final.toDataURL("image/png"), measurements, diffStats, rowCurves, colCurves, thumbs };
+        return { outDataUrl: final.toDataURL("image/png"), measurements, diffStats, rowCurves, colCurves, thumbs, maskImageWarnings };
       },
-      { tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap: !!heatmapPath },
+      { tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap: !!heatmapPath, maskImageDataUrl, maskChannel, maskThreshold, maskLabelHigh, maskLabelLow },
     );
     if (outPath) {
       fs.writeFileSync(outPath, Buffer.from(outDataUrl.split(",")[1], "base64"));
@@ -504,12 +591,15 @@ async function main() {
         console.log(`[compare] 亮度 / 色彩（0–255，饱和度 / 比例 0–100%）：`);
         for (const m of measurements) {
           console.log(
-            `  ${m.image}  region=${m.region.x},${m.region.y},${m.region.w},${m.region.h}  luma mean=${m.mean} p99=${m.p99}  ` +
-              `RGB=(${m.meanR},${m.meanG},${m.meanB})  sat=${m.meanSaturation}  adjDiff=${m.adjacentDiff}  ` +
+            `  ${m.image}${m.group ? `[${m.group}]` : ""}  region=${m.region.x},${m.region.y},${m.region.w},${m.region.h}  luma mean=${m.mean} p99=${m.p99}  ` +
+              `RGB=(${m.meanR},${m.meanG},${m.meanB})  sat=${m.meanSaturation}  adjDiff=${m.adjacentDiff}（横${m.adjDiffH}/纵${m.adjDiffV}/对角${m.adjDiffDiag}）  ` +
               `bright≥250=${m.pctBright}%  dark≤5=${m.pctDark}%${m.maskedPixels ? `  masked=${m.maskedPixels}` : ""}`,
           );
         }
       }
+    }
+    if (maskImageWarnings && maskImageWarnings.length > 0) {
+      for (const w of maskImageWarnings) console.warn(`[compare] --mask-image 警告：${w}`);
     }
     if (diffStats) {
       const { heatDataUrl, ...printable } = diffStats;

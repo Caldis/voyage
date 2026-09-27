@@ -11,12 +11,13 @@
 //   node scripts/dev-browser.mjs check --port 5230 [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--query '<url参数>']
 //   node scripts/dev-browser.mjs shots --port 5230 [--only noon-cumulus,sunset-wing] [--scene '<JSON>' ...]
 //                                       [--scenes-file 路径.json] [--query '<url参数>']
-//                                       [--out tmp/screenshot/dev-5230] [--allow-flash] [--freeze] [--settle]
-//                                       [--pair '<js1>' --pair '<js2>' | --base-shader <端口|目录|提交> [--material sceneMat]]
+//                                       [--out tmp/screenshot/dev-5230] [--allow-flash] [--freeze] [--cloud-live] [--settle]
+//                                       [--pair '<js1>' --pair '<js2>' | --pair '<预设置js>' --base-shader <端口|目录|提交>
+//                                         [--material sceneMat] [--define KEY[=VALUE] ...]]
 //                                       [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--baseline 5181] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
-//   node scripts/dev-browser.mjs flicker --port 5230 --only <场景> [--step 0.06] [--frames 20] [--crop x,y,w,h] [--debug N]
+//   node scripts/dev-browser.mjs flicker --port 5230 --only <场景> [--step 0.06] [--frames 20] [--cloud-live] [--crop x,y,w,h] [--debug N]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
 //
 // --scenes-file（DX-12）：一个场景数组的 JSON 文件（字段和 --scene 一致），免去命令行 JSON 转义——一个带
@@ -28,18 +29,29 @@
 //   解决「批量截图时飞机一直在飞，只拨一个开关的同机位对照拍不成」。--pair '<js1>' --pair '<js2>' 时两张
 //   各自跑一段任意 js；--base-shader <端口|目录|提交> 时第二张换成「换上另一棵树的着色器原文」（PERF-12-ab.mjs
 //   的三段式对照：a → 换基线着色器拍 b → 换回原文拍 a2 当噪声底），--pair 此时至多给一段「拍 a 之前」的
-//   预设置 js。冻结前会先 pinGeometry（钉回场景该有的头部 / 云偏移，见 scenarios.mjs），并把翼尖频闪钉死
-//   为灭（PERF-13 反馈，避免夜景冻结截图撞上全白窗）。详见 README「调试与验证」。
+//   预设置 js（DX-22：但必须显式给，哪怕是空字符串——不给 --pair 时 --base-shader 会直接报错，不再静默
+//   忽略只拍一张普通截图）。冻结前会先 pinGeometry（钉回场景该有的头部 / 云偏移，见 scenarios.mjs），并把
+//   翼尖频闪钉死为灭（PERF-13 反馈，避免夜景冻结截图撞上全白窗）。详见 README「调试与验证」。
+// --material（DX-22，配 --base-shader）：除了字面点号路径（sceneMat/outsideMat/wingMat/seatMat/clouds.*），
+//   还认几个「这一帧实际在画什么」的运行时路径：cabinClass.current / cabinClass.seat（座椅单独 pass，
+//   PERF-14）/ wingMat.current / wingMat.wet（机翼湿窗变体）/ clouds.marchMat（这里特指当前实际画的云步进
+//   变体，不是字面默认变体）。--define KEY[=VALUE]（可重复）给换上的着色器原文补 #define 再重编。
+// --cloud-live（DX-22，仅 shots，配 --freeze 或 --pair 用）：__voyage.freeze(true, {cloudLive:true})，
+//   冻结除云以外的一切，云照常渲染 / 做时间累积。
 //
 // --freeze（DX-08，仅 shots）：截图前调用 __voyage.freeze(true)（main.ts 的调试句柄）钉住位置 / 航向 / 头部 /
 //   模拟时间 / 曝光适应 / 闪电 / 翼尖航行灯频闪相位，冻结后连续渲染逐像素一致，可以拿两次 shots 的截图相减
 //   （配合 compare.mjs 的 --diff）定位「这一版改动到底动了哪些像素」，不必依赖「同一份代码跑两次」的噪声估计。
+//   DX-22：benchFrame 现在也遵守冻结（以前会绕开冻结推进飞机位置 / 模拟时间 / 曝光，见下面 benchFrame 注释）。
 // --settle（DX-08，仅 shots）：等 __voyage.ground.pending === 0 再截（默认的 sc.ground 等待用的是更宽松的
 //   pending < 5，够看大致画面但地面瓦片可能还在陆续贴上来），逐像素对比前建议加上，否则瓦片加载差异会被
 //   误判成回归。
 // flicker（DX-08，泛化自 handoff/T08-flicker.mjs + T08-flicker.py + T43-crawl.py）：__voyage.freeze(true) 之后
 //   按 --step 毫米（默认 0.06，亚像素）步进微移相机（head.x），连拍 --frames 帧，输出块能量变异系数（T08 法，
 //   抗锯齿做对了每块总亮度守恒）与爬行指标（T43 法，二阶差分，抓块能量法量不出的「台阶沿线爬」）。
+//   --cloud-live（DX-22，把 handoff/C03-rt.mjs 审查用的实时路径收成正式选项）：冻结除云以外的一切，
+//   --step 默认改 0、--frames 默认改 32，额外输出 relStd（时间标准差/均值）与 relLow16（16 帧盒平均后的
+//   低频标准差/均值——层状云横纹这类肉眼看得出的起伏是低频的，纯 relStd 会被逐帧噪声盖住）。
 //
 // --out（shots 的截图输出目录）相对**仓库根**解析，不是当前工作目录（T08 开发体验反馈踩过这个坑：
 //   写了 `../../tmp/...` 结果传到了仓库外面）。不传就是 `tmp/screenshot/dev-<port>`。
@@ -200,9 +212,21 @@ function parseExtraQuery(args) {
 // DX-12（PERF-12/TR07 反馈）：给了 --base-shader 时，第二张不再是任意 js，而是「同一机位换上另一棵树的
 // 着色器原文」，此时 --pair/--ab 至多给一段「拍 a 之前」的预设置 js（0 或 1 个都行）；没给 --base-shader
 // 还是原来的规矩——必须正好两段 js。
+// DX-22：--base-shader 不给 --pair/--ab 时以前会静默忽略——parsePairJs 直接返回 null，cmdShots 整段
+// pairJs 分支都不会进入，--base-shader 本身悄悄被吃掉，只拍到一张普通冻结截图，用户还以为拍到了对照
+// （TASKS.md DX-22 描述）。现在改成直接报错：--base-shader 必须搭配 --pair（哪怕只传一个空字符串占位，
+// 表示「不需要预设置 js，直接对照」），报错信息里给出这个写法。
 function parsePairJs(args) {
   const raw = args.pair !== undefined ? args.pair : args.ab;
-  if (raw === undefined) return null;
+  if (raw === undefined) {
+    if (args["base-shader"]) {
+      throw new Error(
+        `--base-shader 需要同时给 --pair/--ab（哪怕只传一个空字符串占位，如 --pair ''），否则会被静默忽略、` +
+          `只拍到一张普通冻结截图（DX-22 发现的坑）。收到 --base-shader "${args["base-shader"]}" 但没有 --pair/--ab。`,
+      );
+    }
+    return null;
+  }
   if (args.pair !== undefined && args.ab !== undefined) throw new Error("--pair 和 --ab 是同一个功能的两个名字，只传其中一个");
   const arr = Array.isArray(raw) ? raw : [raw];
   if (args["base-shader"]) {
@@ -411,14 +435,47 @@ async function setWingStrobe(page, value) {
 
 /** --material 点号路径 -> collectPrograms（lint-shaders.mjs）枚举出的程序 id，只有这张表里的材质
  * 才能用「目录 / 提交」当 --base-shader（离线枚举，不用真起开发服务器）；传端口号不受此限制（直接读
- * 那个端口页面上材质此刻的 fragmentShader，见 resolveBaseShaderSource）。 */
+ * 那个端口页面上材质此刻的 fragmentShader，见 resolveBaseShaderSource）。
+ * DX-22：`cabinClass.current` / `cabinClass.seat` / `wingMat.current` / `wingMat.wet`（这一帧或强制
+ * 指定实际画的变体）与「`clouds.marchMat` 当前实际画的变体」这几个 --material 值是「运行中的页面状态」，
+ * 离线枚举一棵目录 / 提交时没有「当前 / 这一帧」的概念，所以故意不放进这张表——传目录 / 提交时会走下面
+ * resolveBaseShaderSource 的通用报错，提示改传端口号（见 resolveLiveMaterial）。`clouds.marchMat` / `wingMat`
+ * / `seatMat` 字面值仍然映射到各自默认变体的程序 id，离线对照默认变体不受影响。
+ * PERF-14 合并后新增 `seatMat`（座椅单独拆出的 pass，见 seat-pass.ts）与 wing 的 WING_WET 派生变体
+ * （wing-pass.ts 的 WingWetVariant，窗上有水时的湿窗版本）。 */
 const MATERIAL_TO_PROGRAM_ID = {
   sceneMat: "scene-default",
   outsideMat: "outside-default",
   wingMat: "wing",
+  seatMat: "seat-default",
   "clouds.marchMat": "cloud-march",
   "clouds.resolveMat": "cloud-resolve",
 };
+
+// DX-22：在页面里解析 --material 点号路径到真正的材质对象，特判几个「路径本身不够、还要看运行时状态」的
+// 值（其余按字面点号路径逐级取属性，和以前的 resolvePath 行为一致）：
+//   "cabinClass.current"  这一帧实际画的舱内合成材质（v.cabinClass.mats[v.cabinClass.shown].cabin），不是
+//                          构造时传入的默认商务舱材质字面量（= 字面量 "sceneMat"）——想换经济舱正在用的
+//                          着色器时，"cabinClass.mats.business.cabin" 这种写法拿到的永远是商务舱（无论
+//                          面板选的是什么）。PERF-14 起 `mats[班次]` 是 `{cabin, seat}` 对子，不再是单个
+//                          材质，取错一层会拿到整个对子对象（不是 ShaderMaterial，下面会报错提醒）。
+//   "cabinClass.seat"     这一帧实际画的座椅 pass 材质（PERF-14 拆出来的单独 pass，v.cabinClass.seat()），
+//                          和舱内合成材质是同一个舱等但两个不同的程序（分别编译、分别计时）。
+//   "wingMat.current"     这一帧实际画的机翼材质：窗上有水（湿度超阈值）且 WING_WET 变体已编好时是湿窗版
+//                          （v.wingVariant.wet），否则是默认干窗版（字面量 "wingMat" 本身）。
+//   "wingMat.wet"          不管这一帧实际画的是不是它，强制取 WING_WET 变体本身（v.wingVariant.wet，变体
+//                          还没编好时是 null，调用方会看到解析失败的报错，不会拿到默认材质悄悄顶替）。
+//   "clouds.marchMat"     当前实际画的云步进变体（v.clouds.marchVariants.get(v.clouds.marchShown).mat），
+//                          不是字面属性 clouds.marchMat（只是默认变体，天气 / 奇观 / 卷云场景下不是实际在画的那个，
+//                          C03 审查发现的「冻结工具对云是瞎的」同一类问题——materialPath 对不上实际渲染路径）。
+// 只在这些值上特判：老版本页面缺对应字段时自动退回能找到的最接近的东西（跨版本对照容错，和 applyScene 的
+// 容错原则一致），其余任意点号路径（sceneMat、outsideMat、wingMat、seatMat，以及以后新增的材质）不需要
+// 在这里特判，通用的点号路径解析已经能覆盖。
+//
+// 这段逻辑要在**两处** page.evaluate 里各写一遍（resolveBaseShaderSource 的端口分支、swapMaterialShader，
+// 各自内联一份 resolveLiveMaterial）：page.evaluate 只序列化传入函数自身的源码，不能引用 Node 侧的闭包函数，
+// 和 scenarios.mjs 的 pinGeometry / applyScene 必须各自独立、不能互相调用是同一个限制（该文件头注释已写明）；
+// 原来两处各写一遍的 `resolvePath` 就是同一个模式，这里只是把它换成更懂 --material 语义的版本。
 
 /** 解析 --base-shader 的值，返回目标材质的 fragmentShader 原文。
  *   看起来像端口号（纯数字）：起一个短命页面，直接读那个端口此刻页面上这个材质的 fragmentShader
@@ -433,8 +490,29 @@ async function resolveBaseShaderSource(spec, materialPath, { browser, angle }) {
     const { context, page } = await openPage(browser, trimmed, angle);
     try {
       const src = await page.evaluate((materialPath) => {
-        const resolvePath = (root, p) => p.split(".").reduce((o, k) => (o == null ? o : o[k]), root);
-        const m = resolvePath(window.__voyage, materialPath);
+        function resolveLiveMaterial(v, materialPath) {
+          if (materialPath === "cabinClass.current" && v.cabinClass && v.cabinClass.mats) {
+            const pair = v.cabinClass.mats[v.cabinClass.shown];
+            return pair ? pair.cabin || pair : null; // pair.cabin：PERF-14 起 mats[班次] 是 {cabin, seat} 对子；老页面兜底 pair 本身
+          }
+          if (materialPath === "cabinClass.seat" && v.cabinClass) {
+            if (typeof v.cabinClass.seat === "function") return v.cabinClass.seat();
+            const pair = v.cabinClass.mats && v.cabinClass.mats[v.cabinClass.shown];
+            return pair ? pair.seat || null : null; // 老页面（PERF-14 之前）没有座椅单独 pass，解析不到
+          }
+          if (materialPath === "wingMat.current" && v.wingVariant) {
+            return v.wingVariant.shownWet ? v.wingVariant.wet : v.wingMat;
+          }
+          if (materialPath === "wingMat.wet" && v.wingVariant) {
+            return v.wingVariant.wet || null; // 还没编好（state 不是 ready）时是 null，不悄悄退回干窗版
+          }
+          if (materialPath === "clouds.marchMat" && v.clouds && v.clouds.marchVariants && v.clouds.marchShown !== undefined) {
+            const variant = v.clouds.marchVariants.get(v.clouds.marchShown || "");
+            if (variant && variant.mat) return variant.mat;
+          }
+          return materialPath.split(".").reduce((o, k) => (o == null ? o : o[k]), v);
+        }
+        const m = resolveLiveMaterial(window.__voyage, materialPath);
         if (!m || typeof m.fragmentShader !== "string") throw new Error(`端口 ${materialPath} 解析不到材质`);
         return m.fragmentShader;
       }, materialPath);
@@ -474,23 +552,69 @@ async function resolveBaseShaderSource(spec, materialPath, { browser, angle }) {
 /** 把 window.__voyage 下某个材质的 fragmentShader 换成 src（null 换回原文），等 renderer.compileAsync
  * 真正编完再返回，并做一次真正的 render() 强制切换（compileAsync 只保证编译完成，不保证已经切换，见
  * probe.mjs / passes.mjs --variants 同一套手法）。原文缓存在页面自己的 window.__pairOrigShaders，
- * 同一个材质多次换只缓存第一次（从未改动过的原文），和 probe.mjs 的 origShaders 是同一个设计。 */
-async function swapMaterialShader(page, materialPath, src) {
+ * 同一个材质多次换只缓存第一次（从未改动过的原文），和 probe.mjs 的 origShaders 是同一个设计。
+ * DX-22：defines（--define，见 parseDefines）在 src 给了值时叠加到材质原本的 defines 上再重编——换上
+ * 另一棵树的着色器原文，如果那份原文靠某个 #define 才走到想看的分支（例如经济舱变体的
+ * CABIN_CLASS_ECONOMY），光换文本编不出想要的东西。src 为 null（换回原文）时 defines 也一并复原，
+ * 不管这次调用有没有传 defines，否则「拍 a2」时着色器换回去了、define 却留着上一轮加的。 */
+async function swapMaterialShader(page, materialPath, src, defines) {
   return page.evaluate(
-    async ({ materialPath, src }) => {
+    async ({ materialPath, src, defines }) => {
       const v = window.__voyage;
-      const resolvePath = (root, p) => p.split(".").reduce((o, k) => (o == null ? o : o[k]), root);
-      const m = resolvePath(v, materialPath);
-      if (!m || typeof m.fragmentShader !== "string") throw new Error(`--material 解析不到 "${materialPath}"（或它不是 ShaderMaterial）`);
+      // 同 resolveBaseShaderSource 端口分支的 resolveLiveMaterial，见上面「--material 点号路径」注释
+      function resolveLiveMaterial(v, materialPath) {
+        if (materialPath === "cabinClass.current" && v.cabinClass && v.cabinClass.mats) {
+          const pair = v.cabinClass.mats[v.cabinClass.shown];
+          return pair ? pair.cabin || pair : null;
+        }
+        if (materialPath === "cabinClass.seat" && v.cabinClass) {
+          if (typeof v.cabinClass.seat === "function") return v.cabinClass.seat();
+          const pair = v.cabinClass.mats && v.cabinClass.mats[v.cabinClass.shown];
+          return pair ? pair.seat || null : null;
+        }
+        if (materialPath === "wingMat.current" && v.wingVariant) {
+          return v.wingVariant.shownWet ? v.wingVariant.wet : v.wingMat;
+        }
+        if (materialPath === "wingMat.wet" && v.wingVariant) {
+          return v.wingVariant.wet || null;
+        }
+        if (materialPath === "clouds.marchMat" && v.clouds && v.clouds.marchVariants && v.clouds.marchShown !== undefined) {
+          const variant = v.clouds.marchVariants.get(v.clouds.marchShown || "");
+          if (variant && variant.mat) return variant.mat;
+        }
+        return materialPath.split(".").reduce((o, k) => (o == null ? o : o[k]), v);
+      }
+      const m = resolveLiveMaterial(v, materialPath);
+      if (!m || typeof m.fragmentShader !== "string") throw new Error(`--material 解析不到 "${materialPath}"（或它不是 ShaderMaterial——变体可能还没编好，比如 wingMat.wet 在窗还没湿过、WING_WET 从未后台编译时就是 null）`);
       window.__pairOrigShaders ??= new Map();
+      window.__pairOrigDefines ??= new Map();
       if (!window.__pairOrigShaders.has(m)) window.__pairOrigShaders.set(m, m.fragmentShader);
+      if (!window.__pairOrigDefines.has(m)) window.__pairOrigDefines.set(m, { ...(m.defines || {}) });
       m.fragmentShader = src ?? window.__pairOrigShaders.get(m);
+      if (src == null) m.defines = { ...window.__pairOrigDefines.get(m) };
+      else if (defines) m.defines = { ...window.__pairOrigDefines.get(m), ...defines };
       m.needsUpdate = true;
       const passObj = v.clouds.pass;
       const renderer = passObj.renderer;
       const prevMat = passObj.mesh.material;
       const prevTarget = renderer.getRenderTarget();
-      const tgt = v.cabinClass && v.cabinClass.mats && Object.values(v.cabinClass.mats).includes(m) ? v.cabinClass.target : v.hdrOutside;
+      // DX-22：按 materialPath 直接查表选真正画进去的目标，不再靠「在 cabinClass.mats 里做对象身份查找」
+      // 猜（PERF-14 把 mats[班次] 从单个材质改成了 {cabin, seat} 对子后，原来的 Object.values(mats).includes(m)
+      // 永远查不到、会一律退化成 hdrOutside，协调者验收前发现的坑）。ANGLE/D3D11 按链接时绑定的帧缓冲生成
+      // 输出布局，绑错会在下一次真实渲染时同步重编（README「着色器编译」坑点，PERF-1）；hdrWing / hdrSeat
+      // 是本任务和 PERF-14 分别加的调试句柄，老版本页面没有就退回 hdrOutside（画面仍然对，只是多一次同步重编）。
+      const tgt =
+        materialPath === "sceneMat" || materialPath === "cabinClass.current"
+          ? v.cabinClass?.target || v.hdrOutside
+          : materialPath === "seatMat" || materialPath === "cabinClass.seat"
+            ? v.hdrSeat || v.cabinClass?.seatTarget || v.hdrOutside
+            : materialPath === "wingMat" || materialPath === "wingMat.current" || materialPath === "wingMat.wet"
+              ? v.hdrWing || v.hdrOutside
+              : materialPath === "clouds.resolveMat"
+                ? v.clouds.history[0]
+                : materialPath.startsWith("clouds.")
+                  ? v.clouds.raw
+                  : v.hdrOutside;
       passObj.mesh.material = m;
       renderer.setRenderTarget(tgt);
       await renderer.compileAsync(passObj.scene, passObj.camera);
@@ -499,8 +623,26 @@ async function swapMaterialShader(page, materialPath, src) {
       renderer.setRenderTarget(prevTarget);
       return true;
     },
-    { materialPath, src },
+    { materialPath, src, defines: defines || null },
   );
+}
+
+/** --define KEY[=VALUE]（可重复，DX-22）：--base-shader 换上另一棵树的着色器原文后，如果那份原文靠一个
+ * 当前材质默认没开的 #define 才走到想看的分支（例如经济舱变体的 CABIN_CLASS_ECONOMY），只换 fragmentShader
+ * 文本编不出想要的变体——重编前把这些 define 一并加上去（叠加在材质原本的 defines 上，不覆盖其余的）。
+ * VALUE 不给就是 1（GLSL `#define X 1` 最常见的写法）。不传 --define 时返回 null（swapMaterialShader
+ * 按「不改 defines」处理，和以前完全一样）。 */
+function parseDefines(args) {
+  if (!args.define) return null;
+  const list = Array.isArray(args.define) ? args.define : [args.define];
+  const out = {};
+  for (const raw of list) {
+    const s = String(raw);
+    const eq = s.indexOf("=");
+    if (eq === -1) out[s] = 1;
+    else out[s.slice(0, eq)] = s.slice(eq + 1);
+  }
+  return out;
 }
 
 // ---------- shots：跑回归场景表，截图 + 每场景一份同名 JSON ----------
@@ -513,7 +655,11 @@ async function cmdShots(args) {
   const viewport = parseViewport(args);
   const dpr = parseDpr(args);
   const allowFlash = Boolean(args["allow-flash"]);
-  const freeze = Boolean(args.freeze);
+  // --cloud-live（DX-22）：冻结除云以外的一切，云照常渲染 / 做时间累积（main.ts 的 freeze(on, {cloudLive})）。
+  // 单独传 --cloud-live（不另加 --freeze）也生效——「冻结但云活着」这个状态本身就依赖冻结，两个开关分开写
+  // 没有意义，见下面 `freeze` 变量。
+  const cloudLive = Boolean(args["cloud-live"]);
+  const freeze = Boolean(args.freeze) || cloudLive;
   const settle = Boolean(args.settle);
   // --pair/--ab（DX-12）：批量截图时飞机一直在飞（applyScene 里等地面瓦片 / 舱等 / 云变体编译好那几秒到
   // 几十秒，位置一直按真实挂钟推进），只拨一个调试开关想拍「同一机位」的前后对照根本拍不成——两次分开跑
@@ -541,7 +687,7 @@ async function cmdShots(args) {
         // scenarios.mjs 文件头注释）——不然 applyScene 设场景到这里之间的等待时间里飞机已经飘走了一截，
         // 冻结的就不是场景原本该有的那个机位。钉完再冻结，两段 js 才是真正「同一机位」的对照。
         await page.evaluate(pinGeometry, sc);
-        await page.evaluate(() => window.__voyage.freeze(true));
+        await page.evaluate((cl) => window.__voyage.freeze(true, { cloudLive: cl }), cloudLive);
         await setWingStrobe(page, 0); // PERF-13 反馈：冻结截图钉死翼尖频闪为灭，不撞上全白窗
         await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
@@ -551,7 +697,7 @@ async function cmdShots(args) {
           const frameMs = await page.evaluate((n) => window.__voyage.benchFrame(n), 30);
           const head = await page.evaluate(() => window.__voyage.head);
           const extra = await collectShotMeta(page);
-          const meta = { scene: sc.name, pair: label, info, head, viewport, dpr, angle, renderer, frameMs: +frameMs.toFixed(3), origin: originFor(port), ...extraFields, ...extra };
+          const meta = { scene: sc.name, pair: label, info, head, viewport, dpr, angle, renderer, cloudLive, frameMs: +frameMs.toFixed(3), origin: originFor(port), ...extraFields, ...extra };
           fs.writeFileSync(path.join(outDir, `${sc.name}.${label}.json`), JSON.stringify(meta, null, 2));
           results.push(meta);
           console.log(`  ${sc.name}.${label}: frameMs=${meta.frameMs}`);
@@ -561,6 +707,7 @@ async function cmdShots(args) {
           // DX-12（PERF-12/TR07 反馈）：第二张不是任意 js，是同一机位换上另一棵树的着色器原文——
           // 拍 a（可选先跑 pairJs[0] 做预设置）→ 换上 --base-shader 拍 b → 换回原文拍 a2（噪声底）
           const materialPath = args.material || "sceneMat";
+          const defines = parseDefines(args); // DX-22：--define KEY[=VALUE]，只作用于 b 那次换文（见 swapMaterialShader）
           const preJs = pairJs[0];
           let preOut;
           if (preJs) {
@@ -571,10 +718,10 @@ async function cmdShots(args) {
 
           const baseSrc = await resolveBaseShaderSource(args["base-shader"], materialPath, { browser, angle });
           const errBefore = errors.length;
-          await swapMaterialShader(page, materialPath, baseSrc);
+          await swapMaterialShader(page, materialPath, baseSrc, defines);
           const shaderError = errors.length > errBefore;
           if (shaderError) console.error(`[dev-browser] --base-shader 换上的着色器编译 / 链接时报了错（见上面的 console.error），"${sc.name}.b.png" 很可能是垃圾画面，不要当真`);
-          await shootOne("b", { baseShader: args["base-shader"], material: materialPath, shaderError });
+          await shootOne("b", { baseShader: args["base-shader"], material: materialPath, defines, shaderError });
 
           await swapMaterialShader(page, materialPath, null);
           await shootOne("a2", { baseShader: args["base-shader"], material: materialPath, note: "换回原文的噪声底：理论上应与 a 逐像素一致（compare.mjs --diff a2 对照 a）" });
@@ -595,12 +742,14 @@ async function cmdShots(args) {
       // --freeze（DX-08）：截图前钉住位置 / 航向 / 头部 / 模拟时间 / 曝光适应 / 闪电 / 翼尖频闪相位
       // （__voyage.freeze，见 main.ts），冻结后连续渲染逐像素一致，可用来做两图相减定位。
       // 多等两帧让第一帧的残留 dt 归零（freeze 那一刻可能刚好在两次 rAF 中间）；截图后立刻解冻，
-      // 不影响紧接着的 benchFrame 计时（那条路本来就不经过 frame()，freeze 状态对它没有实际影响，
-      // 这里解冻只是让后续场景恢复正常节奏）。
+      // 再调用 benchFrame 计时——DX-22 起 benchFrame 冻结时也会读同一个 frozenNow（不再绕开冻结推进状态，
+      // 见 main.ts），但这里先解冻更干净：这一条 benchFrame 数字本来就是想测「正常节奏下」这个场景的帧时间，
+      // 不是想再拍一份冻结帧，解冻后恢复正常节奏，不影响后续场景。
       // PERF-13 反馈：freeze 只钉住频闪的「相位」，冻结那一刻可能恰好落在亮的窗口，夜景冻结截图偶尔会
       // 撞上一整块过曝白光；这里额外把 wingDebug.strobe 钉死为灭（0），解冻后恢复正常节奏。
+      // --cloud-live（DX-22）：freeze 变量已经把 cloudLive 纳入（见上），这里统一传给 __voyage.freeze。
       if (freeze) {
-        await page.evaluate(() => window.__voyage.freeze(true));
+        await page.evaluate((cl) => window.__voyage.freeze(true, { cloudLive: cl }), cloudLive);
         await setWingStrobe(page, 0);
         await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       }
@@ -622,6 +771,7 @@ async function cmdShots(args) {
         dpr,
         angle,
         renderer,
+        cloudLive,
         frameMs: +frameMs.toFixed(3),
         origin: originFor(port),
         ...extra,
@@ -679,6 +829,65 @@ async function coldOnce(browser, origin, angle, viewport, dpr) {
   }
 }
 
+/** DX-22：把多轮 cold 的 startup（各阶段耗时，`window.__voyageStartup`）汇总成 min/median/max——以前
+ * `cmdCold` 只是每一轮各打印一份，`--repeat` 传大了以后自己拿眼睛比哪个阶段稳定、哪个阶段来回跳很费劲。
+ * 数值型的键直接聚合；值本身是对象、或是「对象序列化后的 JSON 字符串」的键（PERF-14 加的
+ * `startup["批次各程序编好（ms）"]` 就是后者：`JSON.stringify({窗外: ms, 舱内: ms, 座椅: ms, 机翼: ms, "云#0": ms, ...})`，
+ * main.ts 的 `startup` 类型是 `Record<string, number | string>`，塞对象会被 `JSON.stringify` 整个页面状态
+ * 序列化失败，所以那边写成了字符串）按子键分别聚合，找出这一批并行后台编译里稳定的关键路径瓶颈是哪个程序。
+ * 非数值、非对象、不是能解析成对象的 JSON 字符串的键（如老页面缺这个字段时的 undefined）跳过。 */
+function summarizeStartup(entries) {
+  const keys = new Set();
+  for (const e of entries) for (const k of Object.keys(e.startup || {})) keys.add(k);
+  const summarizeNums = (vals) => {
+    const nums = vals.filter((v) => typeof v === "number" && Number.isFinite(v));
+    if (nums.length === 0) return null;
+    const sorted = [...nums].sort((a, b) => a - b);
+    return { min: sorted[0], median: sorted[Math.floor(sorted.length / 2)], max: sorted[sorted.length - 1], n: nums.length };
+  };
+  /** "批次各程序编好（ms）" 这类字段是 JSON.stringify 过的对象（见上）：能解析且解析出来是纯对象就返回解析结果，
+   * 否则（不是 JSON、或解析出来是数组 / 原语）原样返回，交给外层按普通字符串处理（跳过，不硬凑聚合）。 */
+  const tryParseObject = (v) => {
+    if (typeof v !== "string") return v;
+    try {
+      const parsed = JSON.parse(v);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : v;
+    } catch {
+      return v;
+    }
+  };
+  const summary = {};
+  for (const k of keys) {
+    const vals = entries.map((e) => e.startup && e.startup[k]).filter((v) => v !== undefined).map(tryParseObject);
+    if (vals.length === 0) continue;
+    if (typeof vals[0] === "number") {
+      summary[k] = summarizeNums(vals);
+    } else if (typeof vals[0] === "object" && vals[0] !== null) {
+      const subKeys = new Set();
+      for (const v of vals) if (v && typeof v === "object") for (const sk of Object.keys(v)) subKeys.add(sk);
+      const sub = {};
+      for (const sk of subKeys) {
+        const s = summarizeNums(vals.map((v) => (v && typeof v === "object" ? v[sk] : undefined)));
+        if (s) sub[sk] = s;
+      }
+      summary[k] = sub;
+    }
+  }
+  return summary;
+}
+
+function printStartupSummary(label, summary) {
+  console.log(`[dev-browser] cold 汇总 ${label}（${Object.keys(summary).length} 项，min/median/max，ms）：`);
+  for (const [k, v] of Object.entries(summary)) {
+    if (v && typeof v.min === "number") {
+      console.log(`    ${k}: min=${v.min} median=${v.median} max=${v.max}（n=${v.n}）`);
+    } else if (v && typeof v === "object") {
+      console.log(`    ${k}:`);
+      for (const [sk, sv] of Object.entries(v)) console.log(`      ${sk}: min=${sv.min} median=${sv.median} max=${sv.max}（n=${sv.n}）`);
+    }
+  }
+}
+
 async function cmdCold(args) {
   const port = args.port;
   if (!port) throw new Error("cold 需要 --port <端口>");
@@ -726,7 +935,19 @@ async function cmdCold(args) {
     await closeBrowserSafely(browser);
     if (releaseLock) releaseLock();
   }
-  if (args.out) fs.writeFileSync(resolveRepoPath(REPO_ROOT, args.out), JSON.stringify(results, null, 2));
+  // DX-22：--repeat > 1 时才有聚合的意义（1 轮聚合就是那一轮本身，跳过避免刷屏）
+  let summary;
+  if (repeat > 1) {
+    const currentEntries = results.filter((e) => !baseline || e.side === "current");
+    summary = { current: summarizeStartup(currentEntries) };
+    printStartupSummary(baseline ? `当前 ${port}` : `${port}`, summary.current);
+    if (baseline) {
+      const baseEntries = results.filter((e) => e.side === "baseline");
+      summary.baseline = summarizeStartup(baseEntries);
+      printStartupSummary(`基线 ${baseline}`, summary.baseline);
+    }
+  }
+  if (args.out) fs.writeFileSync(resolveRepoPath(REPO_ROOT, args.out), JSON.stringify({ results, summary }, null, 2));
   return results;
 }
 
@@ -744,11 +965,16 @@ function parseXYWH(s, label) {
   return { x, y, w, h };
 }
 
-/** 在（已经打开的）页面里解码 N 张截图、算块能量 CV 与爬行指标；不需要真实 GPU，只用 Canvas2D。 */
-async function analyzeFlicker(page, files, crop, blockSize) {
+/** 在（已经打开的）页面里解码 N 张截图、算块能量 CV 与爬行指标；不需要真实 GPU，只用 Canvas2D。
+ * cloudLive=true 时额外算 relStd / relLow16（DX-22，把 handoff/C03-rt.mjs 审查用的 realtime() 收成正式
+ * 指标）：每个够亮的像素在 T 帧上的 luma 时间序列，relStd = 时间标准差 / 均值，relLow16 = 先按 16 帧盒平均
+ * 去掉逐帧噪声、再算这条「低频」序列的标准差 / 均值——前者混进了 TAA / 抖动这类逐帧就会自己抵消的高频噪声，
+ * 后者才是「云本身在变化」的量级（C03 审查发现层状云横纹有肉眼看得出的低频明暗起伏，逐帧噪声掩盖不了它）。
+ * 两个指标都只在 cloudLive 时计算（不改变非 cloud-live 调用的返回形状，向后兼容）。 */
+async function analyzeFlicker(page, files, crop, blockSize, cloudLive) {
   const dataUrls = files.map((f) => `data:image/png;base64,${fs.readFileSync(f).toString("base64")}`);
   return page.evaluate(
-    async ({ dataUrls, crop, blockSize }) => {
+    async ({ dataUrls, crop, blockSize, cloudLive }) => {
       const loadImg = (src) =>
         new Promise((resolve, reject) => {
           const img = new Image();
@@ -822,6 +1048,35 @@ async function analyzeFlicker(page, files, crop, blockSize) {
         if (mean[j] > 20) jitVals.push(d1 / mean[j]);
       }
       jitVals.sort((a, b) => a - b);
+      // ---- DX-22（cloud-live）：逐像素 relStd（全频段时间标准差/均值）与 relLow16（16 帧盒平均后的
+      // 低频标准差/均值），只在 cloudLive 时算（其余状态冻结，波动来源只可能是云自己） ----
+      let relStd = null, relLow16 = null;
+      if (cloudLive) {
+        let sumRelStd = 0, sumRelLow = 0, cntRS = 0;
+        const BOX = 16;
+        for (let j = 0; j < N; j++) {
+          const m = mean[j];
+          if (m <= 12) continue;
+          let s2 = 0;
+          for (let t = 0; t < T; t++) s2 += (lumas[t][j] - m) ** 2;
+          let l2 = 0, nb = 0;
+          for (let t0 = 0; t0 + BOX <= T; t0 += BOX) {
+            let a = 0;
+            for (let t = t0; t < t0 + BOX; t++) a += lumas[t][j];
+            a /= BOX;
+            l2 += (a - m) ** 2;
+            nb++;
+          }
+          if (nb === 0) continue; // T < 16：一个完整的盒子都凑不齐，这个像素不参与 relLow16（也不参与 relStd，两个指标要在同一批像素上才可比）
+          sumRelStd += Math.sqrt(s2 / T) / m;
+          sumRelLow += Math.sqrt(l2 / nb) / m;
+          cntRS++;
+        }
+        if (cntRS > 0) {
+          relStd = sumRelStd / cntRS;
+          relLow16 = sumRelLow / cntRS;
+        }
+      }
       return {
         frames: T,
         crop: { x: x0, y: y0, w, h },
@@ -833,9 +1088,11 @@ async function analyzeFlicker(page, files, crop, blockSize) {
         crawlD1: brightCount ? sumD1 / sumBrightMean : NaN,
         pixelJitterMedian: percentile(jitVals, 50),
         brightPixels: brightCount,
+        relStd,
+        relLow16,
       };
     },
-    { dataUrls, crop, blockSize },
+    { dataUrls, crop, blockSize, cloudLive: !!cloudLive },
   );
 }
 
@@ -847,9 +1104,21 @@ async function cmdFlicker(args) {
   const dpr = parseDpr(args);
   const outDir = resolveRepoPath(REPO_ROOT, args.out || `tmp/screenshot/dev-${port}-flicker`);
   fs.mkdirSync(outDir, { recursive: true });
-  const frames = Number(args.frames || 20);
+  // --cloud-live（DX-22）：冻结除云以外的一切，只看云本身的时间波动——这时不应该再叠加 --step 的相机
+  // 平移（那是测空间抗锯齿用的，混进来会分不清波动到底来自云还是来自相机微移）。默认步长改成 0，默认帧数
+  // 拉到 32（凑够 2 个 16 帧盒子，relLow16 才有统计意义；本想学 handoff/C03-rt.mjs 的 nSeries=128，但
+  // analyzeFlicker 是拿一批完整截图 + base64 dataUrl 整批塞进 page.evaluate 解码，不是 C03-rt 那种直接读
+  // GPU 缓冲——DX-22 交付前在本机实测：48 帧稳定复现 `page.evaluate: Target page, context or browser has
+  // been closed`（40 帧过、48 帧必炸，猜测是这一批 dataUrl 太大让渲染进程崩溃；**不带 `--cloud-live` 的原版
+  // flicker 同样在 48 帧崩，不是本任务引入的新问题**，只是原来没人试过这么多帧）。32 是留了余量的稳妥默认值，
+  // 机器空闲、确实需要更细的低频分辨率时可以 `--frames` 显式调大，但见 README「调试与验证」flicker 一节的
+  // 提醒——这是一个已知的 DX 缺口，没有列进本任务范围，建议排一个 DX 任务把 analyzeFlicker 改成分批读回
+  // （不必一次性把所有帧的 dataUrl 都塞进同一次 page.evaluate）。
+  // --step / --frames 都可以显式覆盖（例如就是想同时测「云 + 相机微移」的耦合效应）。
+  const cloudLive = Boolean(args["cloud-live"]);
+  const frames = Number(args.frames || (cloudLive ? 32 : 20));
   // 每帧头部横向位移（毫米），W01b-flicker.mjs 用过 0.06 mm 这个量级（亚像素、不引入可见的构图变化）
-  const stepMm = Number(args.step ?? 0.06);
+  const stepMm = Number(args.step ?? (cloudLive ? 0 : 0.06));
   const blockSize = Number(args.block || 48);
   const crop = args.crop ? parseXYWH(args.crop, "--crop") : null;
   const debugMode = args.debug !== undefined ? Number(args.debug) : null;
@@ -862,17 +1131,19 @@ async function cmdFlicker(args) {
   const browser = await launchBrowser(angle);
   try {
     const { page, renderer } = await openPage(browser, port, angle, viewport, dpr);
-    console.log(`[dev-browser] flicker --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
+    console.log(`[dev-browser] flicker --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}${cloudLive ? "  --cloud-live" : ""}`);
     await page.evaluate(applyScene, { sc, defaults: DEFAULTS, settle });
     if (debugMode !== null) await page.evaluate((d) => { window.__voyage.sceneMat.uniforms.uDebug.value = d; }, debugMode);
-    // 冻结（DX-08）：位置 / 航向 / 模拟时间 / 曝光适应 / 闪电 / 频闪相位全部钉住，只由下面手动步进 head.x
-    await page.evaluate(() => window.__voyage.freeze(true));
+    // 冻结（DX-08）：位置 / 航向 / 模拟时间 / 曝光适应 / 闪电 / 频闪相位全部钉住，只由下面手动步进 head.x；
+    // cloudLive 时云不在冻结之列，照常按真实 rAF 节奏渲染 / 做时间累积（main.ts 的 freeze(on, {cloudLive})）。
+    await page.evaluate((cl) => window.__voyage.freeze(true, { cloudLive: cl }), cloudLive);
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
     const stepM = stepMm / 1000;
     const files = [];
     for (let i = 0; i < frames; i++) {
-      if (i > 0) await page.evaluate((dx) => { window.__voyage.head.x += dx; }, stepM);
-      // 等两帧真正画出新的 head.x（frame() 里 renderFrame 每次都读最新的 head.x，不缓存）
+      if (i > 0 && stepM !== 0) await page.evaluate((dx) => { window.__voyage.head.x += dx; }, stepM);
+      // 等两帧真正画出新状态（frame() 里 renderFrame 每次都读最新的 head.x，不缓存；cloudLive 时这两帧
+      // rAF 本身就是云继续渲染的驱动力，即使 stepM=0 也不能省）
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       const file = path.join(outDir, `f${String(i).padStart(2, "0")}.png`);
       await page.screenshot({ path: file, timeout: 60000 });
@@ -880,10 +1151,14 @@ async function cmdFlicker(args) {
     }
     await page.evaluate(() => window.__voyage.freeze(false));
     console.log(`[dev-browser] ${sc.name}：${frames} 帧，每帧头部 +${stepMm} mm，输出 ${path.relative(REPO_ROOT, outDir).replace(/\\/g, "/")}`);
-    const stats = await analyzeFlicker(page, files, crop, blockSize);
+    const stats = await analyzeFlicker(page, files, crop, blockSize, cloudLive);
     console.log(`  块能量 CV（T08 法）中位 ${stats.cvMedian.toFixed(4)} / p90 ${stats.cvP90.toFixed(4)} / p98 ${stats.cvP98.toFixed(4)}（${stats.blocks} 个块，边长 ${blockSize}）`);
     console.log(`  爬行指标（T43 法，二阶差分/亮度）${stats.crawlD2.toFixed(4)}（一阶差分/亮度 ${stats.crawlD1.toFixed(4)} 做参考，亮像素 ${stats.brightPixels}）`);
-    if (args.out) fs.writeFileSync(path.join(outDir, "stats.json"), JSON.stringify({ scene: sc.name, stepMm, debug: debugMode, ...stats }, null, 2));
+    if (cloudLive) {
+      console.log(`  云时间波动（DX-22）relStd=${stats.relStd?.toFixed(4) ?? "n/a"}  relLow16=${stats.relLow16?.toFixed(4) ?? "n/a"}（16 帧盒平均后的低频/均值；n/a 说明 --frames 太少凑不出一个盒子，或裁剪区太暗）`);
+      console.log(`  对角高频（棋盘 / 菱形纹）不在这里算：拿输出目录里任意一帧（如 f00.png）跑 compare.mjs --measure 看 adjDiffDiag（见 README「调试与验证」）`);
+    }
+    if (args.out) fs.writeFileSync(path.join(outDir, "stats.json"), JSON.stringify({ scene: sc.name, stepMm, cloudLive, debug: debugMode, ...stats }, null, 2));
     return stats;
   } finally {
     await closeBrowserSafely(browser);
@@ -990,13 +1265,19 @@ async function main() {
     console.error("  --allow-flash   仅 shots：不关闭雷电频闪（默认关，见 weather.ts 的 hold / heldIntensity 开关）");
     console.error("  --freeze        仅 shots（DX-08）：截图前 __voyage.freeze(true)——位置 / 航向 / 头部 / 模拟时间 /");
     console.error("                  曝光适应 / 闪电 / 翼尖频闪相位全部钉住（PERF-13：另把翼尖频闪钉死为灭），连续渲染逐像素一致，适合两图相减找回归");
+    console.error("                  DX-22：benchFrame 现在也遵守冻结，不会再把状态推进掉（以前 --pair 两张之间调用 benchFrame 会绕开冻结）");
+    console.error("  --cloud-live    仅 shots（DX-22）：__voyage.freeze(true, {cloudLive:true})，冻结除云以外的一切，云照常渲染 / 做时间累积");
     console.error("  --settle        仅 shots（DX-08）：等 ground.pending === 0 再截（而不是默认的 pending<5），逐像素对比用");
     console.error("  --pair '<js1>' --pair '<js2>'（或 --ab，DX-12）  仅 shots：同一机位冻结后先后跑两段 js 各拍一张（<场景>.a.png / .b.png）");
-    console.error("                  --base-shader <端口|目录|提交> [--material sceneMat]：第二张换成换上另一棵树着色器原文的对照（另拍 a2 噪声底）");
+    console.error("                  --base-shader <端口|目录|提交> [--material sceneMat] [--define KEY[=VALUE] ...]：第二张换成换上另一棵树着色器原文的对照（另拍 a2 噪声底）");
+    console.error("                  DX-22：--base-shader 必须搭配 --pair（哪怕传空字符串），不给会直接报错，不再静默忽略");
+    console.error("                  DX-22：--material 除字面路径外还认 cabinClass.current / cabinClass.seat / wingMat.current / wingMat.wet（这一帧实际画的变体）");
     console.error("  flicker         冻结后按亚像素步进（--step 毫米，默认 0.06）微移相机（head.x）连拍 --frames 帧（默认 20），");
     console.error("                  输出块能量变异系数（T08 法）与爬行指标（T43 法）；--crop x,y,w,h 限定统计区域，");
     console.error("                  --block N 块边长（默认 48），--debug N 设 uDebug，一次只测一个场景（--only 单选或单个 --scene）");
+    console.error("                  --cloud-live（DX-22）：冻结除云以外的一切（--step 默认改 0、--frames 默认改 32），额外输出 relStd / relLow16（云的时间波动）");
     console.error("  cold --baseline 端口（DX-12）：--repeat 轮交替测 port / baseline 两侧真冷启动，不用手写交替脚本");
+    console.error("                  --repeat > 1 时额外打印各阶段 min/median/max 汇总（DX-22），含 PERF-14 的「批次各程序编好（ms）」——按程序名分别聚合，看关键路径稳不稳定");
     process.exit(1);
   }
   // playwright-core 有时会留一些内部句柄没清干净（尤其是 GPU 争用导致渲染进程中途崩溃过一次的情况），
