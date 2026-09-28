@@ -400,6 +400,9 @@ int gWingPart = 0;
 // 算自阴影时跳过着色点自己所在的部件（主翼和翼尖算一组）：凸的翼面对自己的「擦边」会被软阴影估计成半影，
 // 翼面上出现一圈圈木纹似的明暗条带。−1 = 不跳过
 int gWingSkip = -1;
+// 命中点的曲率 1/R（1/m，四面体采样的拉普拉斯估计，见 wingTrace）。shadeWing 用它估计一个像素里法线转过多少，
+// 给翼尖灯照明的地平线做像素足迹滤波（W-LAMP）。不放进 WingTraceResult：结构体每多一个字段，五条射线的结果都要多占寄存器
+float gWingCurv = 0.0;
 
 float sdWing(vec3 P) {
   float d = gWingSkip == 0 ? 1e3 : sdWingMain(P);
@@ -625,6 +628,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         // 斜着看的大片翼面（夕阳场景约 4% 的像素）都会被当成边缘去超采样，白白多花 1 毫秒多
         float lap = (sumD - 4.0 * dHit) / (2.0 * 0.0023 * 0.0023);
         float rad = 1.0 / max(lap, 1e-3);
+        gWingCurv = max(lap, 0.0);
         float silPx = rad * ndv * ndv * 0.5 / (pa * w.t);
         if (silPx < 1.5) w.edge = true;
         if (ndv < 0.05) n = normalize(n - dA * (0.05 - ndv));

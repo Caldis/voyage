@@ -1,0 +1,57 @@
+[
+ {
+  "name": "night-city-low-all",
+  "scene": {
+   "name": "night-city-low",
+   "p": {
+    "preset": "fuji",
+    "date": "2026-01-16",
+    "time": 1260,
+    "altitude": 1,
+    "coverage": 0.15,
+    "cabin-light": "off",
+    "quality": "high"
+   },
+   "offset": [
+    0,
+    -25
+   ],
+   "ground": true,
+   "head": -0.25
+  },
+  "variants": [
+   {
+    "name": "old",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new",
+    "js": ""
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new2",
+    "js": ""
+   }
+  ],
+  "live": {
+   "crop": [
+    680,
+    400,
+    200,
+    90
+   ],
+   "frames": 480,
+   "all": true,
+   "variants": [
+    "old",
+    "new",
+    "old2",
+    "new2"
+   ]
+  }
+ }
+]

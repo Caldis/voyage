@@ -1,0 +1,441 @@
+[
+ {
+  "name": "night-city-low",
+  "scene": {
+   "name": "night-city-low",
+   "p": {
+    "preset": "fuji",
+    "date": "2026-01-16",
+    "time": 1260,
+    "altitude": 1,
+    "coverage": 0.15,
+    "cabin-light": "off",
+    "quality": "high"
+   },
+   "offset": [
+    0,
+    -25
+   ],
+   "ground": true,
+   "head": -0.25
+  },
+  "variants": [
+   {
+    "name": "old",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new",
+    "js": ""
+   },
+   {
+    "name": "nowing",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "old-strobe",
+    "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "new-strobe",
+    "js": "v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "nowing-strobe",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
+   }
+  ],
+  "compare": [
+   [
+    "new",
+    "old",
+    "nowing",
+    "mask"
+   ],
+   [
+    "new-strobe",
+    "old-strobe",
+    "nowing-strobe",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
+   ]
+  ]
+ },
+ {
+  "name": "night-city-off",
+  "scene": {
+   "name": "night-city-off",
+   "p": {
+    "preset": "fuji",
+    "date": "2026-01-16",
+    "time": 1260,
+    "altitude": 4,
+    "coverage": 0.15,
+    "cabin-light": "off",
+    "quality": "high"
+   },
+   "offset": [
+    0,
+    -25
+   ],
+   "ground": true,
+   "head": -0.25
+  },
+  "variants": [
+   {
+    "name": "old",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new",
+    "js": ""
+   },
+   {
+    "name": "nowing",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "old-strobe",
+    "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "new-strobe",
+    "js": "v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "nowing-strobe",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
+   }
+  ],
+  "compare": [
+   [
+    "new",
+    "old",
+    "nowing",
+    "mask"
+   ],
+   [
+    "new-strobe",
+    "old-strobe",
+    "nowing-strobe",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
+   ]
+  ]
+ },
+ {
+  "name": "night-sea-milkyway",
+  "scene": {
+   "name": "night-sea-milkyway",
+   "p": {
+    "preset": "scs",
+    "seat": "left",
+    "date": "2026-05-15",
+    "time": 1350,
+    "coverage": 0.15,
+    "cabin-light": "off",
+    "wing-pos": "-4",
+    "quality": "high"
+   }
+  },
+  "variants": [
+   {
+    "name": "old",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new",
+    "js": ""
+   },
+   {
+    "name": "nowing",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "old-strobe",
+    "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "new-strobe",
+    "js": "v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "nowing-strobe",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
+   }
+  ],
+  "compare": [
+   [
+    "new",
+    "old",
+    "nowing",
+    "mask"
+   ],
+   [
+    "new-strobe",
+    "old-strobe",
+    "nowing-strobe",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
+   ]
+  ]
+ },
+ {
+  "name": "night-wing-on",
+  "scene": {
+   "name": "night-wing-on",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-01-16",
+    "time": 1320,
+    "coverage": 0.15,
+    "cabin-light": true,
+    "wing-pos": "8",
+    "quality": "high"
+   }
+  },
+  "variants": [
+   {
+    "name": "old",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new",
+    "js": ""
+   },
+   {
+    "name": "nowing",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "old-strobe",
+    "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "new-strobe",
+    "js": "v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "nowing-strobe",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
+   }
+  ],
+  "compare": [
+   [
+    "new",
+    "old",
+    "nowing",
+    "mask"
+   ],
+   [
+    "new-strobe",
+    "old-strobe",
+    "nowing-strobe",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
+   ]
+  ]
+ },
+ {
+  "name": "noon-cumulus",
+  "scene": {
+   "name": "noon-cumulus",
+   "p": {
+    "preset": "wpac",
+    "time": 720,
+    "wing-pos": "8",
+    "quality": "high"
+   }
+  },
+  "variants": [
+   {
+    "name": "old",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new",
+    "js": ""
+   },
+   {
+    "name": "nowing",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
+   }
+  ],
+  "compare": [
+   [
+    "new",
+    "old",
+    "nowing",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
+   ]
+  ]
+ },
+ {
+  "name": "sunset-wing",
+  "scene": {
+   "name": "sunset-wing",
+   "p": {
+    "preset": "wpac",
+    "time": 1040,
+    "wing-pos": "8",
+    "quality": "high"
+   }
+  },
+  "variants": [
+   {
+    "name": "old",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new",
+    "js": ""
+   },
+   {
+    "name": "nowing",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
+   }
+  ],
+  "compare": [
+   [
+    "new",
+    "old",
+    "nowing",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
+   ]
+  ]
+ },
+ {
+  "name": "biz-seated-noon",
+  "scene": {
+   "name": "biz-seated-noon",
+   "p": {
+    "preset": "wpac",
+    "time": 720,
+    "wing-pos": "8",
+    "cabin-class": "business",
+    "quality": "high"
+   },
+   "head": [
+    0,
+    0.02,
+    -0.42
+   ]
+  },
+  "variants": [
+   {
+    "name": "old",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new",
+    "js": ""
+   },
+   {
+    "name": "nowing",
+    "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
+   }
+  ],
+  "compare": [
+   [
+    "new",
+    "old",
+    "nowing",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
+   ]
+  ]
+ }
+]
