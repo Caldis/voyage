@@ -106,6 +106,7 @@ import { resolveExistingDirRoot, resolveCommitRoot } from "./lib/baseline-root.m
 import { collectPrograms } from "./lint-shaders.mjs";
 import { cmdAb, cmdFlight } from "./lib/ab.mjs";
 import { cmdGpuAb } from "./lib/gpu-ab.mjs";
+import { groundSettle } from "./lib/ab-live.mjs";
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
@@ -744,6 +745,7 @@ async function cmdShots(args) {
         await page.evaluate(pinGeometry, sc);
         await page.evaluate((cl) => window.__voyage.freeze(true, { cloudLive: cl }), cloudLive);
         await setWingStrobe(page, 0); // PERF-13 反馈：冻结截图钉死翼尖频闪为灭，不撞上全白窗
+        if (sc.ground) await groundSettle(page, 120000); // G-FREEZE：冻结后等地面完全稳定（否则 a / b 之间地面可能换版）
         await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
         const shootOne = async (label, extraFields) => {
@@ -807,6 +809,7 @@ async function cmdShots(args) {
       if (freeze) {
         await page.evaluate((cl) => window.__voyage.freeze(true, { cloudLive: cl }), cloudLive);
         await setWingStrobe(page, 0);
+        if (sc.ground) await groundSettle(page, 120000); // G-FREEZE：冻结后等地面完全稳定
         await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       }
       const pngPath = path.join(outDir, `${sc.name}.png`);
@@ -1195,6 +1198,7 @@ async function cmdFlicker(args) {
     // 冻结（DX-08）：位置 / 航向 / 模拟时间 / 曝光适应 / 闪电 / 频闪相位全部钉住，只由下面手动步进 head.x；
     // cloudLive 时云不在冻结之列，照常按真实 rAF 节奏渲染 / 做时间累积（main.ts 的 freeze(on, {cloudLive})）。
     await page.evaluate((cl) => window.__voyage.freeze(true, { cloudLive: cl }), cloudLive);
+    if (sc.ground) await groundSettle(page, 120000); // G-FREEZE：冻结后等地面完全稳定，免得连拍期间地面换版被算成闪烁
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
     const stepM = stepMm / 1000;
     const files = [];

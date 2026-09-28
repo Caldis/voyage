@@ -24,7 +24,7 @@ import path from "node:path";
 import { DEFAULTS, SCENES, applyScene, pinGeometry } from "../scenarios.mjs";
 import { resolveRepoPath } from "./chrome.mjs";
 import { acquireOrWait } from "./measure-lock.mjs";
-import { groundSettle, readGround, setGround, dumpClouds, saveCloudDump, runLive, printLive } from "./ab-live.mjs";
+import { groundSettle, groundUploads, readGround, setGround, dumpClouds, saveCloudDump, runLive, printLive } from "./ab-live.mjs";
 import { cloudMetrics, printCloudMetrics } from "./cloud-metrics.mjs";
 
 // ---------- 小工具 ----------
@@ -398,11 +398,12 @@ export async function cmdAb(args, h) {
       await setWingStrobe(page, 0);
       // DX-26：job.ground 简写（{ 开关: 值 }，如 G08c 的 demNightEdgeShared）：设好、rebuildAll，下面统一等瓦片
       if (job.ground) await setGround(page, job.ground, log, "job");
-      // 冻结状态下等地面瓦片全部到位（applyScene 的 settle 有超时；钉回机位后还可能触发新瓦片）。
-      // DX-26：判据从 pending === 0 加严到 G08c-seam 的 settled（各级 valid、不在建、上传队列空），再多等 2 s 让上传落地
+      // 冻结状态下等地面完全稳定（applyScene 的 settle 有超时；钉回机位后还可能触发新瓦片）。
+      // G-FREEZE：pending === 0（+ 2 s）不够——瓦片取齐后拼接 / 合成 / 上传还要几秒，各级在截图之间陆续换上（night-city-low 同设置两张差 20 万像素）。
+      // 改等 ground.unsettled() 连续 10 帧为 null 且换版计数不变（groundSettle）；之后每张图记换版计数，和这里的基线不同就作废
       const settle = await groundSettle(page, 120000);
-      await page.waitForTimeout(2000);
-      log(`${job.name}：场景就绪 ${((Date.now() - t0) / 1000).toFixed(1)} s${settle.ok ? "" : `（等瓦片超时，pending=${settle.pending}）`}`);
+      let groundBase = settle.uploads;
+      log(`${job.name}：场景就绪 ${((Date.now() - t0) / 1000).toFixed(1)} s${settle.ok ? "" : `（等地面稳定超时：${settle.reason}）`}`);
       const { mats, unis } = collectPaths(variants);
       await page.evaluate(({ mats, unis }) => window.__dx.prepare(mats, unis), { mats, unis });
       // 变体级 ground：所有变体碰过的开关先记下 job 设好后的值，没写这个开关的变体按这个值（变了才 rebuildAll）
@@ -419,7 +420,8 @@ export async function cmdAb(args, h) {
           const label = r === 0 ? va.name : `${va.name}#${r + 1}`;
           const e0 = errors.length;
           const te0 = tileErrors.n;
-          if (groundOrig) await setGround(page, { ...groundOrig, ...(va.ground || {}) }, log, label);
+          // 变体级 ground 有意 rebuildAll 了：换版计数的基线跟着换（setGround 已等到稳定）
+          if (groundOrig && (await setGround(page, { ...groundOrig, ...(va.ground || {}) }, log, label)).changed) groundBase = await groundUploads(page);
           const res = await page.evaluate((va) => window.__dx.apply(va), va);
           // DX-26：cloudDump——换完变体先手动推进云并读回（全冻结时 rAF 不画云，这一步也让截图里的云是本变体收敛后的样子）
           let cloud = null;
@@ -455,6 +457,7 @@ export async function cmdAb(args, h) {
           }
           const meta = await page.evaluate(() => ({
             groundPending: window.__voyage.ground ? window.__voyage.ground.pending : null,
+            groundUploads: window.__voyage.ground && typeof window.__voyage.ground.uploads === "number" ? window.__voyage.ground.uploads : null,
             quality: window.__voyage.quality ? { tier: window.__voyage.quality.tier, level: window.__voyage.quality.level } : null,
           }));
           let hdr = null;
@@ -476,8 +479,10 @@ export async function cmdAb(args, h) {
           }
           const errs = errors.slice(e0);
           const cors = tileErrors.n - te0;
-          const rec = { label, variant: va.name, round: r + 1, file: path.relative(REPO_ROOT, file).replace(/\\/g, "/"), warmShots: warm, stable, ...meta, errors: errs.length, corsErrors: cors, void: cors > 0 || (meta.groundPending ?? 0) > 0, changed: res.changed, jsOut: res.jsOut, hdr, bench };
-          if (rec.void) log(`  [作废] ${job.name}/${label}：这一张期间瓦片跨域失败 ${cors} 条 / pending=${meta.groundPending}，地面可能缺瓦片，不要拿它下结论`);
+          // G-FREEZE：冻结期间地面换过版（换版计数 ≠ 稳定时的基线）→ 这张和别的不在同一份地面上
+          const groundChanged = groundBase !== null && meta.groundUploads !== null && meta.groundUploads !== groundBase;
+          const rec = { label, variant: va.name, round: r + 1, file: path.relative(REPO_ROOT, file).replace(/\\/g, "/"), warmShots: warm, stable, ...meta, groundChanged, errors: errs.length, corsErrors: cors, void: cors > 0 || (meta.groundPending ?? 0) > 0 || groundChanged, changed: res.changed, jsOut: res.jsOut, hdr, bench };
+          if (rec.void) log(`  [作废] ${job.name}/${label}：这一张期间瓦片跨域失败 ${cors} 条 / pending=${meta.groundPending}${groundChanged ? ` / 冻结期间地面换版 ${meta.groundUploads - groundBase} 次` : ""}，地面可能缺瓦片或已换版，不要拿它下结论`);
           if (stable === false) log(`  [警告] ${job.name}/${label}：预热 ${warmMax} 轮仍未逐字节稳定（冻结没钉住某个状态？），差异里会混进这部分噪声`);
           if (meta.quality && meta.quality.level !== "high" && !args.quality) log(`  [警告] ${job.name}/${label}：画质档是 ${meta.quality.level}（自动降档？），与别的截图不可比`);
           rec.cloud = cloud;
@@ -814,6 +819,11 @@ export async function cmdFlight(args, h) {
       await raf(page, 30);
       await page.evaluate(() => window.__voyage.freeze(true)); // 全冻结：云只由下面的手动 render 推进，航迹逐位可复现
       await setWingStrobe(page, 0);
+      // G-FREEZE：带地面的场景冻结后等地面完全稳定（与 ab / gpu-ab 同一判据），否则各变体之间地面可能换版
+      if (sc.ground) {
+        const st = await groundSettle(page, 120000);
+        if (!st.ok) log(`  [警告] ${job.name}：等地面稳定超时（${st.reason}）`);
+      }
       await raf(page, 2);
       await page.evaluate(() => window.__dxf.savePose());
       const { mats, unis } = collectPaths(variants);
