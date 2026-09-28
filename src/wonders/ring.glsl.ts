@@ -47,7 +47,66 @@ float ringBands(float x, float f, float P, float w) {
   f = max(f, 1e-3);
   return (ringBandInt(x + 0.5 * f, P, w) - ringBandInt(x - 0.5 * f, P, w)) / f;
 }
+// 同上，但周期短到 4 个像素以内时淡到平均值 w/P：一个像素宽的盒式积分对「两三个像素一周期」的花纹仍留下六成反差，
+// 随飞行 / 晃动沿线爬动、逐帧闪（WS08 live 实测：护套灯串在远段 2 像素一盏时闪烁像素 200+）
+float ringBandsAA(float x, float f, float P, float w) {
+  return mix(ringBands(x, f, P, w), w / P, smoothstep(0.25, 0.5, f / P));
+}
 float ringLum(vec3 v) { return dot(v, vec3(0.2126, 0.7152, 0.0722)); }
+
+// 每 S km 一段、每段一个随机值 hash12(段号, salt)，在足迹 [x ± f/2] 上的平均（足迹小于一段时最多跨两段，按重叠长度加权）。
+// 足迹大过半段时退回期望 0.5。段界是世界里的硬边，不这样过滤就会随飞行 / 晃动在像素之间跳（WS08 live 实测的远段闪烁）
+float ringSegHash(float x, float f, float S, float salt) {
+  f = max(f, 1e-3);
+  float k0 = floor((x - 0.5 * f) / S);
+  float a = clamp(((k0 + 1.0) * S - (x - 0.5 * f)) / f, 0.0, 1.0);
+  float h = a * hash12(vec2(k0, salt)) + (1.0 - a) * hash12(vec2(k0 + 1.0, salt));
+  return mix(h, 0.5, smoothstep(0.25, 0.5, f / S));
+}
+// 同上，但每段的值是「随机数 < thr」（这一段是不是某种段）：返回足迹里这种段所占的比例，远处退回 thr
+float ringSegIs(float x, float f, float S, float salt, float thr) {
+  f = max(f, 1e-3);
+  float k0 = floor((x - 0.5 * f) / S);
+  float a = clamp(((k0 + 1.0) * S - (x - 0.5 * f)) / f, 0.0, 1.0);
+  float h = a * step(hash12(vec2(k0, salt)), thr) + (1.0 - a) * step(hash12(vec2(k0 + 1.0, salt)), thr);
+  return mix(h, thr, smoothstep(0.25, 0.5, f / S));
+}
+
+// 腹面某一处（沿环弧长 s、横向 v）有灯的概率：成片的城区（28 × 20 km 尺度的低频噪声）、枢纽处固定 0.35、
+// 还没封板的桁架段（每段 13%）不亮。只由位置决定——在灯所在的格子中心取，同一盏灯在所有像素上结论一致
+// （WS08 返工：按像素取时，跨段界 / 枢纽边的灯会被切掉一半，飞机一晃就忽亮忽灭）
+float ringLampP(vec2 c, float Lp, float Lh, float Sr) {
+  float sx = c.x - 0.5 * Lp;
+  float hubK = floor(sx / Lh + 0.5);
+  float hubP = step(abs(sx - hubK * Lh), 12.0 + 11.0 * hash12(vec2(hubK, 53.0 + uRingDet.w * 97.0)));
+  float densP = smoothstep(0.45, 0.9, vnoise(vec2(c.x / 28.0, c.y / 20.0 + 17.0 * uRingDet.w)));
+  float truss = step(hash12(vec2(floor(sx / Sr), 7.0 + uRingDet.w * 97.0)), 0.13);
+  return mix(0.5 * densP, 0.35, hubP) * (1.0 - truss);
+}
+
+// 随机稀疏的灯：每 C km 一格、按 ringLampP 的概率有一盏边长 w 的小方块灯（位置、亮度随机，平均亮度 1）。
+// 按真正的点光源画：灯心的三维位置投到垂直于视线的平面上，用 σ = 0.5 像素的高斯核（在屏幕上各向同性、归一化）分到像素，
+// 每盏灯的总能量 = 投影面积 w²·cosI / 像素面积，灯挪半个像素时总能量不变（WS08 返工：先前在「沿环 × 横向」坐标里做盒式积分，
+// 斜看的腹面上像素足迹不是这两个轴向的盒子，相邻像素的盒子不拼接，灯随头部晃动一亮一灭，live 闪烁像素 100+）。
+// 返回以「灯面辐亮度」为单位的像素亮度；q 周围 2 × 2 格外的灯离本像素 ≥ C/2，高斯核早已为 0
+float ringLampPts(vec2 q, vec3 rd, vec3 P, vec3 A, vec3 B, vec3 n, float r, float pixA, float cosI,
+                  float C, float w, float seed, float Lp, float Lh, float Sr) {
+  vec2 c0 = floor(q / C - 0.5);
+  float sum = 0.0;
+  for (int i = 0; i < 4; i++) {
+    vec2 cell = c0 + vec2(float(i - 2 * (i / 2)), float(i / 2));
+    float e = hash12(cell + seed);
+    float p = ringLampP((cell + 0.5) * C, Lp, Lh, Sr);
+    vec2 lc = (cell + 0.15 + 0.7 * hash22(cell + seed + 7.3)) * C;
+    float th = lc.x / r;
+    vec3 dv = r * (cos(th) * A + sin(th) * B) + n * lc.y - P;
+    float t = dot(dv, rd);
+    vec3 pp = dv - rd * t;
+    float px2 = pixA * pixA * t * t;
+    sum += e < p ? (0.4 + 1.2 * e / p) * exp(-2.0 * dot(pp, pp) / px2) * 0.6366 * w * w * cosI / px2 : 0.0;
+  }
+  return sum;
+}
 
 // 点 p（地心坐标）朝 dir 看光源的透射率：大气层以内查透射率 LUT；以外看这条光线的近地点——
 // 低于地面 = 在地影里，落在大气层里 = 光穿过了一段大气（近地点处水平方向到层顶透射率的平方），所以地影边缘是红的
@@ -130,7 +189,7 @@ vec3 orbitRing(vec3 L, vec3 rd, bool hitGround) {
   float sxH = sx - 0.5 * Hh * dot(rd, T) / max(d2.x, 0.02);
   float hubK = floor(sxH / Lh + 0.5);
   float hubLen = mix(24.0 + 22.0 * hash12(vec2(hubK, 53.0 + uRingDet.w * 97.0)), 35.0, smoothstep(0.1, 0.3, fTb / Lh));
-  float hubA = ringBands(sxH + 0.5 * hubLen, fTb, Lh, hubLen);
+  float hubA = ringBandsAA(sxH + 0.5 * hubLen, fTb, Lh, hubLen);
   float uc = 0.5 * (Hd + 1.5 - Hh);
   float cHubBox = ringStrip((s0 + uc * dh.y) / fp, (0.5 * (Hd + 1.5 + Hh) * abs(dh.y) + (W2 + Wx) * abs(dh.x)) / fp);
   float cHubBelly = min(ringStrip((s0 - Hh * dh.y) / fp, (W2 + Wx) * abs(dh.x) / fp), cHubBox);
@@ -181,31 +240,29 @@ vec3 orbitRing(vec3 L, vec3 rd, bool hitGround) {
   vec3 Nw = sgW * n;                               // 看得到的那面侧壁的法线（朝相机一侧）
   float fVb = ringFoot(rd, Nb, n, fp);
   float fUw = ringFoot(rd, Nw, U, fp);
-  // 每段（两道肋之间）的随机：铺板深浅、是不是还没封板的桁架段。足迹大过半段时退回平均值（远处不逐段跳）
-  float segK = floor(sx / Sr);
-  float hs = hash12(vec2(segK, 7.0 + uRingDet.w * 97.0));
-  float hr = hash12(vec2(segK, 31.0 + uRingDet.w * 97.0));
+  // 每段（两道肋之间）的随机：铺板深浅、是不是还没封板的桁架段（与 ringLampP 同一个随机数，桁架段不亮灯）。
+  // 按足迹跨段加权、足迹大过半段时退回平均值（段界是硬边，不过滤会随晃动在像素间跳）
   float farSeg = smoothstep(0.15, 0.5, fTb / Sr);
-  float segVar = mix(hs, 0.5, farSeg);
-  float truss = mix(step(hs, 0.13), 0.13, farSeg);
+  float segVar = ringSegHash(sx, fTb, Sr, 31.0 + uRingDet.w * 97.0);
+  float truss = ringSegIs(sx, fTb, Sr, 7.0 + uRingDet.w * 97.0, 0.13);
   // 肋：宽窄不一、四分之一空着（按所在格的随机；格界在两道肋正中，带子在那里本来就是 0，不会有跳变）
   float ribK = floor((sx + 0.5 * Sr) / Sr);
   float ribW = mix(1.0 + 3.0 * hash12(vec2(ribK, 43.0)), 2.5, farSeg);
-  float rib = ringBands(sx + 0.5 * ribW, fTb, Sr, ribW) * mix(step(0.25, hash12(vec2(ribK, 47.0))), 0.75, farSeg);
+  float rib = ringBandsAA(sx + 0.5 * ribW, fTb, Sr, ribW) * mix(step(0.25, hash12(vec2(ribK, 47.0))), 0.75, farSeg);
   float hub = hubA;
   // 铺板：沿环每 9 km、横向每 W2/3 一块，深浅按块随机（第三级纹理，远处按足迹退回平均）
   float pk = hash12(floor(vec2(sAl / 9.0, v / (0.34 * W2))) + vec2(3.0, 11.0));
   float panel = mix(pk, 0.5, smoothstep(0.2, 0.6, max(fTb / 9.0, fVb / (0.34 * W2))));
   // 桁架段：斜交的杆件，杆间露出暗的内部
   float fD = fTb + fVb;
-  float lattice = 1.0 - (1.0 - ringBands(sAl + v, fD, 6.0, 1.1)) * (1.0 - ringBands(sAl - v, fD, 6.0, 1.1));
+  float lattice = 1.0 - (1.0 - ringBandsAA(sAl + v, fD, 6.0, 1.1)) * (1.0 - ringBandsAA(sAl - v, fD, 6.0, 1.1));
   float albB = 0.25 + 0.07 * (segVar - 0.5) + 0.03 * (panel - 0.5);
   albB = mix(albB, mix(0.05, 0.34, lattice), truss);
   albB = mix(albB, 0.36, rib);
   albB = mix(albB, 0.42, hub);
   // 侧壁：每 0.9 km 一层的窗带（白天略暗），枢纽处是整块浅色的舱段
   float uW = cWall > 0.0 ? clamp((sgW * W2 - v) / (abs(dh.y) > 1e-3 ? dh.y : 1e-3) * dh.x, 0.0, Hd) : 0.5 * Hd;
-  float rows = ringBands(uW, fUw, 0.9, 0.32);
+  float rows = ringBandsAA(uW, fUw, 0.9, 0.32);
   float albW = mix(0.32 - 0.1 * rows + 0.05 * (segVar - 0.5), 0.42, hub);
 
   vec3 Eb = eS * max(dot(Nb, uSunDir), 0.0) + eM * max(dot(Nb, uMoonDir), 0.0) + eEarth;
@@ -226,27 +283,42 @@ vec3 orbitRing(vec3 L, vec3 rd, bool hitGround) {
   refl = refl * (1.0 - cR1) + cR1 * 0.5 / M_PI * E1;
   refl = refl * (1.0 - cR2) + cR2 * 0.5 / M_PI * E2;
 
-  // ---- 自发光（夜里的城市灯带；白天也亮着，只是比阳光下的结构暗几个数量级、看不出来）
-  // 腹面：一片片「城区」（沿环 40 km、横向 25 km 尺度的低频噪声定疏密，桁架段不亮），城区里是 2.3 × 1.9 km 的灯格，
-  // 都按像素足迹积分（远处噪声也退回平均，不闪）；枢纽是冷白的灯环；侧壁的窗带按同一片城区的疏密亮；
-  // 护套上每 5 km 一盏灯，灯串上有沿环奔跑的光脉冲（约 9 km/s，每 700 km 一道：1500 km 外每秒挪几个像素，用时间给出尺度）
-  float dens = smoothstep(0.3, 0.9, vnoise(vec2(sAl / 28.0, v / 20.0 + 17.0 * uRingDet.w)));
-  dens *= mix(0.4 + 1.2 * vnoise(vec2(sAl / 6.0, v / 5.0 + 3.0)), 1.0, smoothstep(2.0, 5.0, max(fTb, fVb)));
-  dens = mix(dens, 0.3, smoothstep(5.0, 14.0, max(fTb, fVb))) * (1.0 - truss);
-  float grid = ringBands(sAl, fTb, 2.3, 0.45) * ringBands(v + 0.7, fVb, 1.9, 0.4);
-  // 沿环的几条「大道」：腹面上每 W2/3 一条 0.5 km 宽的灯线，亮度沿环缓慢起伏（远看就是几道平行的灯带）
-  float ave = ringBands(v + W2 + 0.25 * W2 / 3.0, fVb, W2 / 3.0, 0.5) * (0.35 + 0.65 * mix(vnoise(vec2(sAl / 55.0, floor(v * 3.0 / W2) + 5.0)), 0.5, smoothstep(20.0, 60.0, fTb)));
-  vec3 emB = vec3(1.0, 0.66, 0.36) * (1.2e-4 * grid * dens + 1.5e-4 * ave * (1.0 - truss)) + vec3(0.8, 0.9, 1.0) * 1.2e-4 * grid * hub;
-  vec3 emW = vec3(1.0, 0.72, 0.44) * 6e-5 * ringBands(uW, fUw, 0.9, 0.3) * (0.15 + dens);
+  // ---- 自发光（夜里的城市灯火；白天也亮着，只是比阳光下的结构暗几个数量级、看不出来）
+  // 腹面：随机稀疏的灯（每 8 km 一格、按「城区疏密」的概率有一盏 0.8 km 的灯，亮度各不相同），疏密由沿环 28 km、
+  // 横向 20 km 尺度的低频噪声定（成片的城区与暗区），沿环每 W2/3 一条「大道」上灯更密（远看是几道断续的平行灯带）；
+  // 桁架段不亮。灯是小而亮的点（单个像素够亮才保得住钠灯的橙色，W02 的浦肯野教训），按像素足迹精确积分、远处退回平均，不闪。
+  // 枢纽是暖白的密灯；侧壁的窗带按同一片城区的疏密亮；护套底线上每 5 km 一盏白灯，
+  // 灯串上有沿环奔跑的光脉冲（约 9 km/s，每 700 km 一道：1500 km 外每秒挪几个像素，用时间给出尺度）
+  vec3 emB = vec3(0.0);
+  float dens = 0.0;
+  if (cBelly > 0.0) {
+    // 灯亮不亮只由灯所在格子的位置决定（ringLampP），不掺像素足迹、不按像素取：否则灯会随飞行 / 头部晃动忽亮忽灭
+    // 噪声的尺度（28 km）比足迹小到采样不住之前，整体退回期望值（否则远段的疏密会逐帧闪）
+    float farL = smoothstep(6.0, 16.0, max(fTb, fVb));
+    dens = mix(smoothstep(0.45, 0.9, vnoise(vec2(sAl / 28.0, v / 20.0 + 17.0 * uRingDet.w))), 0.25, farL);
+    // 近处按点光源画；像素在腹面上大过约 1/4 格时换成按足迹平均的面亮度（用过滤过的疏密 / 枢纽 / 桁架，和点光源的期望相同）
+    float farP = smoothstep(2.0, 3.6, max(fTb, fVb));
+    float lamps = mix(ringLampPts(vec2(sAl, v), rd, P, A, B, n, r, pixA, abs(d2.x), 8.0, 0.8, 13.0 + 31.0 * uRingDet.w, Lp, Lh, Sr),
+                      mix(0.5 * dens, 0.35, hub) * (1.0 - truss) * 0.64 / 64.0, farP);
+    // 沿环的几条「大道」：腹面上每 W2/3 一条 2 km 宽的走廊，每 3 km 一盏灯，一段段亮、一段段暗（远看是几道断续的平行灯带）
+    float aveOn = mix(smoothstep(0.35, 0.75, vnoise(vec2(sAl / 55.0, floor(v * 3.0 / W2) + 5.0 + 11.0 * uRingDet.w))), 0.5, smoothstep(12.0, 30.0, fTb));
+    float ave = ringBandsAA(v + W2 + 0.25 * W2 / 3.0 + 1.0, fVb, W2 / 3.0, 2.0) * ringBandsAA(sAl, fTb, 3.0, 0.5) * aveOn;
+    emB = (mix(vec3(1.0, 0.5, 0.18), vec3(1.0, 0.78, 0.55), hub) * lamps + vec3(1.0, 0.62, 0.3) * 0.02 * ave * (1.0 - truss)) * 5e-3;
+  }
+  vec3 emW = vec3(1.0, 0.7, 0.42) * 5e-5 * ringBandsAA(uW, fUw, 0.9, 0.3) * (0.15 + dens + hub);
   // 护套上的灯串：只在两根护套朝地面的底线上（截面点 (−Rt, ±W2)），0.6 km 粗的一道细线，每 5 km 一盏
-  float bead = ringBands(sAl + 0.2, fTb, 5.0, 0.4);
+  // 灯串是一条线：沿线方向的足迹 = 像素宽 ÷ 环切向垂直于视线的分量（这才是屏幕上沿线一个像素对应多少 km，盒式积分沿线逐像素拼接）
+  float fLine = fp / max(length(T - rd * dot(rd, T)), 0.02);
+  float bead = ringBandsAA(sAl + 0.2, fLine, 5.0, 0.4);
   float cL1 = ringStrip((oR1 - Rt * dh.y) / fp, 0.3 / fp) * (1.0 - hubA);
   float cL2 = ringStrip((oR2 - Rt * dh.y) / fp, 0.3 / fp) * (1.0 - hubA);
   float ph1 = fract((sAl - 9.0 * uTime) / 700.0) - 0.5;
   float ph2 = fract((sAl + 9.0 * uTime) / 700.0) - 0.5;
-  float pls1 = exp(-ph1 * ph1 * 700.0 * 700.0 / 450.0);
-  float pls2 = exp(-ph2 * ph2 * 700.0 * 700.0 / 450.0);
-  vec3 lampC = vec3(0.9, 0.95, 1.0) * 4e-3;
+  // 脉冲本身是 σ = 15 km 的高斯；按沿环的像素足迹加宽（方差相加）并按比例减弱，能量不变——远处足迹几十 km 时不会一格一格地跳
+  float sgE2 = 225.0 + fTb * fTb / 6.0;
+  float pls1 = sqrt(225.0 / sgE2) * exp(-0.5 * ph1 * ph1 * 490000.0 / sgE2);
+  float pls2 = sqrt(225.0 / sgE2) * exp(-0.5 * ph2 * ph2 * 490000.0 / sgE2);
+  vec3 lampC = vec3(0.95, 0.95, 1.0) * 1.5e-3;
   vec3 emit = (cBelly * emB + cWall * emW) * (1.0 - cR1) * (1.0 - cR2);
   emit += lampC * (cL1 * (bead + 0.06 * pls1) + cL2 * (bead + 0.06 * pls2));
 
@@ -276,7 +348,7 @@ vec3 orbitRing(vec3 L, vec3 rd, bool hitGround) {
     vec3 eSky = skyIrradiance(min(BOTTOM + max(altP, 0.0), TOP), aP) * (1.0 - smoothstep(40.0, 100.0, altP));
     vec3 Lpil = 0.3 / M_PI * (uSunIlluminance * tS * perp * ph + 0.5 * (eSky + eUp) + 0.35 * eM);
     // 夜里：每 25 km 一盏暖白灯（足迹沿轴线积分）
-    Lpil += vec3(1.0, 0.8, 0.55) * 2e-3 * ringBands(altP, pixA * tP * inversesqrt(max(1.0 - dot(rd, aP) * dot(rd, aP), 1e-6)), 25.0, 0.5);
+    Lpil += vec3(1.0, 0.8, 0.55) * 2e-3 * ringBandsAA(altP, pixA * tP * inversesqrt(max(1.0 - dot(rd, aP) * dot(rd, aP), 1e-6)), 25.0, 0.5);
     vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, min(tP, AERIAL_MAX_DISTANCE));
     vec3 apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
     vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;
