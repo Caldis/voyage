@@ -1,0 +1,40 @@
+[
+  {
+    "name": "sunset-wing-live",
+    "scene": "sunset-wing",
+    "variants": [
+      { "name": "off", "js": "v.rays.enabled = false;" },
+      { "name": "on", "js": "for (let i = 0; i < 300 && v.rays.state !== 'ready'; i++) await new Promise((r) => setTimeout(r, 100)); v.rays.enabled = true;" },
+      { "name": "off2", "js": "v.rays.enabled = false;" },
+      { "name": "on2", "js": "v.rays.enabled = true;" }
+    ],
+    "live": {
+      "crop": [800, 600, 400, 300],
+      "frames": 360,
+      "record": { "uStrobe": "sceneMat.uniforms.uStrobe.value" },
+      "skip": "uStrobe >= 0.5",
+      "regions": { "霾层": [0, 0, 400, 300] },
+      "thr": 8,
+      "frac": 0.05
+    }
+  },
+  {
+    "name": "backlit-close-live",
+    "scene": "backlit-close",
+    "variants": [
+      { "name": "off", "js": "v.rays.enabled = false;" },
+      { "name": "on", "js": "for (let i = 0; i < 300 && v.rays.state !== 'ready'; i++) await new Promise((r) => setTimeout(r, 100)); v.rays.enabled = true;" },
+      { "name": "off2", "js": "v.rays.enabled = false;" },
+      { "name": "on2", "js": "v.rays.enabled = true;" }
+    ],
+    "live": {
+      "crop": [500, 450, 600, 350],
+      "frames": 360,
+      "record": { "uStrobe": "sceneMat.uniforms.uStrobe.value" },
+      "skip": "uStrobe >= 0.5",
+      "regions": { "阴影边界与海面": [0, 0, 600, 350] },
+      "thr": 8,
+      "frac": 0.05
+    }
+  }
+]

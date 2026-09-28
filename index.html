@@ -11,6 +11,8 @@
   </head>
   <body>
     <div id="app" aria-label="舷窗外的景色"></div>
+    <!-- 聚焦观察的暗角（FOCUS-ZOOM）：CSS 叠层、不接收指针；不聚焦时 hidden，画布逐位不变 -->
+    <div id="focus-vignette" aria-hidden="true" hidden></div>
     <div id="loading" role="status">
       <div class="loading-box">
         <div class="loading-title">航行伴侣</div>
@@ -188,6 +190,8 @@
           <option value="off">全关（只剩阅读灯）</option>
         </select>
       </label>
+      <!-- REFLECT-OFF：舷窗玻璃上的舱内倒影，默认关（用户嫌强）；观看偏好，只记用户亲手拖的值；URL ?reflect=0..1 优先 -->
+      <label title="舷窗玻璃映出的舱内倒影（夜里开灯时最明显）。0 为关，100% 为物理强度；双击复位到关">窗上倒影 <output id="cabin-reflect-out"></output><input id="cabin-reflect" type="range" min="0" max="1" step="0.05" value="0" /></label>
       <label class="check"><input id="auto-exposure" type="checkbox" checked />人眼式自动曝光</label>
       <label>曝光补偿 <output id="ev-comp-out"></output><input id="ev-comp" type="range" min="-3" max="3" step="0.1" value="0" /></label>
       <label id="manual-row">手动曝光 <output id="manual-ev-out"></output><input id="manual-ev" type="range" min="-2" max="17" step="0.1" value="14" /></label>
@@ -195,6 +199,16 @@
       <label class="check"><input id="minimap-on" type="checkbox" />调试小地图（航向 / 云回波 / 交通 / 奇观，快捷键 N；点击地图切换量程）</label>
       <!-- 调试（T49）：不等飞到终点，立即走一次「到达」：自动航线接下一段（含大角度掉头的遮挡排队），直飞转入盘旋。同 __voyage.director.forceArrive() -->
       <button id="debug-arrive" type="button">立即触发到达 / 接下一段（调试）</button>
+      <!-- 开发者区（FOCUS-ZOOM 起建，PANEL_UX_GUIDE §2.1）：普通用户看不到；URL 带 ?dev 或按 Shift + D 显示，显示与否记在 voyage.pref.panel。
+           以后别的调试控件（小地图、立即到达、手动 EV……）按规范逐步挪进来 -->
+      <section id="dev-section" class="dev-section" aria-label="开发者" hidden>
+        <h2>开发者 <small>Shift + D</small></h2>
+        <!-- 聚焦观察（FOCUS-ZOOM）：画面上按住不动或按住 Z。倍率 / 过渡时长可用 URL ?zoom= / ?zoomms= 指定（优先于这里记住的值） -->
+        <label title="双击复位到 2.5×">聚焦倍率 <output id="focus-mag-out"></output><input id="focus-mag" type="range" min="1.5" max="8" step="0.1" value="2.5" /></label>
+        <label title="双击复位到 200 ms">聚焦过渡 <output id="focus-ms-out"></output><input id="focus-ms" type="range" min="0" max="600" step="10" value="200" /></label>
+        <label title="双击复位到 40%">聚焦暗角 <output id="focus-vignette-out"></output><input id="focus-vignette" type="range" min="0" max="1" step="0.05" value="0.4" /></label>
+        <p id="focus-hint" class="hint">画面上按住不动或按住 Z 聚焦，拖动仍可转头</p>
+      </section>
       <pre id="info"></pre>
       <p class="credits">影像：<a id="credit-eox" href="https://cloudless.eox.at" target="_blank" rel="noopener">Sentinel-2 cloudless 2025</a> by EOX IT Services GmbH（含修改过的 Copernicus Sentinel 数据，CC BY-NC-SA 4.0）· 日本低空近景细节：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院（地理院タイル・全国最新写真（シームレス））</a>を加工して作成 · 地形：AWS Terrain Tiles · 水体：© OpenStreetMap contributors（OpenFreeMap）<br />关闭真实地理数据时，岛屿为程序生成的示例，不对应真实地理。<br />星表：耶鲁亮星表 BSC5（CDS V/50）· 月面贴图 © Solar System Scope（CC BY 4.0）</p>
     </aside>

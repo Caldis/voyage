@@ -47,6 +47,9 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 
 - 启动：仓库根目录 `pnpm dev:voyage`，打开 http://127.0.0.1:5181
 - 在画面上按住拖动 = 转头（窗框视差），滚轮 = 前后挪（靠近 / 远离舷窗），双击复位；`H` 隐藏面板
+- 聚焦观察（FOCUS-ZOOM）：在画面上**按住不动**约 0.2 秒（位移不超过 5 px），视场平滑收窄到「默认 / 倍率」（默认 2.5×，缓入缓出约 0.2 秒），松开平滑还原；按下就拖走的仍是转头。聚焦中照样可以拖动转头，灵敏度按倍率降低。触屏长按同理；键盘按住 `Z` 等价（焦点在输入框 / 下拉里时不触发）。聚焦时四角轻微压暗（CSS 叠层，不进渲染管线）
+- 头部左右限位（FOCUS-ZOOM 追加）：头往舷窗前伸得越多、视场越宽，左右能挪的就越少——保证视锥永远看不到没建模的前后机舱（纯黑 / 空白侧壁）和本窗很斜时的窗洞黑带；聚焦（视场变窄）时可以转得更偏。拖到限位附近有弹性阻尼，前伸或松开聚焦使限位收紧时头部被平滑拉回。限位表与判据见 `handoff/FOCUS-ZOOM.md`，离线重算 `node --experimental-transform-types --no-warnings apps/voyage/handoff/FOCUS-ZOOM-limits.mts`
+- 开发者区（`?dev`、`?dev=1` 或 `Shift + D` 显示，记在 localStorage `voyage.pref.panel`）：聚焦倍率（1.5–8×）、聚焦过渡（0–600 ms）、聚焦暗角（0–100%），双击复位。URL `?zoom=4` / `?zoomms=300` 本次优先（`zoom` 允许 1 = 关掉聚焦，对照用）且不写记忆；亲手调过的值记在 `voyage.focus`（`{v:1, mag, ms, vignette}`，只记 `isTrusted` 的操作）
 - 快捷键（UX-1a 统一守卫）：`H` / `B` / `M` / `N` 在焦点位于文字输入框、日期框、下拉时不触发（焦点在复选框、滑条、按钮上照常），带 `Ctrl` / `Alt` / `Meta` 时也不触发；方向键在焦点位于任何输入框 / 下拉时归控件自己。面板下拉用鼠标选完会把焦点还给画面（键盘在下拉里挑选项时不抢焦点）
 - 声音（T11）：默认关；面板勾选「声音」或按 `M` 开启（浏览器要求用户手势），背景板模式下照常播放、`M` 仍可开关
 - 时间：日期 + 当地时刻滑块，或用 60× / 600× 快进看日落
@@ -62,6 +65,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   → 云：光线步进（层状云 + 雷暴 + 台风）→ 时间累积（带重投影）；每 4 帧一次云密度探针（异步读回）
   → 窗外 pass（outside-pass.ts，全屏但只算本窗窗板以内）：地形求交或海面、天空、太阳、月亮、星星 + 云合成
       + 远处飞机与航迹云 + 云地闪通道，× 窗板透射率 → hdrOutside（全分辨率 32F）
+  → 云隙光（atmosphere/rays.ts，SPEC-RAYS，只在白天有云时画）：1/4 分辨率沿视线查云影图 → 4×4 模糊 → 从 hdrOutside 减掉云影里的空气散射，写 rays.target，舱内合成改读它
   → 座椅 pass（seat-pass.ts，PERF-14）：本排 / 前排座椅 → hdrSeat（颜色 + 覆盖率）
   → 场景 pass（scene.ts，舱内合成）：舷窗几何（舱壁 / 内衬 / 遮光板 / 座椅）+ 读 hdrOutside + 窗板细节（划痕、油污、水痕）
       → HDR（kcd/m²，alpha 打包窗外遮罩与机翼参考，见 scene.ts 的 packWingRef）
@@ -78,7 +82,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/main.ts` | 创建渲染器与各系统、主循环编排（各 pass 调度）、`setPreset` / `snapAll` / `resize`、调试句柄 `window.__voyage` |
 | `src/state.ts` | 共享类型 `VoyageState` / `Preset`、`CRUISE_PITCH_DEG`、`$` 小工具 |
 | `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进）；自动驾驶（T49，`autopilotOf(state)`：沿航线 / 手动航向 / 直飞 / 跑道形等待航线，坡度与滚转速率按真实时间限制） |
-| `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步 |
+| `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步；开发者区（`?dev` / `Shift + D`）与聚焦设置、`Z` 键 |
+| `src/view-presets.ts` / `src/focus-zoom.ts` / `src/head-limits.ts` | 视角预设与画布输入（按住拖动转头、滚轮前后、双击复位、按住不动聚焦）；聚焦观察（视场过渡、设置与记忆、暗角叠层）；头部左右限位（按前伸 / 视场 / 座位 / 舱等求不露出未建模区域的上限，拖动弹性阻尼）（FOCUS-ZOOM） |
 | `src/astro.ts` | 太阳 / 月亮位置、月相、当地→赤道坐标矩阵（astronomy-engine） |
 | `src/sky-assets.ts` | 星图（RGB：BSC5 星表格子，每格最多一颗星，T41；A 通道是银河）、月面贴图 |
 | `src/light-pollution.ts` | 城市光污染的天空背景（T09）：从地面夜光估算，只压银河的可见度 |
@@ -90,6 +95,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
 | `src/atmosphere/luts.ts` | 透射率 / 多次散射 / 辐照度 / 天空视图 / 空气透视 LUT；`setHaze` 设边界层霾 |
 | `src/atmosphere/haze.ts` / `src/render/haze.glsl.ts` | 低空障眼法（T18）：边界层霾参数（按时段、地区、日期）、清晨谷地辐射雾 |
+| `src/atmosphere/rays.ts` | 云隙光 / 曙暮光条（SPEC-RAYS）：窗外 pass 之后按云影图步进空气里的影子、从窗外 HDR 减掉被云挡住的单次散射，舱内合成改读它的输出（不画时就是 hdrOutside）；按需后台编译，不在冷启动关键路径上 |
 | `src/clouds/noise.ts` | 云的形状 / 细节噪声、天气图（GPU 生成） |
 | `src/clouds/clouds.glsl.ts` | 云密度：层状云（天气场驱动）、雷暴（`towerShape`）、台风；云影 |
 | `src/clouds/clouds.ts` | 云的光线步进、时间累积、云预设、密度探针 |
@@ -149,6 +155,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
 - **航向 / 接力调试**（T49）：面板底部「立即触发到达 / 接下一段（调试）」按钮 = `__voyage.director.forceArrive()`：不等飞到终点，立即走一次「到达」（自动航线接下一段，要掉头 > 90° 时照常排进遮挡队列；直飞模式转入盘旋）。其他句柄：`__voyage.director.ap`（自动驾驶：`mode` / `selHeading` / `turnDir` / `timeScale` / `hold` / `nextCourse` / `holdCourse`）、`director.setHeading(deg, dir?)`、`director.turnBy(±deg)`、`director.hold()`、`director.directTo("ITM")`、`director.resumeRoute()`、`director.nextLeg`（离终点 400 km 内预挑的下一段）、`director.describeNav()`。离线复现 / 单测（不开浏览器，几秒跑完）：`node --import ./handoff/T49-resolve.mjs --experimental-transform-types --no-warnings handoff/T49-test.mts`；按真实时间打印航向 / 坡度曲线与 > 60° 转向事件：同样的前缀跑 `handoff/T49-sim.mts [流速] [真实分钟] [预设]`。
 - `window.__voyageStartup`：启动各阶段耗时。
+- **聚焦 / 头部限位**（FOCUS-ZOOM）：`__voyage.focus`（`mag` / `durationMs` / `vignette`、`factor` 当前放大倍数、`progress` 过渡进度、`hold('script', true|false)` 脚本按住 / 松开；冻结时要直接到位就再设 `progress = 1`）；`__voyage.headLimits`（`pos` / `neg` 这一帧头部 x 两侧的上限，`clamp(x)`）；`__voyage.clouds.zoomSinceResetCap`（视场变化帧的「reset 后帧数」上限，默认 8，`Infinity` = 改前行为）。截图时聚焦要走 `focus`，直接改 `sceneMat.uniforms.uTanHalfFov` 会在下一帧被主循环写回。测量脚本：`handoff/FOCUS-ZOOM-input.mjs`（真实鼠标 / 键盘 / 触摸验收）、`FOCUS-ZOOM-cloud.mjs`（视场变化时云时间累积对真值误差）、`FOCUS-ZOOM-gpu-*.json`（`gpu-ab` 1× / 4× / 8×）。
 - **CPU / GPU 进程剖析（PERF-CPU，`scripts/cpu-prof.mjs`，默认有头 Chrome）**：`node scripts/cpu-prof.mjs --port <端口> [--scenes default,noon-cumulus,night-city,storm-day,in-cloud,route-1x,route-60x] [--seconds 6] [--viewport 2560x1300 --dpr 1.5] [--angle d3d11|d3d11-warp] [--trace] [--no-gl] [--out tmp/perfcpu/x.json]`。每个场景输出：rAF 间隔中位 / p95 / 最大、每个 rAF 回调里主循环 JS 的耗时；主线程忙碌比例（`Performance.getMetrics`）；各进程 CPU（`SystemInfo.getProcessInfo`，100% = 一核）与最忙的线程（带 Chrome 线程名：`CrRendererMain` / `CrGpuMain` / `DedicatedWorker thread` / `VizCompositorThread` / `ThreadPoolForegroundWorker`…，`scripts/lib/thread-cpu.ps1`，仅 Windows）；Worker 消息频率；主线程 JS 自耗时 Top N（CDP Profiler，ms/帧）；WebGL 调用统计（每帧次数 / 耗时，另列 getError / readPixels / getParameter / clientWaitSync 这类同步调用）；`--trace` 再录一段 Performance trace，按线程列事件自耗时（样式 / 布局 / 绘制 / GPU 命令解码）。场景除 `scenarios.mjs` 的名字外还有 `default`（打开页面什么都不设）、`route-1x` / `route-60x`（hnd-cts 连续航程）、`same`（不重设再量一次）、`wait<N>`（等 N 秒）、`A` / `B`（执行 `--jsA` / `--jsB` 后再量，同页交替对照；代码可写 `file:<路径>`）。持测量锁。
 - URL 参数 `?lut16`：大气 LUT 强制用半精度（T36 改前的行为、没有 32 位浮点线性过滤的设备），用来对照深暮光的阶梯。
 - 截图前：把 `head` 固定在 `{tx:0, ty:0.02, x:0, y:0.02, tz:-0.3, z:-0.3}`、`uCloudOffset` 归零或设成固定值、隐藏面板（加 `hidden` 类），前后对比才有意义；截图放 `tmp/screenshot/voyage-*.png`。
@@ -372,6 +379,9 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 <a id="pit-cloud"></a>
 ### 云
 
+- **视场会变了（FOCUS-ZOOM 聚焦）：resolve 必须按上一帧的视场投影历史**。现象：只改 `uTanHalfFov`、resolve 还拿本帧视场去算历史的 ndc，放大 / 还原的 0.2 秒里整片云缓冲被按错误的比例取历史，云边拖出一圈缩放方向的重影（`handoff/FOCUS-ZOOM-cloud.mjs` sea-sc 4×：过渡中对真值误差 0.41–0.47、云边梯度能量比 0.36–0.65，正确投影后 0.12–0.13 / 0.80）。修法：`uPrevTanHalfFov`（`clouds.render` 末尾记下这一帧的视场）；视场不变时两者相等，resolve 逐位不变。另外放大时历史的角分辨率比这一帧粗（被拉伸、发糊），视场变化的帧把「reset 后帧数」压到 ≤ 8（`zoomSinceResetCap`），resolve 的等权兜底让新样本多占一些，过渡后第 4 / 8 / 16 帧误差 −12% / −17% / −15%；直接 reset 过渡中是 1 spp 噪点（误差 0.47–0.51），不可取。以后别处再改视场 / 投影（例如宽屏、换相机模型），同样要让 resolve 知道上一帧的投影。
+
+- **雷暴程序的外壳空域跳跃**（PERF-STORM，`clouds.ts` 的 `laySeg` / `wxSeg`，只编进纯雷暴变体 `CLOUD_STORM_SKIP`）：够得着雷暴的视线（refineOn）原来整条走 0–15 km 外壳，现在只走层状云包络（首次进层 → 最后出层）和各雷暴包围柱（半径 7.5R + 0.5 km、高到砧顶 + 1.8 km）两段，之外一步跳到下一段起点。跳后第一步走半步、`lastEmpty` 同步到跳点（否则塔身表面细化会退回跳过的那段、反复撞同一处表面）。与默认程序从层顶起步是同一套采样，有无雷暴切换时近处云海逐带 Y 比与 master 相同（`handoff/PERF-STORM-switch.py`）。**改雷暴密度的形状 / 外延半径时，同步改 `cloudRayWeatherSpan` 的半径与顶高**，否则包围柱外的新密度被跳过（画面缺一块，α 读回对真值会掉）。
 - **天气渐变不能走 `clouds.applyPreset` / `snap()`**（T19b）：会清掉时间累积，并让云影图整张在一帧里重建（3–8 ms）；连续航程每 0.25 s 推进一次云量，就会变成持续卡顿。修法：`clouds.setParams(p, true)`（gradual），云影图按后台分片节奏跟上；借遮挡的硬切才用 `setParams(p, false)`。
 - **占据网格只保护 ±128 km 内的雷暴 / 台风**（T19b）：网格外照样逐点求值，4 个单体在 300 km 外仍 +1–1.5 ms/帧，台风在 750 km 外 +2–3 ms/帧（`handoff/T19b-storm-cost.mjs`）。天气驱动因此只在 280 km（雷暴）/ 600 km（台风）内摆放；以后要放得更远，先在云程序里给网格外的雷暴 / 台风做 LOD。
 - **改天气场（`WeatherField`）的气候倾向之前和之后都要跑 `scripts/weather-stats.mts`**（WX10；DX-11 挂进了 `package.json`）：门禁是 `pnpm --filter voyage weather-stats -- --multi`（等价于 `node --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi`，6 个种子全部通过，约 2.5 分钟，不开浏览器；不加 `--multi` 只跑一个种子并打印完整统计表，约 15 s）。它按月份和地区统计云型、雷暴、锋面、台风（100 年样本）、风场（WX11a），对照气候目标区间断言，退出码非 0 就是失败；每条断言都写了依据。T19b 的天气场就是在没有这类统计的情况下，把 1 月日本海做成了 63% 晴空、把台风做成了每年 59 个。
@@ -568,6 +578,21 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   坑：门限按相对亮度差 0.002 → 0.02 时，白漆与背后白云亮度相近的像素漏过去，翼面留一片散点——只能用「逐位相同」这个严格判据。不要把覆盖率打包进 `hdrWing` 的 alpha：测光 pass 在半纹素位置双线性采它，打包值会在机翼边界插值成乱码。
   没管到：地形 / 奇观剪影挡在云前（不经机翼 pass），要窗外 pass 输出有效云不透明度才能根治。识别：`TM02-wing.py`（机翼区相对高光段全关的逐像素差）+ `TM02-ab.mjs` 的 tm01bug / noOcc 变体。
   另两处已知的边界（TM02 审查，低）：机翼剪影边缘 1 px 细线不提亮（背后受光云时暗 4–13 级、与剪影重合，肉眼不可见；根治要机翼 pass 输出覆盖率）；薄雾 + 频闪时翼尖灯的雾中散射会让天空 / 海被判成「机翼覆盖」，这些区域本不提亮，无影响。
+- **云隙光 / 曙暮光条是「从 LUT 的内散射里减掉云影里那一段」，不是往画面上加亮条**（SPEC-RAYS，`src/atmosphere/rays.ts`，`handoff/SPEC-RAYS.md`）：
+  现象（改前）：低太阳在积云后面时空气里没有影子——天空视图 / 空气透视 LUT 以相机为中心、只按「相对太阳的方位 × 天顶角 × 距离」存，整条视线都当受光；云影只画在海面上，霾层是一片均匀的橙色辉光。
+  做法：独立的三个小 pass（1/4 分辨率步进 → 4×4 盒式模糊 → 全分辨率合成），沿视线在云顶以下的空气里查云影图得到阳光可见度 V，累计被挡掉的单次散射 ΔL，从 hdrOutside 里减掉后写一张新目标，舱内合成改读它（`main.ts` 一行 `u.uOutside.value = rays.render(hdrOutside)`）；
+  多次散射不减（影子里的空气仍被天光照着），所以暗条偏灰蓝——真实照片里暗的曙暮光条就是蓝灰色的。不画时（夜里主光源是月亮、太阳 < −4°、没有云、云影图没建好、程序没编好）返回原 hdrOutside，逐位不变。
+  坑一（紫点）：第一版逐通道 `max(src − ΔL, 5%·src)`：夕阳下 ΔL 偏红，红通道先触底、蓝通道照减，海浪暗像素被染成一粒粒紫色、地平线一条紫线。改成三通道共用一个缩放 k（最多减掉 90%）。
+  坑二（冻结对照里「整窗发蓝」是假象）：`shots --pair` / `ab` 冻结后曝光与**舱内色适应**停在 A 变体，B 变体减掉暖色霾辉光后被按 A 的白平衡显示，看起来是一片饱和的紫蓝海。判颜色要用不冻结的两次 `shots`（`--query rays=0` 对照），判逐位零回归才用冻结对照。
+  坑三：云影图只存 0 / 1 / 2 / 3 km 起点的透射率，3 km 以上的点按 3 km 取、在云底—云顶之间渐变回 1；浓积云（1.4–6.5 km）云层内部的空气误差最大，云层以下（光条主要在这里）是准的。
+  坑四（诊断时读回的坐标系）：`probe.mjs --read` 的 x / y 直接交给 `readRenderTargetPixels`，是 **GL 左下原点**、rows 自下而上，不是它文件头注释说的左上原点——按屏幕坐标给 y 读到的是上下镜像的位置，把「天空 / 海面」读反（本任务误判过一次「海面受光但空气在影里」）。
+  坑五（地形，审查 P1）：第一版步进终点是海平面球面，视线打到近处草地 / 山体后还一路走到海平面，把地面背后本没画进画面的空气也当成云影减掉（被 90% 上限兜着，看起来像「更通透」）：火车大糸线 17:30 前景草地发深绿、平均暗 14.5 级、最多 88 级。
+  修法：低于 `uTerrainMax` 的步点查一次 `groundHeightAt`（窗外求交同一个高度场），落到地面以下就停。复测前景草地 ≤ 2 级（随距离增到 −2，是真实的云影空气），山脊线 1/4 分辨率 + 4×4 模糊看不出光晕。
+  识别：近处地面开 / 关差超过 1–2 级就是减错了——近处只有几百米空气，没有那么多内散射可减。
+  没管到：奇观（浮空城、建木、天梯）和远处飞机这类不透明物体后面的空气同样会被减（步进不知道它们），实测城体 / 机体上看不出，先不管；以后新增近处的大块不透明物体要让步进认得它。
+  淡入：从不画到画（编译完成那一帧、云覆盖率从 0 变正、云影图刚建好）时 ΔL 在 0.5 s 内按挂钟从 0 升到 1（`rays.fade`），整窗不跳；冻结对照要等 0.5 s 以上再拍。
+  显存：`rays.target` 是全分辨率 RGBA32F（与 hdrOutside 同类型，太阳辐亮度要 32 位），3840×1950 下约 120 MB；第 60 帧起编译时就分配，不分昼夜常驻。步进 / 模糊两张 1/4 分辨率半精度目标可忽略。
+  识别：`__voyage.rays`（`enabled` 开关、`active` 这一帧画没画、`state` 编译状态、`downscale` 步进目标缩小倍数、`await rays.bench(__voyage.hdrOutside, 20, "all"|"march"|"blur"|"composite")` GPU 计时）；URL `?rays=0` 整个关掉。
 
 <a id="pit-ground"></a>
 ### 地面与数据
@@ -670,6 +695,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   坑一：按真实折射率算，偏折是几十度 = 上百像素，点采样会在水珠里画出放射状条纹（像图钉），还读到窗板开口以外（那里 alpha = 0，黑）；`WATER_DEFLECT` 因此缩到物理值的约 1/10，开口外的样本退回不偏折。
   坑二：整圈暗环 = 空心圆圈；均匀的雾里折射前后一样，暗环是唯一可见的东西，必须弱且只留下缘。
   另：湿度按 ISA 气温门限（`flight.ts` 的 `outsideAirTempC`），高于约 4.6 km（ISA −15°C）不再挂水，已有的水按升华 / 吹干消退。
+- **舱内只建了侧壁（沿机身无限长）、本排与前一排座椅**（FOCUS-ZOOM 追加）：头前伸贴窗再往两侧挪（相机总看向窗板中心，于是斜着沿舱壁看），视锥边上的视线平行 / 背离侧壁时什么都打不到——纯黑（`rd.z < 1e-4` 一支）；再斜一点是消失点附近无限重复的窗；往下看更远处是「该有座椅却只有光秃侧壁」的空白舱。修法不在着色器补模型，而在相机上限位（`src/head-limits.ts`，每帧按前伸、高度、视场、画面宽高比、座位、舱等求头部 x 两侧的上限）：① 视线必须打到侧壁，且打到的点沿机身方向离眼睛不超过「眼睛所在深度处、与侧壁成 12° 的水平视线」的落点（消失点只在沿机身方向；上下方向侧壁弯回来，俯仰不受限，头最高 / 最低贴窗的截图都没露馅）；② 视线在碰到真有的两排座椅或侧壁之前，不能进入按同一排距外推的「幽灵座椅」包围盒；③ 下一条的窗洞黑带。识别：截图里窗框外侧出现大片纯黑 / 灰白无细节区，或 `__voyage.headLimits.pos/neg` 与头部位置对不上。以后要是补建了更多排座椅 / 过道 / 行李架，把 `head-limits.ts` 的判据放宽（`PHANTOM_ROWS`、`MIN_GRAZE_DEG`），限位表用 `handoff/FOCUS-ZOOM-limits.mts` 重算。
+- **很斜地看本窗时，窗板开口近侧有一条竖直纯黑带**（FOCUS-ZOOM 发现，着色器缺陷未修）：眼睛到窗板开口近侧边缘（x = ±0.12、z = 0.075）的视线与窗板法线夹角 ≥ 约 35° 时出现、越斜越宽（网格实测见 `handoff/FOCUS-ZOOM.md`；默认坐姿的视角到不了，前伸 + 侧挪 + 聚焦才看得到）。根因没查清（猜测是窗洞内衬挡住窗板的那一条，`scene.ts` 按窗板平面的 `inPane` 合成成窗外、而那里窗外 / 内衬都没有有效着色——**是假设，未验证**；`uDebug` 1 / 4 可以从这里查起）。现在由 `head-limits.ts` 的 `PANE_EDGE_MAX_DEG = 33°` 在相机上避开；修好 `scene.ts` 的合成后可以放宽。
 - **`fwidth` 做抗锯齿要设上限**：视线几乎贴着舱壁时，平面交点在无穷远处，导数巨大，会把遮光板、内衬、舱壁的颜色混在一起。
 - 舱内色适应不能拿舱内平均色直接当白点（灰世界）：舱壁本身是暖白，平均色偏暖就会被当成暖光抵消，白天舱壁依然冷灰。要先除以饰面的平均反照率（`uCabinRefAlbedo`）得到光源色。改了舱内主材的反照率要同步这个值。
 - **机翼自阴影用的距离场必须处处是真实距离的下界，包围要覆盖各个方向**（T22）：襟翼滑轨整流罩旧版只按展向 `|z − zf|` 包围，翼面上方几米高的点也只报几十厘米；软阴影估计 `14·d / 走过的距离` 把它当成「擦边」，整片上翼面被压暗，而且按步进采样离散成一圈圈年轮纹（夜景最明显），穿云时成迷彩块，小翼上成竖向分面、像镀铬。识别：`uWingDebug` 的 8（去自阴影）一开纹就没了；1（去鼓包）、4（去环境反射）无效。修法：包围加上竖直方向，最终距离再对包围取大兜底。改任何部件的距离场后都用 8 位对照一次。
@@ -719,6 +746,10 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **倒影白天也在付钱**（PERF-12）：倒影的跳过条件「上界 < 窗外 0.3%」里含对面舷窗的亮度（≈ 本窗窗外的一半），白天永远不成立，
   正午也要算完整个倒影（约 0.11 ms）。实测正午关掉倒影，差异是对面舷窗的两团淡影（≤ 2–4/255），看得出一点「玻璃感」，所以没改跳过条件，
   改成倒影内部省：座位列由近到远做前后合成（被近列挡满就不算远列和整个背景），视线高过这一列能画的最高处就跳过，光点只在朝上的射线上算。
+- **窗上倒影默认关（REFLECT-OFF，用户 2026-09-29：「机舱反光过强了，也请弱化甚至默认关闭」）**：`uReflStrength`（`cabin-reflect.glsl.ts` 的 `CABIN_REFLECT_STRENGTH`，各舱等变体共用）默认 0；
+  面板「舱内灯光」下面的「窗上倒影」滑条（`#cabin-reflect`，0–100%，双击复位到关）与 URL `?reflect=0..1`（也认 on / off）设它，优先级 URL > 用户亲手拖过的值（`voyage.pref.view` 的 `reflect`，只记 `isTrusted`）> 0。
+  `scene.ts` 在强度 0 时整段跳过倒影（夜里开灯舱内合成约 −4–6%，正午在噪声内）；强度乘在软限幅**之后**（`view += uReflStrength * reflAdd`），是整层按比例变淡——乘在 `reflGain` 上会被 T34 的上限压回去，调小了看不出差别。
+  验证：同页冻结 A/B，强度 1 与 master 着色器逐位 0（4 个场景），默认与强度 0 逐位 0；窗外框以外只有辉光（bloom 读窗内的光）带来的 ≤ 1 LSB、≤ 0.02% 像素的差。**回归场景现在默认看不到倒影**：要看 / 量倒影（T24 / T34 / T41 / T42 类问题）给场景 `p` 加 `"cabin-reflect": 1`，或 `--query reflect=1`；`uDebug` 31 / 33（只看倒影）不受强度开关影响。
 - **点星在白天也会查 3×3 星表格**（PERF-12）：窗外 pass 只要是天空就在 alpha 里标「看得见星」，正午整扇窗每个像素都在算 `starPoints`。
   现在舱内按「窗外亮度 × 像素张角² < 6e-7」门限（天狼星峰值的 200 倍）才算，白天和黄昏亮的那半边跳过，夜景逐像素不变。
 
@@ -740,6 +771,16 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **远处物体自己的「光束」（体积阴影）在屏幕上只有十来个像素**（W03）：6 km 大的城在 80 km 外，树冠缝隙切出的光束朝相机方向延伸，投影长度约「光束长 × sin(光束与视线夹角) / 距离」，几 km 的光束只有 10 像素上下；把雾加浓到看得见光束时整座城先被蒙白。逆光的观感主要靠剪影 + 树冠透光的亮边 + 底座下被照亮的云团；画面级的「云隙光」要由云系统在相机与奇观之间的云里做（归属 clouds/*）。识别：调浓雾找光束之前，先看城是不是已经发白。
 - **「深色、圆整、对称的球 + 盘 + 下面一团云和几根细柱」远看就是核爆蘑菇云**（W03 返工，协调者发现）：浮空古城第一版树冠是居中的对称大圆球，压在盘状底座上，正下方托着一团云、垂着根须——80 km 外、白天逆光的深色剪影正好是蘑菇云的语汇。修法：冠层偏向一侧、横向宽扁、顶面起伏，另一侧留低矮次冠，残塔 / 台地从冠层旁边露出来；底座下的云偏一侧、变淡；再补空气透视让它远而淡。识别：把截图缩到 64 px 高看剪影（`handoff/W03-compare.py` 的 thumb64）。以后做任何「上面一团、下面一根」的远景奇观都先做这个缩略测试。
 - **往下看的视线别直接查天空 LUT（`skyRadiance(rd, false)`）当「背景色」**（W03 返工）：地平线以下的 LUT 值是偏橙的错色，拿它给奇观底座做空气透视混色，底座下面整片发橙。修法：把视线抬到地平线（巡航高度约 −3.3°）上方一点再查。
+- **夜里的巨构要比身后的光穹暗，才读得成剪影**（WS02）：灯城放大到 15–24 km 后，塔面「下方发光雾的补光」沿用 W02 的系数（反照率 × 灯海 × 0.15），加上一成亮的窗格平均成的底光，塔面比身后被照亮的空气还亮，整座金字塔读成一盏发光的纸灯笼。按竖直面看到半个下半球的发光雾估，补光应是 反照率 × 灯海 × 0.05，并随高度衰减；窗改成 3–4.5% 亮的「2 层 × 一格」窗块（110 km 外约 3 × 3 像素），光穹分塔前 / 塔后两段、塔后那段才勾出剪影。识别：临时让着色返回 0（塔全黑），剪影一下就出来了——说明补光 / 底光过量，先查补光系数，别去调光穹。
+- **掠射看薄雾层，雾盘外缘的硬边来自「亮度跟着浓度走」和「露出的地面灯」**（WS02）：10.7 km 高处看 100 km 外 1–2 km 厚的雾，一条视线在雾里走十几 km，光学厚度到城边最后一两公里才从几十掉到 0；如果发光也跟浓度同一个范围收，雾盘就在那一两公里里一刀切（「一盘发光液体」）。另外雾在城边变薄时，直接露出的地面灯比雾亮好几倍，会在近边切出一条亮带。修法：发光包络比浓度提前约 20 km 渐隐（城边还浓着的雾是暗的），地面灯只在城区里面露出来；雾与光穹的范围收在包围盒以内（盒边不能切边）。识别：同机位拍「开 / 关事件」（`uWonderParams.w` 临时开关或 `volume.surface / medium`），硬边只在开事件时出现 → 是地面事件。
+- **奇观 pass 的冷编译对「代码总量」超线性，单项撤回的比例加不起来**（WS02）：离线 FXC 逐项撤回，每一项都掉 20–40%，合起来远超 100%。真正有效的：删掉在新距离上本来就看不见的部件（W02 的车流光痕，90 km 外按设计已淡没）、共用函数少调用点（fcMask 有 atan 和几个 sin，调用处算好传进去）、点光合成一个循环。循环里的 break / continue 单独撤回量出 −21%，改成把不存在的塔挪到 1 万 km 外后复测却没有变化，属于噪声。负载下离线 FXC 的噪声在 ±15% 量级：判定看 3 轮的最小值，并与基线交替测（`shader-budget --baseline`）。`--variants` 的撤回要写成编译期常量（`if (false)`），写成 uniform 比较 FXC 照样编那一支。
+- **Windows 上 Python 用文本模式写文件会把 `\n` 写成 CRLF**（WS02）：`open(p, "w")` 改源文件以后 `check:glsl` 报「CRLF 行尾」，`shader-budget --variants` 里带 `\n` 的多行锚点也就匹配不上（报「出现 0 次」）。写源文件一律 `open(p, "w", encoding="utf-8", newline="\n")`。
+- **W02 的窗格用局部坐标的法线判断「哪一面」**（WS02 修）：塔按城市坐标（局部坐标绕 y 转了种子角）摆放，法线却没转，窗格沿错的轴被拉长成横条。着色里用到面朝向的地方，法线要和位置一样先转到城市坐标（`fcToCity(n)`）。
+- **天幕层的粗大实体（锚塔、环站）按「像面」做就够精确，不用光线步进**（WS01）：每个像素取正交基 `nh = rd×a` 归一、`up = (a − b·rd)/sn`，相对基座的点 p 投到 `(p·nh, p·up)`，本像素是 `(X, s·sn)`——视线穿过 p 当且仅当两者相等，所以「打中没有」是沿视线的正交投影，精确；轴线上高 h、半径 R 的圆投成横半轴 R、纵半轴 |b|R 的椭圆（`b = rd·a`），b > 0（仰视）时朝相机的半圈在上。截锥 = 横向按该高度半径 + 纵向上下两个椭圆弧，环 = 到椭圆的距离 ≤ 环管半径，覆盖率都用三角核解析积分（`wonderFrustum` / `wonderEllipseNearest`）。WS05 建木加粗、WS07 巨柱群照这套写。识别：想给远处巨构写球面追踪 / 步进之前，先问它是不是「柱 + 台 + 环」。
+- **巨构要被云「排到后面」，得先有云的深度**（WS01）：`cloudBufferDepth` 只在附近有高出海面的真实地形时才写（PERF-11，`clouds.ts` 的 `depthOn`），平时返回 0 = 云全在前面，`cloudBeforeGround(cloud, D, 塔的距离)` 什么都不做。修法：天幕层奇观在场（`uWonderOn`）时 `depthOn` 也开；窗外 OUTSIDE_WONDER 段按奇观盖住像素的比例混 `cloudBeforeGround`。另：从 10.7 km 看 220 km 外的塔，塔脚那一带的视线在 170 km 左右就扎进了 1–3 km 的云顶——塔脚是被**近处**的云海挡住的（对的），真正被塔挡掉的远云只有塔身下沿几百个像素。识别：`shots --pair "" --pair "v.sceneMat.uniforms.uCloudDepthOn.value = 0;"` 同机位冻结对照。
+- **远处高空的暗色大面也「黑不下去」**（WS01）：环站朝下铺深色板（反照率 0.07）想让仰视时环管中间一道暗带，画面上几乎看不出——几百 km 外高处物体的亮度大半是它前面那段空气的内散射（W00 同一个道理），`wonderCap` 还给了「不暗过背景 60%」的地板。要层次就靠受光面与背光面（竖肋把法线左右偏）和尺度更大的结构（节点舱、退台），别靠反照率反差。
+- **放射状辐条一画出来，环站就是一只自行车轮**（WS01）：4–8 根辐条从缆辐射到环上，250 km 外还剩 1 px 的线，整体读成车轮 / 玩具；真实的张拉索只有米级，本来就看不见。现在只画环上大小不一的节点舱，不画辐条。以后做「环 + 中心」类结构先缩成 64 px 高看剪影（同 W03 的蘑菇云教训）。
+- **OW 变体（窗外 + 奇观 + 罕见光学）的 FXC 冷编译按「结构」涨，不按指令数**（WS01）：天梯巨构第一版让 OW 离线 FXC +34%（同轮「无天梯」对照 −35%），fxc 指令槽只 +18%。逐项消融（`tmp/ws01/fxc-variants*.mjs` 的写法，`shader-budget --variants`）没有一块单独占大头，拿回来的几刀：①远 / 近两层部件着色合成收成一个调用点（原来 6 处 `wonderIrr` + `wonderCap`）；②撤掉几何算完后「什么都没盖到就提前 return」的中途早退（−10%，GPU 上本来也量不出省了什么）；③循环外按编号动态取 uniform 数组（`uWonderRings[int(k)]`）改成在循环里存下来（−9%）；④默认关的开发者开关代码（塔身灯格）不编进默认变体，改成 URL `?towerwin` 时才拼进源码（−9%）；⑤研究里的扶壁、辐条、舱体表面在 220 km 外看不出来，砍掉。最后同轮对照 master 约 +22%（最小值）/ +14%（中位），负载下噪声 ±30%。识别：`shader-budget --only outside-extras` 的 `slots / temps` 是确定性的，时间要和基线交替 ≥ 3 轮看最小值；「把 continue 改成 if 块」「常量循环加 uLoopGuard」「三角函数换旋转递推」在这里都没用（噪声内或更慢）。
 - **奇观介质想自己算受光（例如光束要被树冠缝隙切开），反照率返回 0、散射光写进 emit**（W03）：`wonderLayer` 在反照率全 0 时跳过标准受光 `wonderMediumLight`（W03 加的判断），否则每步白算一次主光源 + 天光 + 4 瓣相函数。标准受光只有一个平滑的投影椭球挡光，切不出光束。
 
 <a id="pit-train"></a>
@@ -776,17 +817,27 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 <a id="pit-perf"></a>
 ### 性能
 
+- **雷暴天云步进最贵的一处是乳状云的口袋场 `pouchField`，不是步数**（PERF-STORM，2026-09-29，`handoff/PERF-STORM.md`）：
+  - 现象：storm-sc-low（巡航俯看层积云海 + 雷暴）云步进是同一片云海无雷暴时的约 9 倍，预审记 5.7 ms @1600×1200、用户 3840×1950 整帧 9 ms。
+  - 定位（`ab` 的 `cloud-steps` 内置变体 + 自定义计数补丁：每像素步数 / 有云样本 / 完整雷暴密度次数 / 精简雷暴密度次数 / 8 步受光样本；`gpu-ab` 逐项关掉）：每像素 168 步里 161 步是外壳里层状云高度以外的空白 2dt 步，有云样本只有约 2 个——但**把这些空白步跳掉（步数 168 → 75）GPU 几乎不变**（×0.99），空白步很便宜。真正的钱在「求雷暴密度的步」：砧与砧下的乳状云带里每像素 20+ 次完整 `stormDensity`；关掉乳状云 ×0.67–0.71，其中几乎全是 `pouchField`（两级 3×3 格点、每格两个哈希）。
+  - 修法（几何逐位不变）：①`pouchField` 里格点中心离采样点 ≥ 0.75 格（口袋最大半径）先跳过第二个哈希；②`mammatusDensity` 按口袋最大下垂深度（≤ 0.75·1.68·cl·zone）剪掉砧底下更深的采样点。两条合起来雷暴云步进 ×0.88；之后空域跳跃（下一条）才显出来，再 ×0.85。
+  - 识别：雷暴 / 台风类任务改密度函数前，先用计数补丁看「每像素求了几次完整密度、在哪」，再按函数逐个关掉量 `gpu-ab`，别只看步数热图。
+- **云步进的天气变体对寄存器压力极敏感，「省步数」的改动要分变体量**（PERF-STORM）：空域跳跃（雷暴包围柱 + 层状云包络之外整段跳过）在雷暴变体里 ×0.85–0.88，同一段代码放进台风变体（台风包围柱 18 倍眼半径几乎罩住整窗，一步也跳不掉）却让台风云步进 **×1.36**——多了几个跨循环存活的量。所以跳跃只编进纯雷暴变体（`CLOUD_STORM_SKIP`）。反过来把闪电端点、相函数等挪进分支「省寄存器」、台风雨带单体循环里的等价早退、受光版单体参数缓存，实测都不省或更慢（×1.0–1.12）：别凭直觉改台风变体，改了必须 `gpu-ab` ≥ 16 轮。
+- **`passes.mjs`（含预审用的 passes-vp 副本）在并行负载下同一场景两次能差 30–100%**（PERF-STORM 实测：master 上 storm-sc-low 云步进 3.2 / 3.9 ms、用户分辨率 6.2 / 11.1 ms 都出现过）：只用来看「一帧的钱花在哪个 pass」；前后对比一律 `gpu-ab`（同页 ABBA 配对 + A/A），用户分辨率用 `gpu-ab --viewport 2560x1300 --dpr 1.5 --time frame`。
 - **「帧率很低、CPU 打满、GPU 利用很低」先查浏览器是不是退到了软件渲染，别先当代码回归查**（PERF-CPU，2026-09-28）：
   - 现象：用户的 Chrome 里整页 2–3 fps，任务管理器 CPU 满、显卡几乎闲着。
   - 根因：前一晚 23:59:37 NVIDIA 驱动重装（系统日志 UserPnp 20003「为设备添加服务 nvlddmkm」），Chrome 的 GPU 进程 4 秒后重启时拿不到硬件 D3D 设备，退到 **WARP**（`Microsoft Basic Render Driver`，D3D11 的 CPU 软件光栅），之后一直不会自己切回（浏览器进程从 9/13 起没重启过）。本页在 WARP 上约 2.4 fps，WARP 的光栅线程占约 26 个核。硬件模式（RTX 5090、有头、1600×1200 或 2560×1300@1.5）各场景稳态都顶在 160 fps vsync，主线程 JS 约 1 ms/帧，**不是回归**。
   - 修法：用户侧完全重启 Chrome（`chrome://restart`），再到 `chrome://gpu` 确认「WebGL: Hardware accelerated」。代码侧：`src/boot/software-gl.ts` 启动时读渲染器字符串，命中 Basic Render / SwiftShader / llvmpipe 就在页面顶部提示原因与办法（`?swgl=1` 强制显示，`__voyage.softwareRenderer` 看判定）。
   - 识别：①页面顶部出现上述提示；②PowerShell `(Get-Process -Id <Chrome GPU 进程>).Modules | ? ModuleName -match 'nvwgf|Warp'`：有 `D3D10Warp.dll`、没有 `nvwgf2umx.dll` 就是 WARP（Chrome GPU 进程 pid 用命令行里的 `--type=gpu-process` 找）；③复现：`node scripts/cpu-prof.mjs --port <端口> --angle d3d11-warp --no-gl`（注意 `--use-angle=warp` 不是合法值，会退到 SwiftShader）。
+- **聚焦（放大）时整帧 GPU 约 ×1.2–1.6，主要是窗外占满全屏，不是 LOD 失控**（FOCUS-ZOOM，`gpu-ab` 8 轮带 A/A，1600×1200）：整帧 4× 时 sea-sc ×1.16、noon-cumulus ×1.43、fuji-day ×1.55、night-city ×1.56、sunset-wing ×1.41；分 pass 看云 ×1.18–1.89、机翼 ×1.3–2.2（机翼占满画面）、窗外 + 舱内 ×1.07–1.20。对照：不聚焦、头贴窗（z = −0.03，窗也占满全屏）的 noon-cumulus 本来就比默认坐姿贵 22%，4× 聚焦只比它再多 17%。用户分辨率下晴天积云约 5.4 → 7.7 ms，超 160 Hz 预算；所以聚焦中（含还原后 1.5 s）暂停自动调档（`quality.pauseDecisions`），宁可这几秒掉一点帧，也不在用户凝神细看时降档、云缓冲重置整片糊一下。以后若要真正省：聚焦时按倍率降云缓冲分辨率（窗外角分辨率已经高了 N 倍），或机翼在放大时减步数——另开 PERF 任务。
 - **每帧 WebGL 调用的大头是空气透视 3D LUT**（PERF-CPU）：原来内散射 / 透射率分两遍各画 32 层，占全帧 111 次 draw 中的 64 次（每层一次 `framebufferTextureLayer` + three 的整套 `render()`），同一段 `integrateSegment` 算两遍。改成两附件 MRT 一遍画出（`luts.ts` 的 `aerialTarget`：three 的 `WebGL3DRenderTarget` 给 `count: 2` 时多出来的 `textures[1]` 仍是 2D `Texture`，要手动换成同设置的 `Data3DTexture`），draw 111 → 79，与旧做法逐 texel 逐位相同（`node handoff/PERF-CPU-aerial-check.mjs <端口>`）。
 - **冗余的 GL 状态调用不是瓶颈**（PERF-CPU 实测）：three 每次 `render()` 末尾把深度测试 / 深度写入复位，全屏 pass 的材质又关掉，每帧约 220 次 `depthMask`、各 110 次 `enable` / `disable`（占调用数 40%）。在 JS 侧去重后同页交替对照，GPU 进程 CPU 在噪声内没有变化——ANGLE 把状态推迟到 draw 时才下发，这类调用很便宜。不值得绕开 three 的状态管理。
 - **测 CPU / GPU 进程开销用 `scripts/cpu-prof.mjs`**（PERF-CPU，见「调试与验证」）：GPU 进程 CPU 同场景两次能差 ±30%（45–90%），前后对照要同页交替（`--scenes 场景,A,B,A,B --jsA … --jsB …`）或多轮交替跑两个端口，不要单次比。启动后头 10 s 与换场景后的几秒里，GPU 进程的 `ThreadPoolForegroundWorker`（后台变体着色器编译）会占 4–7 个核，是一次性的，量稳态要等过去。
 
 <a id="pit-tools"></a>
 ### 工具与环境
+
+- **测量工具的 URL 带 `?dev=<时间戳>`（防缓存），开发者区的 `?dev` 开关只认空值 / `1` / `true` / `on`**（FOCUS-ZOOM）：面板规范（`research/PANEL_UX_GUIDE.md` §2.1）用 `?dev` 打开开发者区，而 `dev-browser.mjs` 的 `openPage` 一直用 `dev=<时间戳>` 破缓存；按「有没有 dev 参数」判断的话，所有工具页面都会显示开发者区（UX 类任务截面板时面板变高、面积测量不对）。以后新增 URL 开关先 grep 一下 `scripts/` 里有没有同名参数。
 
 - **面板元素设了 `display` 就会盖住 `hidden` 属性**（T49、UX-1 各踩一次）：现象：代码里 `el.hidden = true`，截图里那一行照样在（连续航程关着时的「航程流速」、自动曝光开着时的「手动曝光」）。根因：`#panel label { display: flex }`、`.row { display: flex }` 的优先级高于浏览器自带的 `[hidden] { display: none }`。修法（UX-1a）：`style.css` 全局 `[hidden] { display: none !important; }`，显示 / 隐藏一律用 `hidden` 属性，不要再给单个选择器补 `xxx[hidden]`。识别：截图场景 `js` 里对照 `el.hidden` 与 `getComputedStyle(el).display`（`handoff/UX-1a-scenes-panel.json` 的 `ux1a-default-bottom`）。
 - **页面默认开启连续航程，测量脚本不带 `voyage=0` 截图就不确定**（VOY-DEFAULT）：现象：自写脚本 / 手动在 Playwright 里打开页面再 `applyScene`，同代码两次截图的云型、云影、海面、舱灯对不上。根因：载入到设场景之间导演已经按天气场硬切云参数（`type` / `density` 不在面板上）、摆了雷暴、写了海面风与舱灯，`applyScene` 的 `setActive(false)` 只停导演不撤回。修法：导航 URL 带 `?voyage=0`（仓库里的工具都已带，见「调试与验证」`applyScene` 一条）。识别：`__voyage.director.telemetry.legs.length > 0` 或 `director.weather.log` 非空，说明这一页进过连续航程。另：首载开启时机头直接对准第一段航线（`setActive(true, true)`）——默认地点西太平洋向南飞，前方没有机场，接入的第一段（羽田 → 关西）在西北，不对准的话首屏是 140° 的大坡度右转。

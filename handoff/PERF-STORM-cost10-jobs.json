@@ -1,0 +1,71 @@
+[
+ {
+  "name": "c10-storm-sc-low",
+  "scene": "storm-sc-low",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "lbrk",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "        for (int j = 0; j < lightSteps; j++) {\n          lt += ls;\n",
+       "        bool sunUp = dot(uKeyDir, up) > 0.0;\n        for (int j = 0; j < lightSteps; j++) {\n          if (sunUp && length(p + uKeyDir * lt) - BOTTOM > uShellTop) { if (j <= 2) odNearW = od; break; }\n          lt += ls;\n"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "c10-storm-day",
+  "scene": "storm-day",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "lbrk",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "        for (int j = 0; j < lightSteps; j++) {\n          lt += ls;\n",
+       "        bool sunUp = dot(uKeyDir, up) > 0.0;\n        for (int j = 0; j < lightSteps; j++) {\n          if (sunUp && length(p + uKeyDir * lt) - BOTTOM > uShellTop) { if (j <= 2) odNearW = od; break; }\n          lt += ls;\n"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "c10-typhoon-bands",
+  "scene": "typhoon-bands",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "lbrk",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "        for (int j = 0; j < lightSteps; j++) {\n          lt += ls;\n",
+       "        bool sunUp = dot(uKeyDir, up) > 0.0;\n        for (int j = 0; j < lightSteps; j++) {\n          if (sunUp && length(p + uKeyDir * lt) - BOTTOM > uShellTop) { if (j <= 2) odNearW = od; break; }\n          lt += ls;\n"
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]

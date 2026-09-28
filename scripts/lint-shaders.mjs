@@ -262,6 +262,15 @@ export async function collectPrograms(server, opts = {}) {
     add("atmosphere-aerial", atmosphere.aerialMaterial);
   });
 
+  // 云隙光（SPEC-RAYS，atmosphere/rays.ts）：步进 / 模糊 / 合成三个小程序，按需后台编译，不在冷启动关键路径上。旧树没有这个模块，lenient 下跳过
+  await section("rays", async () => {
+    const m = await server.ssrLoadModule("/src/atmosphere/rays.ts");
+    const r = m.createRaysMaterials({}, {});
+    add("rays-march", r.march);
+    add("rays-blur", r.blur);
+    add("rays-composite", r.composite);
+  });
+
   return programs;
 }
 
@@ -841,7 +850,7 @@ async function main() {
     // -- 1c. PERF-13：窗外默认程序预处理后不含罕见光学（宝光 / 影子 / 幻日 / 晕）与天幕层奇观代码；变体里必须有（断言有区分力） --
     // 这两块一旦写到 #ifdef OUTSIDE_OPTICS / OUTSIDE_WONDER 外面，就又编进了冷启动关键路径上的窗外默认程序
     console.log("\n-- 窗外默认程序不含罕见光学 / 天幕层奇观代码（PERF-13，glslangValidator -E） --");
-    const EXTRA_IDS = ["opticsGlory", "opticsPlaneShadow", "opticsCloudFactor", "opticsHaloRadiance", "uOpticsGlory", "wonderSky", "wonderStrut", "wonderSpheroid", "uWonderOn"];
+    const EXTRA_IDS = ["opticsGlory", "opticsPlaneShadow", "opticsCloudFactor", "opticsHaloRadiance", "uOpticsGlory", "wonderSky", "wonderStrut", "wonderFrustum", "uWonderOn"];
     const preprocess = (prog) => {
       const file = path.join(tmpDir, `${prog.id}.pp13.frag`);
       writeFileSync(file, FRAG_PREFIX + resolveIncludes(prog.fragmentShader, new Set()));

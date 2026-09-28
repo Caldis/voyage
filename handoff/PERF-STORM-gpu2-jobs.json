@@ -1,0 +1,137 @@
+[
+ {
+  "name": "g2-storm-sc-low",
+  "scene": "storm-sc-low",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "hullIn",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);",
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);\n    if (wxSeg.y < wxSeg.x) return;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "hullOut",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);",
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);\n    if (wxSeg.y >= wxSeg.x) return;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "refOnly",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (!nearW.x) {\n    if (uCoverage <= 0.0) return;",
+       "  if (!nearW.x) {\n    return;"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "g2-storm-day",
+  "scene": "storm-day",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "hullIn",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);",
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);\n    if (wxSeg.y < wxSeg.x) return;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "hullOut",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);",
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);\n    if (wxSeg.y >= wxSeg.x) return;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "refOnly",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (!nearW.x) {\n    if (uCoverage <= 0.0) return;",
+       "  if (!nearW.x) {\n    return;"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "g2-typhoon-bands",
+  "scene": "typhoon-bands",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "hullIn",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);",
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);\n    if (wxSeg.y < wxSeg.x) return;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "hullOut",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);",
+       "    wxSeg = cloudRayWeatherSpan(ro, rd);\n    if (wxSeg.y >= wxSeg.x) return;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "refOnly",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (!nearW.x) {\n    if (uCoverage <= 0.0) return;",
+       "  if (!nearW.x) {\n    return;"
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]

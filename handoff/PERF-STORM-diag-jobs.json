@@ -1,0 +1,490 @@
+[
+ {
+  "name": "diag-storm-sc-low",
+  "scene": "storm-sc-low",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "lit",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      float sigma = dens * CLOUD_EXTINCTION;",
+       "      nLit += 1.0;\n      float sigma = dens * CLOUD_EXTINCTION;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nLit;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "out",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) { emptyK = 2.0; nOut += 1.0; }"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nOut;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "in",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "    float dt = fine > 0 ? fineDt : dtBase;",
+       "    if (emptyK < 1.99) nIn += 1.0;\n    float dt = fine > 0 ? fineDt : dtBase;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nIn;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "tend",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = t;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "diag-storm-day",
+  "scene": "storm-day",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "lit",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      float sigma = dens * CLOUD_EXTINCTION;",
+       "      nLit += 1.0;\n      float sigma = dens * CLOUD_EXTINCTION;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nLit;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "out",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) { emptyK = 2.0; nOut += 1.0; }"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nOut;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "in",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "    float dt = fine > 0 ? fineDt : dtBase;",
+       "    if (emptyK < 1.99) nIn += 1.0;\n    float dt = fine > 0 ? fineDt : dtBase;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nIn;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "tend",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = t;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "diag-typhoon-bands",
+  "scene": "typhoon-bands",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "lit",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      float sigma = dens * CLOUD_EXTINCTION;",
+       "      nLit += 1.0;\n      float sigma = dens * CLOUD_EXTINCTION;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nLit;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "out",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) { emptyK = 2.0; nOut += 1.0; }"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nOut;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "in",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "    float dt = fine > 0 ? fineDt : dtBase;",
+       "    if (emptyK < 1.99) nIn += 1.0;\n    float dt = fine > 0 ? fineDt : dtBase;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nIn;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "tend",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = t;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "diag-storm-sc",
+  "scene": "storm-sc",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "lit",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      float sigma = dens * CLOUD_EXTINCTION;",
+       "      nLit += 1.0;\n      float sigma = dens * CLOUD_EXTINCTION;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nLit;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "out",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) { emptyK = 2.0; nOut += 1.0; }"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nOut;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "in",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "    float dt = fine > 0 ? fineDt : dtBase;",
+       "    if (emptyK < 1.99) nIn += 1.0;\n    float dt = fine > 0 ? fineDt : dtBase;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nIn;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "tend",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = t;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "diag-storm-graze",
+  "scene": {
+   "name": "storm-graze",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 900,
+    "coverage": 0.6,
+    "altitude": 3.0,
+    "weather": "storm",
+    "wing-pos": "-4",
+    "quality": "high",
+    "ground-on": false
+   },
+   "offset": [
+    0,
+    0
+   ],
+   "wait": 3000
+  },
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "lit",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      float sigma = dens * CLOUD_EXTINCTION;",
+       "      nLit += 1.0;\n      float sigma = dens * CLOUD_EXTINCTION;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nLit;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "out",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) { emptyK = 2.0; nOut += 1.0; }"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nOut;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "in",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  bool wasEmpty = true;\n",
+       "  bool wasEmpty = true;\n  float nLit = 0.0; float nOut = 0.0; float nIn = 0.0;\n"
+      ],
+      [
+       "    float dt = fine > 0 ? fineDt : dtBase;",
+       "    if (emptyK < 1.99) nIn += 1.0;\n    float dt = fine > 0 ? fineDt : dtBase;"
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = nIn;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "tend",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = t;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ }
+]

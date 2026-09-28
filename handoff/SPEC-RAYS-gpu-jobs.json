@@ -1,0 +1,29 @@
+[
+  {
+    "name": "sunset-wing",
+    "scene": "sunset-wing",
+    "variants": [
+      { "name": "off", "js": "v.rays.enabled = false;" },
+      { "name": "on", "js": "for (let i = 0; i < 300 && v.rays.state !== 'ready'; i++) await new Promise((r) => setTimeout(r, 100)); v.rays.enabled = true;" },
+      { "name": "off2", "js": "v.rays.enabled = false;" }
+    ]
+  },
+  {
+    "name": "backlit-cu",
+    "scene": { "name": "backlit-cu", "p": { "preset": "wpac", "date": "2026-09-28", "time": 1010, "altitude": 4, "coverage": 0.5, "wing-pos": "-4" } },
+    "variants": [
+      { "name": "off", "js": "v.rays.enabled = false;" },
+      { "name": "on", "js": "for (let i = 0; i < 300 && v.rays.state !== 'ready'; i++) await new Promise((r) => setTimeout(r, 100)); v.rays.enabled = true;" },
+      { "name": "off2", "js": "v.rays.enabled = false;" }
+    ]
+  },
+  {
+    "name": "noon-cumulus",
+    "scene": "noon-cumulus",
+    "variants": [
+      { "name": "off", "js": "v.rays.enabled = false;" },
+      { "name": "on", "js": "for (let i = 0; i < 300 && v.rays.state !== 'ready'; i++) await new Promise((r) => setTimeout(r, 100)); v.rays.enabled = true;" },
+      { "name": "off2", "js": "v.rays.enabled = false;" }
+    ]
+  }
+]

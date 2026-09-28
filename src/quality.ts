@@ -412,8 +412,23 @@ export class QualityController {
     } else {
       this.pushCost(intervalMs);
     }
+    if (nowMs < this.pausedUntil) {
+      // FOCUS-ZOOM：聚焦观察期间（及松开后一小段）不调档，计时只清零不累计——见 pauseDecisions
+      this.overSince = this.underSince = null;
+      return;
+    }
     if (this.tierValue === "auto") this.decide(nowMs);
   }
+
+  /**
+   * FOCUS-ZOOM：到 untilMs 之前暂停自动调档。聚焦（按住放大）时窗外占满全屏、整帧 GPU 约 ×1.4（handoff/FOCUS-ZOOM.md），
+   * 用户分辨率下会超预算；按住超过 DOWNGRADE_HOLD_MS 就会降档——一降档云分辨率变、时间累积重置，正好在用户凝神细看时整片糊一下。
+   * 聚焦是短暂的主动操作，宁可这几秒掉一点帧，也不在这时换档；main.ts 在聚焦中（含还原过渡）每帧把期限往后推。
+   */
+  pauseDecisions(untilMs: number) {
+    this.pausedUntil = Math.max(this.pausedUntil, untilMs);
+  }
+  private pausedUntil = -Infinity;
 
   /** 面板切换画质档位 */
   setTier(tier: QualityTier, nowMs = performance.now()) {

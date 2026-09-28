@@ -40,6 +40,11 @@ ${VIEW_COMMON}
 #ifdef CLOUD_WEATHER
 #define CLOUD_OCC 1
 #endif
+// PERF-STORM 空域跳跃只编进纯雷暴变体（见 main 里 laySeg / wxSeg）：台风变体里台风的包围柱（18 倍眼半径）几乎罩住整窗，跳不掉什么，
+// 多出的几个跨循环变量却让台风云步进 ×1.36（gpu-ab 16 轮，handoff/PERF-STORM.md）
+#if defined(CLOUD_STORM) && !defined(CLOUD_TYPHOON)
+#define CLOUD_STORM_SKIP 1
+#endif
 ${CLOUD_COMMON}
 ${LIGHTS_COMMON}
 #ifdef WONDER_LAYER
@@ -207,6 +212,28 @@ bool cloudPointNearWeather(vec2 xz) {
 #endif
   return nearAny;
 }
+#ifdef CLOUD_STORM_SKIP
+// PERF-STORM：视线上「可能有雷暴密度」的区间的包络 [t0, t1]（没有时 t1 < t0）。
+// 半径与密度函数的提前退出一致（√56 ≈ 7.48 倍塔身半径），留 0.5 km；高度按 weather.ts 的外壳：到 c.w + 1.8 km。
+// 包络外只剩层状云，主循环可以整段跳过空白（见 main）
+vec2 cloudRayWeatherSpan(vec3 ro, vec3 rd) {
+  vec2 span = vec2(1e9, -1e9);
+  float a = max(dot(rd.xz, rd.xz), 1e-8);
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 c = uStorms[i];
+    vec2 rel = c.xy - uCloudOffset;
+    float R = c.z * 7.5 + 0.5;
+    float tc = dot(rel, rd.xz) / a;
+    float h2 = R * R - (dot(rel, rel) - tc * tc * a);
+    if (h2 < 0.0) continue;
+    float hw = sqrt(h2 / a);
+    vec2 hs = cloudShellIntervalH(ro, rd, uShellBottom, c.w + 1.8);
+    vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
+    if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
+  }
+  return span;
+}
+#endif
 #endif
 
 float hg(float c, float g) {
@@ -348,6 +375,23 @@ void main() {
   float fineDt = 0.03;
   bool wasThin = false;       // 上一个采样点是稀薄的软边冰晶云（下一步走 2 倍步长，见 SOFT_SKIP）
   float lastEmpty = seg.x;   // 最近一个空白采样点的位置：表面一定在它和第一个有云的采样点之间
+  // PERF-STORM 空域跳跃（只在纯雷暴变体，CLOUD_STORM_SKIP）：够得着雷暴的视线（refineOn）要走 0–15 km 的整个外壳，
+  // 实测 storm-sc-low 每像素 168 步里 161 步是层状云高度以外的空白 2dt 步（有云样本只有约 2 个）：巡航高度本身就在外壳里，
+  // 往下看要从机身空走到云顶、往上看要空走到 15 km，一路逐步求密度。其实外壳里只有两处可能有云：
+  // 层状云自己的高度范围（laySeg）和各雷暴的包围柱（wxSeg，见 cloudRayWeatherSpan）。两者之外一步跳到下一段的起点。
+  // laySeg 取「首次进层 → 最后出层」的包络：不碰地面的掠射视线出层底后还会再进层，包络里夹着的空白照旧走 2dt（下面的高度门控）
+#ifdef CLOUD_STORM_SKIP
+  vec2 laySeg = vec2(1e9, -1e9);
+  vec2 wxSeg = vec2(1e9, -1e9);
+  if (refineOn) {
+    if (uCoverage > 0.0) {
+      laySeg = cloudShellIntervalH(ro, rd, uCloudBottom, uCloudTop);
+      if (raySphere2(ro, rd, BOTTOM).x <= 0.0) laySeg.y = max(laySeg.y, raySphere2(ro, rd, BOTTOM + uCloudTop).y);
+      if (laySeg.y <= laySeg.x) laySeg = vec2(1e9, -1e9);
+    }
+    wxSeg = cloudRayWeatherSpan(ro, rd);
+  }
+#endif
   // 闪电放电通道（线段）：两端换到相机坐标
   vec3 fA = vec3(uFlash.x - uCloudOffset.x, BOTTOM + uFlash.y, uFlash.z - uCloudOffset.y);
   vec3 fAB = vec3(uFlashB.x - uCloudOffset.x, BOTTOM + uFlashB.y, uFlashB.z - uCloudOffset.y) - fA;
@@ -387,6 +431,19 @@ void main() {
     // 没有雷暴时 384 步（原来 192；C10b 近处空白步不加倍，走到同样远要多约一倍的步数；多出的 448 − 384 步只给雷暴的表面细化用）
 #ifdef CLOUD_WEATHER
     if (t >= seg.y || T < 0.005 || (!refineOn && i >= 384)) break;
+    // PERF-STORM 空域跳跃（见循环前 laySeg / wxSeg）：空白处、不在任何一段里 → 跳到下一段的起点；后面没有段了就结束。
+    // 跳到的点上 lastEmpty 同步（塔身表面细化按它回退，不能退回跳过的那段）；跳后第一步走半步，
+    // 与默认程序从层顶起步（i == 0 半步）一致——远离雷暴的层状云在两个程序里是同一套采样，换程序不跳变
+    bool jumped = false;
+#ifdef CLOUD_STORM_SKIP
+    if (refineOn && wasEmpty && fine == 0 && !(t >= laySeg.x && t < laySeg.y) && !(t >= wxSeg.x && t < wxSeg.y)) {
+      float tn = min(t < laySeg.x ? laySeg.x : 1e9, t < wxSeg.x ? wxSeg.x : 1e9);
+      if (tn >= seg.y) break;
+      t = tn;
+      lastEmpty = tn;
+      jumped = true;
+    }
+#endif
 #else
     if (t >= seg.y || T < 0.005 || i >= 384) break;
 #endif
@@ -403,7 +460,11 @@ void main() {
     // 系数按 t 连续变化（步长本来就随 t 连续变），没有 C10 的 60 km 硬开关；雷暴 / 台风程序的普通层状云走同一套（不再换程序就换估计）。
     // 第一步只走一半（i == 0 时 wasEmpty 恒为真）：飞机在云里时第一个样本离相机更近（深度 [0, dt/2]），云里 8 姿态的时间噪声
     // 回到 C10 二分时的水平（不缩短时 relStd ×1.29、噪声分量 ×1.15，缩短后 ×0.87 / ×0.94，见 handoff/C10b.md）；从外面看的云只影响进壳的第一个样本
+#ifdef CLOUD_WEATHER
+    float emptyK = (1.0 + smoothstep(60.0, 90.0, t)) * (i == 0 || jumped ? 0.5 : 1.0);
+#else
     float emptyK = (1.0 + smoothstep(60.0, 90.0, t)) * (i == 0 ? 0.5 : 1.0);
+#endif
 #ifdef CLOUD_WEATHER
     // 够得着雷暴 / 台风的视线要走 0–15 km（台风 0.5–20.5 km）的整个外壳，只在层状云自己的高度范围（上下各留 300 m）里走细步：
     // 塔身进云另有表面细化（fine），外壳里其余高度的空白没有层状云可漏。不加这一条时 storm-day / typhoon 云步进 +1.4~2.2 ms（+45~60%），
@@ -827,6 +888,7 @@ uniform bool uResetDepth;   // 右半（深度）这一帧从停用变回启用�
 uniform vec2 uCloudResolution;
 uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；与步进程序、曝光的 uWhiteout 同一个 uniform 对象，C11）
 uniform float uSinceReset;     // 自上次 reset 起的帧数（reset 帧 = 0，C12b 审查）
+uniform float uPrevTanHalfFov; // 上一帧的垂直半视场正切（FOCUS-ZOOM：历史按它投影，视场不变时与 uTanHalfFov 相同）
 varying vec2 vUv;
 // 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半是云的深度——窗外程序要拿它判断云在山前还是山后
 // （clouds.glsl.ts 的 cloudBeforeGround），放进同一张纹理，窗外 / 机翼程序不多占 sampler。两半各自时间累积、各自邻域夹取。
@@ -916,7 +978,7 @@ void main() {
   float blend = 0.12;
   vec2 puv = vec2(-1.0);
   if (v.z < 0.0) {
-    vec2 ndc = v.xy / (-v.z) / uTanHalfFov;
+    vec2 ndc = v.xy / (-v.z) / uPrevTanHalfFov;  // 上一帧的视场（FOCUS-ZOOM：聚焦时视场逐帧变）
     ndc.x /= uResolution.x / uResolution.y;
     puv = ndc * 0.5 + 0.5;
   }
@@ -1240,6 +1302,8 @@ export class Clouds {
   /** 云的渲染分辨率相对全屏的比例 */
   resolutionScale = 1;
   private reset = true;
+  /** FOCUS-ZOOM：视场变化的帧把 resolve 的「reset 后帧数」压到不超过它（见 render）；设成 Infinity 就是改前的行为（测量对照用） */
+  zoomSinceResetCap = 8;
   private readonly prevCamBasis = new THREE.Matrix3();
   private readonly prevCabinToWorld = new THREE.Matrix3();
 
@@ -1439,6 +1503,7 @@ export class Clouds {
         uCloudResolution: this.marchMat.uniforms.uCloudResolution,
         uCloudImmersion: EXPOSURE_WHITEOUT, // 云里的空间平均（C11，见 RESOLVE_FRAG）
         uSinceReset: { value: 0 },
+        uPrevTanHalfFov: { value: (viewUniforms.uTanHalfFov?.value as number | undefined) ?? 1 },
       },
     });
   }
@@ -1933,13 +1998,22 @@ export class Clouds {
     r.uReset.value = this.reset;
     // reset 后的帧计数（C12b 审查：reset 后按等权平均兜底收敛，见 RESOLVE_FRAG 末尾）
     r.uSinceReset.value = this.reset ? 0 : Math.min(r.uSinceReset.value + 1, 1e4);
+    // FOCUS-ZOOM：视场这一帧变了（聚焦放大 / 还原的过渡）——历史已按上一帧视场正确投影（uPrevTanHalfFov），但放大时历史的
+    // 角分辨率比这一帧粗（被拉伸、发糊），缩小时是欠采样。把「reset 后帧数」压到 ≤ zoomSinceResetCap，resolve 的等权兜底
+    // blend ≥ 1/(n+1) 让新样本多占一些、历史照样保留（不清空，不出 1 spp 噪点）。实测（handoff/FOCUS-ZOOM.md，sea-sc 4×）：
+    // 过渡中误差与不压持平，过渡结束后第 4 / 8 / 16 帧对真值误差 −12% / −17% / −15%；压到 ≤ 4 过渡中更噪，≤ 8 两头都不吃亏
+    const tanNow = this.view.uTanHalfFov?.value as number | undefined;
+    if (tanNow !== undefined && tanNow !== r.uPrevTanHalfFov.value) r.uSinceReset.value = Math.min(r.uSinceReset.value, this.zoomSinceResetCap);
     // 云缓冲右半（云的平均深度，T38）只在附近有高出海面的真实地形时写（PERF-11）：它只用来判断「云在山前还是山后」，
     // 海面 / 没开真实地理时用不上，却让 resolve 多一倍像素。停用期间右半不更新（窗外按 uCloudDepthOn = 0 不读），
     // 重新启用的那一帧右半不取历史（旧内容早已过时）
     const v = this.view;
     // 相机离地很低（火车 TR03、低空）时常开：平原上几十米的小丘也挡得住贴地平线的远云（审查建议）
     const camAlt = (v.uCamR?.value ?? 1e9) - 6360;
-    const depthOn = (v.uGroundOn?.value ?? 0) > 0.5 && ((v.uTerrainMax?.value ?? 0) > DEPTH_TERRAIN_MIN_KM || camAlt < DEPTH_LOW_CAMERA_KM);
+    // WS01：天幕层奇观（天梯锚塔）在场时也要云的深度——比塔远的云要排到塔后面（outside-pass.ts 的 OUTSIDE_WONDER 段）
+    const depthOn =
+      ((v.uGroundOn?.value ?? 0) > 0.5 && ((v.uTerrainMax?.value ?? 0) > DEPTH_TERRAIN_MIN_KM || camAlt < DEPTH_LOW_CAMERA_KM)) ||
+      (v.uWonderOn?.value ?? 0) > 0.5;
     r.uResetDepth.value = depthOn && !this.depthOn;
     this.depthOn = depthOn;
     if (this.uniforms.uCloudDepthOn) this.uniforms.uCloudDepthOn.value = depthOn ? 1 : 0;
@@ -1952,5 +2026,7 @@ export class Clouds {
     this.reset = false;
     this.prevCamBasis.copy(camBasis);
     this.prevCabinToWorld.copy(cabinToWorld);
+    // FOCUS-ZOOM：记下这一帧的视场，下一帧 resolve 按它把历史投影回来（聚焦过渡时视场逐帧变，按当前视场投影会把历史整体缩放错位）
+    if (v.uTanHalfFov) r.uPrevTanHalfFov.value = v.uTanHalfFov.value;
   }
 }

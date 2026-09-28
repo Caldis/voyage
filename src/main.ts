@@ -20,10 +20,13 @@ import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateAltitudeFloo
 import { $, CRUISE_PITCH_DEG, type CabinClass, type Preset, type VoyageState } from "./state";
 import { fromLocal, localParts, setupUi, startVoyageByDefault, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
 import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets";
+import { FocusZoom, TAN_HALF_FOV_DEFAULT } from "./focus-zoom";
+import { HeadLimiter } from "./head-limits";
 import { BootProgress } from "./boot/progress";
 import { Director } from "./director";
 import { WonderSystem } from "./wonders/system";
 import { Optics } from "./render/optics";
+import { CloudRays } from "./atmosphere/rays";
 import { createQualityController, DEFAULT_DPR_CAP } from "./quality";
 import { CabinAudio, audioInputFrom } from "./audio";
 import { LightPollution } from "./light-pollution";
@@ -100,6 +103,8 @@ Object.assign(sceneMat.uniforms, {
 const outsideMat = createOutsideMaterial(sceneMat.uniforms);
 const hdrOutside = createOutsideTarget(renderer);
 sceneMat.uniforms.uOutside.value = hdrOutside.texture;
+// 云隙光（SPEC-RAYS，atmosphere/rays.ts）：窗外 pass 之后减掉云影里的空气散射，舱内合成改读它给的纹理（不画时就是 hdrOutside）
+const rays = new CloudRays(renderer, pass, sceneMat.uniforms, atmosphere.hazeUniforms, hdrOutside);
 // 低空地面细节（T02）：海拔 4 km 以下后台编译窗外程序的 GROUND_DETAIL 变体，编好才切换。
 // PERF-13 起它管全部窗外变体（罕见光学 / 天幕层奇观 / 低空细节 / 火车，选择在 outside-pass.ts 的 wantedOutsideKey）
 const groundDetail = new GroundDetailVariant(outsideMat, hdrOutside);
@@ -212,8 +217,11 @@ function setView(id: string) {
   viewPreset = VIEW_PRESETS.find((v) => v.id === id) ?? VIEW_PRESETS[0];
   applyViewPreset(head, viewPreset, state.seat, state.wingRootLE); // 只改目标位置，头会平滑挪过去
 }
-// 按住拖动才转视角（面板上的操作不会带动画面）；滚轮前后挪头；双击回到当前预设
-setupViewControls(renderer.domElement, head, () => setView(viewPreset.id));
+// 聚焦观察（FOCUS-ZOOM，focus-zoom.ts）与头部左右限位（head-limits.ts：前伸 / 视场越宽，左右能挪得越少，不露出未建模的舱）
+const focus = new FocusZoom();
+const headLimits = new HeadLimiter();
+// 按住拖动才转视角（面板上的操作不会带动画面）；按住不动 = 聚焦观察；滚轮前后挪头；双击回到当前预设
+setupViewControls(renderer.domElement, head, () => setView(viewPreset.id), { focus, limits: headLimits });
 
 function cabinToWorld(): THREE.Matrix3 {
   const h = THREE.MathUtils.degToRad(state.heading);
@@ -347,6 +355,7 @@ function resize() {
   hdr.setSize(size.x, size.y);
   hdrSeat.setSize(size.x, size.y);
   hdrOutside.setSize(size.x, size.y);
+  rays.setSize(size.x, size.y);
   hdrWing.setSize(size.x, size.y);
   clouds.setSize(size.x, size.y);
   bloom.setSize(size.x, size.y);
@@ -359,7 +368,7 @@ resize();
 // 重新应用一次分辨率 / DPR——上面的初始 renderer.setPixelRatio + resize() 已经把状态摆对了
 const quality = createQualityController({ renderer, clouds, resize });
 
-setupUi({ state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, quality, audio, minimap, vehicle: rail });
+setupUi({ state, setPreset, snapAll, exposure, clouds, weather, cloudUniforms, setView, currentView: () => viewPreset.id, director, wonders, quality, audio, minimap, vehicle: rail, focus });
 // 奇观之门（W01 预留、T19b 接入）：遮挡开始时通知奇观系统；只有 wonders.preferGate = true 时才会借遮挡出现
 director.onCover((kind) => wonders.onCover(kind));
 
@@ -403,6 +412,8 @@ function frame(now: number) {
   lastFrameAt = t;
   quality.beginFrame();
   renderFrame(t);
+  // FOCUS-ZOOM：聚焦中及还原后 1.5 s 内不自动调档（quality.ts pauseDecisions）
+  if (focus.active) quality.pauseDecisions(t + 1500);
   quality.endFrame(t, intervalMs);
   requestAnimationFrame(frame);
 }
@@ -436,9 +447,16 @@ function renderFrame(now: number) {
   const bump = updateTurbulence(state, { dt, now, inCloud, storms: weather.storms, cloudOffset: cloudUniforms.uCloudOffset.value });
 
   const k = 1 - Math.exp(-dt * 6);
-  head.x += (head.tx - head.x) * k;
   head.y += (head.ty - head.y) * k;
   head.z += (head.tz - head.z) * k;
+  // FOCUS-ZOOM：聚焦的视场（倍率 1 时与默认常数逐位相同）；头部左右限位按这一帧的高度、前伸、视场求，
+  // 实际位置硬夹进限位——限位随前伸 / 视场连续变化，被夹住的头部跟着平滑移动，不会瞬跳；目标位置 tx 不改（换视角预设时
+  // 头还在前伸处，先夹住、退回去以后再放开），拖动时的弹性阻尼在 view-presets.ts
+  const tanHalfFov = TAN_HALF_FOV_DEFAULT / focus.update(dt);
+  sceneMat.uniforms.uTanHalfFov.value = tanHalfFov;
+  const res = sceneMat.uniforms.uResolution.value as THREE.Vector2;
+  headLimits.update({ y: head.y, z: head.z, tanHalfFov, aspect: res.x / Math.max(res.y, 1), seatSign: state.seat === "right" ? 1 : -1, economy: cabinClass.shown === "economy" });
+  head.x = headLimits.clamp(head.x + (head.tx - head.x) * k);
 
   // 高度下限与霾（T18）：都要在大气 LUT 更新之前
   const offT18 = cloudUniforms.uCloudOffset.value;
@@ -565,6 +583,7 @@ function renderFrame(now: number) {
   // 窗外（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdrOutside，舱内合成读它画到 hdr，
   // 机翼 pass 再读实际画出来的 hdr 合成
   pass.render(pickOutside(), hdrOutside);
+  u.uOutside.value = rays.render(hdrOutside);
   const cabinMat = cabinClass.pick(renderer, state.cabinClass);
   exposure.finalMat.uniforms.uCabinRefAlbedo.value.copy(CABIN_REF_ALBEDO[cabinClass.shown]);
   exposure.finalMat.uniforms.uClouds.value = clouds.texture; // TM01：高光段只给云（曝光合成读云缓冲的不透明度）
@@ -728,7 +747,10 @@ function benchScene(n = 20, which: "both" | "outside" | "cabin" = "both") {
   const px = new Float32Array(4);
   const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
   const once = () => {
-    if (which !== "cabin") pass.render(pickOutside(), hdrOutside);
+    if (which !== "cabin") {
+      pass.render(pickOutside(), hdrOutside);
+      sceneMat.uniforms.uOutside.value = rays.render(hdrOutside);
+    }
     if (which !== "outside") {
       const cabinMat = cabinClass.pick(renderer, state.cabinClass);
       pass.render(cabinClass.seat(), hdrSeat);
@@ -771,4 +793,4 @@ function benchFrame(n = 10) {
 // （README「着色器编译」坑点，PERF-1）。以前 dev-browser.mjs 只能退而求其次统一绑到 hdrOutside。
 // PERF-14 合并（座椅拆成单独 pass）带来 seatMat / hdrSeat（座椅材质与目标）、wingVariant（机翼湿窗变体，
 // WingWetVariant 实例，--material 用它的 pick() 结果当「当前实际画的变体」，同 clouds.marchMat 的做法）。
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, softwareRenderer, atmosphere, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, softwareRenderer, atmosphere, rays, focus, headLimits, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };

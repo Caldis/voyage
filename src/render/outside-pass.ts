@@ -205,6 +205,10 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
 #else
   if (onGround) cloud = cloudBeforeGround(cloud, cloudBufferDepth(uClouds, gl_FragCoord.xy / uResolution), tGround);
 #endif
+#ifdef OUTSIDE_WONDER
+  // 天幕层奇观挡住比它远的云（WS01：天梯锚塔在 200–260 km 外，地平线一带更远的云要排到塔后面），按它盖住像素的比例混
+  if (gWonderCov > 0.0) cloud = mix(cloud, cloudBeforeGround(cloud, cloudBufferDepth(uClouds, gl_FragCoord.xy / uResolution), gWonderT), gWonderCov);
+#endif
   // 云挡在前面：背景剩下云的透射率那么多，再加上云自身的光（T17：云的光乘宝光 / 本机影子，再加卷云里的幻日和晕；
   // 这两项只在 OUTSIDE_OPTICS 变体里，默认程序的 opticsComposite 只剩前两项，见 optics.glsl.ts）
   return opticsComposite(L, cloud, rd);

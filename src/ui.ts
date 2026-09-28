@@ -3,6 +3,7 @@ import type { SunPosition, MoonState } from "./astro";
 import { CLOUD_PRESETS, type Clouds, type CloudUniforms } from "./clouds/clouds";
 import { effectiveTargetKm, resetAltitudeFloor, FLOOR_LAND_AGL_KM, FLOOR_SEA_KM, PRESETS, haversineKm } from "./flight";
 import type { Exposure } from "./render/exposure";
+import { CABIN_REFLECT_STRENGTH } from "./render/cabin-reflect.glsl";
 import { $, type HighLiftSetting, type VoyageState } from "./state";
 import { WEATHER_PRESETS, type WeatherSystem } from "./weather";
 import { VIEW_PRESETS } from "./view-presets";
@@ -14,6 +15,7 @@ import { describeGroundRes, groundResPref, isHeavyWeather, setGroundResPref, typ
 import type { CabinAudio } from "./audio";
 import type { RailSoundSource } from "./rail/audio-rail";
 import type { DebugMinimap } from "./debug/minimap";
+import { FOCUS_MAG, FOCUS_MS, FOCUS_VIGNETTE, type FocusZoom } from "./focus-zoom";
 
 /**
  * 面板：DOM 绑定、信息栏文字、方位文字（COMPASS）。从 main.ts 拆出（T01 纯重构，未改动任何取值或绑定顺序）。
@@ -158,6 +160,8 @@ export interface UiDeps {
   minimap: DebugMinimap;
   /** 交通工具（TR02）：飞机 / 火车切换（rail/mode.ts 的 RailMode） */
   vehicle: VehicleControl;
+  /** 聚焦观察（FOCUS-ZOOM）：开发者区的倍率 / 过渡 / 暗角，按住 Z 聚焦 */
+  focus: FocusZoom;
 }
 
 /** 面板需要的火车模式接口（rail/mode.ts 的 RailMode 满足它；这里只声明用到的部分，免得 ui.ts 引入 rail 模块） */
@@ -325,6 +329,7 @@ export function setupUi(deps: UiDeps) {
     state.cabinLight = v === "true";
     state.moodLight = v !== "off";
   });
+  setupReflectUi();
   // 舱等（T25）：只改状态，main.ts 每帧按它挑舱内合成的着色器变体（没编过的先后台编译，编好才切）
   $<HTMLSelectElement>("cabin-class").addEventListener("change", (e) => {
     state.cabinClass = (e.target as HTMLSelectElement).value === "economy" ? "economy" : "business";
@@ -339,6 +344,8 @@ export function setupUi(deps: UiDeps) {
   deps.audio.attachRail(deps.vehicle); // TR07：火车模式下声音换成火车的声场（只读列车状态）
   setupMinimapUi(deps.minimap);
   setupVehicleUi(deps.vehicle);
+  setupDevSection();
+  setupFocusUi(deps.focus);
 
   // 画质（PERF-5）：面板只负责挑档位（自动 / 高 / 中 / 低），具体分辨率 / DPR 上限与自适应逻辑都在 quality.ts
   const qualitySel = $<HTMLSelectElement>("quality");
@@ -369,6 +376,63 @@ export function setupUi(deps: UiDeps) {
       viaPointer = false;
     });
   });
+}
+
+// ---------- 窗上倒影强度（REFLECT-OFF） ----------
+
+/** 观看偏好（PANEL_UX_GUIDE §7.1 的 `voyage.pref.view`，结构 { v: 1, ... }）；这里只读写其中的 reflect 字段，其余字段原样保留 */
+const VIEW_PREF_KEY = "voyage.pref.view";
+/** 默认关：用户 2026-09-29「机舱反光过强了，也请弱化甚至默认关闭」 */
+const REFLECT_DEFAULT = 0;
+
+function readViewPref(): Record<string, unknown> {
+  try {
+    const o = JSON.parse(globalThis.localStorage?.getItem(VIEW_PREF_KEY) ?? "null");
+    return o && typeof o === "object" && o.v === 1 ? o : {}; // 不认识的版本当没记过
+  } catch {
+    return {};
+  }
+}
+
+/** 页面载入时的倒影强度：URL `?reflect=0..1`（也认 on / off；多个以最后一个为准）> 用户上次亲手拖的值 > 默认 0（关） */
+function initialReflect(): number {
+  const all = new URLSearchParams(globalThis.location?.search ?? "").getAll("reflect");
+  const q = all.length ? all[all.length - 1].toLowerCase() : "";
+  const n = q === "on" || q === "true" ? 1 : q === "off" || q === "false" ? 0 : q === "" ? NaN : Number(q);
+  if (Number.isFinite(n)) return THREE.MathUtils.clamp(n, 0, 1);
+  const saved = readViewPref().reflect;
+  if (typeof saved === "number" && Number.isFinite(saved)) return THREE.MathUtils.clamp(saved, 0, 1);
+  return REFLECT_DEFAULT;
+}
+
+function setupReflectUi() {
+  const input = $<HTMLInputElement>("cabin-reflect");
+  const out = $("cabin-reflect-out");
+  input.value = String(initialReflect());
+  const update = () => {
+    const v = Number(input.value);
+    CABIN_REFLECT_STRENGTH.value = v;
+    out.textContent = v === 0 ? "关" : `${Math.round(v * 100)}%`;
+    input.setAttribute("aria-valuetext", out.textContent);
+  };
+  const save = (e: Event) => {
+    // 只记用户亲手的操作（isTrusted）：回归 / 测量脚本派发的事件不写；URL 给的初值本身也从不写
+    if (!e.isTrusted) return;
+    try {
+      globalThis.localStorage?.setItem(VIEW_PREF_KEY, JSON.stringify({ ...readViewPref(), v: 1, reflect: Number(input.value) }));
+    } catch {
+      // 隐私模式等拿不到 localStorage：不记
+    }
+  };
+  input.addEventListener("input", update);
+  input.addEventListener("change", save); // 松手时写一次
+  // 双击复位到默认（关），PANEL_UX_GUIDE §4.2
+  input.addEventListener("dblclick", (e) => {
+    input.value = String(REFLECT_DEFAULT);
+    update();
+    save(e);
+  });
+  update();
 }
 
 // ---------- 连续航程 / 背景板模式（T19a） ----------
@@ -733,4 +797,82 @@ function setupMinimapUi(minimap: DebugMinimap) {
     }
   });
   sync();
+}
+
+// ---------- 开发者区（FOCUS-ZOOM 起建，PANEL_UX_GUIDE §2.1 / §7） ----------
+
+const PANEL_PREF_KEY = "voyage.pref.panel";
+
+/** 开发者区：默认隐藏；URL 带 ?dev 时本次显示（不写记忆）；Shift + D 切换并记住（只记真实按键） */
+function setupDevSection() {
+  const sec = $("dev-section");
+  let stored = false;
+  try {
+    const p = JSON.parse(localStorage.getItem(PANEL_PREF_KEY) ?? "null") as { v?: number; dev?: boolean } | null;
+    stored = p?.v === 1 && p.dev === true;
+  } catch {
+    // 拿不到 localStorage：按默认（隐藏）
+  }
+  // 只认 ?dev、?dev=1 / true / on：dev-browser.mjs 等测量工具用 ?dev=<时间戳> 防缓存，不能被当成「打开开发者区」
+  const devParam = new URLSearchParams(location.search).getAll("dev").pop();
+  const devUrl = devParam !== undefined && ["", "1", "true", "on"].includes(devParam.toLowerCase());
+  sec.hidden = !(devUrl || stored);
+  window.addEventListener("keydown", (e) => {
+    if (!e.shiftKey || !isLetterShortcut(e, "d")) return;
+    sec.hidden = !sec.hidden;
+    if (!e.isTrusted) return;
+    try {
+      const p = (JSON.parse(localStorage.getItem(PANEL_PREF_KEY) ?? "null") as Record<string, unknown> | null) ?? {};
+      localStorage.setItem(PANEL_PREF_KEY, JSON.stringify({ ...(p.v === 1 ? p : {}), v: 1, dev: !sec.hidden }));
+    } catch {
+      // 只是不记忆
+    }
+  });
+}
+
+/**
+ * 聚焦观察（FOCUS-ZOOM）：开发者区的三条滑条（倍率 / 过渡时长 / 暗角），双击滑条或标签复位；按住 Z 聚焦（松开还原）。
+ * 只记用户亲手改的（isTrusted）；URL ?zoom= / ?zoomms= 生效时 hint 里注明，本次不写记忆（focus-zoom.ts）
+ */
+function setupFocusUi(focus: FocusZoom) {
+  const hint = $("focus-hint");
+  const baseHint = hint.textContent ?? "";
+  const bind = (id: string, key: "mag" | "ms" | "vignette", spec: { def: number }, fmt: (v: number) => string, get: () => number) => {
+    const input = $<HTMLInputElement>(id);
+    const out = $(`${id}-out`);
+    const show = () => {
+      input.value = String(get());
+      out.textContent = fmt(get());
+      input.setAttribute("aria-valuetext", fmt(get()));
+    };
+    input.addEventListener("input", (e) => {
+      focus.set(key, Number(input.value), e.isTrusted);
+      show();
+      syncHint();
+    });
+    // 双击滑条或它的标签复位（§4.2）
+    input.closest("label")?.addEventListener("dblclick", (e) => {
+      focus.set(key, spec.def, e.isTrusted);
+      show();
+      syncHint();
+    });
+    show();
+  };
+  const syncHint = () => {
+    const urls = [focus.fromUrl.mag ? "zoom" : "", focus.fromUrl.ms ? "zoomms" : ""].filter(Boolean);
+    hint.textContent = baseHint + (urls.length ? `（URL 参数 ${urls.join(" / ")} 优先）` : "");
+  };
+  bind("focus-mag", "mag", FOCUS_MAG, (v) => `${v.toFixed(1)}×`, () => focus.mag);
+  bind("focus-ms", "ms", FOCUS_MS, (v) => `${Math.round(v)} ms`, () => focus.durationMs);
+  bind("focus-vignette", "vignette", FOCUS_VIGNETTE, (v) => `${Math.round(v * 100)}%`, () => focus.vignette);
+  syncHint();
+
+  // 按住 Z 聚焦：与单字母快捷键同一个守卫（焦点在会吃字母的控件里时不触发）；松开时不看焦点（免得卡在放大状态）
+  window.addEventListener("keydown", (e) => {
+    if (!e.repeat && !e.shiftKey && isLetterShortcut(e, "z")) focus.hold("key", true);
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.key.toLowerCase() === "z") focus.hold("key", false);
+  });
+  window.addEventListener("blur", () => focus.hold("key", false));
 }

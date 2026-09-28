@@ -1,0 +1,11 @@
+[
+  { "name": "lim-biz-left-fwd", "p": { "preset": "wpac", "time": 720, "seat": "left", "wing-pos": "8" }, "head": [0.45, 0.02, -0.03] },
+  { "name": "lim-biz-left-aft", "p": { "preset": "wpac", "time": 720, "seat": "left", "wing-pos": "8" }, "head": [-0.45, 0.02, -0.03] },
+  { "name": "lim-eco-right-fwd", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "economy" }, "head": [0.45, 0.02, -0.03] },
+  { "name": "lim-eco-right-aft", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "economy" }, "head": [-0.45, 0.02, -0.03] },
+  { "name": "lim-biz-right-mid-low", "p": { "preset": "wpac", "time": 720, "wing-pos": "8" }, "head": [0.45, -0.12, -0.2] },
+  { "name": "lim-biz-right-mid-high", "p": { "preset": "wpac", "time": 720, "wing-pos": "8" }, "head": [-0.45, 0.18, -0.2] },
+  { "name": "lim-night-right-fwd", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 4, "coverage": 0.15, "cabin-light": false }, "head": [0.45, 0.02, -0.03] },
+  { "name": "lim-rail-right", "p": { "vehicle": "train", "date": "2026-08-05", "time": 720 }, "wait": 3000, "js": "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(12650, 1, 0); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(12650, 1, 0); Object.assign(v.head, { x: 0.45, tx: 0.45, y: 0.02, ty: 0.02, z: -0.03, tz: -0.03 }); return v.state.seat;" },
+  { "name": "lim-rail-other", "p": { "vehicle": "train", "date": "2026-08-05", "time": 720 }, "wait": 3000, "js": "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(12650, 1, 0); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(12650, 1, 0); Object.assign(v.head, { x: -0.45, tx: -0.45, y: 0.02, ty: 0.02, z: -0.03, tz: -0.03 }); v.focus.mag = 8; v.focus.hold('script', true); return v.state.seat;" }
+]
