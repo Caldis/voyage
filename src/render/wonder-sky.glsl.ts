@@ -44,7 +44,7 @@
  * 只有一个调用点（outsideRadiance 的合成处）；uWonderOn = 0 时第一行就返回，关掉奇观模式时画面与原来逐像素一致。
  * PERF-13：整段只拼进窗外程序的 OUTSIDE_WONDER 变体（outside-pass.ts 里包在 #ifdef 中），默认程序预处理后不含它；
  * uWonderOn = 1 时才选这个变体（wantedOutsideKey），没编好之前不画天幕层奇观（浮现本来就从地平线的霾里开始）。
- * 重函数（透射率 / 辐照度 / 空气透视查表）各只算一次、各部分共用；天梯先只算几何覆盖率，一个像素什么都没盖到就不查表直接返回。
+ * 重函数（透射率 / 辐照度 / 空气透视查表）各只算一次、各部分共用；天梯先算各部件的几何覆盖率，再统一着色合成。
  * 循环（撑杆、退台、环站、节点舱）上界都写成「常数 + uLoopGuard」，FXC 不展开。
  */
 /**
@@ -54,11 +54,13 @@
 const TOWER_WINDOWS = typeof location !== "undefined" && new URLSearchParams(location.search).has("towerwin");
 const TOWER_WINDOWS_GLSL = TOWER_WINDOWS
   ? /* glsl */ `
-      // 塔身灯格（开发者开关，默认关）：楼层 0.3 km 一层、窗带占 40%，按像素足迹积分成暗暖色横纹；按 1.2 km × 1.6 km 的块随机亮灭
+      // 塔身灯格（开发者开关，默认关）：楼层 0.3 km 一层、窗带占 40%，按像素足迹积分成暗暖色横纹；
+      // 按 0.6 km × 0.8 km 的小块随机亮灭、亮度各不相同（约三成亮着），块的亮度再用一层低频噪声调成一片片（不是规则棋盘）
       if (uWonderSky.w > 0.5) {
         float fl = wonderBands(hq, fh, 0.3, 0.12);
-        float lit = step(0.55, hash12(vec2(floor(hq / 1.2), floor(u / 1.6) + 17.0)));
-        Lw += vec3(1.0, 0.72, 0.45) * 2.5e-4 * fl * lit * (1.0 - capF) * (1.0 - dayF) * smoothstep(1.0, 3.0, hq);
+        float hb2 = hash12(vec2(floor(hq / 0.6), floor(u / 0.8) + 17.0));
+        float lit = smoothstep(0.62, 0.8, hb2 * (0.55 + 0.9 * vnoise(vec2(u / 4.0, hq / 3.0))));
+        Lw += vec3(1.0, 0.72, 0.45) * 2.0e-4 * fl * lit * (0.5 + hb2) * (1.0 - capF) * (1.0 - dayF) * smoothstep(1.0, 3.0, hq);
       }`
   : "";
 
@@ -263,6 +265,7 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   float partM = 1.0;
   bool partFar = false;
   float ringLamp = -1.0;                         // 离本像素最近的环站编号（灯用）
+  vec4 ringHit = vec4(0.0);                      // 那只环站的参数（在循环里存下，不在循环外按编号动态取 uniform 数组：FXC 冷编译 −9%）
   float rimW = 0.0;                              // 退台轮廓灯的像素权重（夜里用）
   if (tether) {
     // 锚塔：各级退台的覆盖率相加（相邻两级在接缝处各 0.5，加起来正好 1，不会有细缝）；
@@ -297,6 +300,7 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       float m2 = 2.2 * rg.z + 2.0 * wPix;
       if (abs(X) > rg.y + m2 || abs(yc) > Bv + m2) continue;
       ringLamp = float(k);
+      ringHit = rg;
       vec2 cp = wonderEllipseNearest(vec2(X, yc), rg.y, Bv);
       vec2 dl = vec2(X, yc) - cp;
       float cr = wonderStrip(length(dl) / wPix, rg.z / wPix);
@@ -415,13 +419,8 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   float hb = 9.5 + 3.0 * hbSeed;
   bool inBanner = tether && abs(s - hb) < 4.0 && dist < 45.0;
   float cc = 0.0;
-  if (tether) {
-    // 什么都没盖到、也不在灯串 / 轮廓灯 / 环站灯 / 旗云附近：不查表
-    float anyCov = covTower + partL.w + cov + covS;
-    // 缆的光晕（半宽约 15 像素）、灯串、舱体（贴在缆束外侧）都在轴线附近
-    bool nearLamp = (dist < radius + 1.0 + 16.0 * wPix && s > H - 2.0) || ringLamp >= 0.0 || (s < H + 1.0 && dist < uWonderTower.y + 3.0 * wPix);
-    if (anyCov <= 0.0 && !nearLamp && !inBanner) return L;
-  }
+  // （试过在这里「什么都没盖到就不查表、提前返回」：省的是塔两侧稳定缆那片空白像素的几次查表，GPU 上量不出来，
+  //  却让 OW 变体的离线 FXC 多约 10%，撤了）
 
   // ---- 光照（各部分共用，查表各一次）：太阳、月亮的直射（真实地影）、上半球天光、下方地球（海面 + 云，反照率约 0.3）反上来的光
   float sP = max(s, 0.0);
@@ -574,7 +573,7 @@ ${TOWER_WINDOWS_GLSL}
       }
       // 环站两端：夜里是常亮的暖白微光（有人住）；白天是高强度白色频闪，从下往上依次闪（4 s 一轮）
       if (ringLamp >= 0.0) {
-        vec4 rg = uWonderRings[int(ringLamp)];
+        vec4 rg = ringHit;
         float wEnds = wonderPoint((abs(X) - rg.y) / wPix, (Y - sn * rg.x) / wPix);
         float ph = fract(T / 4.0 - ringLamp * 0.09);
         float strobe = exp(-ph * ph / 0.0009);
