@@ -4,7 +4,7 @@
  *
  * 画面：海上 5–12 根混凝土巨柱（一群全是圆柱，或全是同一朝向的方柱），沿一条斜线往地平线退去，一根比一根远、一根比一根蓝，
  * 最远的柱脚沉到地平线以下只剩柱顶；柱脚被云海吞没，身上挂着和我们一样高的旗云，一架同高度的航班拖着航迹云从柱间穿过
- * （尺度参照：60 m 的飞机旁边是 3–7 km 粗、30–66 km 高的柱）；柱顶在稀薄的高空里比柱脚清楚得多；
+ * （尺度参照：60 m 的飞机旁边是 3–7 km 粗、30–70 km 高的柱）；柱顶在稀薄的高空里比柱脚清楚得多；
  * 黄昏柱脚已入夜、柱顶还被阳光照着；夜里只剩柱顶同步慢闪的红灯和各层环带上稀疏的暖白灯。
  *
  * 只拼进窗外程序的 OWP 变体（OUTSIDE_WONDER + WONDER_PILLARS，outside-pass.ts），巨柱群在场时才后台编译；
@@ -89,7 +89,9 @@ vec2 pillarContrail(vec3 w0, vec3 rd, vec3 a, vec3 E, vec3 S, float pixelAngle, 
   float fpx = tr * pixelAngle;
   float we2 = wd * wd + fpx * fpx;
   float patchy = 0.55 + 0.45 * sin(sl * 0.37 + sd * 40.0) * sin(sl * 0.11 + 1.3);
-  float tau = 0.5 * patchy * exp(-age / 600.0) * smoothstep(2.0, 12.0, age) * (wd / sqrt(we2)) * exp(-dot(dv, dv) / we2) / max(sqrt(den), 0.2);
+  // 横截面光学厚度取 1（新生的航迹云是一道不透明的白线；浮空古城用 0.5 是因为它近一半）：190 km 外管子比像素细，
+  // 按能量守恒摊薄以后只剩一两级灰——太淡就起不到「尺子」的作用
+  float tau = 1.0 * patchy * exp(-age / 900.0) * smoothstep(2.0, 12.0, age) * (wd / sqrt(we2)) * exp(-dot(dv, dv) / we2) / max(sqrt(den), 0.2);
   // 两端淡出：机头走到 +75 km 以后整道淡掉（下一趟从另一头重新出现）；离群中心超过包围半径之前淡到 0（整群早退不切出硬边）
   tau *= smoothstep(88.0, 70.0, abs(sl)) * smoothstep(90.0, 75.0, sPlane) * smoothstep(uPillarS.w - 5.0, uPillarS.w - 25.0, abs(sl) + abs(off));
   return vec2(tau, tr);
