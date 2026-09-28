@@ -587,6 +587,22 @@ vec2 rot2(vec2 p, float a) {
   return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
 }
 
+#ifdef CLOUD_STORM
+// 积雨云塔脚周围的低云（TW04）：塔脚淹在一圈浓积云 / 层积云里（上升气流带起的低云、辐合带），远看塔底不是一刀平切地
+// 「坐」在海面上（research/TOWERING.md §2.2 第 5 条）。不另写一套裙边密度（试过：高度场做的裙边是一块边缘整齐的圆盘 / 一排蛋托），
+// 而是让普通云层在塔的 1–3.5 倍半径内云量变大——裙边和远处的积云是同一种云、同一套受光。返回要加到覆盖率上的量（0..0.5）
+float stormLayerBoost(vec2 xz) {
+  float b = 0.0;
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 c = uStorms[i];
+    vec2 d = xz - c.xy;
+    float r2 = dot(d, d) / (c.z * c.z);
+    if (r2 < 12.25) b = max(b, 0.5 * (1.0 - smoothstep(1.4, 12.25, r2)));
+  }
+  return b;
+}
+#endif
+
 // 层状云（普通云层）的密度：lod 是噪声采样的 mip 级别，远处用粗的；detail = false 时跳过细节侵蚀（阴影、远景用）
 float layerDensity(vec3 p, float lod, bool detail) {
   float r = length(p);
@@ -609,6 +625,9 @@ float layerDensity(vec3 p, float lod, bool detail) {
   }
 #endif
   Weather wx = sampleWeather(xzW);
+#ifdef CLOUD_STORM
+  if (gWeatherOn && uStormCount > 0) wx.coverage += stormLayerBoost(xz) * (1.0 - wx.coverage);
+#endif
   if (wx.coverage < 0.01) return 0.0;
   // 这一带的云顶：高度剖面按局部云顶重新归一
   float h = hLayer / wx.top;
@@ -705,7 +724,7 @@ float sminStorm(float a, float b, float k) {
 
 #ifdef CLOUD_STORM
 const float STORM_BASE = 1.2;
-const float STORM_OVERSHOOT = 0.9;   // 上冲云顶高出 uStorms.w（砧顶）多少，km
+const float STORM_OVERSHOOT = 1.3;   // 上冲云顶最多高出 uStorms.w（砧顶）多少，km（TW04：按单体 0.7–1.3，见 stormTowersSdf）
 
 // 乳状云口袋：平面上的格子，每格至多一个口袋，位置几乎可以贴到格边、半径 0.3–0.75 格各不相同，约 1/4 的格子空着；
 // 返回这一点下垂的深度（格为单位，口袋剖面是半椭球 √(1 − (d/半径)²)，大口袋更深），相邻口袋重叠处取最深的（T37）。
@@ -733,40 +752,59 @@ float pouchField(vec2 p) {
   return best;
 }
 
-// 一座对流塔的有符号距离（km，负值在云里）。apex：穹顶最高点；R：塔身半径。ao：隆起之间凹处的遮蔽（0..1）
-float towerSdf(vec2 xz, float alt, vec2 axis, float R, float apex, float domeFrac, float lod, out float ao) {
+// Worley 值（1 − 到最近特征点的距离）→ 球冠隆起 √(1 − d²) − 0.55：每个格子鼓成圆顶，交界处是尖锐的折痕（菜花）。
+// 直接用 Worley 值是圆锥形的尖包
+float stormCap(float w) {
+  float dd = clamp((1.0 - w) * 1.6, 0.0, 1.0);
+  return sqrt(1.0 - dd * dd) - 0.55;
+}
+
+// 一座对流塔的有符号距离（km，负值在云里）。apex：穹顶最高点；R：塔身半径；sd：这座塔的两个随机数（0..1）；
+// neck：顶部收窄的比例（主塔的上冲云顶比塔身窄，伴生塔 0）。ao：隆起之间凹处的遮蔽（0..1）
+// TW04 重做（research/TOWERING.md §2.2 第 1、3 条：中远处是光滑竖壁的柱子、塔底平切、缺多尺度卷团）：
+//  - 外形：塔脚窄（约 0.6R）、中上部最胖（约 1.1R），一节节上升气泡叠出的腰身（±15%），截面按方位角两级起伏（几股上升气流并成一簇），
+//    倾斜程度每座塔不同；
+//  - 隆起五级：约 3.3 / 1.6 / 1.05 / 0.5 / 0.26 km（形状噪声 G / B / A 三个 Worley 频率，两次取样就有），高度与尺寸相当；
+//    远处 mip 封顶（大的一级 2、小的一级 3）：旧版按步长取 mip，150 km 外 mip 4–5 把隆起平均成常数，只剩光滑的竖壁；
+//    最细的两级按 mip 淡出（远处它们小于像素，留着只会闪）；
+//  - 云底不是一刀切的平面：±0.2 km 的起伏；塔脚周围的低云由层状云负责（layerDensity 里按离塔多远加云量，stormLayerBoost）
+float towerSdf(vec2 xz, float alt, vec2 axis, float R, float apex, float domeFrac, float lod, vec2 sd, float neck, out float ao) {
   ao = 1.0;
   float H = apex - STORM_BASE;
   float h = (alt - STORM_BASE) / H;
-  if (h < -0.08 || h > 1.12) return 1e3;
-  // 轴线随高度缓慢摆动（一簇小塔错落上升），上半截被高空风吹斜。
+  if (h < -0.1 || h > 1.12) return 1e3;
+  // 轴线随高度缓慢摆动（一簇小塔错落上升），上半截被高空风吹斜（斜多少每座塔不同）。
   // 摆动必须是平滑的低频函数：旧版用 Worley 噪声，每隔几百米整个截面就横移一公里多，侧面成了一层层的锯齿
-  float ph = dot(axis, vec2(0.37, 0.61));
+  float ph = sd.x * 6.2831853;
   vec2 wob = vec2(sin(alt * 0.45 + ph), sin(alt * 0.33 + ph * 1.7 + 1.3)) * R * 0.12;
-  vec2 shear = uUpperWind * R * 0.7 * h * h;
-  float r = length(xz - axis - wob - shear);
-  if (r > R * 2.2) return r - R * 1.4;  // 远离塔身：不必算噪声，给一个保守的距离
-  // 平滑外形：底部稍窄、中上部最胖，顶上是扁圆穹顶（从 0.72 H 开始收）
-  float Rd = R * (0.72 + 0.28 * sin(clamp(h / domeFrac, 0.0, 1.0) * 1.8));
+  vec2 shear = uUpperWind * R * (0.4 + 0.7 * sd.y) * h * h;
+  vec2 rel = xz - axis - wob - shear;
+  float r = length(rel);
+  if (r > R * 2.4) return r - R * 1.6;  // 远离塔身：不必算噪声，给一个保守的距离
+  // 截面的方位角起伏：cos / sin 的倍角直接由方向向量得到（不求 atan）
+  vec2 cs = rel / max(r, 1e-3);
+  vec2 cs2 = vec2(cs.x * cs.x - cs.y * cs.y, 2.0 * cs.x * cs.y);
+  vec2 cs3 = vec2(cs2.x * cs.x - cs2.y * cs.y, cs2.x * cs.y + cs2.y * cs.x);
+  float a2 = ph * 3.0 + h * 2.0, a3 = ph * 5.0 - h * 3.0;
+  float lobe = 0.13 * (cs2.y * cos(a2) + cs2.x * sin(a2)) + 0.07 * (cs3.y * cos(a3) + cs3.x * sin(a3));
+  float prof = (0.6 + 0.52 * smoothstep(0.0, 0.55, h) - 0.1 * smoothstep(0.65, 1.0, h)) * (1.0 - neck * smoothstep(0.72, 1.0, h));
+  prof *= 1.0 + (0.1 * sin(h * 17.0 + ph) + 0.06 * sin(h * 29.0 + 2.3 * ph + 1.7)) * smoothstep(0.05, 0.25, h) + lobe;
+  float Rd = R * prof;
   float domeStart = STORM_BASE + H * domeFrac;
   float Hd = apex - domeStart;
   vec2 q = vec2(r / Rd, max(alt - domeStart, 0.0) / Hd);
   float lq = length(q);
   float sdf = (lq - 1.0) * mix(Rd, Hd, q.y / max(lq, 1e-3));
-  // 翻卷的隆起：约 3 km 的大团 + 约 1 km 的小塔。高度和尺寸相当（圆鼓鼓的）；塔底附近比较平整
-  vec4 nA = textureLod(uShapeNoise, vec3(xz.x, alt * 0.8, xz.y) / 13.0, lod);
-  vec4 nB = textureLod(uShapeNoise, vec3(xz.x, alt * 1.1, xz.y) / 4.2 + 0.31, lod);
-  // 三级：约 3 km 的大团、约 1 km 的小塔（都来自 Worley）、约 0.5 km 的翻卷（Perlin-Worley）。
-  // Worley 值是「1 − 到最近特征点的距离」，直接用是圆锥形的尖包；换成球冠 √(1 − d²)：
-  // 每个格子鼓成一个圆顶，格子交界处是尖锐的折痕——这就是菜花状隆起的样子
-  float dA = clamp((1.0 - nA.g) * 1.6, 0.0, 1.0);
-  float dB = clamp((1.0 - nB.g) * 1.6, 0.0, 1.0);
-  float bump = 2.2 * (sqrt(1.0 - dA * dA) - 0.55) + 0.9 * (sqrt(1.0 - dB * dB) - 0.55) + 0.4 * (nB.r - 0.55);
-  bump *= mix(0.35, 1.0, smoothstep(0.03, 0.35, h));
+  vec4 nA = textureLod(uShapeNoise, vec3(xz.x, alt * 0.8, xz.y) / 13.0, min(lod, 2.0));
+  vec4 nB = textureLod(uShapeNoise, vec3(xz.x, alt * 1.1, xz.y) / 4.2 + 0.31, min(lod, 3.0));
+  float fineW = 1.0 - smoothstep(1.5, 3.5, lod);
+  float bump = 1.9 * stormCap(nA.g) + 0.8 * stormCap(nA.b) + 0.6 * stormCap(nB.g)
+             + fineW * (0.3 * stormCap(nB.b) + 0.16 * stormCap(nB.a)) + 0.25 * (nB.r - 0.55);
+  // 小塔的隆起按塔身半径收（半径 2–3 km 的伴生塔上叠 ±1 km 的大团就成了一堆土豆）
+  bump *= mix(0.35, 1.0, smoothstep(0.03, 0.3, h)) * min(R / 4.0, 1.0);
   // 隆起的顶端看得到大半个天空，凹处只看得到一小块
   ao = smoothstep(-1.1, 0.7, bump);
-  // 平的云底（略有起伏）
-  float base = STORM_BASE + 0.12 * (nA.b - 0.5);
+  float base = STORM_BASE + 0.25 * (nA.a - 0.5) + 0.15 * stormCap(nA.b);
   return max(sdf - bump, base - alt);
 }
 
@@ -853,8 +891,140 @@ float rainDensity(vec2 xz, float alt, vec2 center, float R, float lod) {
   return sigma / CLOUD_EXTINCTION;
 }
 
+// ---- 砧盾（TW04）----
+// 真实积雨云的砧向下风铺开几十到一百多公里（孤立单体），上风侧只伸出一点、边缘陡，下风侧越来越薄、被高空风撕成纤维；
+// 飑线 / 团簇的几块砧连成一整片起伏的层状云盾（research/TOWERING.md §2.2 第 2 条）。旧版只有每个单体一块半径 10–36 km 的透镜
+// （anvilDensity），远看是一张薄圆盘（「飞碟」），飑线是四块透镜连成的一条等厚长板。
+// 做法（research/PERF_PREVIEW_wave8.md 的预审：照原样把透镜放大 2–5 倍，砧覆盖的天空 ×4–25，雷暴天整帧 ×1.3–2）：
+// 砧的外缘不走逐单体的 SDF，改成一片「砧盾」层状密度——每个单体只贡献一个平面椭圆足迹（纯算术：下风半轴、上风半轴、向下风张开的宽度），
+// 足迹叠加（相邻单体的砧连成一片）、按足迹加权出顶高与厚度，然后整片只取一次水平切片噪声（顶面鼓包、底面起伏、边缘）
+// 和一次顺风拉长的纤维噪声（只在主步进）。靠近塔身的砧根、蘑菇伞与乳状云仍由 anvilDensity 负责，两者取最大。
+// 受光走正常的 8 步受光步进（精简密度里也有砧盾）；步进把它当软边（不细化、稀薄处 2 倍步长）。
+// 试过像台风卷云盖那样用「本点消光 × 到砧顶的斜程」解析受光：砧底被照得和砧顶一样白，仰看是一片发亮的波纹，
+// 也没有塔身、砧根投在砧盾上的影子；而且并不省——受光步进让砧底变暗，视线的透射率降得快、早停，
+// gpu-ab 反而比解析版快 6–12%（storm-day ×1.58 对 ×1.81，飑线 ×1.74 对 ×1.85）
+
+// 单体的种子：按半径与砧顶取（换原点时整体平移，按位置取哈希会让形状在换原点时跳变）
+vec2 stormSeed2(vec4 c) { return stormHash22(vec2(c.z * 7.13 + c.w * 0.37, c.w * 3.71 + c.z * 1.9)); }
+// 砧盾下风半轴 / 上风半轴（km）：孤立单体下风 6–17 倍塔身半径（R 4–6.5 km → 约 25–110 km），上风 1.2–2 倍
+vec2 shieldAxes(vec4 c) {
+  vec2 h = stormSeed2(c);
+  return vec2(c.z * (6.0 + 11.0 * h.x), c.z * (1.2 + 0.8 * h.y));
+}
+// 砧盾的平面外接圆（xy：世界坐标圆心，z：半径 km），给视线 / 采样点的包围判断用（clouds.ts）
+vec3 shieldCircle(vec4 c) {
+  vec2 L = shieldAxes(c);
+  return vec3(c.xy + uUpperWind * (c.z * 0.7 + (L.x - L.y) * 0.5), (L.x + L.y) * 0.5 + c.z * 2.5 + 8.0);
+}
+const float SHIELD_BELOW = 5.0;   // 砧盾在砧顶以下最多伸到多深（厚 3 km + 底面起伏 + 蘑菇伞）
+const float SHIELD_ABOVE = 1.3;   // 砧顶以上（顶面鼓包）
+
+// 砧盾的密度（0..1）。detail：主步进（取纤维与细节噪声）；受光 / 云影 / 探针 / 占据网格不取
+float anvilShield(vec2 xz, float alt, float lod, bool detail) {
+  vec2 W = uUpperWind;
+  vec2 Pp = vec2(-W.y, W.x);
+  float aSum = 0.0, topW = 0.0, thW = 0.0, faW = 0.0;
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 c = uStorms[i];
+    if (alt < c.w - SHIELD_BELOW || alt > c.w + SHIELD_ABOVE) continue;
+    vec2 h = stormSeed2(c);
+    vec2 L = shieldAxes(c);
+    // 从被高空风吹歪的塔顶量起
+    vec2 d = xz - c.xy - W * (c.z * 0.7);
+    float a = dot(d, W);
+    float fa = clamp(a / L.x, 0.0, 1.0);
+    // 下风方的中线略弯（高空风随距离转向），弯向按单体随机
+    float b = dot(d, Pp) - (h.y - 0.5) * 0.5 * a * fa;
+    // 平面是向下风张开的扇形：塔顶处宽约 2 倍塔身半径，每往下风走 1 km 半宽加 0.36 km（约 20°）
+    float wh = c.z * 1.9 + 0.36 * max(a, 0.0);
+    float u = a > 0.0 ? a / L.x : -a / L.y;
+    float e = u * u + (b * b) / (wh * wh);
+    if (e >= 1.0) continue;
+    float k = 1.0 - e;
+    aSum += k;
+    // 顶高：塔顶附近在砧顶，往下风缓慢下沉（冰晶被吹出去以后慢慢沉降，远端低 1–1.6 km）
+    topW += k * (c.w - 0.15 - (1.0 + 0.6 * h.x) * fa * fa);
+    // 厚度：塔顶附近约 3 km，下风端只剩几百米；上风侧一直很厚、到边上陡降（上风侧陡）
+    thW += k * (a > 0.0 ? mix(3.0, 0.3, pow(fa, 0.6)) : mix(3.0, 1.6, -a / L.y));
+    faW += k * fa;
+  }
+  if (aSum <= 0.0) return 0.0;
+  float F = min(aSum, 1.0);
+  float topA = topW / aSum;
+  float thA = thW / aSum;
+  float fa = faW / aSum;
+  // 取噪声之前先按起伏的上限判高度（下面 aTop / aBot 的噪声项取到极值时的范围）：砧盾那一段高度层里大半是空的
+  // （下风薄段只有几百米厚），视线在层里空走的每一步都不必取纹理
+  float und0 = (1.0 - fa) * (1.0 - fa);
+  if (alt > topA + 0.7 * und0 + 0.02 || alt < topA - thA * (0.35 + 0.65 * sqrt(F)) - 1.5 * und0 - 0.02) return 0.0;
+  // 水平切片噪声（高度场只能用水平切片，README 坑点）：约 6 km / 3 km / 1.5 km 的鼓包 + Perlin-Worley 的大起伏
+  vec4 nH = textureLod(uShapeNoise, vec3(xz / 24.0, 0.29), max(lod - 1.0, 0.0));
+  float dG = clamp((1.0 - nH.g) * 1.6, 0.0, 1.0);
+  float dB = clamp((1.0 - nH.b) * 1.6, 0.0, 1.0);
+  float capG = sqrt(1.0 - dG * dG) - 0.55;
+  float capB = sqrt(1.0 - dB * dB) - 0.55;
+  // 顶面：塔顶附近翻腾（±0.5 km 的圆鼓包），往下风被吹平但不是平板。
+  // 试过 ±0.8 km：从略低于砧顶的巡航高度斜看，下风方下沉的顶面整片是光滑的大鼓包，读成一层融化的塑料
+  // 大起伏（整片上下挪，不改厚度）+ 顶面鼓包（只在厚的砧根一带）
+  // 起伏都只在砧根一段（× (1 − fa)²）：下风的薄段只有几百米厚，巡航高度就在它下面不远，整片按 24 km 的光滑噪声上下挪
+  // 零点几公里，仰看是一条条光滑的等值线波纹（ab 开关对照：去掉这张噪声波纹就没了）；那一段的纹理交给顺风的纤维
+  float und = (1.0 - fa) * (1.0 - fa);
+  float aTop = topA + (0.4 * (nH.r - 0.5) + (0.12 + 0.55 * (1.0 - fa)) * (capG + 0.6 * capB)) * und;
+  // 底面：厚度按足迹平滑变化，起伏与下垂的絮团只在厚的一段。
+  // 试过顶面、底面各自按噪声起伏：下风端只有几百米厚，两面的起伏和厚度同量级，整片被一条条等值线掐断，
+  // 从下面仰看是一层层发亮的波纹（像水面的焦散）
+  float aBot = aTop - thA * (0.35 + 0.65 * sqrt(F)) + ((0.7 * (nH.a - 0.5)) - 0.6 * max(capB, 0.0)) * und;
+  if (alt < aBot || alt > aTop) return 0.0;
+  // 纤维：沿高空风拉长的噪声（顺风约 11 km、横风约 1.2 km、竖直约 0.4 km），只在主步进取
+  float fib = 0.5;
+  float ero = 1.0;
+  if (detail) {
+    vec2 wn = vec2(dot(xz, W), dot(xz, Pp));
+    vec4 nF = textureLod(uShapeNoise, vec3(wn.x / 45.0, alt / 1.6, wn.y / 5.0) + 0.41, lod);
+    fib = nF.b * 0.6 + nF.g * 0.4;
+    // 细节：和塔顶砧（anvilDensity）同一种按比例变稀疏的侵蚀，冰晶云表面是絮状的，不是光滑的壳
+    vec3 dn = textureLod(uDetailNoise, vec3(xz.x, alt, xz.y) / DETAIL_TILE, lod).rgb;
+    ero = clamp(0.35 + 1.3 * (dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125 - 0.3), 0.25, 1.1);
+  }
+  // 外缘：足迹的边被纤维和小鼓包撕开，下风端撕得更碎
+  float edge = smoothstep(0.0, 0.2, F - 0.12 + (0.25 + 0.6 * fa) * (fib - 0.5) + 0.3 * (nH.a - 0.5));
+  // 竖直剖面按相对厚度（上下各 30% 渐变）：薄的地方不会被两条固定宽度的渐变带夹成一条线
+  float xv = (alt - aBot) / max(aTop - aBot, 0.05);
+  float vert = smoothstep(0.0, 0.3, xv) * (1.0 - smoothstep(0.7, 1.0, xv));
+  // 冰晶云：塔顶附近不透明（消光约 30 /km），下风端只剩光学厚度一两（能透出后面的天），沿纤维一条条浓淡
+  return vert * edge * ero * mix(0.5, 0.045, smoothstep(0.0, 0.9, fa)) * mix(0.7 + 0.6 * fib, 0.25 + 1.5 * fib, smoothstep(0.2, 0.8, fa));
+}
+
 // stormDensity 的副产物：这一点取的是「软边」的部分（砧、雨幡），见 gStormSoft
 bool gStormSoftHit = false;
+
+// 主塔 + 伴生塔（TW04）：完整版与精简版共用（形状必须一致，T12 教训），各内联一处。ao：取胜那座塔的凹处遮蔽。
+// 旧版伴生塔固定 3 座、等角度（k·2.1 rad）、等比例（0.45R、顶 0.35 + 0.12k），每座雷暴都是同一个配方（铁律 4）；
+// 现在按单体种子：2–4 座，方位集中在一侧（侧翼线）再各自随机偏，离主塔 1.25–2.35R，半径 0.3–0.58R，顶 0.28–0.7 倍塔高（少数高、多数矮）
+float stormTowersSdf(vec4 c, vec2 xz, float alt, float lod, out float ao) {
+  float top = c.w;
+  float R = c.z;
+  vec2 sd = stormSeed2(c);
+  // 上冲云顶：高出砧顶 0.7–1.3 km、比塔身窄（neck 0.35）；外壳只留到砧顶 + 1.8 km（weather.ts updateShell），隆起再高会被截平
+  float sdf = towerSdf(xz, alt, c.xy, R, top + 0.7 + 0.6 * sd.y, 0.72, lod, sd, 0.35, ao);
+  // 伴生塔数量写成「4 + 一个恒为 0 的 uniform 表达式」，FXC 就不会把塔身 SDF 展开 4 份
+  int nSat = 2 + int(sd.x * 2.99);
+  float flank = sd.y * 6.2831853;
+  for (int k = 0; k < 4 + min(uStormCount, 0); k++) {
+    if (k >= nSat) break;
+    vec2 hk = stormHash22(sd * 37.1 + float(k) * 1.37);
+    float ang = flank + (float(k) - 0.5 * float(nSat - 1)) * 1.1 + (hk.x - 0.5) * 0.9;
+    vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.25 + 1.1 * hk.y);
+    float tk = STORM_BASE + (top - STORM_BASE) * (0.28 + 0.42 * hk.y * hk.y);
+    if (alt > tk + 0.8) continue;
+    float a2;
+    float s2 = towerSdf(xz, alt, ax, R * (0.3 + 0.28 * hk.x), tk, 0.45 + 0.2 * hk.x, lod, hk, 0.0, a2);
+    if (s2 < sdf) ao = a2;
+    // 低处融合得更宽：小塔和主塔从同一片云底长出来（飑线侧翼那样连成一体），高处才各自分开
+    sdf = sminStorm(sdf, s2, mix(2.2, 0.6, smoothstep(STORM_BASE + 0.5, STORM_BASE + 3.5, alt)));
+  }
+  return sdf;
+}
 
 float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float ao) {
   ao = 1.0;
@@ -868,22 +1038,9 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
     ao = 0.3; // 头顶是几公里厚的云
     if (alt < STORM_BASE - 0.1) return rain;
   }
-  // 主塔（穹顶就是上冲云顶）+ 伴生的浓积云小塔（顶只有主塔的 35–60%，和主塔平滑地连成一体）
+  // 主塔（穹顶就是上冲云顶）+ 伴生的浓积云小塔 + 塔脚的低云裙边（TW04）
   float aoT;
-  float sdf = towerSdf(xz, alt, c.xy, R, top + STORM_OVERSHOOT, 0.72, lod, aoT);
-  // 伴生塔数量写成「3 + 一个恒为 0 的 uniform 表达式」，FXC 就不会把塔身 SDF 展开 3 份
-  int nSat = 3 + min(uStormCount, 0);
-  for (int k = 0; k < nSat; k++) {
-    float ang = float(k) * 2.1 + c.x * 0.37;
-    vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.5 + 0.3 * float(k));
-    float tk = STORM_BASE + (top - STORM_BASE) * (0.35 + 0.12 * float(k));
-    if (alt > tk + 0.5) continue;
-    float a2;
-    float s2 = towerSdf(xz, alt, ax, R * 0.45, tk, 0.4, lod, a2);
-    if (s2 < sdf) aoT = a2;
-    // 低处融合得更宽：小塔和主塔从同一片云底长出来（飑线侧翼那样连成一体），高处才各自分开
-    sdf = sminStorm(sdf, s2, mix(2.2, 0.6, smoothstep(STORM_BASE + 0.5, STORM_BASE + 3.5, alt)));
-  }
+  float sdf = stormTowersSdf(c, xz, alt, lod, aoT);
   // 从表面往里约 250 m 内密度升到饱和：边界干脆，但步进能看到它的厚度
   float tower = smoothstep(0.0, 0.25, -sdf);
   float aoA;
@@ -922,16 +1079,7 @@ float stormDensityLite(vec4 c, vec2 xz, float alt, float lod) {
   float rainL = alt < STORM_BASE + 0.1 ? rainDensity(xz, alt, c.xy, R, lod) : 0.0;
   if (alt < STORM_BASE - 0.1) return rainL;
   float ao;
-  float sdf = towerSdf(xz, alt, c.xy, R, top + STORM_OVERSHOOT, 0.72, lod, ao);
-  // 伴生塔数量写成「3 + 一个恒为 0 的 uniform 表达式」，FXC 就不会把塔身 SDF 展开 3 份
-  int nSat = 3 + min(uStormCount, 0);
-  for (int k = 0; k < nSat; k++) {
-    float ang = float(k) * 2.1 + c.x * 0.37;
-    vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.5 + 0.3 * float(k));
-    float tk = STORM_BASE + (top - STORM_BASE) * (0.35 + 0.12 * float(k));
-    if (alt > tk + 0.5) continue;
-    sdf = sminStorm(sdf, towerSdf(xz, alt, ax, R * 0.45, tk, 0.4, lod, ao), mix(2.2, 0.6, smoothstep(STORM_BASE + 0.5, STORM_BASE + 3.5, alt)));
-  }
+  float sdf = stormTowersSdf(c, xz, alt, lod, ao);
   vec3 geo;
   return max(max(smoothstep(0.0, 0.25, -sdf), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo)), rainL);
 }
@@ -1090,6 +1238,8 @@ float cloudDensityLite(vec3 p, float lod, bool detail, bool fullHurricane) {
       if (dot(dd, dd) > c.z * c.z * 56.0) continue;
       d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);
     }
+    // 砧盾（TW04）：所有单体共用一片，不取纤维噪声
+    if (uStormCount > 0) d = max(d, anvilShield(xz, alt, lod, false) * uCloudDensity);
 #endif
 #ifdef CLOUD_TYPHOON
     if (uHurricane.w > 0.5) {
@@ -1129,6 +1279,11 @@ float cloudDensity(vec3 p, float lod, bool detail) {
       float ao;
       float sd = stormDensity(c, xz, alt, lod, detail, ao) * uCloudDensity;
       if (sd > d) { d = sd; gStormW = 1.0; gStormAO = ao; gStormSoft = gStormSoftHit ? 1.0 : 0.0; }
+    }
+    // 砧盾（TW04）：所有单体共用一片，只求一次；取胜时按软边处理（不做表面细化）
+    if (uStormCount > 0) {
+      float sh = anvilShield(xz, alt, lod, detail) * uCloudDensity;
+      if (sh > d) { d = sh; gStormW = 1.0; gStormAO = 0.8; gStormSoft = 1.0; }
     }
 #endif
 #ifdef CLOUD_TYPHOON

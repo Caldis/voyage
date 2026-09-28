@@ -199,6 +199,10 @@ bvec2 cloudRayNearWeather(vec3 rd, vec2 seg) {
   for (int i = 0; i < uStormCount; i++) {
     vec4 c = uStorms[i];
     if (cloudRayDist2D(rd, seg, c.xy) < c.z * 7.5 + WEATHER_LIGHT_REACH) nearAny = true;
+    // 砧盾（TW04）向下风铺开上百公里：视线从它下面 / 里面穿过也算够得着（砧盾是软边、解析受光，
+    // 只让视线走到砧的高度，塔身的表面细化只在碰到塔时发生）
+    vec3 sc = shieldCircle(c);
+    if (cloudRayDist2D(rd, seg, sc.xy) < sc.z) nearAny = true;
   }
 #endif
   bool nearHur = cloudHurOn() && cloudRayDist2D(rd, seg, uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
@@ -232,6 +236,26 @@ vec2 cloudRayWeatherSpan(vec3 ro, vec3 rd) {
     if (h2 < 0.0) continue;
     float hw = sqrt(h2 / a);
     vec2 hs = cloudShellIntervalH(ro, rd, uShellBottom, c.w + 1.8);
+    vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
+    if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
+  }
+  return span;
+}
+// TW04：砧盾那一段（外接圆 × 砧顶附近的高度层 [砧顶 − SHIELD_BELOW, 砧顶 + SHIELD_ABOVE]）的包络。
+// 单独一段而不并进上面的包围柱：巡航高度常在砧的高度层里，往下看的视线出了这一层以后到层状云之间整段是空的，
+// 并成一段就跳不过去了
+vec2 cloudRayShieldSpan(vec3 ro, vec3 rd) {
+  vec2 span = vec2(1e9, -1e9);
+  float a = max(dot(rd.xz, rd.xz), 1e-8);
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 c = uStorms[i];
+    vec3 sc = shieldCircle(c);
+    vec2 rel = sc.xy - uCloudOffset;
+    float tc = dot(rel, rd.xz) / a;
+    float h2 = sc.z * sc.z - (dot(rel, rel) - tc * tc * a);
+    if (h2 < 0.0) continue;
+    float hw = sqrt(h2 / a);
+    vec2 hs = cloudShellIntervalH(ro, rd, c.w - SHIELD_BELOW, c.w + SHIELD_ABOVE);
     vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
     if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
   }
@@ -425,6 +449,7 @@ void main() {
 #ifdef CLOUD_STORM_SKIP
   vec2 laySeg = vec2(1e9, -1e9);
   vec2 wxSeg = vec2(1e9, -1e9);
+  vec2 anvSeg = vec2(1e9, -1e9);   // TW04 砧盾那一段（cloudRayShieldSpan）
   if (refineOn) {
     if (uCoverage > 0.0) {
       laySeg = cloudShellIntervalH(ro, rd, uCloudBottom, uCloudTop);
@@ -432,6 +457,7 @@ void main() {
       if (laySeg.y <= laySeg.x) laySeg = vec2(1e9, -1e9);
     }
     wxSeg = cloudRayWeatherSpan(ro, rd);
+    anvSeg = cloudRayShieldSpan(ro, rd);
   }
 #endif
   // 闪电放电通道（线段）：两端换到相机坐标
@@ -478,8 +504,8 @@ void main() {
     // 与默认程序从层顶起步（i == 0 半步）一致——远离雷暴的层状云在两个程序里是同一套采样，换程序不跳变
     bool jumped = false;
 #ifdef CLOUD_STORM_SKIP
-    if (refineOn && wasEmpty && fine == 0 && !(t >= laySeg.x && t < laySeg.y) && !(t >= wxSeg.x && t < wxSeg.y)) {
-      float tn = min(t < laySeg.x ? laySeg.x : 1e9, t < wxSeg.x ? wxSeg.x : 1e9);
+    if (refineOn && wasEmpty && fine == 0 && !(t >= laySeg.x && t < laySeg.y) && !(t >= wxSeg.x && t < wxSeg.y) && !(t >= anvSeg.x && t < anvSeg.y)) {
+      float tn = min(min(t < laySeg.x ? laySeg.x : 1e9, t < wxSeg.x ? wxSeg.x : 1e9), t < anvSeg.x ? anvSeg.x : 1e9);
       if (tn >= seg.y) break;
       t = tn;
       lastEmpty = tn;
@@ -1110,6 +1136,8 @@ void main() {
       if (dot(dd, dd) > c.z * c.z * 56.0) continue;
       d = max(d, stormDensity(c, xz, alt, lod, false, ao));
     }
+    // 砧盾（TW04）：云步进先查网格，网格里没登记的话整片砧盾被当成空白跳过
+    if (uStormCount > 0) d = max(d, anvilShield(xz, alt, lod, false));
     if (uHurricane.w > 0.5) d = max(d, hurricaneDensity(xz, alt, lod, false, ao));
   }
   gl_FragColor = vec4(d > 0.0 ? 1.0 : 0.0, 0.0, 0.0, 1.0);
