@@ -4,6 +4,7 @@
     "scene": "noon-cumulus",
     "variants": [
       { "name": "cur" },
+      { "name": "cur2" },
       { "name": "master", "materials": { "clouds.marchMat": "base" } },
       { "name": "cap384", "patch": { "clouds.marchMat": [{ "re": "i >= 192(\\)+) break;", "to": "i >= 384$1 break;" }] } },
       { "name": "ref", "builtin": "cloud-ref" }

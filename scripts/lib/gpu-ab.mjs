@@ -14,7 +14,8 @@
 //   ② 计时区间里，变体改过的材质一次都没画到（改错了材质 / 这一帧实际画的是另一个步进变体）→ 报错，并列出区间里实际画了哪些材质；
 //   ③ 所有变体文本都相同（只改 uniform / js）→ 提示一句，不报错。
 // 统计：每个变体每轮一个样本（ms / 次）；报中位、最小、四分位距 / 中位（离散度）；对第一个变体逐轮配对比的中位与四分位，
-// 四分位区间不跨 1 才标「显著」，否则「在离散度内」。持测量锁（外层已持锁时不再等，见 lib/measure-lock.mjs）。
+// 四分位区间不跨 1、且中位偏离超过 max(3%, 基准自身离散 / 2) 才标「显著」，否则「在离散度内」；
+// 想要直接的噪声底就加一个与基准相同的变体（如 { "name": "cur2" }），它的配对比就是 A/A。持测量锁（外层已持锁时不再等，见 lib/measure-lock.mjs）。
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULTS, applyScene, pinGeometry } from "../scenarios.mjs";
@@ -197,6 +198,11 @@ export async function cmdGpuAb(args, h) {
 
       const base = names[0];
       const rows = {};
+      // 判定门槛：配对比的四分位区间不跨 1，且中位偏离 1 超过 max(3%, 基准变体自身离散的一半)——
+      // 负载下 4 轮时实测出过 ×1.20 的假「显著」（noon-cumulus 上 cap384 本应无变化），所以同时要求幅度过门槛
+      const baseIqr = (q(samples[base], 0.75) - q(samples[base], 0.25)) / (q(samples[base], 0.5) || 1);
+      const gate = Math.max(0.03, 0.5 * (Number.isFinite(baseIqr) ? baseIqr : 0));
+      if (rounds < 6) log(`  [提示] ${job.name}：只有 ${rounds} 轮，配对比的四分位不稳，结论请用 --rounds ≥ 8 复测`);
       for (const nm of names) {
         const xs = samples[nm];
         const med = q(xs, 0.5);
@@ -208,13 +214,16 @@ export async function cmdGpuAb(args, h) {
           median: med,
           min: q(xs, 0),
           iqrRel: med ? (q(xs, 0.75) - q(xs, 0.25)) / med : null,
-          ratio: nm === base ? null : { p25: rq[0], median: rq[1], p75: rq[2], verdict: rq[0] == null ? "—" : rq[0] > 1 ? "显著变慢" : rq[2] < 1 ? "显著变快" : "在离散度内" },
+          ratio:
+            nm === base
+              ? null
+              : { p25: rq[0], median: rq[1], p75: rq[2], gate, verdict: rq[0] == null ? "—" : rq[0] > 1 && rq[1] > 1 + gate ? "显著变慢" : rq[2] < 1 && rq[1] < 1 - gate ? "显著变快" : "在离散度内" },
           programs: progs[nm],
           samples: xs,
         };
       }
       console.log(`\n== ${job.name}（--time ${kind}，每样本 ${n} 次取平均、${rounds} 轮 ABBA；云步进变体键 "${lastSeen?.marchKey ?? ""}"；${((Date.now() - t0) / 1000).toFixed(0)} s；CPU ${load0 == null ? "?" : load0.toFixed(0)}% → ${load1 == null ? "?" : load1.toFixed(0)}%）`);
-      console.log(`| 变体 | 中位 ms | 最小 ms | 离散（IQR/中位） | 对 ${base} 配对比 中位 [p25, p75] | 判定 | 程序 # | disjoint |`);
+      console.log(`| 变体 | 中位 ms | 最小 ms | 离散（IQR/中位） | 对 ${base} 配对比 中位 [p25, p75] | 判定（门槛 ±${(100 * gate).toFixed(1)}%） | 程序 # | disjoint |`);
       console.log("|---|---:|---:|---:|---|---|---|---:|");
       for (const nm of names) {
         const r = rows[nm];
