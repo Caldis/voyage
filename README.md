@@ -46,6 +46,11 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 ## 使用
 
 - 启动：仓库根目录 `pnpm dev:voyage`，打开 http://127.0.0.1:5181
+- **面板分区**（UX-3，`research/PANEL_UX_GUIDE.md` §2）：标题栏 →「此刻」摘要（常驻，航段 / 时刻 / 朝向 / 天气一句）→
+  观景 / 航程（默认展开）→ 天气 / 声音 / 画质（默认折叠，标题行右侧一行摘要；声音区标题行本身带开关）→ 开发者区
+  （默认隐藏，`?dev` 或 `Shift + D`）→ 页脚（数据来源与许可，折叠为一行）。折叠状态记在 localStorage
+  `voyage.pref.panel`（`sections` 字段各区、`dev` 字段开发者区，只记用户亲手点的）。完整信息栏（太阳 / 月亮高度角、
+  经纬度小数点后三位）在开发者区的 `<pre id="info">`；控件 id 与规范 §1「控件 id 契约」保持不变，场景表按 id 设值不受分区影响。
 - 在画面上按住拖动 = 转头（窗框视差），滚轮 = 前后挪（靠近 / 远离舷窗），双击复位；`H` 隐藏面板
 - 聚焦观察（FOCUS-ZOOM）：在画面上**按住不动**约 0.2 秒（位移不超过 5 px），视场平滑收窄到「默认 / 倍率」（默认 2.5×，缓入缓出约 0.2 秒），松开平滑还原；按下就拖走的仍是转头。聚焦中照样可以拖动转头，灵敏度按倍率降低。触屏长按同理；键盘按住 `Z` 等价（焦点在输入框 / 下拉里时不触发）。聚焦时四角轻微压暗（CSS 叠层，不进渲染管线）
 - 头部左右限位（FOCUS-ZOOM 追加）：头往舷窗前伸得越多、视场越宽，左右能挪的就越少——保证视锥永远看不到没建模的前后机舱（纯黑 / 空白侧壁）和本窗很斜时的窗洞黑带；聚焦（视场变窄）时可以转得更偏。拖到限位附近有弹性阻尼，前伸或松开聚焦使限位收紧时头部被平滑拉回。限位表与判据见 `handoff/FOCUS-ZOOM.md`，离线重算 `node --experimental-transform-types --no-warnings apps/voyage/handoff/FOCUS-ZOOM-limits.mts`
@@ -82,7 +87,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/main.ts` | 创建渲染器与各系统、主循环编排（各 pass 调度）、`setPreset` / `snapAll` / `resize`、调试句柄 `window.__voyage` |
 | `src/state.ts` | 共享类型 `VoyageState` / `Preset`、`CRUISE_PITCH_DEG`、`$` 小工具 |
 | `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进）；自动驾驶（T49，`autopilotOf(state)`：沿航线 / 手动航向 / 直飞 / 跑道形等待航线，坡度与滚转速率按真实时间限制） |
-| `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步；开发者区（`?dev` / `Shift + D`）与聚焦设置、`Z` 键 |
+| `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`（拆「此刻」摘要 `#now-line1/2` 与开发者区完整版 `#info`，UX-3）、时间 / 高度控件同步；六个分区的折叠记忆 `setupPanelFoldUi`（`voyage.pref.panel.sections`，UX-3）；开发者区（`?dev` / `Shift + D`）与聚焦设置、`Z` 键 |
 | `src/view-presets.ts` / `src/focus-zoom.ts` / `src/head-limits.ts` | 视角预设与画布输入（按住拖动转头、滚轮前后、双击复位、按住不动聚焦）；聚焦观察（视场过渡、设置与记忆、暗角叠层）；头部左右限位（按前伸 / 视场 / 座位 / 舱等求不露出未建模区域的上限，拖动弹性阻尼）（FOCUS-ZOOM） |
 | `src/astro.ts` | 太阳 / 月亮位置、月相、当地→赤道坐标矩阵（astronomy-engine） |
 | `src/sky-assets.ts` | 星图（RGB：BSC5 星表格子，每格最多一颗星，T41；A 通道是银河）、月面贴图 |
@@ -889,6 +894,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 ### 工具与环境
 
 - **测量工具的 URL 带 `?dev=<时间戳>`（防缓存），开发者区的 `?dev` 开关只认空值 / `1` / `true` / `on`**（FOCUS-ZOOM）：面板规范（`research/PANEL_UX_GUIDE.md` §2.1）用 `?dev` 打开开发者区，而 `dev-browser.mjs` 的 `openPage` 一直用 `dev=<时间戳>` 破缓存；按「有没有 dev 参数」判断的话，所有工具页面都会显示开发者区（UX 类任务截面板时面板变高、面积测量不对）。以后新增 URL 开关先 grep 一下 `scripts/` 里有没有同名参数。
+- **id 撞了会让 CSS 规则套到错的元素上，`getElementById` 也总是拿第一个**（UX-3 发现，FOCUS-ZOOM 遗留）：开发者区「聚焦暗角」滑条原来和聚焦暗角的**叠层 div**（`<div id="focus-vignette">`，`focus-zoom.ts` 用来画四角压暗）共用同一个 `id="focus-vignette"`。后果两层：① `style.css` 里给叠层 div 写的 `#focus-vignette { position: fixed; inset: 0; }` 连带套到了这条滑条上——`#panel` 有 `backdrop-filter`，会给后代的 `fixed` 元素建立新的包含块，于是滑条被拉伸铺满了 `#panel` 自己的内容区，原生滑块画在面板纵向正中间，展开开发者区时会看到一条诡异的横杠叠在别的行上；② `ui.ts` 里 `document.getElementById("focus-vignette")` 永远拿文档序里第一个（那个叠层 div），`setupFocusUi` 给它挂的 `input` 事件、双击复位全挂在了一个 div 上——**这条滑条从 FOCUS-ZOOM 上线起，拖动就没真正改过 `focus.vignette`**（只能靠 URL 参数或脚本改）。修法：滑条 id 改成不冲突的 `focus-vig`（`index.html` / `ui.ts` 各一处），叠层 div 的 id 不动。识别：面板里出现一条位置诡异、和当前展开区无关的滑块；或者某个滑条拖动后 `output` 文字不跟着变。新增控件前排查一下 id 有没有已经被别处占用（尤其是「同名的叠层 / 提示 div」这类容易被忘掉的非控件元素）。
+- **压缩面板控件的竖直高度：下拉 `flex-basis` 要用 `0%` 不要用 `auto`**（UX-3，为了让 1600×1200 默认面板不用滚动，`research/PANEL_UX_AUDIT_1.md` P2 报的 2622 px 压到约 1100 px）：把 `#panel label` 从 `flex-direction: column`（标签文字、数值、控件各占一行）改成 `flex-wrap: wrap`（同一行放不下才换行）后，下拉框如果写 `flex: 1 1 auto`，换行判断会按它**当前选项文字的天然宽度**参与计算——选项本来就长的下拉（地点名、天气名）会把整行提前挤到换行，看起来和没优化一样。改成 `flex: 1 1 0%` 后换行判断只看 `min-width`（给了 64 px），下拉本身按 flex 伸展占满剩余空间，选项文字再长也只在框内被原生裁切，不会撑破布局。滑条同理不用再强制单独占一行（去掉 `flex-basis: 100%`），标签 + 数值 + 滑条能挤下就单行。
 
 - **面板元素设了 `display` 就会盖住 `hidden` 属性**（T49、UX-1 各踩一次）：现象：代码里 `el.hidden = true`，截图里那一行照样在（连续航程关着时的「航程流速」、自动曝光开着时的「手动曝光」）。根因：`#panel label { display: flex }`、`.row { display: flex }` 的优先级高于浏览器自带的 `[hidden] { display: none }`。修法（UX-1a）：`style.css` 全局 `[hidden] { display: none !important; }`，显示 / 隐藏一律用 `hidden` 属性，不要再给单个选择器补 `xxx[hidden]`。识别：截图场景 `js` 里对照 `el.hidden` 与 `getComputedStyle(el).display`（`handoff/UX-1a-scenes-panel.json` 的 `ux1a-default-bottom`）。
 - **页面默认开启连续航程，测量脚本不带 `voyage=0` 截图就不确定**（VOY-DEFAULT）：现象：自写脚本 / 手动在 Playwright 里打开页面再 `applyScene`，同代码两次截图的云型、云影、海面、舱灯对不上。根因：载入到设场景之间导演已经按天气场硬切云参数（`type` / `density` 不在面板上）、摆了雷暴、写了海面风与舱灯，`applyScene` 的 `setActive(false)` 只停导演不撤回。修法：导航 URL 带 `?voyage=0`（仓库里的工具都已带，见「调试与验证」`applyScene` 一条）。识别：`__voyage.director.telemetry.legs.length > 0` 或 `director.weather.log` 非空，说明这一页进过连续航程。另：首载开启时机头直接对准第一段航线（`setActive(true, true)`）——默认地点西太平洋向南飞，前方没有机场，接入的第一段（羽田 → 关西）在西北，不对准的话首屏是 140° 的大坡度右转。

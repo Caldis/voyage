@@ -74,6 +74,11 @@ const timeInput = $<HTMLInputElement>("time");
 const timeLabel = $("time-label");
 const info = $("info");
 const altInput = $<HTMLInputElement>("altitude");
+// 「此刻」摘要（UX-3，PANEL_UX_GUIDE §2.1）：常驻的 1–3 行，普通区；完整信息留在开发者区的 #info（见 updateInfo）。
+// now-line3 只在 STROBE-CLOUD 的「夜间云中自动关频闪」状态适用时显示，平时 hidden，不占布局空间
+const nowLine1 = $("now-line1");
+const nowLine2 = $("now-line2");
+const nowLine3 = $("now-line3");
 
 export function syncTimeUi(state: VoyageState) {
   const { date, minutes } = localParts(state.simTime, state.preset.tz);
@@ -113,7 +118,15 @@ function syncFloorUi(state: VoyageState) {
 }
 
 let lastInfo = 0;
-/** 信息栏文字：太阳 / 月亮方位、航向、位置，每 250 ms 刷新一次。strobeCloudOff：STROBE-CLOUD 按夜间云中迟滞判定关闭频闪时追加一行状态（不对用户静默，见 handoff/STROBE-CLOUD.md） */
+/**
+ * 信息栏文字：太阳 / 月亮方位、航向、位置，每 250 ms 刷新一次。
+ * UX-3（PANEL_UX_GUIDE §2.1）：同时写两份——完整版留在开发者区的 `#info`（原样不变，dev-browser 截图 JSON 读它的
+ * textContent，见 scripts/scenarios.mjs）；普通区的「此刻」摘要（`#now-line1` / `#now-line2` / `#now-line3`）只挑
+ * 用户关心的几件事：航段 / 导航一句、当地时刻、窗外朝向、天气一句，不放太阳 / 月亮高度角、经纬度小数点后三位这类
+ * 开发者数字。strobeCloudOff：STROBE-CLOUD 按夜间云中迟滞判定关闭频闪时追加一行状态（不对用户静默，见
+ * handoff/STROBE-CLOUD.md）——这条本来就是写给普通用户看的画面行为解释，不是开发者数字，UX-3 把 `#info` 挪进
+ * 开发者区后，另外用 `#now-line3` 让它继续留在普通区可见（不适用时该行隐藏）。
+ */
 export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number, legLine = "", strobeCloudOff = false) {
   if (now - lastInfo <= 250) return;
   lastInfo = now;
@@ -134,6 +147,20 @@ export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state
 ${legLine}` : "") +
     (strobeCloudOff ? `
 频闪：夜间云中自动关闭（按惯例避免反光晃眼，出云后恢复）` : "");
+
+  // 摘要第一行：连续航程 / 导航一句（有的话）；没有就退回高度（窗外朝向已经在第二行，不重复）
+  const navLine = legLine.split("\n")[0] ?? "";
+  nowLine1.textContent = navLine || `高度 ${state.altitudeKm.toFixed(1)} km`;
+  // 摘要第二行：当地时刻 · 窗外朝向 · 天气一句。只用云型 + 云量（读已渲染好的下拉文字 / 输出文字，不重复一份天气
+  // 描述逻辑）——天气系统名称较长（如「无特殊天气（只有云层）」），完整名称在展开「天气」区可见，不进摘要行
+  const cloudSelEl = document.getElementById("cloud-preset") as HTMLSelectElement | null;
+  const coverageOutEl = document.getElementById("coverage-out");
+  const cloudName = cloudSelEl?.selectedOptions[0]?.textContent ?? "";
+  const coverageText = coverageOutEl?.textContent ?? "";
+  nowLine2.textContent = `${timeLabel.textContent ?? ""} · 窗外朝${compass(outward)} · ${cloudName} ${coverageText}`.replace(/\s+/g, " ").trim();
+  // 摘要第三行（STROBE-CLOUD）：夜间云中自动关频闪的状态，本来就是写给用户看的画面行为解释，不适用时整行隐藏
+  nowLine3.hidden = !strobeCloudOff;
+  if (strobeCloudOff) nowLine3.textContent = "频闪：夜间云中自动关闭";
 }
 
 export interface UiDeps {
@@ -348,6 +375,8 @@ export function setupUi(deps: UiDeps) {
   setupMinimapUi(deps.minimap);
   setupVehicleUi(deps.vehicle);
   setupDevSection();
+  setupPanelFoldUi();
+  setupQualitySummary(quality);
   setupFocusUi(deps.focus);
 
   // 画质（PERF-5）：面板只负责挑档位（自动 / 高 / 中 / 低），具体分辨率 / DPR 上限与自适应逻辑都在 quality.ts
@@ -564,7 +593,7 @@ function setupNavUi(director: Director, vehicle: VehicleControl, s0: VoyageState
   const arriveBtn = $<HTMLButtonElement>("debug-arrive");
   const state = () => s0;
   dest.innerHTML =
-    `<option value="">（选择机场）</option>` +
+    `<option value="">选择机场…</option>` +
     Object.values(AIRPORTS)
       .map((a) => `<option value="${a.code}">${a.name}（${a.code}）</option>`)
       .join("");
@@ -590,9 +619,8 @@ function setupNavUi(director: Director, vehicle: VehicleControl, s0: VoyageState
     hdgOut.textContent = `${String(Math.round(shown) % 360).padStart(3, "0")}°（${compass(shown)}）`;
     const want = ap.mode === "direct" ? (director.leg?.to.code ?? "") : "";
     if (dest.value !== want && document.activeElement !== dest) dest.value = want;
-    const text =
-      director.describeNav() ||
-      (s.preset.dest ? "沿航线飞：到达终点上空后自动接下一段" : "保持航向直飞") + "。方向键 ← / → 转向（每次 5°，Shift 15°）";
+    // 方向键转向的说明已经在左右转按钮的 title 里（UX-3：这里缩短成一句，避免默认状态就占两行）
+    const text = director.describeNav() || (s.preset.dest ? "沿航线飞：到达终点上空后自动接下一段" : "保持航向直飞");
     if (text !== lastStatus) status.textContent = lastStatus = text;
   }
 
@@ -707,6 +735,8 @@ function setupWeatherAutoSync(deps: UiDeps) {
   const weatherSel = $<HTMLSelectElement>("weather");
   const cloudSel = $<HTMLSelectElement>("cloud-preset");
   const presetSel = $<HTMLSelectElement>("preset");
+  // UX-3：折叠区「天气」的 summary 摘要（只用云型 + 云量，理由同 updateInfo 的「此刻」摘要）
+  const weatherSummary = $("weather-summary");
 
   const isOwned = () => director.active && director.weather.enabled;
   let manual = { coverage: false, base: false, thick: false, wind: false };
@@ -787,6 +817,10 @@ function setupWeatherAutoSync(deps: UiDeps) {
     setAutoBadge("cloud-preset-auto", owned);
     if (owned) cloudSel.value = director.weather.regime;
 
+    const cloudName = cloudSel.selectedOptions[0]?.textContent ?? "";
+    const coverageText = coverageOut.textContent ?? "";
+    weatherSummary.textContent = (owned ? `自动 · ${cloudName} ${coverageText}` : `${cloudName} ${coverageText}`).replace(/\s+/g, " ").trim();
+
     syncPresetOption();
   }
 
@@ -850,6 +884,8 @@ function setupSoundUi(audio: CabinAudio) {
   const ac = $<HTMLInputElement>("sound-aircon");
   const chime = $<HTMLInputElement>("sound-chime");
   const joints = $<HTMLSelectElement>("sound-rail-joints");
+  // UX-3：「声音」折叠区标题行本身带开关（PANEL_UX_GUIDE §2.1）；summary 摘要文字
+  const summaryText = $("sound-summary-text");
   const sync = () => {
     joints.value = audio.options.railJoints;
     box.checked = audio.enabled;
@@ -858,8 +894,12 @@ function setupSoundUi(audio: CabinAudio) {
     volOut.textContent = `${Math.round(audio.volume * 100)}%`;
     ac.checked = audio.options.aircon;
     chime.checked = audio.options.chime;
+    summaryText.textContent = audio.enabled ? `开 · ${Math.round(audio.volume * 100)}%` : "关";
   };
   audio.onChange = sync;
+  // 开关挪进了 <summary>：点击它本身不该把整个折叠区跟着收起 / 展开（浏览器默认行为是点击 summary 内任意
+  // 位置都触发 <details> 的原生 toggle，除非事件不再冒泡到 summary）。change 事件不受影响，开关照常生效
+  box.addEventListener("click", (e) => e.stopPropagation());
   box.addEventListener("change", () => (box.checked ? void audio.enable() : audio.disable()));
   vol.addEventListener("input", () => {
     audio.setVolume(Number(vol.value) / 100);
@@ -966,6 +1006,66 @@ function setupDevSection() {
   });
 }
 
+// ---------- 面板分区折叠记忆（UX-3，PANEL_UX_GUIDE §2.3 / §7.1） ----------
+
+/** 六个可折叠区：默认展开（观景、航程）或默认折叠（天气、声音、画质、页脚），与规范 §2.1 的表一致 */
+const PANEL_SECTIONS: { id: string; key: string; defaultOpen: boolean }[] = [
+  { id: "section-view", key: "view", defaultOpen: true },
+  { id: "section-voyage", key: "voyage", defaultOpen: true },
+  { id: "section-weather", key: "weather", defaultOpen: false },
+  { id: "section-sound", key: "sound", defaultOpen: false },
+  { id: "section-quality", key: "quality", defaultOpen: false },
+  { id: "section-footer", key: "footer", defaultOpen: false },
+];
+
+/**
+ * 折叠状态记忆：与开发者区共用同一个 `voyage.pref.panel` 键（PANEL_PREF_KEY，见上面 setupDevSection），
+ * 只记用户亲手展开 / 折叠的（`toggle` 事件的 `isTrusted`）——回归 / 截图脚本用 `sc.js` 直接设 `.open` 属性
+ * 不触发 `toggle`，不会写记忆；展开 / 折叠本身只是显示，不改变任何渲染状态、不触发任何 apply（§2.3）。
+ */
+function setupPanelFoldUi() {
+  let stored: Record<string, boolean> = {};
+  try {
+    const p = JSON.parse(localStorage.getItem(PANEL_PREF_KEY) ?? "null") as { v?: number; sections?: Record<string, boolean> } | null;
+    if (p?.v === 1 && p.sections && typeof p.sections === "object") stored = p.sections;
+  } catch {
+    // 拿不到 localStorage：按默认展开 / 折叠
+  }
+  for (const { id, key, defaultOpen } of PANEL_SECTIONS) {
+    const el = document.getElementById(id) as HTMLDetailsElement | null;
+    if (!el) continue;
+    el.open = key in stored ? stored[key] : defaultOpen;
+    el.addEventListener("toggle", (e) => {
+      if (!e.isTrusted) return;
+      try {
+        const p = (JSON.parse(localStorage.getItem(PANEL_PREF_KEY) ?? "null") as Record<string, unknown> | null) ?? {};
+        const prevSections = p.v === 1 && p.sections && typeof p.sections === "object" ? (p.sections as Record<string, boolean>) : {};
+        const sections = { ...prevSections, [key]: el.open };
+        localStorage.setItem(PANEL_PREF_KEY, JSON.stringify({ ...(p.v === 1 ? p : {}), v: 1, sections }));
+      } catch {
+        // 只是不记忆
+      }
+    });
+  }
+}
+
+// ---------- 折叠区摘要：画质（UX-3） ----------
+
+/** 「画质」折叠区 summary 摘要：复用 #quality-status 已经写好的文字（main.ts 每帧调 quality.describe()），
+ *  只去掉括号里给开发者看的 GPU 毫秒数 / 预算（规范 §2.1：GPU 毫秒数进开发者区，摘要只留「自动 → 高」这类结论） */
+function setupQualitySummary(quality: QualityController) {
+  const status = $("quality-status");
+  const summary = $("quality-summary");
+  const sync = () => {
+    const raw = (status.textContent ?? "").trim();
+    const idx = raw.indexOf("（");
+    const head = idx >= 0 ? raw.slice(0, idx) : raw;
+    summary.textContent = quality.tier === "auto" ? head : `${head}（固定）`;
+  };
+  window.setInterval(sync, 250);
+  sync();
+}
+
 /**
  * 聚焦观察（FOCUS-ZOOM）：开发者区的三条滑条（倍率 / 过渡时长 / 暗角），双击滑条或标签复位；按住 Z 聚焦（松开还原）。
  * 只记用户亲手改的（isTrusted）；URL ?zoom= / ?zoomms= 生效时 hint 里注明，本次不写记忆（focus-zoom.ts）
@@ -1000,7 +1100,10 @@ function setupFocusUi(focus: FocusZoom) {
   };
   bind("focus-mag", "mag", FOCUS_MAG, (v) => `${v.toFixed(1)}×`, () => focus.mag);
   bind("focus-ms", "ms", FOCUS_MS, (v) => `${Math.round(v)} ms`, () => focus.durationMs);
-  bind("focus-vignette", "vignette", FOCUS_VIGNETTE, (v) => `${Math.round(v * 100)}%`, () => focus.vignette);
+  // UX-3 发现并修复：这个控件的 id 原来是 "focus-vignette"，与聚焦暗角叠层 div（focus-zoom.ts 用同一个 id）撞了，
+  // getElementById 总是先取到那个 div——拖这条滑条从 FOCUS-ZOOM 上线起就没真正生效过（div 没有 .value、不会派发
+  // input 事件）。滑条 id 改成 "focus-vig"（index.html 同步改），叠层 div 的 id 不动。
+  bind("focus-vig", "vignette", FOCUS_VIGNETTE, (v) => `${Math.round(v * 100)}%`, () => focus.vignette);
   syncHint();
 
   // 按住 Z 聚焦：与单字母快捷键同一个守卫（焦点在会吃字母的控件里时不触发）；松开时不看焦点（免得卡在放大状态）
