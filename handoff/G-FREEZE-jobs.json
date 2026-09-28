@@ -1,0 +1,10 @@
+[
+  {
+    "name": "night-city-low",
+    "scene": { "name": "night-city-low", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 1, "coverage": 0.15, "cabin-light": "off" }, "offset": [0, -25], "ground": true, "head": -0.25 },
+    "variants": [{ "name": "a", "js": "" }, { "name": "b", "js": "" }]
+  },
+  { "name": "night-city-off", "scene": "night-city-off", "variants": [{ "name": "a", "js": "" }, { "name": "b", "js": "" }] },
+  { "name": "fuji-day", "scene": "fuji-day", "variants": [{ "name": "a", "js": "" }, { "name": "b", "js": "" }] },
+  { "name": "route-hnd-cts-night", "scene": "route-hnd-cts-night", "variants": [{ "name": "a", "js": "" }, { "name": "b", "js": "" }] }
+]
