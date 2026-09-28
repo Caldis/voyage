@@ -360,6 +360,7 @@ uniform float uCloudTop;        // 云顶高度，km
 uniform float uCoverage;        // 0..1
 uniform float uCloudType;       // 0 = 层积云（扁平），1 = 积云（圆顶高耸）
 uniform float uCloudDensity;    // 消光系数的倍率
+uniform vec3 uCuShape;         // C-TOFU：(nA 竖直倍率, nB 竖直倍率, 积云族权重)，clouds.ts 的 cumulusShape() 每帧按层厚 / 云型算好
 // ---- 天气系统 ----
 uniform float uShellBottom;     // 所有云（层状云、雷暴、台风）合起来的高度范围，km
 uniform float uShellTop;
@@ -509,6 +510,39 @@ float heightProfile(float h, float type) {
   return mix(stratus, cumulus, type);
 }
 
+// ---- 积云的立体形状（C-TOFU：去掉「二维轮廓往上挤出来」的豆腐块）----
+// 旧版三个成因（research/TOWERING.md §2.1，着色器开关对照定位）：
+//  ①形状噪声竖直方向几乎不变：大云团那级 nB 竖直周期约 18 km（alt × 0.9 / 16.1 km）、小的 nA 约 5.4 km，
+//    积云层只有 2–5 km 厚 → 一层之内噪声只随水平位置变，云就是水平轮廓的竖直挤出；
+//  ②剖面 h 0.12–0.45 是满密度平台，再 ×4.5 饱和 → 侧壁竖直，云顶被剖面的下降段统一截平；
+//  ③远处取到形状噪声 mip 4–5（128³ 的 mip 5 只剩 4³ 纹素），三线性插值的平面小面在竖直方向连成肋纹。
+// 竖直频率按层厚归一（uCuShape.xy，算法和常数在 clouds.ts 的 cumulusShape()：每帧在 CPU 上算一次，
+// 着色器里写成 clamp(7 / (1.3·层厚)) 这类算术的话，layerDensity 被内联进步进 / 受光 / 云影各处，cloud-march 冷编译 +10%）
+// ③远处竖肋：试过形状噪声 mip 封顶 3（C-TOFU 初版），竖直频率与云顶改好以后远排几乎看不出差别，
+// 却让云 pass 贵 5–10%、远处时间噪声更高（C-TOFU 审查复测），已撤回，mip 仍按步长取
+// 这一列的云顶（h 单位，按局部云顶归一）：归一强度 σ = (d − CU_VIS_D) / max(覆盖率 − CU_VIS_D, CU_RANGE_MIN)，
+// 云顶 = 基 + (1 − 基)·σ^(1/CU_TOP_POW)：弱的芯（σ → 0，云的水平边缘）只到 CU_DOME_BASE，高度连续收到云底（圆顶），
+// 最强的才顶到局部云顶；同一片云场里云顶高低错落，「多数矮、少数高」来自 σ 本身的分布（强芯少）。
+// 云顶用一块「斜天花板」压：d ≤ CU_VIS_D + CU_TOP_GRAD·(云顶 − h)，天花板正好在云顶处降到「看得见」的门槛。
+// 斜率 CU_TOP_GRAD 决定云顶那一层被细节侵蚀啃成菜花的厚度（旧版剖面下降段在 d 空间的斜率约 0.75；0.5 碎块偏多、0.75 稀疏天气里云量掉得多，取 0.6）：
+//  - 太缓（初版按 (覆盖率 − CU_VIS_D)·门槛(h) 从 d 里扣，斜率约 0.2）：云的上半截整段都是「刚过阈值」的淡密度，
+//    细节侵蚀把它啃成一片悬空的碎块（浓积云预设近处满是「爆米花」）；
+//  - 太陡（试过云顶下 0.12 内把 d 乘到 0，斜率约 3）：侵蚀没有余地，云顶是光滑的塑料团子，弱的云被削成薄片、云量明显变少。
+//  - CU_VIS_D：细节侵蚀平均吃掉的 d（远处不取细节时 layerDensity 就按 0.275 侵蚀），d 高出它的那段才看得见；
+//  - CU_RANGE_MIN：覆盖率接近 CU_VIS_D 时（稀疏的天气）「看得见的一段」很窄，不按它放大，否则一点点强度差就把弱云拉满整层；
+//    直接用 d / 覆盖率（不扣 CU_VIS_D）的话，低覆盖率天气里所有看得见的云 σ 都挤在 0.7–1，全都一样高（初版踩过：成了扁饼）
+//  - CU_CEIL 以上乘法收到 0：最强的几列在局部云顶处收口，不在 h = 1 处一刀截平
+const float CU_DOME_BASE = 0.25;
+const float CU_TOP_POW = 1.2;
+const float CU_TOP_GRAD = 0.6;
+const float CU_VIS_D = 0.275;
+const float CU_RANGE_MIN = 0.15;
+const float CU_CEIL = 0.8;
+float cumulusTop(float d, float coverage) {
+  float sig = clamp((d - CU_VIS_D) / max(coverage - CU_VIS_D, CU_RANGE_MIN), 0.0, 1.0);
+  return CU_DOME_BASE + (1.0 - CU_DOME_BASE) * pow(sig, 1.0 / CU_TOP_POW);
+}
+
 // ---- 天气场：决定每个区域长什么样的云，而不只是「有没有云」----
 struct Weather {
   float coverage;  // 0..1
@@ -592,9 +626,14 @@ float layerDensity(vec3 p, float lod, bool detail) {
   }
 #endif
   // 两个尺度的形状噪声，相互旋转 37°，按区域混合：有的地方是小碎云，有的地方是大云团
-  vec4 nA = textureLod(uShapeNoise, vec3(xzn.x, alt * 1.3, xzn.y) / SHAPE_TILE, lod);
+  // 竖直频率按层厚归一（C-TOFU，见 uCuShape 的注释）。
+  // 竖直频率只改积云族（cuW）：层积云 / 高积云 / 卷云本来就该是薄层，照旧
+  float cuW = uCuShape.z;
+  float va = uCuShape.x;
+  float vb = uCuShape.y;
+  vec4 nA = textureLod(uShapeNoise, vec3(xzn.x, alt * va, xzn.y) / SHAPE_TILE, lod);
   vec2 xzB = rot2(xzn, 0.65);
-  vec4 nB = textureLod(uShapeNoise, vec3(xzB.x, alt * 0.9, xzB.y) / (SHAPE_TILE * 2.3) + 0.37, max(lod - 1.0, 0.0));
+  vec4 nB = textureLod(uShapeNoise, vec3(xzB.x, alt * vb, xzB.y) / (SHAPE_TILE * 2.3) + 0.37, max(lod - 1.0, 0.0));
   float fbmA = nA.g * 0.625 + nA.b * 0.25 + nA.a * 0.125;
   float fbmB = nB.g * 0.625 + nB.b * 0.25 + nB.a * 0.125;
   float baseA = remapc(nA.r, fbmA - 1.0, 1.0, 0.0, 1.0);
@@ -604,9 +643,14 @@ float layerDensity(vec3 p, float lod, bool detail) {
   // 按约 0.4 km 的小单体（nA.a）和几公里的大起伏（fbmB）上下错开，有的地方垂下来一兜、有的地方缩上去，
   // 云底才有明暗不一的絮团。只挪高度剖面的输入，不多取纹理
   float hB = h + (1.0 - cir) * (0.09 * (nA.a - 0.45) + 0.05 * (fbmB - 0.5)) * (1.0 - smoothstep(0.1, 0.3, h));
-  base *= heightProfile(hB, uCloudType);
+  // 积云族（云型 > 0.45）不再用「满密度平台 + 统一下降段」的剖面（C-TOFU），改成「云顶随这一列的强度变」：
+  // 剖面只管云底，云顶由这一列的强度决定（cumulusTop）——强的芯长得高、弱的矮，边缘处高度连续收到云底（圆顶），
+  // 层积云 / 高积云 / 卷云（云型 ≤ 0.45）照旧
+  base *= mix(heightProfile(hB, uCloudType), smoothstep(0.0, 0.12, hB) * (1.0 - smoothstep(CU_CEIL, 1.0, h)), cuW);
   float coverage = wx.coverage;
   float d = remapc(base, 1.0 - coverage, 1.0, 0.0, 1.0) * coverage;
+  float topC = cumulusTop(d, coverage);
+  d = mix(d, max(min(d, CU_VIS_D + CU_TOP_GRAD * (topC - h)), 0.0), cuW);
   // 卷云的丝缕要细：覆盖阈值再往上抬，只留噪声的脊
 #ifdef CLOUD_CIRRUS
   if (cir > 0.0) d = remapc(d, 0.25 * cir, 1.0, 0.0, 1.0);
