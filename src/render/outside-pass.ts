@@ -216,6 +216,7 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
 #ifdef OUTSIDE_WONDER
 #ifdef WONDER_PILLARS
   L = wonderPillars(L, rd, hitGround ? tGround : 1e9);
+  gStarVis *= 1.0 - gWonderCov; // 柱子挡住它身后的点星（点星在舱内程序画，只认这个标记）
 #else
   L = wonderSky(L, rd, hitGround ? tGround : 1e9);
 #endif
