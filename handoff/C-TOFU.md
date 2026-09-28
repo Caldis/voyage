@@ -1,5 +1,8 @@
 # C-TOFU：去掉积云「垂直挤出豆腐块」
 
+> **返工（审查 `handoff/C-TOFU-review.md`）**：撤回形状噪声 mip 封顶（`SHAPE_LOD_MAX` 已删，textureLod 恢复原来的 lod 写法）。
+> 下文「改法」表里的 mip 封顶一行、以及指标 / 时间行为表里标注「封顶版」的数字是返工前的；返工后的 GPU 复测与远排截图见文末「返工复测」，以那一节为准。
+
 分支 `worktree-agent-a2341dfa7198ef2d1`（已 merge master 到 80e0d59，含 C-FLAT）。改动只在 `src/clouds/clouds.glsl.ts`（`layerDensity` 形状段 + 新常数 / 函数）与 `src/clouds/clouds.ts`（新增 `uCuShape` uniform 与 `cumulusShape()`，`render()` 开头调用一次；没碰受光段）。
 
 ## 根因（复现 research/TOWERING.md §2.1，开关对照已由研究代理做过）
@@ -16,7 +19,7 @@
 | --- | --- | --- |
 | 竖直频率按层厚归一 | nA 竖直周期 = 1.3 层厚、nB = 3 层厚（晴天积云 2.9 / 6.6 km；浓积云夹在旧值 1.3 / 0.9 不再更低）。只对积云族（云型 > 0.45，smoothstep 权重），层积云 / 高积云 / 卷云照旧 | `clouds.ts` `cumulusShape()` → `uCuShape.xy` |
 | 云顶随列强度变（替代平台） | σ = (d − 0.275) / max(覆盖率 − 0.275, 0.15)；云顶 = 0.25 + 0.75·σ^(1/1.2)（局部云顶单位）；`d ≤ 0.275 + 0.6·(云顶 − h)` 的斜天花板压；h > 0.8 乘法收口 | `clouds.glsl.ts` `cumulusTop()` + `layerDensity` |
-| 形状噪声 mip 封顶 | `nA` ≤ 3、`nB` ≤ 2（`SHAPE_LOD_MAX`） | `layerDensity` |
+| ~~形状噪声 mip 封顶~~（已撤回） | ~~`nA` ≤ 3、`nB` ≤ 2~~：远排看起来几乎一样，却让云 pass 贵 5–10%、远处时间噪声更高 | — |
 
 试过又放弃的（坑，已写进 README 云坑点）：
 - 按 0..1 从 d 里直接扣门槛：低覆盖率天气 d 最大只有覆盖率，全部云被压成扁饼（`tmp/screenshot/ctofu/z-ab1-*`）。
@@ -25,7 +28,7 @@
 - 固定竖直 ×2：浓积云 5 km 厚的层里叠两三个 nA 周期，塔身断成上下分离的碎块。
 - 竖直倍率在着色器里按 uniform 算：cloud-march 冷编译 +10%（`layerDensity` 内联十几处），挪到 CPU。
 
-## 指标（同页 `ab --cloud-live`，merge C-FLAT 之后的 master 为基线；输出 `tmp/screenshot/ctofu/m3/`）
+## 指标（封顶版，返工前；同页 `ab --cloud-live`，merge C-FLAT 之后的 master 为基线；输出 `tmp/screenshot/ctofu/m3/`）
 
 口径（`handoff/C-TOFU-metrics.py`，云缓冲全分辨率 16 帧平均 α；高度出口补丁 `L = vec3(length(ro + rd*depth) - BOTTOM) * (1 - T)`，距离来自 `cloud-dist`）：
 - **竖壁游程**：α 过 0.5 的侧边像素中，同一列连续 ≥ 5 行的比例；**平顶游程**：顶边像素中同一行连续 ≥ 12 列的比例；按距离带 20–100 / 100+ km。
@@ -45,7 +48,9 @@
 
 方向性竖肋：`ribX = E|∂x box_y7 α| / E|∂x α|` 在 100+ km 带 cu-6000 0.41 → 0.38、noon 0.46 → 0.42（竖向相干度下降）；tow-a8 0.41 → 0.46（塔的侧面变多）。这个指标区分力弱，以游程和截图为准。
 
-### 时间行为（`flight --modes static,reset,cruise,turn`，`tmp/screenshot/ctofu/flight4/`，new / old）
+### 时间行为（封顶版，返工前；`flight --modes static,reset,cruise,turn`，`tmp/screenshot/ctofu/flight4/`，new / old）
+
+审查复测去掉封顶后：cu-6000 远排静止 relStd ×1.26 → ×1.20，tow-a8 ×1.39 → ×1.26。
 
 | 场景（裁剪） | 静止 relStd | 对真值 err | reset@16 | cruise err | turn err | 云边模糊 σ / edge |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -56,9 +61,9 @@
 | sea-sc | ×0.98 | ×0.98 | ×1.01 | ×1.01 | ×1.00 | 不变 |
 | storm-sc | ×1.00 | ×1.00 | ×1.01 | ×1.01 | ×1.00 | 不变 |
 
-没有拖影（σ、edge 不变）；近处（noon）噪声略降。远排噪声上升：mip 封顶贡献一部分（flight3：cu-6000 远排 nocap ×1.16 / cap4 ×1.18 / cap3 ×1.21；tow-a8 ×1.27 / ×1.32 / ×1.41），其余是轮廓变多（云顶错落、塔长高）。**这是本任务最主要的代价，交审查 / 美术总监判断**；要省可以把 `SHAPE_LOD_MAX` 放到 6（等于不封顶），远处平顶会回来一部分（tow-a8 100+ km 平顶 0.011 → 0.078、竖壁 0.028 → 0.055）。
+没有拖影（σ、edge 不变）；近处（noon）噪声略降。远排噪声上升：mip 封顶贡献一部分（flight3：cu-6000 远排 nocap ×1.16 / cap4 ×1.18 / cap3 ×1.21；tow-a8 ×1.27 / ×1.32 / ×1.41），其余是轮廓变多（云顶错落、塔长高）。**这是本任务最主要的代价，交审查 / 美术总监判断**；要省可以把 `SHAPE_LOD_MAX` 放到 6（等于不封顶），远处平顶会回来一部分（tow-a8 100+ km 平顶 0.011 → 0.078、竖壁 0.028 → 0.055）。（审查复测后按不封顶交付：游程指标上的差异在截图上几乎看不出，见文末「返工复测」。）
 
-### GPU（`gpu-ab --time clouds`，8 轮 ABBA，带 A/A）
+### GPU（封顶版，返工前，已作废；返工后的数字见文末「返工复测」）
 
 | 场景 | new / old | 其中不封顶 mip 时 |
 | --- | --- | --- |
@@ -72,7 +77,7 @@
 
 ### 冷编译（`shader-budget --wait-quiet --baseline <master> --rounds 5`，min）
 
-cloud-march 482 → 503 ms（**+4.4%**），cloud-march-storm 4004 → 4140（+3.4%）。竖直倍率在着色器里算的中间版本是 +21%（拆分：竖直倍率 −9.9%、云顶 −4.3%、mip 封顶 −2.4%，`handoff/C-TOFU-fxc-variants.mjs`）。
+封顶版 cloud-march 482 → 503 ms（**+4.4%**），cloud-march-storm 4004 → 4140（+3.4%）；撤回封顶约再省 2.4%（同一份 fxc 拆分），返工后未单独复测。竖直倍率在着色器里算的中间版本是 +21%（拆分：竖直倍率 −9.9%、云顶 −4.3%、mip 封顶 −2.4%，`handoff/C-TOFU-fxc-variants.mjs`）。
 
 ## 对照图（`tmp/screenshot/ctofu/`，上 old 下 new）
 
@@ -88,8 +93,8 @@ cloud-march 482 → 503 ms（**+4.4%**），cloud-march-storm 4004 → 4140（+3
 python handoff/C-TOFU-mkjobs.py tmp/ctofu-jobs.json
 node scripts/dev-browser.mjs ab --port <本分支> --base <master> --angle d3d11 --cloud-live --quality high --rounds 1 --jobs tmp/ctofu-jobs.json --out tmp/screenshot/ctofu/m
 python handoff/C-TOFU-metrics.py tmp/screenshot/ctofu/m old,new
-node scripts/dev-browser.mjs flight --port <本分支> --base <master> --modes static,reset,cruise,turn --jobs handoff/C-TOFU-flight-jobs.json --variants handoff/C-TOFU-flight-variants.json
-node scripts/dev-browser.mjs gpu-ab --port <本分支> --base <master> --rounds 8 --jobs handoff/C-TOFU-gpu-jobs.json
+node scripts/dev-browser.mjs flight --port <本分支> --base <master> --modes static,reset,cruise,turn --jobs apps/voyage/handoff/C-TOFU-flight-jobs.json --variants apps/voyage/handoff/C-TOFU-flight-variants.json
+node scripts/dev-browser.mjs gpu-ab --port <本分支> --base <master> --rounds 8 --jobs apps/voyage/handoff/C-TOFU-gpu-jobs.json
 node scripts/shader-budget.mjs --wait-quiet --baseline <master 树>/apps/voyage --rounds 5 --only cloud-march,cloud-march-storm
 python handoff/C-TOFU-stack.py <job 目录> old,new x,y,w,h <倍数> <输出.png>
 ```
@@ -99,3 +104,18 @@ python handoff/C-TOFU-stack.py <job 目录> old,new x,y,w,h <倍数> <输出.png
 - TW03（冲出云层的塔）：直接用 `cumulusTop()`——把局部云顶放高，只有 σ 大的芯长到顶上。`CU_DOME_BASE` / `CU_TOP_POW` 控制「多数矮、少数高」。
 - 云量视觉校准（WX10）：俯看云量基本不变（noon 0.74 → 0.73、cu-6000 0.70 → 0.68），擦云层看的「平均云高」下降（cu-6000 顶边中位 1.93 → 1.81 km），强芯变高。
 - `uCuShape` 每帧在 `Clouds.render()` 开头算；别的地方如果不经 `render()` 直接用云 uniform（没有），要先调 `cumulusShape()`。
+
+## 返工复测（撤回 mip 封顶后，merge master 9673aab 为基线）
+
+GPU（`gpu-ab --time clouds`，8 轮 ABBA，old2 = A/A 噪声底；jobs 即 `handoff/C-TOFU-gpu-jobs.json` 加 cu-side）：
+
+| 场景 | old ms | new ms | new / old 配对中位 [p25, p75] | A/A |
+| --- | --- | --- | --- | --- |
+| noon-cumulus | 0.529 | 0.562 | ×1.055 [1.035, 1.082] | ×0.994 |
+| clouds-variety | 1.395 | 1.565 | ×1.123 [1.109, 1.138] | ×1.008 |
+| cu-6000 | 1.041 | 1.132 | ×1.092 [1.070, 1.102] | ×1.001 |
+| cu-side | 1.739 | 2.016 | ×1.154 [1.142, 1.164] | ×1.015 |
+
+剩下的增量是「云变高」本身（视线在云里的步数变多），协调者已接受并记入预算账本。封顶版曾写的 noon ×1.08 偏乐观，以本表为准。
+
+远排放大（上改前、下改后，`tmp/screenshot/ctofu/rework/`）：`far-cu6000-x2.png`（6 km 机位远排：没有平顶长条块，云顶高低错落）、`far-tow-a8-x2.png`、`tow-a8.png`（浓积云：中远处仍是一座座圆顶，豆腐块没有回来；约 200 km 的地平线带有很淡的竖纹，改前也有，量级相当）。控制台 0 error。

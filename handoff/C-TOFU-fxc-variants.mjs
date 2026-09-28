@@ -4,7 +4,6 @@
 const F = "src/clouds/clouds.glsl.ts";
 export const VARIANTS = [
   ["cur", []],
-  ["nocap", [{ file: F, find: "const float SHAPE_LOD_MAX = 3.0;", replace: "const float SHAPE_LOD_MAX = 6.0;" }]],
   ["notop", [
     { file: F, find: "  float topC = cumulusTop(d, coverage);\n  d = mix(d, max(min(d, CU_VIS_D + CU_TOP_GRAD * (topC - h)), 0.0), cuW);", replace: "" },
   ]],
