@@ -30,7 +30,11 @@ fs.mkdirSync(OUT, { recursive: true });
 const log = (...a) => console.log("[wlamp]", ...a);
 
 const repoRoot = path.resolve(VOYAGE, "../..");
-if (readLock(repoRoot)) { log("测量锁存在，等待释放"); await waitForRelease(repoRoot, { log }); }
+// 截图不受别人测量的影响，只有带 bench 的 job（计时）才等测量锁（同 dev-browser shots 的约定：查锁只提示）
+if (readLock(repoRoot)) {
+  if (jobs.some((j) => j.bench)) { log("测量锁存在，等待释放（有计时 job）"); await waitForRelease(repoRoot, { log }); }
+  else log("测量锁存在（别的代理在计时），本次只截图、不计时，不等");
+}
 
 const browser = await launchBrowser(chromium, { angle: arg("angle", "d3d11") });
 let errCount = 0;
