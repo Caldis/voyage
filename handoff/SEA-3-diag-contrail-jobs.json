@@ -12,7 +12,7 @@
     "wing-pos": "-4"
    }
   },
-  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; const e = v.sceneMat.uniforms.uCabinToWorld.value.elements; let ox = e[6], oz = e[8]; const ol = Math.hypot(ox, oz); ox /= ol; oz /= ol; const ax = -oz, az = ox; const P = v.traffic.planes; P[0].pos.set(ox * 40 + ax * -25, 0.3, oz * 40 + az * -25); P[0].dir.set(ax, 0, az); P[0].speed = 0.23; P[0].active = true; P[0].respawnIn = 1e9; P[1].active = false; P[1].respawnIn = 1e9; return 'shown=' + JSON.stringify(k);",
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; const e = v.sceneMat.uniforms.uCabinToWorld.value.elements; let ox = e[6], oz = e[8]; const ol = Math.hypot(ox, oz); ox /= ol; oz /= ol; const ax = -oz, az = ox; const P = v.traffic.planes; P[0].pos.set(ox * 40 + ax * 12, 0.3, oz * 40 + az * 12); P[0].dir.set(ax, 0, az); P[0].speed = 0.23; P[0].active = true; P[0].respawnIn = 1e9; P[1].active = false; P[1].respawnIn = 1e9; return 'shown=' + JSON.stringify(k);",
   "variants": [
    {
     "name": "cur"
@@ -48,25 +48,17 @@
   ]
  },
  {
-  "name": "wpac-cruise@40+0.6",
+  "name": "noon-cumulus@60+0.6",
   "scene": {
-   "name": "wpac-cruise",
+   "name": "noon-cumulus",
    "p": {
     "preset": "wpac",
     "date": "2026-09-28",
-    "time": 870,
-    "coverage": 0.05,
-    "altitude": 10.7,
-    "wind": 7,
+    "time": 720,
     "wing-pos": "8"
-   },
-   "head": [
-    0,
-    0.14,
-    -0.2
-   ]
+   }
   },
-  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; const e = v.sceneMat.uniforms.uCabinToWorld.value.elements; let ox = e[6], oz = e[8]; const ol = Math.hypot(ox, oz); ox /= ol; oz /= ol; const ax = -oz, az = ox; const P = v.traffic.planes; P[0].pos.set(ox * 40 + ax * -25, 0.6, oz * 40 + az * -25); P[0].dir.set(ax, 0, az); P[0].speed = 0.23; P[0].active = true; P[0].respawnIn = 1e9; P[1].active = false; P[1].respawnIn = 1e9; return 'shown=' + JSON.stringify(k);",
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; const e = v.sceneMat.uniforms.uCabinToWorld.value.elements; let ox = e[6], oz = e[8]; const ol = Math.hypot(ox, oz); ox /= ol; oz /= ol; const ax = -oz, az = ox; const P = v.traffic.planes; P[0].pos.set(ox * 60 + ax * 12, 0.6, oz * 60 + az * 12); P[0].dir.set(ax, 0, az); P[0].speed = 0.23; P[0].active = true; P[0].respawnIn = 1e9; P[1].active = false; P[1].respawnIn = 1e9; return 'shown=' + JSON.stringify(k);",
   "variants": [
    {
     "name": "cur"
@@ -102,25 +94,17 @@
   ]
  },
  {
-  "name": "wpac-cruise@60-0.3",
+  "name": "sunset@50+0.3",
   "scene": {
-   "name": "wpac-cruise",
+   "name": "sunset",
    "p": {
     "preset": "wpac",
     "date": "2026-09-28",
-    "time": 870,
-    "coverage": 0.05,
-    "altitude": 10.7,
-    "wind": 7,
+    "time": 1040,
     "wing-pos": "8"
-   },
-   "head": [
-    0,
-    0.14,
-    -0.2
-   ]
+   }
   },
-  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; const e = v.sceneMat.uniforms.uCabinToWorld.value.elements; let ox = e[6], oz = e[8]; const ol = Math.hypot(ox, oz); ox /= ol; oz /= ol; const ax = -oz, az = ox; const P = v.traffic.planes; P[0].pos.set(ox * 60 + ax * -25, -0.3, oz * 60 + az * -25); P[0].dir.set(ax, 0, az); P[0].speed = 0.23; P[0].active = true; P[0].respawnIn = 1e9; P[1].active = false; P[1].respawnIn = 1e9; return 'shown=' + JSON.stringify(k);",
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; const e = v.sceneMat.uniforms.uCabinToWorld.value.elements; let ox = e[6], oz = e[8]; const ol = Math.hypot(ox, oz); ox /= ol; oz /= ol; const ax = -oz, az = ox; const P = v.traffic.planes; P[0].pos.set(ox * 50 + ax * 12, 0.3, oz * 50 + az * 12); P[0].dir.set(ax, 0, az); P[0].speed = 0.23; P[0].active = true; P[0].respawnIn = 1e9; P[1].active = false; P[1].respawnIn = 1e9; return 'shown=' + JSON.stringify(k);",
   "variants": [
    {
     "name": "cur"

@@ -20,6 +20,8 @@ SCENES = {
     "cruise-ground": {"preset": "hnd-cts", "date": "2026-09-28", "time": 780, "altitude": 10.7, "coverage": 0.05, "wing-pos": "8"},
     "noon-cu-close": {"preset": "wpac", "date": "2026-09-28", "time": 750, "altitude": 3, "coverage": 0.45, "wing-pos": "-4"},
     "sea-mod-low": {"preset": "wpac", "date": "2026-09-28", "time": 870, "coverage": 0.1, "altitude": 0.8, "wind": 8, "wing-pos": "-4"},
+    "noon-cumulus": {"preset": "wpac", "date": "2026-09-28", "time": 720, "wing-pos": "8"},
+    "sunset": {"preset": "wpac", "date": "2026-09-28", "time": 1040, "wing-pos": "8"},
     "wpac-cruise": {"preset": "wpac", "date": "2026-09-28", "time": 870, "coverage": 0.05, "altitude": 10.7, "wind": 7, "wing-pos": "8"},
 }
 GROUND = {"hnd-low-day", "hnd-low-day-26", "cruise-ground"}
@@ -138,6 +140,135 @@ def diag_stripes2():
     return [job("cruise-ground", vs, crop=[700, 60, 550, 260])]
 
 
+# 逐像素积分要带上边界层霾：uHaze / uHazeShape 平时只接在 LUT 材质上（窗外程序里不可达、值为默认 0 = 无霾），
+# 诊断时把 LUT 用的那两个 uniform 对象挂进窗外材质
+PRE_HAZE = PRE.replace(
+    "return 'shown=",
+    "v.__outCur.uniforms.uHaze = v.atmosphere.hazeUniforms.uHaze; v.__outCur.uniforms.uHazeShape = v.atmosphere.hazeUniforms.uHazeShape; "
+    "return 'haze=' + v.atmosphere.hazeUniforms.uHaze.value.toArray().map((x) => x.toFixed(3)) + ' shown=",
+)
+
+
+def diag_truth():
+    wall = [
+        {"name": "cur"},
+        {"name": "exactSky", **patch([(SKYL, EXACT_SKY)])},
+        {"name": "exactBoth", **patch([(GF, EXACT_AP + GF), (SKYL, EXACT_SKY)])},
+        {"name": "exactAll", **patch([(GF, EXACT_AP + GF), (SKYL, EXACT_SKY), (SKYCAM, EXACT_SKYCAM)])},
+    ]
+    stripes = [
+        {"name": "cur"},
+        {"name": "exactAP", **patch([(GF, EXACT_AP + GF)])},
+        {"name": "exactSkyCam", **patch([(SKYCAM, EXACT_SKYCAM)])},
+        {"name": "exactAll", **patch([(GF, EXACT_AP + GF), (SKYL, EXACT_SKY), (SKYCAM, EXACT_SKYCAM)])},
+    ]
+    return [
+        job("hnd-low-day", wall, crop=[400, 400, 800, 300], extra={"pre": PRE_HAZE}),
+        job("hnd-low-day-26", wall, crop=[400, 400, 800, 300], extra={"pre": PRE_HAZE}),
+        job("cruise-ground", stripes, crop=[700, 60, 550, 260], extra={"pre": PRE_HAZE}),
+    ]
+
+
+GF_REFL = "fView * max(skyCam - gh.apL, vec3(0.0))"
+GF_REFL_CLAMP = "fView * clamp(skyCam - gh.apL, vec3(0.0), gh.apT * skyCam)"
+OS_REFL = "      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n"
+OS_REFL_CLAMP = "      vec3 refl = fView * clamp(skyCam - inscatter, vec3(0.0), tView * skyCam);\n"
+AERIAL_SAMPLES = "dist, 24.0, T);"
+
+
+def aerial(n):
+    return {"patch": {"atmosphere.aerialMaterial": [[AERIAL_SAMPLES, f"dist, {n}.0, T);"]]}}
+
+
+def proto():
+    clamp = {"name": "reflClamp", **patch([(GF_REFL, GF_REFL_CLAMP), (OS_REFL, OS_REFL_CLAMP)])}
+    stripes = [
+        {"name": "cur"},
+        {"name": "exactAP24", **patch([(GF, EXACT_AP.replace("64.0", "24.0") + GF)])},
+        {"name": "exactAP64", **patch([(GF, EXACT_AP + GF)])},
+        {"name": "lutAP48", **aerial(48)},
+        {"name": "lutAP64", **aerial(64)},
+        clamp,
+    ]
+    wall = [{"name": "cur"}, clamp, {"name": "lutAP64", **aerial(64)}]
+    side = [{"name": "cur"}, clamp, {"name": "lutAP64", **aerial(64)}]
+    return [
+        job("cruise-ground", stripes, crop=[700, 60, 550, 260], extra={"pre": PRE_HAZE}),
+        job("hnd-low-day", wall, crop=[400, 400, 800, 300]),
+        job("hnd-low-day-26", wall, crop=[400, 400, 800, 300]),
+        job("sea-mod-low", side, crop=[400, 400, 800, 600]),
+        job("wpac-cruise", side, crop=[400, 100, 800, 800]),
+        job("noon-cumulus", side, crop=[400, 100, 800, 800]),
+    ]
+
+
+# 方案 B：水面看到的反射天空 = 按「水面处往反射方向到大气顶的透射率 tUp」在两者间混合：
+#   tUp → 1（反射方向很快出霾）：沿用原来的 L相机(反射方向) − 内散射；
+#   tUp → 0（掠射、水面埋在霾里）：水面反射的是霾本身，亮度取视线这段霾的「饱和内散射」apL / (1 − apT)，再乘 apT 传到相机
+SKYCAM_SURF = (
+    SKYCAM
+    + "      if (onGround) {\n"
+    "        float sEps = max(dot(reflect(rd, nView), n), 0.0);\n"
+    "        vec3 tUp = transmittanceToTop(BOTTOM, sEps);\n"
+    "        vec3 hazeR = gh.apT * gh.apL / max(vec3(1.0) - gh.apT, vec3(1e-3));\n"
+    "        skyCam = gh.apL + mix(hazeR, max(skyCam - gh.apL, vec3(0.0)), tUp);\n"
+    "      }\n"
+)
+OS_REFL_SURF = (
+    "      vec3 tUpR = transmittanceToTop(BOTTOM, max(dot(reflect(rd, nView), n), 0.0));\n"
+    "      vec3 refl = fView * mix(tView * inscatter / max(vec3(1.0) - tView, vec3(1e-3)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n"
+)
+
+
+def proto2():
+    surf = {"name": "reflSurf", **patch([(SKYCAM, SKYCAM_SURF), (OS_REFL, OS_REFL_SURF)])}
+    vs = [{"name": "cur"}, surf]
+    return [
+        job("hnd-low-day", vs, crop=[400, 400, 800, 300]),
+        job("hnd-low-day-26", vs, crop=[400, 400, 800, 300]),
+        job("cruise-ground", vs, crop=[700, 60, 550, 260]),
+        job("sea-mod-low", vs, crop=[400, 400, 800, 600]),
+        job("wpac-cruise", vs, crop=[400, 100, 800, 800]),
+        job("noon-cumulus", vs, crop=[400, 100, 800, 800]),
+        job("sunset", vs, crop=[400, 100, 800, 800]),
+    ]
+
+
+AP_FETCH = (
+    "  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n"
+    "  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n"
+)
+
+
+def ap_bspline(ax):
+    """空气透视 LUT 沿某一轴（z = 距离层，y = 天顶角行）改成三次 B 样条重建（两次线性取样），看横纹是否消失"""
+    D = {"z": "AERIAL_SIZE.z", "y": "AERIAL_SIZE.y"}[ax]
+    other = {"z": "vec3(uvw.xy, {p})", "y": "vec3(uvw.x, {p}, uvw.z)"}[ax]
+    return (
+        "  { float Dz = " + D + "; float f = uvw." + ax + " * Dz - 0.5; float i = floor(f); float t = f - i;\n"
+        "    float t2 = t * t, t3 = t2 * t;\n"
+        "    float w0 = (1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0, w1 = (4.0 - 6.0 * t2 + 3.0 * t3) / 6.0;\n"
+        "    float w2 = (1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3) / 6.0, w3 = t3 / 6.0;\n"
+        "    float g0 = w0 + w1, g1 = w2 + w3;\n"
+        "    vec3 a = " + other.format(p="(i - 1.0 + w1 / g0 + 0.5) / Dz") + ", b = " + other.format(p="(i + 1.0 + w3 / g1 + 0.5) / Dz") + ";\n"
+        "    gh.apL = (g0 * texture(uAerialInscatterS, a).rgb + g1 * texture(uAerialInscatterS, b).rgb) * uSunIlluminance;\n"
+        "    gh.apT = g0 * texture(uAerialTransmittanceS, a).rgb + g1 * texture(uAerialTransmittanceS, b).rgb; }\n"
+    )
+
+
+def diag_stripes3():
+    vs = [
+        {"name": "cur"},
+        {"name": "bsplineZ", **patch([(AP_FETCH, ap_bspline("z"))])},
+        {"name": "bsplineY", **patch([(AP_FETCH, ap_bspline("y"))])},
+        {"name": "exactAP24", **patch([(GF, EXACT_AP.replace("64.0", "24.0") + GF)])},
+    ]
+    return [
+        job("cruise-ground", vs, crop=[700, 60, 550, 260], extra={"pre": PRE_HAZE}),
+        job("wpac-cruise", vs, crop=[700, 60, 550, 260], extra={"pre": PRE_HAZE}),
+    ]
+
+
 # 暗尾迹：把 0 号飞机摆在窗外正前方 dist km、比我们高 dy km、沿窗面横向飞（尾迹横穿窗口），1 号关掉
 def traffic_pre(dist, dy, back):
     return PRE.replace(
@@ -164,10 +295,10 @@ def diag_contrail():
         {"name": "noTraffic", **patch([("    if (tau > 1e-4) {\n", "    tau = 0.0;\n    if (tau > 1e-4) {\n")])},
     ]
     jobs = []
-    for sc, dist, dy in (("noon-cu-close", 40, 0.3), ("wpac-cruise", 40, 0.6), ("wpac-cruise", 60, -0.3)):
+    for sc, dist, dy in (("noon-cu-close", 40, 0.3), ("noon-cumulus", 60, 0.6), ("sunset", 50, 0.3)):
         j = job(sc, vs, crop=[380, 0, 850, 600])
         j["name"] = f"{sc}@{dist}{'+' if dy > 0 else ''}{dy}"
-        j["pre"] = traffic_pre(dist, dy, -25)
+        j["pre"] = traffic_pre(dist, dy, 12)
         jobs.append(j)
     return jobs
 
@@ -179,6 +310,10 @@ GROUPS = {
     "diag-wall3": diag_wall3,
     "diag-contrail": diag_contrail,
     "diag-stripes2": diag_stripes2,
+    "diag-truth": diag_truth,
+    "proto": proto,
+    "proto2": proto2,
+    "diag-stripes3": diag_stripes3,
 }
 
 if __name__ == "__main__":
