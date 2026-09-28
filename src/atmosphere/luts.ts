@@ -265,21 +265,31 @@ function lutMaterial(fragmentShader: string, uniforms: Record<string, THREE.IUni
 }
 
 // 地平线天光系数（NIGHT-AP-1）：天空视图 LUT 在地平线上第一行、所有方位的亮度均值（「光源照度 = 1」为单位），
-// 按光源高度角查表，只用来判断太阳 / 月亮哪一路主导空气透视、另一路可不可以忽略（相对量，不进画面）。
-// TODO 实测填表
-const HORIZON_SKY_ELEV = [-90, 0, 90];
-const HORIZON_SKY_LOG10 = [-30, -5, -5];
+// 按光源高度角、相机海拔查表，只用来判断太阳 / 月亮哪一路主导空气透视、另一路可不可以忽略（相对量，不进画面）。
+// 数值是 log10，NIGHT-AP-1 用 tmp/nap/sky-scale.mjs 在本程序里实测（无霾、32 位 LUT，RTX 5090）；−30° 以下按最后一段斜率外推
+const HORIZON_SKY_ELEV = [-30, -29, -28, -27, -26, -25, -24, -23, -22, -21, -20, -19, -18, -17, -16, -15, -14, -13, -12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, 0, 2, 5, 10, 20, 30, 45, 60, 90];
+const HORIZON_SKY_ALT_KM = [0.3, 3, 10.7, 13];
+const HORIZON_SKY_LOG10 = [
+  [-15.76, -15.39, -14.9, -14.58, -14.35, -14.06, -13.66, -13.37, -13.16, -12.92, -12.63, -12.15, -11.49, -10.66, -9.4, -9.06, -8.84, -7.95, -7.04, -6.76, -6.58, -5.71, -5.17, -4.93, -4.77, -3.99, -3.62, -3.42, -3.28, -2.55, -1.66, -1.13, -0.99, -1.04, -1.15, -1.28, -1.35, -1.41],
+  [-16.14, -15.67, -15.38, -15.15, -14.83, -14.44, -14.17, -13.97, -13.71, -13.4, -12.9, -12.23, -11.42, -10.03, -9.34, -9.05, -8.65, -7.53, -6.94, -6.68, -6.33, -5.52, -5.08, -4.86, -4.5, -3.86, -3.54, -3.35, -3.15, -1.87, -1.46, -1.23, -1.12, -1.11, -1.14, -1.18, -1.2, -1.23],
+  [-15.43, -15.19, -14.94, -14.53, -14.22, -14, -13.78, -13.48, -12.99, -12.45, -11.87, -10.88, -10.1, -9.57, -9.16, -8.42, -7.72, -7.16, -6.76, -6.27, -5.74, -5.26, -4.92, -4.52, -4.08, -3.66, -3.38, -2.98, -2.15, -1.6, -1.37, -1.21, -1.12, -1.09, -1.09, -1.11, -1.13, -1.15],
+  [-15.54, -15.31, -15, -14.6, -14.33, -14.12, -13.87, -13.58, -13, -12.38, -11.77, -10.66, -9.99, -9.52, -9.08, -8.22, -7.59, -7.1, -6.68, -6.14, -5.65, -5.21, -4.84, -4.43, -4.01, -3.62, -3.35, -2.66, -2.03, -1.56, -1.36, -1.21, -1.12, -1.09, -1.09, -1.11, -1.13, -1.15],
+];
 
-function horizonSkyScale(elevDeg: number, _camR: number) {
-  const e = HORIZON_SKY_ELEV, v = HORIZON_SKY_LOG10;
-  if (elevDeg <= e[0]) return 10 ** v[0];
-  for (let i = 1; i < e.length; i++) {
-    if (elevDeg <= e[i]) {
-      const f = (elevDeg - e[i - 1]) / (e[i] - e[i - 1]);
-      return 10 ** (v[i - 1] + f * (v[i] - v[i - 1]));
-    }
-  }
-  return 10 ** v[v.length - 1];
+function interp(xs: readonly number[], ys: readonly number[], x: number) {
+  const n = xs.length;
+  if (x <= xs[0]) return ys[0] + ((x - xs[0]) * (ys[1] - ys[0])) / (xs[1] - xs[0]);
+  if (x >= xs[n - 1]) return ys[n - 1];
+  let i = 1;
+  while (x > xs[i]) i++;
+  return ys[i - 1] + ((x - xs[i - 1]) * (ys[i] - ys[i - 1])) / (xs[i] - xs[i - 1]);
+}
+
+/** 地平线天光系数（线性值）：光源高度角 elevDeg（度）、相机到地心距离 camR（km） */
+function horizonSkyScale(elevDeg: number, camR: number) {
+  const alt = Math.min(Math.max(camR - 6360, HORIZON_SKY_ALT_KM[0]), HORIZON_SKY_ALT_KM[HORIZON_SKY_ALT_KM.length - 1]);
+  const col = HORIZON_SKY_LOG10.map((row) => interp(HORIZON_SKY_ELEV, row, elevDeg));
+  return 10 ** interp(HORIZON_SKY_ALT_KM, col, alt);
 }
 
 export class Atmosphere {
@@ -314,6 +324,8 @@ export class Atmosphere {
   readonly apState = { dominant: "sun" as "sun" | "moon", second: false, ratio: 0, sunSky: 0, moonSky: 0 };
   /** 调试：false = 只有太阳一路（NIGHT-AP-1 改前的行为，同页 A/B 用） */
   apMoon = true;
+  /** 调试：强制主导光源（量切换那一帧的跳变用）；null = 按估计自动选 */
+  apForce: "sun" | "moon" | null = null;
 
   /**
    * 边界层霾（T18）：所有 LUT 程序共用这两个 uniform 对象（含义见 common.glsl.ts 的 uHaze / uHazeShape）。
@@ -425,6 +437,7 @@ export class Atmosphere {
     // 回差：月亮要比太阳亮 25% 才接管，太阳要比月亮亮 25% 才交回（两路都是 0 时回到太阳，与改前一致）
     if (st.dominant === "sun" && st.moonSky > st.sunSky * 1.25) st.dominant = "moon";
     else if (st.dominant === "moon" && !(st.moonSky * 1.25 > st.sunSky)) st.dominant = "sun";
+    if (this.apForce) st.dominant = this.apForce;
     const moonDom = st.dominant === "moon";
     const dom = moonDom ? moonDir : sunDir;
     const sec = moonDom ? sunDir : moonDir;
