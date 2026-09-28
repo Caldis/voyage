@@ -254,58 +254,95 @@ function markMissing(gate: HostGate, url: string) {
 }
 
 /**
- * 加载图片瓦片；取不到返回 null（调用方留透明、由着色器回退到粗一级，或用兜底颜色）。
- * source 给了就用它的占位图识别；按站点限速与并发（HOST_LIMITS）
+ * 取一张图片瓦片的原始字节（Blob）：按站点限速与并发（HOST_LIMITS），404 / 410 / 占位图负缓存；取不到返回 null。
+ * decode 给了就在 gate 里顺带解码（解码失败按网络错误算，不缓存）
  */
-export function loadBitmap(url: string, source?: ImagerySource): Promise<ImageBitmap | null> {
+async function fetchTile<T>(url: string, source: ImagerySource | undefined, decode: (b: Blob) => Promise<T>): Promise<T | null> {
   const gate = gateOf(url);
+  await gate.acquire();
+  gate.stats.requests++;
+  try {
+    const r = await fetch(url, { mode: "cors" });
+    if (r.status === 404 || r.status === 410) {
+      markMissing(gate, url);
+      return null;
+    }
+    if (!r.ok) {
+      gate.stats.throttled++;
+      return null;
+    }
+    const blob = await r.blob();
+    if (source?.isPlaceholder && (await source.isPlaceholder(blob))) {
+      markMissing(gate, url);
+      return null;
+    }
+    const v = await decode(blob);
+    gate.stats.ok++;
+    return v;
+  } catch {
+    gate.stats.failed++;
+    return null;
+  } finally {
+    gate.release();
+  }
+}
+
+/** 带缓存地取：缓存里放 Promise（同一张瓦片并发请求只发一次）；失败（网络错误、限流、确定没有）都不留在缓存里——
+ * 前两种下次重建时再试，确定没有的由 missing 挡住 */
+function cachedTile<T>(cache: Lru<Promise<T | null>>, url: string, make: () => Promise<T | null>): Promise<T | null> {
   if (missing.has(url)) {
-    gate.stats.missingSkipped++;
+    gateOf(url).stats.missingSkipped++;
     return Promise.resolve(null);
   }
-  let p = bitmaps.get(url);
+  let p = cache.get(url);
   if (!p) {
-    p = (async () => {
-      await gate.acquire();
-      gate.stats.requests++;
-      try {
-        const r = await fetch(url, { mode: "cors" });
-        if (r.status === 404 || r.status === 410) {
-          markMissing(gate, url);
-          return null;
-        }
-        if (!r.ok) {
-          gate.stats.throttled++;
-          return null;
-        }
-        const blob = await r.blob();
-        if (source?.isPlaceholder && (await source.isPlaceholder(blob))) {
-          markMissing(gate, url);
-          return null;
-        }
-        const bmp = await createImageBitmap(blob);
-        gate.stats.ok++;
-        return bmp;
-      } catch {
-        gate.stats.failed++;
-        return null;
-      } finally {
-        gate.release();
-      }
-    })();
-    bitmaps.set(url, p);
-    // 失败（网络错误、限流、确定没有）都不放在位图缓存里：前两种下次重建时再试，确定没有的由 missing 挡住
-    const key = url;
+    p = make();
+    cache.set(url, p);
     p.then((b) => {
-      if (!b) bitmaps.delete(key);
+      if (!b) cache.delete(url);
     });
   }
   return p;
 }
 
-/** 按影像源取一张瓦片（覆盖范围由调用方先用 inBounds 判断，见 clipmap.buildImagery） */
+/**
+ * 加载图片瓦片并在主线程解码（夜光、地形：画布小，主线程拼）；取不到返回 null（调用方用兜底颜色）。
+ * source 给了就用它的占位图识别
+ */
+export function loadBitmap(url: string, source?: ImagerySource): Promise<ImageBitmap | null> {
+  return cachedTile(bitmaps, url, () => fetchTile(url, source, (b) => createImageBitmap(b)));
+}
+
+/**
+ * 影像瓦片的原始字节（G08）：主线程只取回 JPEG，解码和拼接都在地面 Worker 里做（tile-compose.ts），
+ * 主线程不再持有解码后的位图、不再有任何画布读回。Blob 发给 Worker 是引用复制（不拷字节），这里的缓存还能给下次重建复用。
+ * 缓存 1500 张（JPEG 一张约 10–40 KB，满了几十 MB）；解码好的位图缓存在 Worker 那边
+ */
+const blobs = new Lru<Promise<Blob | null>>(1500);
+export function loadImageryBlob(src: ImagerySource, z: number, x: number, y: number): Promise<Blob | null> {
+  const url = src.url(z, x, y);
+  return cachedTile(blobs, url, () => fetchTile(url, src, async (b) => b));
+}
+
+/** Worker 报告这张瓦片解码失败（损坏的数据）：从 Blob 缓存里删掉、记一次 failed，下次重建重取 */
+export function forgetImageryBlob(url: string) {
+  blobs.delete(url);
+  gateOf(url).stats.failed++;
+}
+
+/** G07b 及以前的做法（`ground.imageryInWorker = false` 对照用）：按影像源取一张瓦片并在主线程解码（覆盖范围由调用方先用 inBounds 判断） */
 export function loadImageryTile(src: ImagerySource, z: number, x: number, y: number): Promise<ImageBitmap | null> {
-  return loadBitmap(src.url(z, x, y), src);
+  const url = src.url(z, x, y);
+  if (missing.has(url)) return Promise.resolve(null);
+  let p = bitmaps.get(url);
+  if (!p) {
+    p = loadImageryBlob(src, z, x, y).then((b) => (b ? createImageBitmap(b).catch(() => null) : null));
+    bitmaps.set(url, p);
+    p.then((b) => {
+      if (!b) bitmaps.delete(url);
+    });
+  }
+  return p;
 }
 
 export interface WaterFeatures {

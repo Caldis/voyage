@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { LocalFrame, latToTileY, lonToTileX, tileXToLon, tileYToLat, zoomForResolution } from "./geo";
-import { DEM_MAX_ZOOM, DEM_URL, EOX_S2, GSI_PHOTO, NIGHT_MAX_ZOOM, NIGHT_URL, VECTOR_MAX_ZOOM, imageryStats, inBounds, loadBitmap, loadImageryTile, loadWater } from "./tiles";
-import { buildGroundLevel, type GroundLevelResult, type RoadJob } from "./road-raster";
+import { DEM_MAX_ZOOM, DEM_URL, EOX_S2, GSI_PHOTO, NIGHT_MAX_ZOOM, NIGHT_URL, VECTOR_MAX_ZOOM, forgetImageryBlob, imageryStats, inBounds, loadBitmap, loadImageryBlob, loadImageryTile, loadWater, type ImagerySource } from "./tiles";
+import { buildGroundLevelFrom, type GroundLevelResult, type ImagerySrc, type RoadJob } from "./road-raster";
+import type { ComposeSpec, ComposeTile } from "./tile-compose";
 import { GROUND_RES_DECISION } from "../quality";
 
 /**
@@ -373,7 +374,9 @@ export class GroundClipmap {
       res: RES,
       warm: this.warm,
       warmup: { ...this.warmMs },
-      worker: { ...workerStats, recent: workerStats.recent.slice() },
+      // queued = 发出去还没回来的任务数（G08，看 60× 下有没有积压）
+      worker: { ...workerStats, queued: roadPending.size, recent: workerStats.recent.slice() },
+      stitch: { ...stitchStats, queued: stitchPending.size, recent: stitchStats.recent.slice() },
       draw: { ...drawStats },
       hosts: imageryStats(),
     };
@@ -543,17 +546,20 @@ export class GroundClipmap {
       // G03：高清细节（GSI）也交给 Worker，和 EOX 做「高频取 GSI、低频取 EOX」的合成（imagery-blend.ts）
       // 高清瓦片没在限时内取齐：这一版按纯 EOX 出，记成没有细节，下次重建补上（见 DETAIL_WAIT_MS）
       const detailDone = detail && detailPx !== null && detailPx.complete;
-      if (!detailDone) detailPx?.px?.close();
+      if (!detailDone) closeSrc(detailPx?.px);
       if (gen !== this.generation || i < this.minLevel) {
-        albedo0.close();
-        if (detailDone) detailPx.px?.close();
+        closeSrc(albedo0);
+        if (detailDone) closeSrc(detailPx.px);
         return;
       }
       // G07：直传路径可用时让 Worker 顺带算这一层的 mip 链（没接 GL 时 three 按层上传、整组 generateMipmap，算了也用不上）
       vec.job.mips = this.gl !== null && !this.gpuMips;
       vec.job.mipScratch = this.mipScratchReuse;
       vec.job.waterCpu = this.waterCanvasCpu;
-      const { water, albedo, detailCoverage, albedoMips, waterMips } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailDone ? detailPx.px : null);
+      // G08：影像 / 高清细节先在拼接 Worker 里拼成像素（和合成 Worker 上一级的活并行），再交给合成 Worker
+      const [albedoSrc, detailSrc] = await stitchAsync(albedo0, detailDone ? detailPx.px : null);
+      if (gen !== this.generation || i < this.minLevel) return;
+      const { water, albedo, detailCoverage, albedoMips, waterMips } = await buildGroundLevelAsync(vec.job, albedoSrc, nightRaw, detailSrc);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
       this.queueUpload(
@@ -615,8 +621,16 @@ export class GroundClipmap {
   /** 调试开关（G07b）：true（默认）= Worker 里水体画布走 CPU 栅格，getImageData 不经 GPU 进程读回；false = G07 及以前（同页 A/B 用） */
   waterCanvasCpu = true;
   /** 调试开关（G07b 调查，已否决）：true = 主线程拼影像 / 细节瓦片的画布走 CPU 栅格（Worker 读回位图不再经 GPU 进程，read 阶段 24 → 10 ms），
-   * 但代价搬到主线程：每次建级出现约 59 ms 的长任务（1× 巡航 33 次 / 分钟 > 16.7 ms 帧），所以默认 false。根治见 handoff/G07b.md（瓦片拼接挪进 Worker） */
+   * 但代价搬到主线程：每次建级出现约 59 ms 的长任务（1× 巡航 33 次 / 分钟 > 16.7 ms 帧），所以默认 false。只在 imageryInWorker = false 时有效 */
   imageryCanvasCpu = false;
+  /**
+   * G08：影像 / 高清细节瓦片的解码与拼接在地面 Worker 里做（tile-compose.ts）：主线程只取回 JPEG Blob，连同画布矩形发过去，
+   * 不再持有 GPU 画布、不再有 transferToImageBitmap → Worker 同步读回 GPU 位图（G07b 查出的 read 段尖峰）。
+   * false = G07b 的做法（主线程 GPU 画布拼好、交位图），同页 A/B 用（改后 `rebuildAll()`）
+   */
+  imageryInWorker = true;
+  /** G08：影像 / 高清细节瓦片的矩形按同一行的中间纬度算左右边，东西相邻的瓦片严格对接（见 tileRect）；false = G07b 的矩形（同页 A/B 用，改后 `rebuildAll()`） */
+  tileEdgeShared = true;
   attachGl(renderer: THREE.WebGLRenderer) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
     this.gl = gl;
@@ -832,14 +846,28 @@ export class GroundClipmap {
   /**
    * coarsest：最粗一级。其他级别里没取到的瓦片留成透明（alpha = 0），着色器用粗一级补上；最粗一级没有更粗的，只能涂深海色。
    * fine（G06）：按 RES（2048）选缩放级；false 时按 1024 选（加速航程，请求量不涨），画布上放大。
-   * 返回 ImageBitmap（G06）：瓦片画在 OffscreenCanvas 上、transferToImageBitmap 交给 Worker 读回像素——
-   * 2048² 的 getImageData 是 16 MB，放在主线程就是一个长任务（PERF-9 当时就把它列为残留的尖峰来源）
+   * G08 起返回拼接任务（各瓦片的 JPEG Blob + 画布矩形），Worker 解码、在 CPU 画布上拼、读回（tile-compose.ts）。
+   * imageryInWorker = false 时是 G06–G07b 的做法：瓦片画在主线程的 OffscreenCanvas（GPU 画布）上、transferToImageBitmap 交给 Worker 读回像素
+   * （Worker 那一步是对 GPU 位图的同步读回，1× 巡航约每分钟 1 帧 23–47 ms，handoff/G07b.md）
    */
-  private async buildImagery(size: number, cx: number, cz: number, coarsest: boolean, fine: boolean) {
+  private async buildImagery(size: number, cx: number, cz: number, coarsest: boolean, fine: boolean): Promise<ImagerySrc> {
     const [latC] = this.frame.toGeo(cx, cz);
     let zoom = zoomForResolution(size / (fine ? RES : TILE_RES_COARSE), latC, EOX_S2.maxZoom);
     let cover = this.tileCover(size, cx, cz, zoom, RES);
     while (cover.tiles.length > IMAGERY_MAX_TILES && zoom > 1) cover = this.tileCover(size, cx, cz, --zoom, RES);
+    // G08：只取 Blob，解码 + 拼接交给 Worker。瓦片按覆盖范围的顺序排（与到达顺序无关）
+    if (this.imageryInWorker) {
+      const got: (ComposeTile | null)[] = new Array(cover.tiles.length).fill(null);
+      this.pending += cover.tiles.length;
+      await Promise.all(
+        cover.tiles.map(async (t, k) => {
+          const blob = await loadImageryBlob(EOX_S2, zoom, t.x, t.y);
+          this.pending--;
+          if (blob) got[k] = composeTile(EOX_S2, cover.toPx, zoom, t, blob, this.tileEdgeShared);
+        }),
+      );
+      return composeSpec(coarsest ? "rgb(8, 22, 40)" : null, got);
+    }
     const canvas = new OffscreenCanvas(RES, RES);
     const ctx = canvas.getContext("2d", this.imageryCanvasCpu ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
     ctx.imageSmoothingQuality = "high"; // 瓦片与纹素不是 1:1（缩放级按四舍五入选），缩小时不要走最近邻 / 低质量
@@ -855,9 +883,8 @@ export class GroundClipmap {
         const bmp = await loadImageryTile(EOX_S2, zoom, t.x, t.y);
         this.pending--;
         if (!bmp) return;
-        const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
-        const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        drawTimed(ctx, bmp, ax, ay, bx - ax, by - ay);
+        const r = tileRect(cover.toPx, zoom, t, this.tileEdgeShared);
+        drawTimed(ctx, bmp, r.x, r.y, r.w, r.h);
       }),
     );
     return canvas.transferToImageBitmap();
@@ -867,10 +894,34 @@ export class GroundClipmap {
    * 高清细节层（G03）：国土地理院航拍画到这一级的 RES² 上，没取到的地方留透明（A = 覆盖率）。一张都没取到返回 null
    * （出了日本 / 海上是 404，tiles.ts 负缓存后不再请求）。合成在 Worker 里做（imagery-blend.ts）
    */
-  private async buildDetail(size: number, cx: number, cz: number, heightKm: Float32Array, zoom: number, deadline: number) {
+  private async buildDetail(size: number, cx: number, cz: number, heightKm: Float32Array, zoom: number, deadline: number): Promise<{ px: ImagerySrc | null; complete: boolean } | null> {
     const all = this.tileCover(size, cx, cz, zoom, RES);
     if (all.tiles.length > DETAIL_MAX_TILES) return null;
     const cover = { ...all, tiles: all.tiles.filter((t) => this.detailTileWanted(all.toPx, zoom, t.x, t.y, heightKm)) };
+    if (this.imageryInWorker) {
+      // G08：同 buildImagery，只取 Blob。限时逻辑不变：到点前到的才算，到点还没齐就不等（在途的照常进缓存，给下一次重建用）
+      const got: (ComposeTile | null)[] = new Array(cover.tiles.length).fill(null);
+      let n = 0;
+      let settledN = 0;
+      this.pending += cover.tiles.length;
+      const all$ = Promise.all(
+        cover.tiles.map(async (t, k) => {
+          const blob = await loadImageryBlob(GSI_PHOTO, zoom, t.x, t.y);
+          this.pending--;
+          settledN++;
+          if (!blob || performance.now() > deadline) return;
+          n++;
+          got[k] = composeTile(GSI_PHOTO, cover.toPx, zoom, t, blob, this.tileEdgeShared);
+        }),
+      );
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([all$, new Promise<void>((r) => (timer = setTimeout(r, Math.max(0, deadline - performance.now()))))]);
+      clearTimeout(timer);
+      const complete = settledN === cover.tiles.length;
+      if (n === 0) return complete ? null : { px: null, complete: false };
+      // 没齐的这一版不用（build 里按纯 EOX 出），不必拼
+      return { px: complete ? composeSpec(null, got) : null, complete };
+    }
     // G06：和 buildImagery 一样画在 OffscreenCanvas 上、交 ImageBitmap 给 Worker 读回（2048² 时源与纹素 1:1，1024 时是 2:1 缩小）
     const canvas = new OffscreenCanvas(RES, RES);
     const ctx = canvas.getContext("2d", this.imageryCanvasCpu ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
@@ -885,9 +936,8 @@ export class GroundClipmap {
         settled++;
         if (!bmp || performance.now() > deadline) return;
         got++;
-        const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
-        const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        drawTimed(ctx, bmp, ax, ay, bx - ax, by - ay);
+        const r = tileRect(cover.toPx, zoom, t, this.tileEdgeShared);
+        drawTimed(ctx, bmp, r.x, r.y, r.w, r.h);
       }),
     );
     // 限时：到点还没齐就不等了（在途的请求照常完成、进缓存，给下一次重建用）
@@ -1005,6 +1055,112 @@ export class GroundClipmap {
   }
 }
 
+/**
+ * 一张影像瓦片在这一级画布上的矩形（轴对齐，近似）。
+ * shared = true（G08，默认）：左右边都按这一行瓦片的中间纬度换算。本地坐标按各自纬度的 cos 换算经度（geo.ts），
+ * G07b 以前左边按上沿纬度、右边按下沿纬度算，东西相邻的两张在共用的那条经线上差 |x|·sinφ·Δφ（离原点越远越大，
+ * 第 3 级离原点 30 km 处约 0.7 像素，航线上离原点几百公里时到几个像素）：原点以西是缝、以东是重叠。
+ * 缝在 GPU 画布上被边缘抗锯齿半透明地糊住（影像 A < 1，着色器在缝上部分回退到粗一级），
+ * 挪到 CPU 画布后（边上不做抗锯齿）缝里的像素整个透明，画面上是一条沿经线的暗细线（fuji-day 同页 A/B 最大差 26，G08 发现）。
+ * 按同一纬度算两边后同一行的瓦片严格对接；上下相邻的两行本来就共用同一条纬线（y 只和纬度有关）。
+ * 顺带：矩形角点的最大位置误差从 1 倍缩到 0.5 倍上述差值（原来右上 / 左下角是整个差值）。
+ * shared = false：G07b 的矩形（同页 A/B 用，`ground.tileEdgeShared = false`）
+ */
+function tileRect(toPx: (lat: number, lon: number) => [number, number], zoom: number, t: { x: number; y: number }, shared: boolean) {
+  const latT = tileYToLat(t.y, zoom), latB = tileYToLat(t.y + 1, zoom);
+  const lonL = tileXToLon(t.x, zoom), lonR = tileXToLon(t.x + 1, zoom);
+  if (!shared) {
+    const [ax, ay] = toPx(latT, lonL);
+    const [bx, by] = toPx(latB, lonR);
+    return { x: ax, y: ay, w: bx - ax, h: by - ay };
+  }
+  const latM = tileYToLat(t.y + 0.5, zoom);
+  const ax = toPx(latM, lonL)[0], bx = toPx(latM, lonR)[0];
+  const ay = toPx(latT, lonL)[1], by = toPx(latB, lonL)[1];
+  return { x: ax, y: ay, w: bx - ax, h: by - ay };
+}
+
+/** G08：一张瓦片的拼接条目（矩形见 tileRect） */
+function composeTile(src: ImagerySource, toPx: (lat: number, lon: number) => [number, number], zoom: number, t: { x: number; y: number }, blob: Blob, shared: boolean): ComposeTile {
+  return { key: src.url(zoom, t.x, t.y), blob, ...tileRect(toPx, zoom, t, shared) };
+}
+
+function composeSpec(fill: string | null, got: (ComposeTile | null)[]): ComposeSpec {
+  return { kind: "compose", res: RES, fill, tiles: got.filter((t): t is ComposeTile => t !== null) };
+}
+
+/** 丢弃一份影像来源：位图（G07b 做法）要 close，拼接任务只是几个 Blob 引用，不用管 */
+function closeSrc(s: ImagerySrc | null | undefined) {
+  if (isBitmap(s)) s.close();
+}
+function isBitmap(s: unknown): s is ImageBitmap {
+  return typeof ImageBitmap !== "undefined" && s instanceof ImageBitmap;
+}
+
+// ---- 影像瓦片拼接 Worker（G08-STITCH，tile-compose.worker.ts）：主线程只把 Blob 与矩形发过去，收回 RES² 像素再转给合成 Worker。
+// 起不来或回报出错时停用，拼接任务原样交给合成 Worker 自己拼（同一份代码，只是串在它的关键路径上）----
+let stitchWorker: Worker | null | undefined;
+let stitchReq = 0;
+const stitchPending = new Map<number, (r: [ImagerySrc, ImagerySrc | null] | null) => void>();
+/** 拼接 Worker 每次任务的起止与分阶段时刻（主线程时间轴，`imageryStats.stitch.recent`）：归因帧尖峰用 */
+type StitchTask = { start: number; end: number; ms: number; marks: [string, number][]; decoded: number; hits: number };
+const stitchStats = { count: 0, totalMs: 0, maxMs: 0, decodedCached: 0, aa: false, recent: [] as StitchTask[] };
+
+function disableStitch(msg: string) {
+  if (!stitchWorker) return;
+  console.warn(msg);
+  stitchWorker.terminate();
+  stitchWorker = null;
+  for (const r of stitchPending.values()) r(null);
+  stitchPending.clear();
+}
+
+type StitchReply =
+  | { id: number; albedo: Uint8ClampedArray; detail: Uint8ClampedArray | null; bad: string[]; ms: number; t0Abs: number; marks: [string, number][]; decoded: number; hits: number; aa: boolean; cached: number }
+  | { id: number; error: string };
+
+/** 拼接任务 → 像素（拼接 Worker）；不是拼接任务（G07b 的位图对照）或 Worker 不可用时原样返回，由合成 Worker 处理 */
+async function stitchAsync(albedo: ImagerySrc, detail: ImagerySrc | null): Promise<[ImagerySrc, ImagerySrc | null]> {
+  if (!("kind" in albedo) || (detail && !("kind" in detail))) return [albedo, detail];
+  if (stitchWorker === undefined) {
+    try {
+      stitchWorker = new Worker(new URL("./tile-compose.worker.ts", import.meta.url), { type: "module" });
+      stitchWorker.onmessage = (e: MessageEvent<StitchReply>) => {
+        const d = e.data;
+        const done = stitchPending.get(d.id);
+        stitchPending.delete(d.id);
+        if ("error" in d) {
+          disableStitch(`影像拼接 Worker 出错（${d.error}），改由地面合成 Worker 拼接`);
+          done?.(null);
+          return;
+        }
+        stitchStats.count++;
+        stitchStats.totalMs += d.ms;
+        stitchStats.maxMs = Math.max(stitchStats.maxMs, d.ms);
+        stitchStats.decodedCached = d.cached;
+        stitchStats.aa = d.aa;
+        const start = d.t0Abs - performance.timeOrigin;
+        stitchStats.recent.push({ start, end: start + d.ms, ms: d.ms, marks: d.marks, decoded: d.decoded, hits: d.hits });
+        if (stitchStats.recent.length > WORKER_RECENT) stitchStats.recent.shift();
+        for (const k of d.bad) forgetImageryBlob(k);
+        done?.([d.albedo, d.detail]);
+      };
+      stitchWorker.onerror = (e) => disableStitch(`影像拼接 Worker 出错（${e.message}），改由地面合成 Worker 拼接`);
+    } catch {
+      stitchWorker = null;
+    }
+  }
+  const w = stitchWorker;
+  if (!w) return [albedo, detail];
+  const id = ++stitchReq;
+  const r = await new Promise<[ImagerySrc, ImagerySrc | null] | null>((resolve) => {
+    stitchPending.set(id, resolve);
+    // Blob 是引用复制（不拷字节），主线程的 Blob 缓存照常留着给下次重建用
+    w.postMessage({ id, albedo, detail });
+  });
+  return r ?? [albedo, detail];
+}
+
 /** G07b：主线程拼瓦片 drawImage 的耗时（imageryStats.draw），画布换 CPU 栅格时看主线程代价 */
 const drawStats = { count: 0, totalMs: 0, maxMs: 0 };
 function drawTimed(ctx: OffscreenCanvasRenderingContext2D, bmp: ImageBitmap, x: number, y: number, w: number, h: number) {
@@ -1017,62 +1173,94 @@ function drawTimed(ctx: OffscreenCanvasRenderingContext2D, bmp: ImageBitmap, x: 
 }
 
 // ---- 地面栅格化的 Worker（T08 道路，PERF-9 并入水体/夜光）：一个常驻 Worker，按请求号对应回调；
-// 起不来时在主线程同步算（buildGroundLevel 用的是 OffscreenCanvas，主线程 / Worker 都能跑）----
-// 像素缓冲区是转移过去的（主线程这边随即失效），所以 Worker 中途出错时没法在这里补算：让这次构建失败，
+// 起不来（或回报出错）时在主线程算（buildGroundLevelFrom 同一份代码，主线程 / Worker 都能跑）----
+// 夜光像素缓冲区是转移过去的（主线程这边随即失效），所以 Worker 中途出错时没法在这里补算：让这次构建失败，
 // build 的 finally 清掉 building 标志，下一帧 update 发现这一级还没建好会重建，那时已经改走主线程
 let roadWorker: Worker | null | undefined;
 /** Worker 每级合成耗时（G06 诊断：`__voyage.ground.imageryStats.worker`）。
  * recent（G07b）：最近 WORKER_RECENT 次任务的起止时刻（主线程 performance.now() 时间轴）与分阶段耗时，归因帧尖峰用 */
-type WorkerTask = { start: number; end: number; ms: number; readMs: number; mipMs: number; marks: [string, number][] };
+/** G08：decoded / hits = 这次解码了几张瓦片 / 命中 Worker 解码缓存几张；decodedCached = Worker 解码缓存里现有几张 */
+type WorkerTask = { start: number; end: number; ms: number; readMs: number; mipMs: number; marks: [string, number][]; decoded: number; hits: number };
 const WORKER_RECENT = 64;
-const workerStats = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0, recent: [] as WorkerTask[] };
+const workerStats = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0, decodedCached: 0, recent: [] as WorkerTask[] };
 let roadReq = 0;
 const roadPending = new Map<number, { resolve: (r: GroundLevelResult) => void; reject: (e: Error) => void }>();
 
+/** 记一次合成任务的起止与分阶段时刻（Worker 回报的，或主线程兜底自己量的） */
+function recordTask(d: { ms: number; t0Abs: number; phases?: GroundLevelResult["phases"]; cached?: number }) {
+  workerStats.count++;
+  workerStats.totalMs += d.ms;
+  workerStats.maxMs = Math.max(workerStats.maxMs, d.ms);
+  workerStats.lastMs = d.ms;
+  const start = d.t0Abs - performance.timeOrigin;
+  workerStats.recent.push({
+    start, end: start + d.ms, ms: d.ms, readMs: d.phases?.readMs ?? 0, mipMs: d.phases?.mipMs ?? 0, marks: d.phases?.marks ?? [],
+    decoded: d.phases?.decoded ?? 0, hits: d.phases?.hits ?? 0,
+  });
+  if (workerStats.recent.length > WORKER_RECENT) workerStats.recent.shift();
+  if (d.cached !== undefined) workerStats.decodedCached = d.cached;
+}
+
 function buildGroundLevelAsync(
   job: RoadJob,
-  albedo: ImageBitmap,
+  albedo: ImagerySrc,
   nightRaw: Uint8ClampedArray,
-  detail: ImageBitmap | null,
+  detail: ImagerySrc | null,
 ): Promise<GroundLevelResult> {
   if (roadWorker === undefined) {
     try {
       roadWorker = new Worker(new URL("./road-raster.worker.ts", import.meta.url), { type: "module" });
-      roadWorker.onmessage = (e: MessageEvent<GroundLevelResult & { id: number; ms: number; t0Abs: number }>) => {
-        workerStats.count++;
-        workerStats.totalMs += e.data.ms;
-        workerStats.maxMs = Math.max(workerStats.maxMs, e.data.ms);
-        workerStats.lastMs = e.data.ms;
-        const start = e.data.t0Abs - performance.timeOrigin;
-        workerStats.recent.push({ start, end: start + e.data.ms, ms: e.data.ms, readMs: e.data.phases?.readMs ?? 0, mipMs: e.data.phases?.mipMs ?? 0, marks: e.data.phases?.marks ?? [] });
-        if (workerStats.recent.length > WORKER_RECENT) workerStats.recent.shift();
-        const req = roadPending.get(e.data.id);
-        roadPending.delete(e.data.id);
+      roadWorker.onmessage = (e: MessageEvent<(GroundLevelResult & { id: number; ms: number; t0Abs: number; bad: string[]; cached: number }) | { id: number; error: string }>) => {
         const d = e.data;
+        const req = roadPending.get(d.id);
+        roadPending.delete(d.id);
+        if ("error" in d) {
+          // Worker 里合成失败（多半是不支持 OffscreenCanvas 2D，Safari 16.4 以前）：停用 Worker，这次构建失败，
+          // 下一帧 update 重建时改在主线程算（同一份代码，tile-compose.ts / road-raster.ts）
+          disableWorker(`地面合成 Worker 出错（${d.error}），改在主线程计算`);
+          req?.reject(new Error(d.error));
+          return;
+        }
+        recordTask(d);
+        for (const k of d.bad) forgetImageryBlob(k);
         req?.resolve({ water: d.water, albedo: d.albedo, detailCoverage: d.detailCoverage, albedoMips: d.albedoMips, waterMips: d.waterMips });
       };
-      roadWorker.onerror = (e) => {
-        console.warn("地面栅格化 Worker 出错，改在主线程计算", e.message);
-        roadWorker?.terminate();
-        roadWorker = null;
-        for (const req of roadPending.values()) req.reject(new Error("地面栅格化 Worker 出错"));
-        roadPending.clear();
-      };
+      roadWorker.onerror = (e) => disableWorker(`地面合成 Worker 出错（${e.message}），改在主线程计算`);
     } catch {
       roadWorker = null;
     }
   }
   if (!roadWorker) {
-    return Promise.resolve(buildGroundLevel(job, albedo, nightRaw, detail));
+    // 主线程兜底：同一份代码（解码 + CPU 画布拼接会在主线程上形成长任务，只是保证功能）
+    const t0 = performance.now();
+    return buildGroundLevelFrom(job, albedo, nightRaw, detail, null).then((r) => {
+      recordTask({ ms: performance.now() - t0, t0Abs: performance.timeOrigin + t0, phases: r.phases });
+      for (const k of r.bad) forgetImageryBlob(k);
+      return r;
+    });
   }
   const id = ++roadReq;
   const worker = roadWorker;
   return new Promise((resolve, reject) => {
     roadPending.set(id, { resolve, reject });
-    // 瓦片水体/道路几何数据复制过去（还留在 LRU 缓存里给下次重建用），像素缓冲区与 ImageBitmap 转移（不复制）
-    const transfer: Transferable[] = detail ? [albedo, nightRaw.buffer, detail] : [albedo, nightRaw.buffer];
+    // 瓦片水体/道路几何数据、影像 Blob（拼接 Worker 停用时）复制过去（Blob 只复制引用；都还留在 LRU 缓存里给下次重建用），
+    // 夜光与拼好的影像像素缓冲区、（G07b 做法的）ImageBitmap 转移（不复制）
+    const transfer: Transferable[] = [nightRaw.buffer];
+    for (const s of [albedo, detail]) {
+      if (s instanceof Uint8ClampedArray) transfer.push(s.buffer);
+      else if (isBitmap(s)) transfer.push(s);
+    }
     worker.postMessage({ id, job, albedo, nightRaw, detail }, transfer);
   });
+}
+
+function disableWorker(msg: string) {
+  if (!roadWorker) return;
+  console.warn(msg);
+  roadWorker.terminate();
+  roadWorker = null;
+  for (const req of roadPending.values()) req.reject(new Error("地面合成 Worker 已停用"));
+  roadPending.clear();
 }
 
 /** 把一级的高度图 / 水体遮罩压成 GRID² 的粗网格（最高点、平均高度、陆地比例），CPU 侧查询用（T18） */
