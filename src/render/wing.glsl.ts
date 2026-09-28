@@ -528,7 +528,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
   float res = 1.0;
   // 求交的步数上限：中心射线贴着表面掠射（外轮廓附近）时可以延长到 3 倍，见下面「步数用完」一段
   int limit = marchSteps;
-  // 外轮廓解析覆盖率（W-EDGE，见法线段末尾）：探测段 ≤ 13 步、延续段 ≤ 64 步，只有中心射线（带自阴影的）会走
+  // 外轮廓解析覆盖率（W-EDGE，见法线段末尾）：探测段 ≤ 14 步、延续段 ≤ 64 步，只有中心射线（带自阴影的）会走
   int total = marchSteps * 3 + 4 + shadowSteps + (shadowSteps > 0 ? 80 : 0);
   // w.cov > 1.5：解析覆盖率待定（W-EDGE），像素中心离外轮廓 w.cov − 3 个像素（外正内负），循环结束后按 wingEdgeCov 出覆盖率。
   // 探测段（phase 3）不另开变量（冷编译对「跨循环活着的变量」很敏感），借用法线段用完的：
@@ -538,7 +538,13 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
     float d = sdWing(q);
     if (phase == 0) {
       float fp = pa * t;                    // 这里一个像素多宽（米）
-      float hthr = shadowSteps > 0 ? 0.05 : 0.4;   // 试验：中心射线命中阈值
+      // 命中阈值：子射线 0.4 个像素；中心射线 0.05 个像素（W-EDGE）。中心射线按 0.4 算命中时，离表面 0.05–0.4 个像素的擦边射线
+      // 也进探测段，探测段第一步就往上、深度取命中那一步的距离场值——它取决于步进落点，逐帧乱跳（sunset 主翼前缘飞行中爬行翻倍）。
+      // 阈值小了这些射线接着走，按「没打中」用外侧解析覆盖率（最近距离取自球体追踪的小步，误差约 0.01）。
+      // 着色点仍取第一次进到 0.4 个像素以内的那一步（w.t，见下面的 else 分支）：着色点落到真表面上时，夜里被翼尖灯照亮的薄边
+      // （小翼后缘、翼尖端面）法线极端，单样本一串白点逐帧闪（夜间「翼尖灯与主翼前缘」闪烁像素 15 → 60）。
+      // 真命中那一步记在 tBest（命中以后 tBest 不再用于「最近点」），探测段从它出发
+      float hthr = shadowSteps > 0 ? 0.05 : 0.4;
       bool done = false;
       if (d < 0.4 * fp && j == 5 && gWingPart != w.part) {
         // 延续段（W-EDGE，j == 5）打到别的部件（短舱压在翼面上、小翼前缘压在主翼上……）：轮廓背后还是机翼，
@@ -547,15 +553,18 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         w.cov = 1.0;
         phase = 2;
       } else if (d < hthr * fp && j != 5) {
-        w.t = t;
+        if (w.t < 0.0) { w.t = t; dHit = d; }
+        tBest = t;
         w.cov = 1.0;
         w.part = gWingPart;
         w.edge = grazed;
         w.inner = grazed;
-        dHit = d;
         done = true;
       } else {
         float r = d / fp;
+        // 中心射线进到 0.4 个像素以内：先记下着色点（旧的命中点）接着走；又离开了（擦过前面的部件、内轮廓）就作废
+        if (d < 0.4 * fp && w.t < 0.0 && j != 5 && shadowSteps > 0) { w.t = t; dHit = d; }
+        else if (d >= 0.4 * fp && j != 5 && w.t >= 0.0) w.t = -1.0;
         if (r < best) { best = r; tBest = t; partBest = gWingPart; }
         // 擦边判定取 2 个像素（W-STAIR）：旧版取 1 个像素，球体追踪的采样点常常跨过最近点附近（步长 ≈ 0.6·d），
         // 同一条内轮廓（整流罩后缘压在襟翼上）上的像素一个判成边缘、一个没判上，超采样隔一个做一个，边上一串虚线似的台阶
@@ -671,15 +680,17 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         w.nA = n;
         w.nGeo = nFlat;
         // 擦边没打中：解析覆盖率（法线在最近点处，正好垂直于视线，投到屏幕上就是轮廓的法向）
-        // W-EDGE：打中了、离外轮廓可能不远（曲率估计不到 3 个像素，或 n·v < 0.12——拉普拉斯曲率逐像素跳，只按 1.5 像素判
-        // 会漏掉贴着轮廓、却算成覆盖率 1 的像素）、不是内轮廓的中心射线，先探测「像素中心在轮廓里面多深」，
-        // 再看轮廓背后是不是窗外，是的话按解析覆盖率出结果、不做边缘超采样（见下面的探测段、延续段）
+        // W-EDGE：打中了、不是内轮廓的中心射线，先探测「像素中心在轮廓里面多深」，再看轮廓背后是不是窗外，
+        // 是的话按解析覆盖率出结果、不做边缘超采样（见下面的探测段、延续段）。
+        // 每个命中都要验：曲率判远（silPx ≥ 3 且 n·v ≥ 0.12）的先只在 0.75 个像素深处采一次（n.z = 13 标记），够深（> 0.71 像素）
+        // 就是覆盖率 1，不够再从头探测。park 版只探测曲率判近的：拉普拉斯曲率逐像素跳、折角轮廓（小翼后缘）上是 0，
+        // 同一个像素逐帧在「不探测、覆盖率 1」和「探测、≈ 0.5」之间切，飞行中沿轮廓爬（sunset 小翼后缘最明显）
         if (w.cov == 1.0 && !grazed && shadowSteps > 0 && (uWingEdgeAA == 1 || uWingEdgeAA == 2) && (uWingDebug & 16384) == 0) {
           bool nearSil = silPx < 3.0 || dot(nFlat, -dA) < 0.12;
           phase = 3;
           n = vec3(0.0, max(dot(nFlat, -dA), 0.02), nearSil ? 0.0 : 13.0);
-          sumD = dHit;
-          t = w.t + (nearSil ? 0.15 : 0.75) * pa * w.t / n.y;
+          sumD = min(dHit, 0.0);
+          t = tBest + (nearSil ? 0.15 : 0.75) * pa * w.t / n.y;
         } else phase = 2;
         // 不要自阴影的调用（边缘超采样的子射线，沿用中心射线的阴影）到这里就结束。
         // 以前 shadowSteps = 0 只是少算了循环总数，阴影段照样走到循环用完（子射线 64·3+4 次里剩下的一百多次），
@@ -698,15 +709,18 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
       } else if (d <= sumD && n.z < 12.0) {
         dHit = sumD;
         sumD = d;
-        n.x = t - w.t;
+        n.x = t - tBest;
         n.z += 1.0;
         t += dS;
       } else if (n.z > 12.5) {
+        // 曲率判远的一次性验深没过：从入口重新按小步探测
         n.z = 0.0;
-        t = w.t + 0.15 * pa * w.t / n.y;
+        t = tBest + 0.15 * pa * w.t / n.y;
       } else if (d <= sumD) {
-        // 走完还没见底：放弃；折角（薄后缘、薄板正对视线、盒子拼接的棱）：最低点是两个面的交线，两侧按面的斜率一次方升降，
-        // |最小值| 是到「另一面」的距离、不是到轮廓的距离，当成轮廓会把整条薄后缘变成半透明——这两种照旧超采样
+        // 走完还没见底：放弃，照旧（w.edge 的像素超采样）。
+        // park 版这里还有「折角 → 超采样」（最低点两侧的差 > 0.6·斜率·步长）：判据随采样相位来回翻，
+        // 解析覆盖率与超采样（子射线命中阈值 0.4 像素，偏高约 +0.15）逐帧切换，是小翼前缘飞行中爬行的主因之一，去掉了。
+        // 折角的 |最小值| 按楔形几何（两面斜率都不大时）本来就接近到棱的屏幕距离
         phase = 2;
       } else {
         // 深度另取几何估计：光滑凸面的弦上最低点在弦中点，深度 = 入射斜率 × 半弦长 / 2（圆截面精确）。盒子式拼接 / 按比例缩放的部件
@@ -720,7 +734,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
           w.cov = 3.0 + sEdge;
           j = 5;
           phase = 0;
-          t = w.t + 2.0 * n.x + pa * w.t;
+          t = tBest + 2.0 * n.x + pa * w.t;
           limit = i + 64;
         }
       }
