@@ -251,6 +251,7 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
   float covSum = 0.0;
   int n = 1;
   float single = 1.0;  // 1 = 只有中心射线（解析覆盖率），0 = 超采样
+  float covA = 1.0;
   float t0 = tStart;
   float tJ = -1.0;
   const int SUB_MIN = 8;
@@ -315,6 +316,18 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
       // 调试：超采样的像素染成品红（亮度不变，不影响自动曝光）
       if (uWingEdgeAA > 1 && single < 0.5) col = vec3(1.0, 0.0, 1.0) * dot(col, vec3(0.2126, 0.7152, 0.0722)) * 1.4;
     }
+    // W-EDGE：解析覆盖率的像素只有中心一个样本，轮廓上的极亮点（夕阳在短舱唇口上的镜面反光、夜里翼尖灯照亮的薄边）
+    // 随像素中心落点逐帧忽有忽无，飞行中一闪一闪（光晕还会把它放大成一团）。中心样本比背后窗外亮 3 倍以上时，
+    // 改走超采样取色 + 下面的去亮点，覆盖率仍用解析值（covA）。1.5 倍时商务舱正午小翼前缘多闪一些，3 倍够用
+    if (k == 0 && single > 0.5 && c < 1.0 && uWingEdgeAA > 0 && dot(col, vec3(0.2126, 0.7152, 0.0722)) > 3.0 * refL) {
+      n = uWingEdgeAA == 3 ? 1 : 5;
+      single = 0.0;
+      covA = c;
+      partC = w.part;
+      nC = w.nA;
+      shC = w.shadow;
+      t0 = max(tStart, w.t - 4.0 * pa * w.t);
+    }
     if (single > 0.5) {
       acc += col * c;
       covSum += c;
@@ -349,7 +362,7 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     }
   }
   if (covSum <= 0.0) return vec4(0.0);
-  return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.2);
+  return vec4(acc / covSum, single > 0.5 ? covSum : (covA < 1.0 ? covA : covSum * 0.2));
 }
 
 // 翼尖的航行灯（右绿左红）、白色频闪、尾灯：小光源 + 周围的光晕（光晕靠后面的眩光处理放大）；
