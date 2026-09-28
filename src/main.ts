@@ -7,6 +7,7 @@ import { Atmosphere } from "./atmosphere/luts";
 import { HazeModel } from "./atmosphere/haze";
 import { CLOUD_PRESETS, Clouds, createCloudUniforms } from "./clouds/clouds";
 import { generateCloudNoise } from "./clouds/noise";
+import { FarTowers } from "./clouds/far-towers";
 import { Bloom } from "./render/bloom";
 import { Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
@@ -114,6 +115,9 @@ const pickOutside = () => groundDetail.pick(renderer, state.groundOn ? state.alt
 const ocean = new OceanWaves(renderer);
 Object.assign(sceneMat.uniforms, ocean.uniforms);
 const clouds = new Clouds(pass, atmosphere, cloudUniforms, sceneMat.uniforms);
+// TW02 远景对流塔层：独立小程序，第一次有远塔时后台编译，叠进云步进的 raw（clouds/far-towers.ts）
+const farTowers = new FarTowers(renderer, pass, atmosphere, sceneMat.uniforms);
+clouds.afterMarch = (raw) => farTowers.render(raw);
 const exposure = new Exposure(pass);
 const traffic = new Traffic();
 const weather = new WeatherSystem(cloudUniforms);
@@ -577,6 +581,7 @@ function renderFrame(now: number) {
   // 只改 dt 会让「这一帧」仍然用不同的抖动相位重新光线步进一次，画面会有肉眼看不出但截图能测出的残留噪声。
   // DX-22：`cloudLive` 时反过来——其余状态仍然冻结（dt=0，flightResult.motion 恒为 0），但云每次真实 rAF
   // 调用都照常渲染，用来看云单独的时间波动（`__voyage.freeze(true, { cloudLive: true })`）。
+  farTowers.update(director.active && !rail.active ? director.weather.farTowerCells(curLat, curLon) : null, (la, lo) => ground.localFrame.toLocal(la, lo), cloudUniforms.uCloudOffset.value, state.simTime, camBasis, c2w);
   if (!frozenNow || cloudLive) clouds.render(flightResult.motion, camBasis, c2w);
   u.uClouds.value = clouds.texture;
   ocean.update(now / 1000, state.wind, cloudUniforms.uCloudOffset.value);
@@ -793,4 +798,4 @@ function benchFrame(n = 10) {
 // （README「着色器编译」坑点，PERF-1）。以前 dev-browser.mjs 只能退而求其次统一绑到 hdrOutside。
 // PERF-14 合并（座椅拆成单独 pass）带来 seatMat / hdrSeat（座椅材质与目标）、wingVariant（机翼湿窗变体，
 // WingWetVariant 实例，--material 用它的 pick() 结果当「当前实际画的变体」，同 clouds.marchMat 的做法）。
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, softwareRenderer, atmosphere, rays, focus, headLimits, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, softwareRenderer, atmosphere, rays, farTowers, focus, headLimits, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };
