@@ -77,6 +77,12 @@ export const SCENES = [
   { name: "route-hnd-cts", p: { preset: "hnd-cts", time: 990, coverage: 0.25, "wing-pos": "8" }, ground: true },
   // DX-07：hnd-cts 21:30 本地，同一个 2026-01-16 月亮高度 −80.4°，同样是无月夜
   { name: "route-hnd-cts-night", p: { preset: "hnd-cts", date: "2026-01-16", time: 1290, coverage: 0.1, seat: "left", "cabin-light": false, "wing-pos": "8" }, ground: true },
+  // G08c：瓦片竖缝回归。fuji 原点以西 111.74 km（约 35.0°N、137.72°E 的山地）、1.2 km 低空：这里正好压着一条 z12 地形瓦片边，
+  // 旧矩形在高度图 L0–L5 每级留一条 0 m 竖缝（L0 约 125 m 宽，两侧 590–740 m），heightAt 在缝上返回 0。日期写死只为太阳位置可复现
+  { name: "fuji-west-seam-low", p: { preset: "fuji", date: "2026-01-16", time: 720, altitude: 1.2, coverage: 0, "wing-pos": "-4" }, offset: [-111.74, 0], ground: true },
+  // G08c：1 km 低空夜城、原点以西 97 km（约 36.2°N、139.22°E，按经纬度推算在埼玉县本庄市附近的平原），正压着 z8 夜光瓦片边 139.21875°E：
+  // 旧矩形在夜光 L0 留约 1.4 km 宽的无灯带。无月夜（hnd-cts 21:30、2026-01-16，月亮 −80.4°，同 route-hnd-cts-night）
+  { name: "night-city-low-west", p: { preset: "hnd-cts", date: "2026-01-16", time: 1290, altitude: 1, coverage: 0.1, seat: "left", "cabin-light": false, "wing-pos": "8" }, offset: [-97, 0], ground: true },
   { name: "economy-ahead", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "economy" }, head: [-0.42, 0.1, -0.5] },
   // T09：夜间无月（2026-05-15 22:30，残月在地平线下 53°）、关舱灯（全关）、南海上空、左座朝东南：人马座大星云低低地在窗正中
   { name: "night-sea-milkyway", p: { preset: "scs", seat: "left", date: "2026-05-15", time: 1350, coverage: 0.15, "cabin-light": "off", "wing-pos": "-4" } },

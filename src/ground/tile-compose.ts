@@ -1,6 +1,7 @@
 /**
  * 影像瓦片拼接（G08-STITCH）：把一级 clipmap 要的影像 / 高清细节瓦片（主线程取回的 JPEG Blob）解码、画到 RES² 的 CPU 画布上、读回像素。
- * 在地面栅格化 Worker 里跑（road-raster.worker.ts）；Worker 不可用时主线程用同一份代码兜底（clipmap.ts 的 buildGroundLevelAsync）。
+ * 主要在单独的拼接 Worker 里跑（tile-compose.worker.ts，和合成 Worker 并行）；拼接 Worker 停用后由合成 Worker（road-raster.worker.ts）
+ * 自己拼，合成 Worker 也停用后退到主线程（clipmap.ts 的 buildGroundLevelAsync），三处用同一份代码。
  *
  * 为什么挪进 Worker（handoff/G07b.md、G08-STITCH.md）：G06–G07b 是主线程在 GPU 加速的 OffscreenCanvas 上拼瓦片、
  * transferToImageBitmap 交给 Worker，Worker 再 drawImage 到 CPU 画布、getImageData——这一步是对 GPU 资源的同步读回（16 MB），
@@ -146,14 +147,13 @@ export async function composeTiles(spec: ComposeSpec, cache: DecodedCache | null
 }
 
 /**
- * 按「像素中心落在矩形里」画一张瓦片，边上不做覆盖率抗锯齿（G08 发现）。
- * 瓦片矩形的边是小数：CPU 画布的 drawImage 对边上像素按覆盖率混合，相邻两张瓦片在接缝像素上各盖一部分，
- * 叠出来 A < 1——影像 A 通道 < 0.5 是「缺影像比例」，着色器在这条缝上回退到粗一级，画面上就是一条沿瓦片边的暗细线
- * （fuji-day 同页 A/B 最大差 26，肉眼可见）。GPU 画布（G07b 以前）画位图不做边缘抗锯齿，没有这个问题。
- * 做法：先按像素中心规则裁一个整像素的矩形（整数边的裁剪没有部分覆盖），在里面先画一张四边各外扩 1 像素的垫底，
+ * 按「像素中心落在矩形里」画一张瓦片，保证相邻瓦片的接缝像素 A = 1（G08）。
+ * 实测（handoff/G08-seam.mjs）：Chrome 的 CPU 画布（willReadFrequently）对轴对齐的 drawImage **不**做边缘抗锯齿，
+ * 本来就是像素中心规则，所以直接画；GPU 画布（G07b 以前）才做覆盖率抗锯齿（接缝 A = 158–183，着色器在缝上部分回退到粗一级）。
+ * 相邻瓦片的矩形由 tileRect 保证在浮点上完全相同（同一行按中间纬度对接），接缝两边的像素各归一张，没有缝也没有重叠。
+ * 只有探测到这个线程的 CPU 画布**做了**边缘抗锯齿（别的浏览器，见 drawAntialiased）时才走慢路径：
+ * 先按像素中心规则裁一个整像素的矩形（整数边的裁剪没有部分覆盖），在里面先画一张四边各外扩 1 像素的垫底，
  * 再在原矩形上画正片——内部像素完全被正片盖住，边上像素是「正片 × 覆盖率 + 垫底 × 余下」，颜色就是瓦片边缘的颜色，A = 1。
- * 相邻瓦片的矩形不严格对接（本地坐标按各自纬度的 cos 换算经度，东西向相邻的两张边上差零点几到几个像素），
- * 重叠处后画的赢（spec 顺序），缝隙处照旧透明，和 GPU 画布一致
  */
 function drawTileCrisp(ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D, b: ImageBitmap, t: ComposeTile) {
   // Chrome 的 CPU 画布对轴对齐的 drawImage 本来就不做边缘抗锯齿（实测 handoff/G08-seam.mjs：与这里的裁剪画法逐字节相同），
