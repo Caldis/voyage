@@ -186,9 +186,10 @@ try {
       log(j.name, vr.name, "完成");
     }
     // compare: [[a, b, mask]]：mask 变体（不画机翼）与 b 逐位相同的像素算「非机翼」，报告这些像素上 a 与 b 的差
-    for (const [a, b, mk] of j.compare ?? []) {
-      const r = await page.evaluate(({ a, b, mk }) => {
-        const A = window.__wsBufs[a], B = window.__wsBufs[b], M = mk ? window.__wsBufs[mk] : null;
+    for (const [a, b, mk, cv] of j.compare ?? []) {
+      const r = await page.evaluate(({ a, b, mk, cv }) => {
+        const A = window.__wsBufs[a], B = window.__wsBufs[b], M = mk ? window.__wsBufs[mk] : null, C = cv ? window.__wsBufs[cv] : null;
+        let nonWingDiffCovered = 0;   // 其中「覆盖率变体」R 通道（wing.a）> 0 的：本来就是机翼像素，只是旧版恰好画成和背景逐位相同
         const pts = []; let nonWing = 0, nonWingDiffPx = 0, nonWingMax = 0, diffPx = 0, maxAll = 0;
         for (let p = 0; p < A.length; p += 4) {
           let d = 0, isNon = !!M;
@@ -197,10 +198,10 @@ try {
             if (M && M[p + c] !== B[p + c]) isNon = false;
           }
           if (d > 0) { diffPx++; maxAll = Math.max(maxAll, d); }
-          if (isNon) { nonWing++; if (d > 0) { nonWingDiffPx++; nonWingMax = Math.max(nonWingMax, d); if (pts.length < 12) { const q = p / 4, W = window.__voyage.hdrWing.width, H = window.__voyage.hdrWing.height; pts.push([q % W, H - 1 - Math.floor(q / W), +d.toPrecision(3)]); } } }
+          if (isNon) { nonWing++; if (d > 0) { nonWingDiffPx++; if (C && C[p] > 0) nonWingDiffCovered++; nonWingMax = Math.max(nonWingMax, d); if (pts.length < 12) { const q = p / 4, W = window.__voyage.hdrWing.width, H = window.__voyage.hdrWing.height; pts.push([q % W, H - 1 - Math.floor(q / W), +d.toPrecision(3)]); } } }
         }
-        return { a, b, mask: mk, nonWing, nonWingDiffPx, nonWingMax, diffPx, maxAll, nonWingPts: pts };
-      }, { a, b, mk });
+        return { a, b, mask: mk, nonWing, nonWingDiffPx, nonWingDiffCovered, nonWingMax, diffPx, maxAll, nonWingPts: pts };
+      }, { a, b, mk, cv });
       log(j.name, "对照", JSON.stringify(r));
       fs.appendFileSync(path.join(OUT, "compare.jsonl"), JSON.stringify({ job: j.name, ...r }) + "\n");
     }

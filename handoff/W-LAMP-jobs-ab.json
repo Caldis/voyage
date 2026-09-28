@@ -33,6 +33,10 @@
     "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
    },
    {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
     "name": "old-strobe",
     "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
    },
@@ -54,12 +58,19 @@
    [
     "new",
     "old",
-    "nowing"
+    "nowing",
+    "mask"
    ],
    [
     "new-strobe",
     "old-strobe",
-    "nowing-strobe"
+    "nowing-strobe",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
    ]
   ]
  },
@@ -97,6 +108,10 @@
     "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
    },
    {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
     "name": "old-strobe",
     "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
    },
@@ -118,12 +133,19 @@
    [
     "new",
     "old",
-    "nowing"
+    "nowing",
+    "mask"
    ],
    [
     "new-strobe",
     "old-strobe",
-    "nowing-strobe"
+    "nowing-strobe",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
    ]
   ]
  },
@@ -156,6 +178,10 @@
     "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
    },
    {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
     "name": "old-strobe",
     "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
    },
@@ -177,12 +203,19 @@
    [
     "new",
     "old",
-    "nowing"
+    "nowing",
+    "mask"
    ],
    [
     "new-strobe",
     "old-strobe",
-    "nowing-strobe"
+    "nowing-strobe",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
    ]
   ]
  },
@@ -214,6 +247,10 @@
     "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);"
    },
    {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
     "name": "old-strobe",
     "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
    },
@@ -235,12 +272,19 @@
    [
     "new",
     "old",
-    "nowing"
+    "nowing",
+    "mask"
    ],
    [
     "new-strobe",
     "old-strobe",
-    "nowing-strobe"
+    "nowing-strobe",
+    "mask"
+   ],
+   [
+    "old2",
+    "old",
+    "nowing"
    ]
   ]
  },
@@ -271,13 +315,19 @@
    {
     "name": "old2",
     "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
    }
   ],
   "compare": [
    [
     "new",
     "old",
-    "nowing"
+    "nowing",
+    "mask"
    ],
    [
     "old2",
@@ -313,13 +363,19 @@
    {
     "name": "old2",
     "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
    }
   ],
   "compare": [
    [
     "new",
     "old",
-    "nowing"
+    "nowing",
+    "mask"
    ],
    [
     "old2",
@@ -361,13 +417,19 @@
    {
     "name": "old2",
     "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "mask",
+    "hdr": "rgb",
+    "js": "__wsPatch([['gl_FragColor = sc;\\n', 'gl_FragColor = vec4(0.0);\\n'], ['gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);', 'gl_FragColor = vec4(wing.a, dot(wingLights(ro, rd), vec3(0.3333)), m, 1.0);']]);"
    }
   ],
   "compare": [
    [
     "new",
     "old",
-    "nowing"
+    "nowing",
+    "mask"
    ],
    [
     "old2",

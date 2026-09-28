@@ -1,0 +1,137 @@
+[
+ {
+  "name": "night-city-low",
+  "scene": {
+   "name": "night-city-low",
+   "p": {
+    "preset": "fuji",
+    "date": "2026-01-16",
+    "time": 1260,
+    "altitude": 1,
+    "coverage": 0.15,
+    "cabin-light": "off",
+    "quality": "high"
+   },
+   "offset": [
+    0,
+    -25
+   ],
+   "ground": true,
+   "head": -0.25
+  },
+  "variants": [
+   {
+    "name": "old0",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new0",
+    "js": ""
+   },
+   {
+    "name": "olds0",
+    "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "news0",
+    "js": "v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "old1",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new1",
+    "js": ""
+   },
+   {
+    "name": "olds1",
+    "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "news1",
+    "js": "v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new2",
+    "js": ""
+   },
+   {
+    "name": "olds2",
+    "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "news2",
+    "js": "v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "old3",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new3",
+    "js": ""
+   },
+   {
+    "name": "olds3",
+    "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;"
+   },
+   {
+    "name": "news3",
+    "js": "v.wingDebug.strobe = 1;"
+   }
+  ],
+  "bench": true
+ },
+ {
+  "name": "sunset-wing",
+  "scene": {
+   "name": "sunset-wing",
+   "p": {
+    "preset": "wpac",
+    "time": 1040,
+    "wing-pos": "8",
+    "quality": "high"
+   }
+  },
+  "variants": [
+   {
+    "name": "old0",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new0",
+    "js": ""
+   },
+   {
+    "name": "old1",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new1",
+    "js": ""
+   },
+   {
+    "name": "old2",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new2",
+    "js": ""
+   },
+   {
+    "name": "old3",
+    "js": "__wsPatch([], __wsBase);"
+   },
+   {
+    "name": "new3",
+    "js": ""
+   }
+  ],
+  "bench": true
+ }
+]

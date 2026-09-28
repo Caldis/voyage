@@ -47,27 +47,30 @@ vec3 wingLampIntensity(int i, vec3 dir) {
 // 高仰角的底取 0.15（位置灯）/ 0.2（频闪），是估计值，不是规定值。水平台阶放软 ±2°（真实灯罩的截止也有几度过渡），
 // 方向接近竖直时水平分布按水平平均取（水平角没有意义）。
 vec3 wingLampSurfI(int i, vec3 dir) {
+  // 不用 atan：离开水平面的角度用 sin²（dir 是单位向量，小角度时与角度² 相差不到 5%，大角度落在底上），
+  // 水平角用 cos / sin 直接比阈值（冷编译：atan 两次 × 三盏灯，离线 FXC 约多 3%）
   float h = length(dir.xz);
-  float e = atan(abs(dir.y), h);                   // 离开水平面的角度（弧度）
-  float e2 = e * e;
+  float s2 = dir.y * dir.y;
+  float wH = smoothstep(0.05, 0.3, h);             // 仰俯角 > 73° 起按水平平均（水平角没有意义）
+  vec2 hz = dir.xz / max(h, 1e-6);                 // (cos, sin) of 水平角：0 = 正前方，sin > 0 朝外侧（+Z）
   if (i == 1) {
     // 25.1401：5° 0.76、10° 0.47、20° 0.3、30° 0.24、再往外 0.2（估计的底）
-    float fv = 0.2 + 0.8 * (0.7 * exp(-e2 / 0.0149) + 0.3 * exp(-e2 / 0.147));
-    return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * fv;
+    float fv = 0.2 + 0.8 * (0.7 * exp(-s2 / 0.0149) + 0.3 * exp(-s2 / 0.147));
+    // 翼尖频闪装在翼尖整流罩里、朝外半个空间照（机身一侧由尾部 / 另一侧翼尖的频闪负责，25.1401 允许被机体挡住的部分）；
+    // 朝内（翼面方向）只有灯罩侧面的漏光，取 0.15（估计值）。旧版各向同性 1500 cd，翼尖内侧半米内的翼面一闪就是一大块死白
+    float fh = mix(0.15, 1.0, smoothstep(-0.25, 0.25, hz.y));
+    return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * fv * mix(0.575, fh, wH);
   }
-  // 25.1393：10° 0.84、20° 0.52、30° 0.28、40° 0.18、再往外 0.15（估计的底）
-  float fv = 0.15 + 0.85 * exp(-e2 / 0.147);
-  vec2 hz = dir.xz / max(h, 1e-6);
-  float a = degrees(atan(hz.y, hz.x));             // 0 = 正前方，正值朝外侧（+Z）
-  float aa = abs(a);
-  float wH = smoothstep(0.05, 0.3, h);             // 仰俯角 > 73° 起按水平平均
+  // 25.1393：10° 0.84、20° 0.52、30° 0.28、40° 0.2、再往外 0.15（估计的底）
+  float fv = 0.15 + 0.85 * exp(-s2 / 0.147);
+  float back = 1.0 - smoothstep(-0.3746, -0.309, hz.x);   // 水平角 |a| > 110°（±2° 过渡）
   if (i == 0) {
-    float lit = smoothstep(-4.9, -0.9, a) * (1.0 - smoothstep(108.0, 112.0, a));
-    float cd = 3.0 + lit * (2.0 + 25.0 * (1.0 - smoothstep(18.0, 22.0, aa)) + 10.0 * (1.0 - smoothstep(8.0, 12.0, aa)));
+    // 朝外 −2.9°…110° 有光区：±10° 内 40 cd、±20° 内 30 cd、其余 5 cd（台阶 ±2° 过渡）；光区外灯罩漏光 3 cd
+    float lit = smoothstep(-0.0854, -0.0157, hz.y) * (1.0 - back);
+    float cd = 3.0 + lit * (2.0 + 25.0 * smoothstep(0.9272, 0.9511, hz.x) + 10.0 * smoothstep(0.9781, 0.9903, hz.x));
     return (uSeatSign > 0.0 ? vec3(0.1, 1.0, 0.35) : vec3(1.0, 0.08, 0.05)) * mix(5.6, cd, wH) * fv;
   }
-  float cd = 2.0 + 18.0 * smoothstep(108.0, 112.0, aa);
-  return vec3(1.0, 0.95, 0.85) * mix(9.0, cd, wH) * fv;
+  return vec3(1.0, 0.95, 0.85) * mix(9.0, 2.0 + 18.0 * back, wH) * fv;
 }
 
 // 环境反射的来源：天空；地平线以下是海面 / 地面（天空视图 LUT 的地面部分），飞在云层之上时混入云海的亮度
