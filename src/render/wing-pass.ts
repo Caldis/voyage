@@ -71,6 +71,7 @@ void main() {
   vec3 eDown = eSkyH + eKey0 * uKeyCloud.x * max(uKeyDir.y, 0.0);
   float belowAlbedo = mix(0.06, 0.7, clamp(uCoverage * 0.9, 0.0, 1.0));
 
+  wingLampsSetup();                // 三盏灯的位置，每个像素算一次（PERF-WING，见 wing-shading.glsl.ts）
   float refL = dot(sc.rgb, vec3(0.2126, 0.7152, 0.0722)) / WING_PANE_T;
   vec4 wing = wingView(ro, rd, (PANE_DEPTH - ro.z) / rd.z, sunC, eSkyH, eDown, belowAlbedo, cloud, refL);
   vec3 col = sc.rgb;
