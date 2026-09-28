@@ -275,6 +275,12 @@ export async function collectPrograms(server, opts = {}) {
     add("rays-composite", r.composite);
   });
 
+  // 远景对流塔层（TW02，clouds/far-towers.ts）：独立小程序，第一次有远塔时后台编译。旧树没有这个模块，lenient 下跳过
+  await section("far-towers", async () => {
+    const m = await server.ssrLoadModule("/src/clouds/far-towers.ts");
+    add("far-towers", m.createFarTowerMaterial({}, null));
+  });
+
   return programs;
 }
 

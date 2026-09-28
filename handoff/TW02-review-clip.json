@@ -1,0 +1,14 @@
+[
+ {
+  "name": "rev-clip-scissor",
+  "p": {"preset": "scs", "date": "2026-08-04", "time": 900, "wing-pos": "-4", "quality": "high"},
+  "wait": 3000,
+  "js": "const f = v.farTowers; delete f.computeScissor; v.state.heading = 0; v.state.bankDeg = 0; await new Promise(r=>setTimeout(r,500)); const ob = (v.state.heading + (v.state.seat === 'right' ? 90 : -90)) * Math.PI / 180; const b0 = Math.atan2(-Math.cos(ob), Math.sin(ob)); const L = [[-8,200,0,0.0],[0,200,0,0.3],[8,200,0,0.6]]; f.override = L.map(([a,d,col0,an],i) => { const b = b0 + a*Math.PI/180; const R = 7.8; return {id:'c'+i, x: Math.cos(b)*d, z: Math.sin(b)*d, R, top: 10.5, Ra: R*2.2, dirX: Math.cos(b+Math.PI/2), dirZ: Math.sin(b+Math.PI/2), thick: 2.4, col: 1, anvil: an, seed: 0.37+0.2*i}; }); await new Promise(r=>setTimeout(r,2500)); return 'active=' + f.active + ' scissor=' + f.scissor.toArray().join(',') + ' state=' + f.state;"
+ },
+ {
+  "name": "rev-clip-full",
+  "p": {"preset": "scs", "date": "2026-08-04", "time": 900, "wing-pos": "-4", "quality": "high"},
+  "wait": 3000,
+  "js": "const f = v.farTowers; f.computeScissor = function (w, h) { this.scissor.set(0, 0, w, h); return true; }; v.state.heading = 0; v.state.bankDeg = 0; await new Promise(r=>setTimeout(r,500)); const ob = (v.state.heading + (v.state.seat === 'right' ? 90 : -90)) * Math.PI / 180; const b0 = Math.atan2(-Math.cos(ob), Math.sin(ob)); const L = [[-8,200,0,0.0],[0,200,0,0.3],[8,200,0,0.6]]; f.override = L.map(([a,d,col0,an],i) => { const b = b0 + a*Math.PI/180; const R = 7.8; return {id:'c'+i, x: Math.cos(b)*d, z: Math.sin(b)*d, R, top: 10.5, Ra: R*2.2, dirX: Math.cos(b+Math.PI/2), dirZ: Math.sin(b+Math.PI/2), thick: 2.4, col: 1, anvil: an, seed: 0.37+0.2*i}; }); await new Promise(r=>setTimeout(r,2500)); const s = 'active=' + f.active + ' scissor=' + f.scissor.toArray().join(',') + ' state=' + f.state; return s;"
+ }
+]
