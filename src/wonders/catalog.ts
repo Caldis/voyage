@@ -135,8 +135,9 @@ export const WONDERS: WonderDef[] = [
     // 致敬《银翼杀手》（1982）开场的「地狱城」：原创造型（阶梯金字塔、火炬、光束、车流都是程序生成），不用任何官方资产
     name: "雾海灯城（致敬《银翼杀手》）",
     layer: "cloud",
-    // 城区半径约 27 km：锚点在 70–130 km 外，近边 40 km 以外（10.7 km 高处俯角 5–14°，窗里的下半截）
-    distanceKm: [70, 130],
+    // WS02 巨构化：城区半径约 33 km（雾与光穹在 43.5 km 内渐隐）；锚点在 90–140 km 外，近边 45 km 以外。
+    // 110 km 处金字塔（14–16 km）顶在地平线上方约 5°、尖塔（20–24 km）约 8–9°，从巡航高度要仰视（research/WONDER_SCALE.md §3.2）
+    distanceKm: [90, 140],
     forwardOffsetDeg: [5, 25],
     minAltitudeKm: 5,
     // 只在夜里（研究文档 C6：太阳 < −12°）；民用暮光末段（−12°..−6°）灯刚亮、雾还带蓝灰，偶尔也出现；白天不自动出现
@@ -145,8 +146,9 @@ export const WONDERS: WonderDef[] = [
     riseS: 120,
     holdSimS: [480, 900],
     fadeS: 120,
-    // 包围盒：城区 ±36 km（城区椭圆外缘 ≈ 32 km）、高 7 km（光束渐隐到 6.8 km；雾只在 2.2 km 以下，介质另外收窄）
-    volume: { kind: FOGCITY_KIND, baseKm: 0, box: [[-36, 0, -36], [36, 7, 36]], surface: true, medium: true, stepKm: 0.3 },
+    // 包围盒：±46 km（雾裙与光穹在 43.5 km 内衰减到 0，盒边不切出硬边）、高 25 km（尖塔最高 24 km + 顶灯；
+    // 雾只在 2.4 km 以下、烟柱 5.6 km 以下，介质另外收窄；表面按每座塔的包围球早退）
+    volume: { kind: FOGCITY_KIND, baseKm: 0, box: [[-46, 0, -46], [46, 25, 46]], surface: true, medium: true, stepKm: 0.3 },
   },
   {
     id: "floatcity",
