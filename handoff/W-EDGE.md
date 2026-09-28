@@ -1,4 +1,4 @@
-# W-EDGE · 机翼外轮廓解析覆盖率（进行中）
+# W-EDGE · 机翼外轮廓解析覆盖率（B′ 交付，静帧两条未达标，见文末）
 
 - 分支 `worktree-agent-a29b869633df128ee`，开发端口 5239，对照 5299（`D:\Code\opus-test\tmp\wedge-base`，detach 旧 master d6ad6b7，机翼着色器与现 master 相同）。
 - 归属：`src/render/wing.glsl.ts`（`wing-shading.glsl.ts` 当前版本未改）；工具 `handoff/W-EDGE-*`。
@@ -116,3 +116,32 @@ live（`tmp/wedge3/live6`，所有命中都探测之后）：sunset 小翼前缘
 **静帧**（`tmp/wedge3/final`，11 场景同页冻结）：差和 700587 → **430919（−38.5%）**，边缘带覆盖率误差 0.071–0.079（old 0.16–0.21），非机翼 11 个 job 逐位 0、新长出覆盖 0。
 **两条静帧验收没达到**（−40%、≤ 0.06）：park 版 v5 是 −45.8% / 0.054，但飞行中爬行过不了硬门槛；为时间稳定去掉的折角超采样、改小的命中阈值让内侧解析覆盖率系统性偏浅约 0.15（序列法按路径统计：码 2 误差 −0.15，外侧解析 +0.01）。
 按比例或整体偏移修正都会重新引入逐帧抖动；只对内侧、随深度渐入的 −0.1 像素（`pt10`：`w.cov = 3.0 + sEdge − 0.1·smoothstep(0, 0.2, −sEdge)`）静帧到 −40.9%，但 sunset 主翼前缘 672（old 708/669）、小翼后缘 4（old 2/3）贴线，没并进来，留给协调者取舍。
+
+**冷编译**（负载下，都只作参考；权威数字留给安静窗口）：
+- 离线 FXC `--baseline tmp/wedge2-base`（62f3cbd）7 轮最小值：wing 5551 → 6552（+18.0%），wing-wet 6772 → 7107（+4.9%）；另一次 5 轮：+19.3% / +23.4%。
+- 同一批次三版本链（`--chain 62f3cbd,fcb0776,40ee270`，5 轮最小值，原始值 5.3–11.5 s 抖）：park v5 相对基线 +15.9% / +32.6%，本次加的几项相对 v5 **+3.6% / −6.4%**。
+  PERF-WING 在安静时量的 v5 是 +10.6% / +6.9%——本次增量在噪声内，大头仍是 B′ 本身。单项撤回（`handoff/W-EDGE-variants-fxc2.mjs`）：亮点超采样 0%、着色点分离 −6%、一次验深 +0.2%（wet 一侧噪声更大，撤回反而更慢）。
+- 真冷启动（`cold --baseline 5311 --repeat 3`）：机翼 min/median 6432 / 7217 ms（基线 5624 / 6052），窗外 7752 / 8138 ms——**机翼仍比窗外早 1.3 s（min）/ 0.9 s（中位），不在关键路径上**。
+
+**机翼 pass 帧时间**（`gpu-ab --time wing`，8 轮 ABBA，old2 = 基线 A/A）：sunset ×1.11 / ×1.11，商务舱 ×1.15 / ×1.24（这一场景 CPU 55%，离散 5–9%），云里（湿窗）×1.09 / ×1.08，夜间 ×1.08 / ×1.11；A/A 都在 ±1.5% 内。
+即每帧多 0.05–0.10 ms（机翼 pass 0.63–0.86 ms 的 8–15%）。来源：所有命中都进探测（多一次距离场）、擦边射线不再算打中而是接着走、亮像素超采样。park v5 自报「帧时间 −3%」是它把轮廓像素的超采样换成了解析，本版又把一部分超采样找回来了。
+
+**其他**：check:glsl、typecheck、build 通过，dist 无 0 字节文件；所有 ab / live / gpu-ab 运行 console error 0。
+对照 worktree `tmp/wedge2-base`、`tmp/wedge3-chain`（shader-budget --chain 建的）已删，5251 / 5311 已关。
+
+### 复现
+
+```
+python handoff/W-EDGE-mkjobs.py ../../tmp/wedge3/jobs-all.json all        # 在 apps/voyage 下
+node scripts/dev-browser.mjs ab --port <开发> --base <对照> --jobs tmp/wedge3/jobs-all.json --rounds 1 --out tmp/wedge3/final
+python apps/voyage/handoff/W-EDGE-metrics.py tmp/wedge3/final old,new       # 在仓库根
+# 飞行中爬行（硬门槛）：同代码两轮当噪声底
+node apps/voyage/scripts/dev-browser.mjs ab --port <开发> --base <对照> --jobs apps/voyage/handoff/W-EDGE-jobs-live.json --rounds 1 --out tmp/wedge3/live
+python apps/voyage/handoff/W-EDGE-live-heat.py tmp/wedge3/live/sun-live 500 400 old,new 310,200,190,200 4 tmp/wedge3/heat.png   # 热图（自动排除频闪帧）
+# 确定性序列 + 路径归因（变体 json 的每条 patch 每帧也算一份覆盖率）
+python apps/voyage/handoff/W-EDGE-sweep-mk.py tmp/wedge3/sweep.json sun 16 0.12 380,500,520,440 [变体.json]
+node apps/voyage/scripts/dev-browser.mjs ab --port <开发> --base <对照> --jobs tmp/wedge3/sweep.json --rounds 1 --out tmp/wedge3/sweep
+python apps/voyage/handoff/W-EDGE-sweep-ana.py tmp/wedge3/sweep/sun/dump.json 小翼=320,220,190,200 主翼前缘=10,150,440,80
+```
+路径码：1 外侧解析，2 探测→解析，3 探测未见底，4 探测早判全在里面，5 延续段打到别的部件，7 探测估计全在里面，9 打中但擦过别处（内轮廓）。
+`W-EDGE-sweep-mk.py` / `-path-mk.py` / `-live-mk.py` / `-dbg-mk.py` 默认读 `tmp/wedge3/jobs-all.json`（`W-EDGE-mkjobs.py all` 的输出），换位置用环境变量 `WEDGE_JOBS`。
