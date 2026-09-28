@@ -27,6 +27,11 @@
 //   [Zhang06] Zhang et al. 2006, GRL 33, L11708：东亚西风急流 1 月轴 32°N、> 70 m/s，4 月位置相近而减弱，7 月北移到 40°N 以北
 //             https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2006GL026377
 //   [Kot58] Koteswaram 1958, Tellus 10：热带东风急流核心 150 hPa、约 15°N、35–40 m/s https://onlinelibrary.wiley.com/doi/abs/10.1111/j.2153-3490.1958.tb01984.x
+//   [JMA平年] 气象厅 1991–2020 平年值·月平均风速（八丈島 7 月 4.3、南大東島 4.5、父島 2.7、石廊崎 4.3、銚子 5.3 m/s）
+//             https://www.data.jma.go.jp/stats/etrn/view/nml_sfc_ym.php （prec_no / block_no：44/47678、91/47945、44/47971、50/47666、45/47648）
+//   [HKO] 香港天文台 1991–2020 平年值，横澜岛月平均风速（1 月 25.1、7 月 21.3 km/h）https://www.hko.gov.hk/en/cis/normal/1991_2020/normals.htm
+//   [Mon06] Monahan 2006, J. Climate 19:497：海面风速近似两参数韦布尔分布 https://journals.ametsoc.org/view/journals/clim/19/4/jcli3640.1.xml
+//   [DD99] Dai & Deser 1999, JGR 104(D24)：地面风日变化陆上午后最大、海上很弱（按记忆转述，振幅未核对原文）
 //   [教科书] Stull 1988、Holton、Wallace & Hobbs 的共识内容（按记忆转述，未逐页核对）
 //   [估算] 按气候常识定的量级区间，不是测量
 import * as W from "../src/weather.ts";
@@ -57,6 +62,15 @@ const REGIONS: Record<string, [number, number][]> = {
   副高: [[28.5, 138], [29.5, 142], [27.5, 145]],
 };
 const MONTHS = [1, 2, 4, 5, 6, 7, 8, 10];
+/** WX11a-b：海面风统计用的预设坐标（src/flight.ts 的 PRESETS；日本海没有预设，取「日本海」地区的第一个点；hnd-cts 取航线上 5 个点） */
+const SEA_PRESETS: Record<string, [number, number][]> = {
+  "fuji 骏河湾": [[35.0, 138.95]],
+  "ecs 东海": [[31.2, 126.0]],
+  日本海: [[39, 134]],
+  "wpac 西太": [[30.0, 139.8]],
+  "scs 南海": [[18.0, 115.0]],
+  "hnd-cts 沿途": [[36.2, 140.3], [37.8, 140.7], [39.5, 141.0], [41.1, 141.3], [42.78, 141.69]],
+};
 
 type Tally = { n: number; reg: Record<CloudRegime, number>; storm: number; stormN: number };
 const empty = (): Tally => ({ n: 0, reg: { clear: 0, cumulus: 0, towering: 0, stratocumulus: 0, altocumulus: 0, cirrus: 0 }, storm: 0, stormN: 0 });
@@ -304,7 +318,32 @@ function runSeed(seed: number) {
       }
     }
     const cont = Object.fromEntries(lv.map((k) => [k, { t99: 100 * quant(dT[k], 0.99), x99: 100 * quant(dX[k], 0.99), tMax: 100 * Math.max(...dT[k]), xMax: 100 * Math.max(...dX[k]) }]));
+    // WX11a-b：各预设按季节的海面风（导演写给海面的就是 windSpeed(profile.sfc)，WX11g）。口径同上：years × 每月 1–28 日 × UTC 0/6/12/18 时，预设坐标
+    const sea: Record<string, Record<number, { med: number; p10: number; p90: number; mean: number; calm: number }>> = {};
+    for (const [name, pts] of Object.entries(SEA_PRESETS)) {
+      sea[name] = {};
+      for (const m of [1, 4, 7, 10]) {
+        const s = collect(m, pts, (p) => W.windSpeed(p.sfc));
+        sea[name][m] = { med: quant(s, 0.5), p10: quant(s, 0.1), p90: quant(s, 0.9), mean: mean(s), calm: frac(s, (v) => v < 2) };
+      }
+    }
+    // 日变化：同一批点在当地 14 时与 02 时的地面风中位之比（4、7、10 月）
+    const diurnalRatio = (pts: [number, number][]) => {
+      const a: number[] = [], b: number[] = [];
+      for (const y of years)
+        for (const m of [4, 7, 10])
+          for (let d = 1; d <= 28; d++)
+            for (const [la, lo] of pts) {
+              const day0 = Date.UTC(y, m - 1, d);
+              a.push(W.windSpeed(field.wind(la, lo, day0 + (14 - lo / 15) * H).sfc));
+              b.push(W.windSpeed(field.wind(la, lo, day0 + (26 - lo / 15) * H).sfc));
+            }
+      return quant(a, 0.5) / quant(b, 0.5);
+    };
+    const diurLand = diurnalRatio([[34.5, 113.5], [30.6, 114.3], [38, 116], [28, 105], [45, 125]]);
+    const diurSea = diurnalRatio([[30, 140], [28, 128], [20, 135], [35, 150], [18, 115]]);
     return {
+      sea, diurLand, diurSea,
       jan, apr, jul, jpJan, scJul250, scJan250, scJulSW, jsNW: frac(jsDir, (d) => d >= 270 && d <= 360), jsMed: quant(jsSpd, 0.5),
       tradeJan, tradeJul, lljN: llj.length, llj12: frac(llj, (v) => v >= 12), lljMed: quant(llj, 0.5), ekSea, ekLand,
       stormN: dAng.length, stormMed: quant(dAng, 0.5), stormP90: quant(dAng, 0.9), stormSN: dAngS.length, stormMedS: quant(dAngS, 0.5), stormP90S: quant(dAngS, 0.9),
@@ -351,6 +390,11 @@ function runSeed(seed: number) {
       console.log(`埃克曼：海上偏角中位 ${w.ekSea.ang.toFixed(1)}°、10 m / 850 风速比 ${w.ekSea.ratio.toFixed(2)}；陆上 ${w.ekLand.ang.toFixed(1)}°、${w.ekLand.ratio.toFixed(2)}`);
       console.log(`雷暴漂移 vs 500 hPa 风向夹角 中位 / p90：全部 ${w.stormMed.toFixed(1)}° / ${w.stormP90.toFixed(1)}°（${w.stormN} 个系统，≤ 45° 的 ${w.stormIn45.toFixed(0)}%），25°N 以南 ${w.stormMedS.toFixed(1)}° / ${w.stormP90S.toFixed(1)}°（${w.stormSN} 个）；漂移速度与 500 hPa 风速相关系数 ${w.stormSpdR.toFixed(2)}`);
       console.log(`连续性（|Δ风| / max(|风|, 5)，%，p99 / 最大）：${Object.entries(w.cont).map(([k, c]) => `${k} 1h ${c.t99.toFixed(1)}/${c.tMax.toFixed(1)}、25km ${c.x99.toFixed(1)}/${c.xMax.toFixed(1)}`).join("；")}\n`);
+      console.log("海面风 windSpeed(sfc)，m/s：中位 / p10 / p90 · 平静（< 2 m/s）%（WX11a-b）\n");
+      console.log("| 预设 | 1 月 | 4 月 | 7 月 | 10 月 |\n| --- | --- | --- | --- | --- |");
+      for (const [name, byM] of Object.entries(w.sea))
+        console.log(`| ${name} | ${[1, 4, 7, 10].map((m) => { const s = byM[m]; return `${s.med.toFixed(1)} / ${s.p10.toFixed(1)} / ${s.p90.toFixed(1)} · ${s.calm.toFixed(0)}`; }).join(" | ")} |`);
+      console.log("");
     }
   }
 
@@ -442,6 +486,30 @@ function runSeed(seed: number) {
     }
     check("风 连续性 地面 相邻 1 小时 p99 %", w.cont.sfc.t99, w.cont.sfc.t99 <= 15, "≤ 15", "同上");
     check("风 连续性 地面 相邻 25 km p99 %", w.cont.sfc.x99, w.cont.sfc.x99 <= 25, "≤ 25", "海岸两侧粗糙度 / 埃克曼偏角本来就不同（真实的海岸内边界层），放宽 [估算]；云层高度（≥ 1 km）不受影响");
+    // ---- WX11a-b：海面风（windSpeed(sfc)，预设坐标）。改前（乘性扰动造不出副高脊线附近的风）西太 7 月中位 1.5–1.8、平静 57–63%，南海 7 月平静 0% ----
+    // 换算约定：韦布尔形状 k ≈ 2–3（[Mon06] 海面风近似韦布尔），中位 / 平均 = (ln 2)^(1/k) / Γ(1 + 1/k) ≈ 0.94–0.98；
+    // 平静比例 P(U < 2) = 1 − exp(−(2/λ)^k)，λ = 平均 / Γ(1 + 1/k)。岛屿测站受地形遮挡，一般低于开阔海面，作下限依据用
+    const sea = w.sea;
+    const wpJ = sea["wpac 西太"][7], scJ = sea["scs 南海"][7];
+    check("风 海面 西太 7 月中位 m/s", wpJ.med, band(wpJ.med, 3.0, 6.5), "3.0–6.5",
+      "[JMA平年] 八丈島 7 月平均 4.3、南大东岛 4.5 → 中位约 4.0–4.2；预设在 30°N，比八丈島（33°N）更靠近副高脊线，父島（27°N、港内）只有 2.7，下限取测站中位的约 75% [门限估算]；上限：最开阔的銚子 7 月 5.3 × 1.2");
+    check("风 海面 西太 7 月平静（< 2 m/s）%", wpJ.calm, band(wpJ.calm, 3, 30), "3–30",
+      "平均 4.3–5.5、k = 2–3 的韦布尔给出 3–16%；上限放宽到 30 给脊线附近更弱的风 [估算]；下限：随机性铁律，偶有镜面海");
+    check("风 海面 南海 7 月中位 m/s", scJ.med, scJ.med >= 3.9, "≥ 3.9",
+      "[HKO] 横澜岛 7 月平均 21.3 km/h = 5.9 m/s（风速计离海面约 80 m [按记忆]，海面对数律折到 10 m ÷ 1.19 ≈ 4.9）→ 中位约 4.6，留 15% [门限估算]");
+    check("风 海面 南海 7 月平静（< 2 m/s）%", scJ.calm, band(scJ.calm, 1, 25), "1–25",
+      "平均约 4.9、k = 2–3.5 的韦布尔给出 3–12%；下限 1%：夏季风也有间歇（季风中断），不能一整月都是同一片海况（随机性铁律）");
+    for (const name of ["日本海", "ecs 东海"]) {
+      const s = sea[name][1];
+      check(`风 海面 ${name} 1 月中位 m/s`, s.med, s.med >= 7, "≥ 7", "冬季风：850 hPa 寒潮 10–20、平时 5–8（WX11-DESIGN，[教科书]）、海上 10 m / 850 = 0.6–0.8 [教科书] → 开阔海面 1 月中位 ≥ 7 [估算]；对照 [HKO] 横澜岛 1 月 7.0（折到 10 m 约 5.9，更南、更弱的东北季风）");
+      check(`风 海面 ${name} 1 月平静（< 2 m/s）%`, s.calm, s.calm <= 5, "≤ 5", "平均 ≥ 8、k = 2 的韦布尔给出 ≤ 4.8%");
+    }
+    check("风 地面风日变化 陆上 14 时 / 02 时（中位之比）", w.diurLand, band(w.diurLand, 1.15, 2.0), "1.15–2.0",
+      "[DD99] 陆上地面风午后最大、夜里最小（白天对流混合把上层动量带下来）；比值门限 [估算]（夜间稳定边界层里地面风常减半，上限 2）");
+    check("风 地面风日变化 海上 14 时 / 02 时（中位之比）", w.diurSea, band(w.diurSea, 0.85, 1.2), "0.85–1.2", "[DD99] 海上日变化很弱（模型 ±3%，比值约 1.06；门限留抽样噪声 [估算]）");
+    const fj = sea["fuji 骏河湾"][7], hc = sea["hnd-cts 沿途"][7];
+    check("风 海面 骏河湾 7 月中位 m/s", fj.med, fj.med >= 2.0, "≥ 2.0", "[JMA平年] 石廊崎（伊豆半岛南端、开阔岬角）7 月 4.3；预设点按陆地粗糙度（陆地比例高），取一半作下限 [估算]");
+    check("风 海面 hnd-cts 沿途 7 月中位 m/s", hc.med, hc.med >= 2.0, "≥ 2.0", "[JMA平年] 銚子 7 月 5.3（开阔海岸）；航线大半在陆上（z₀ 大），取测站的四成作下限 [估算]");
   }
   return { seed, checks, elapsed, table, frontM, ty, wind };
 }

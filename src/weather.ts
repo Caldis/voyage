@@ -366,6 +366,8 @@ function vnoise(x: number, y: number, z: number, seed: number) {
     fz,
   );
 }
+/** vnoise 的标准差（实测 40 万点：均值 0.500、标准差 0.185、p10 / p90 = 0.254 / 0.746，接近正态）。(vnoise − 0.5) / VNOISE_SD ≈ 标准正态 */
+const VNOISE_SD = 0.185;
 /** 两个倍频叠加，再拉开对比（值噪声叠加后挤在 0.5 附近） */
 const fbm = (x: number, y: number, z: number, seed: number) =>
   clamp01(0.5 + (0.65 * vnoise(x, y, z, seed) + 0.35 * vnoise(x * 2.1 + 5.3, y * 2.1 + 1.7, z * 1.9, seed + 7) - 0.5) * 1.8);
@@ -558,6 +560,12 @@ const rank = (v: number) => clamp01(0.5 + (v - 0.5) * 1.85);
 //             4 月位置相近但明显减弱，7 月中心北移到 40°N 以北。https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2006GL026377
 //   [Kot58]   Koteswaram 1958, Tellus 10：热带东风急流核心 150 hPa、约 15°N、50–80°E、35–40 m/s。
 //             https://onlinelibrary.wiley.com/doi/abs/10.1111/j.2153-3490.1958.tb01984.x
+//   [LL90]    Lau & Lau 1990, Mon. Wea. Rev. 118：西太平洋夏季 850 hPa 经向风里的 2–8 天天气尺度扰动（东风波等）。只引用「存在且是主要变率」，量级未从原文核对
+//   [Mon06]   Monahan 2006, J. Climate 19:497（SeaWinds 散射计）：海面风速近似两参数韦布尔分布，偏度随「平均 / 标准差」变。
+//             https://journals.ametsoc.org/view/journals/clim/19/4/jcli3640.1.xml
+//   [DD99]    Dai & Deser 1999, JGR 104(D24)：地面风速日变化陆上明显（午后最大）、海上很弱（按记忆转述，振幅未从原文核对）
+//   [JMA平年] 气象厅 1991–2020 平年值（月平均风速）https://www.data.jma.go.jp/stats/etrn/ ；[HKO] 香港天文台横澜岛 1991–2020 平年值
+//             https://www.hko.gov.hk/en/cis/normal/1991_2020/normals.htm 。对照表见 handoff/WX11a-b.md
 // 坐标：风矢量一律是 (u 向东, v 向北)，m/s，表示「吹向」；风向（气象惯例的「来向」，0 = 北风、270 = 西风）用 windFromDeg 换算。
 // 场景本地坐标是 x 东、z 南，所以换到场景里是 (x, z) = (u, −v)（windToLocal）。
 // 都是示意性的气候态，不是真实天气数据；WX23 可以用 Open-Meteo 的 850 / 500 / 250 hPa 实测风替换 wind() 的输出（接口保持不变）。
@@ -584,6 +592,8 @@ export interface WindProfile {
   ekman: number;
   /** 周围的陆地比例 0..1（0.5° 格点双线性插值，海岸不跳变） */
   land: number;
+  /** 地面风速的日变化倍数（WX11a-b，陆上约 0.8–1.2、海上约 0.97–1.03，当地 14 时最大）；往上按 ln z 线性回到 1（边界层顶） */
+  diurnal: number;
 }
 
 /** 各层次的代表高度（km）。250 hPa 以上保持 250 hPa 的值；边界层顶以下按对数廓线 + 埃克曼螺旋 */
@@ -622,7 +632,8 @@ export const windToLocal = (w: Wind) => ({ x: w.u, z: -w.v });
  * 风廓线在高度 altKm 处的风（纯算术，约几十纳秒，可以每帧调用；wind() 本身才贵，应当按天气场取样的节奏缓存 profile）。
  *   · ≤ 10 m：返回 sfc（10 m 风）；
  *   · 10 m – 边界层顶（1 km）：风速按对数律 |G|·ln(z/z₀)/ln(h/z₀)（[教科书：Stull 1988 §9]，严格说只在近地层成立，外推到边界层顶是简化 [估算]），
- *     风向从地面的逆时针偏角 ekman 按 ln z 线性转回边界层顶的方向（埃克曼螺旋：往上顺时针转，[教科书]）；
+ *     风向从地面的逆时针偏角 ekman 按 ln z 线性转回边界层顶的方向（埃克曼螺旋：往上顺时针转，[教科书]），
+ *     风速的日变化倍数 diurnal 同样按 ln z 线性回到 1（10 m 处与 sfc 连续）；
  *   · 1–1.5 km：等于 850 hPa；1.5 / 5.5 / 10.5 km 之间分段线性；10.5 km 以上保持 250 hPa。
  */
 export function windAt(p: WindProfile, altKm: number): Wind {
@@ -632,8 +643,9 @@ export function windAt(p: WindProfile, altKm: number): Wind {
   if (zm < hm) {
     const g = p.p850;
     const k = Math.log(zm / p.z0) / Math.log(hm / p.z0);
-    const turn = p.ekman * (1 - Math.log(zm / 10) / Math.log(hm / 10));
-    return rotScale(g, turn, k);
+    const low = 1 - Math.log(zm / 10) / Math.log(hm / 10);
+    const turn = p.ekman * low;
+    return rotScale(g, turn, k * (1 + ((p.diurnal ?? 1) - 1) * low));
   }
   const L = WIND_LEVEL_KM;
   const lerp = (a: Wind, b: Wind, f: number): Wind => ({ u: a.u + (b.u - a.u) * f, v: a.v + (b.v - a.v) * f });
@@ -925,7 +937,21 @@ export class WeatherField {
     // 天气尺度扰动：方向 ±25°、风速 ×(0.7–1.3)，千公里 / 一两天的尺度（WX11-DESIGN §1.2 的建议值 [估算]）
     const r850 = 25 * (2 * rank(vnoise(lon / 12, lat / 12, hours / 30, this.seed + 211)) - 1);
     const k850 = 0.7 + 0.6 * rank(vnoise(lon / 15, lat / 15, hours / 40, this.seed + 212));
-    const p850 = rotScale({ u, v }, r850, k850);
+    const pm = rotScale({ u, v }, r850, k850);
+    // WX11a-b：天气尺度的加性扰动（随机风矢量，u、v 各自近似正态、互相独立）。上面的乘性扰动只能放大 / 转动气候态矢量，
+    // 在气候态矢量平均接近 0 的地方（副高脊线、季风转换期、赤道无风带）造不出风：西太 30°N 7 月 850 hPa 中位只有 1.5–1.9 m/s，
+    // 海面几乎总是镜面（WX11g 审查 D2）。真实大气里这些地方的「标量平均风速」远大于「矢量平均」，差的就是天气尺度扰动
+    // （东风波、副高进退、锋面 / 低压过境；西太夏季 850 hPa 2–8 天扰动见 [LL90]），标量风速按矢量平均 + 各向扰动 ≈ 莱斯 / 韦布尔分布 [Mon06]。
+    // 每个分量的标准差：基础 4.5 m/s，冬季中纬度（风暴路径）加到 6 m/s；气候态气流强而稳定的地方（信风、夏季风、寒潮西北风，|矢量| ≥ 9 m/s）
+    // 减到六成——[Mon06]：信风 / 季风这类副高赤道一侧的气流「平均 / 标准差」最大，风最稳定；而且那里的乘性扰动已经给了变率。
+    // 数值都是 [估算]（天气尺度 850 hPa 风分量日际标准差几 m/s 的量级，没查到逐点数值）；验收不看这个数，
+    // 看海面风与测站平年值的对照（weather-stats 的「海面风」断言、handoff/WX11a-b.md）。
+    // 空间尺度与乘性扰动同源（千公里级），时间尺度 48 h（天气尺度 2–8 天周期 [LL90] 的相关时间量级；30 h 时 850 hPa 1 小时连续性 p99 到 18%，超门限），
+    // 用独立的种子偏移（213 / 214），同一 (lat, lon, t, seed) 结果确定
+    const sigA = (4.5 + 1.5 * wN * smooth(25, 40, lat)) * (1 - 0.4 * smooth(3, 9, windSpeed(pm)));
+    const nU = (vnoise(lon / 12, lat / 12, hours / 48, this.seed + 213) - 0.5) / VNOISE_SD;
+    const nV = (vnoise(lon / 12, lat / 12, hours / 48, this.seed + 214) - 0.5) / VNOISE_SD;
+    const p850 = { u: pm.u + sigA * nU, v: pm.v + sigA * nV };
 
     // ---- 500 hPa：急流层与 850 hPa 的加权（0.45 / 0.35，[估算]：按 WX11-DESIGN §1.2 表里日本 1 月 500 hPa 25–40、华南 7 月 < 5 m/s 定），再加 ±15° ----
     const r500 = 15 * (2 * rank(vnoise(lon / 13, lat / 13, hours / 32, this.seed + 221)) - 1);
@@ -945,9 +971,13 @@ export class WeatherField {
     const z0 = Math.exp(Math.log(z0s) + (Math.log(0.2) - Math.log(z0s)) * land);
     // 埃克曼：地面风比边界层顶逆时针偏 海上约 15°、陆上约 35°（[教科书] 海上 10–20°、陆上 25–45°）；赤道附近科氏力趋零，偏角压掉
     const ekman = (15 + 20 * land) * Math.sign(lat || 1) * smooth(2, 8, Math.abs(lat));
+    // 日变化（WX11a-b）：白天对流混合把上面的动量带下来，陆上地面风午后最大、夜里最小，海上很弱 [DD99]。
+    // 振幅：陆上 ±20%（地面风 3–5 m/s 时约 ±0.6–1 m/s）、海上 ±3%，最大在当地 14 时（[估算]，量级按 [DD99]）
+    const hourLocal = (((hours + lon / 15) % 24) + 24) % 24;
+    const diurnal = 1 + (0.03 + 0.17 * land) * Math.cos((2 * Math.PI * (hourLocal - 14)) / 24);
     const k10 = Math.log(10 / z0) / Math.log(hm / z0);
-    const sfc = rotScale(p850, ekman, k10);
-    return { sfc, p850, p500, p250, z0, ekman, land };
+    const sfc = rotScale(p850, ekman, k10 * diurnal);
+    return { sfc, p850, p500, p250, z0, ekman, land, diurnal };
   }
 
   /** 便捷：一处一刻、某高度（km）的风。要反复查同一处时先 wind() 再 windAt(profile, 高度)，别重复算整条廓线 */
