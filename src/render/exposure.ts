@@ -228,6 +228,7 @@ void main() {
 //   做法：闪光是已知的事件（频闪开关 uStrobe、闪电亮度 uFlash.w，main.ts 每帧写进 Exposure.flash）。
 //   · 不闪时，粗格状态 S 每帧直接等于当帧（k = 1），扣除量 0——巡航、画面平移时与 T48b 逐位相同；
 //   · 闪的时候，S 只按 τ 0.3 s 慢慢跟（闪光基本不进适应），扣除量 T = 当帧粗格亮度 − 闪光前的 S（线性，按更新前的状态）；
+//     T 再取 3×3 最小值（孤立的一格一格——闪的那几十毫秒里灯点跨格的运动差——归零，复审 P1-c）；
 //     最终合成用「细低通 − T」算局部适应，并让 T 在这个像素里占的那一份不吃局部适应（见 FINAL_FRAG 的 transFrac）。
 //   被推翻的写法（handoff/T48c.md「返工」、T48c-review.md）：
 //   · 整张半分辨率低通做指数平滑：移动的灯点跨纹素都要「先亮、再被压」，运动中整片抖动约 1.6 倍；
@@ -246,8 +247,19 @@ uniform float uBloomLevels;
 uniform float uLocalRate;  // 闪光期间状态跟随当帧的速率（1/秒）
 uniform float uFlash;      // 闪光程度（0 = 没在闪，1 = 在闪），见 Exposure.flash
 uniform float uDt;
+uniform int uMode;         // 0 = 更新状态，1 = 扣除量做 3×3 取最小值（输出 R）
 varying vec2 vUv;
 void main() {
+  if (uMode == 1) {
+    // 闪光的扣除量在空间上是成片、平滑的（频闪的大光晕、闪电照亮的云）；闪的那几十毫秒里灯点跨格的运动差是孤立的一格一格，
+    // 取 3×3 最小值后归零（复审 P1-c：不取时频闪帧里远处城区按 16 px 方块变亮，1 km 均值 +8、分块 p95 +32）
+    ivec2 p = ivec2(gl_FragCoord.xy), sz = textureSize(uPrevLocal, 0) - 1;
+    float m = 1e30;
+    for (int i = -1; i <= 1; i++)
+      for (int j = -1; j <= 1; j++) m = min(m, texelFetch(uPrevLocal, clamp(p + ivec2(i, j), ivec2(0), sz), 0).g);
+    gl_FragColor = vec4(m, 0.0, 0.0, 1.0);
+    return;
+  }
   // 一格 = 眩光纹理 LOCAL_CELL × LOCAL_CELL 纹素：每次双线性取样正好是 2×2 纹素的平均（偏移 ±1、±3…个纹素）
   const int H = LOCAL_CELL / 2;
   float s = 0.0;
@@ -285,7 +297,7 @@ uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 
 uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
 uniform vec3 uNightLocal;     // T48b 夜里窗外的局部适应：低通亮度超过中灰 x 档的部分，整个像素压暗 y × 超出量（log2）；y = 0 关；z：T48c 机翼翼面自身参与的比例（见下文）
 uniform float uLocalFrac;     // T48c 调试：闪光份额不吃局部适应的开关（1 开）
-uniform sampler2D uLocalLum;  // T48c 粗网格的闪光扣除量（LOCAL_FRAG 的 G：线性亮度，与 glare 同单位；不闪时为 0）
+uniform sampler2D uLocalLum;  // T48c 粗网格的闪光扣除量（LOCAL_FRAG 取过 3×3 最小值的 R：线性亮度，与 glare 同单位；不闪时为 0）
 uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
 uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透明度 x→y 之间由 0 过渡到 1，z = 1 开 / 0 不看云（整窗都给）
 uniform float uDayHiSatRoll;  // TM01 返工：收回段按饱和度前移的倍数（见 dayHighlightGain）
@@ -434,7 +446,7 @@ void main() {
   // T48c 粗网格上「刚刚突然变亮」的线性亮度（频闪 / 闪电，与 glare 同单位；冻结、稳态时为 0）和它在这个像素里的份额：
   //   这一份（眩光里新增的闪光）不吃局部适应——否则常亮位置灯旁被「闪光前的适应」压着，闪光的白雾在灯周围成了暗盘（审查 P1-b：
   //   即使按闪光前的状态适应，灯把自己周围压暗了，叠上去的闪光在那里也被压暗，径向剖面 r 15 → 55 反而上升 15–25 级）
-  float transient = texture(uLocalLum, vUv).g;
+  float transient = texture(uLocalLum, vUv).r;
   float transFrac = uLocalFrac * clamp(uGlare * transient / max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12), 0.0, 1.0);
   // 舱内色适应：只改色度，亮度保持（亮度适应已由上面的曝光负责）；遮罩是解析的，交界处按 alpha 过渡
   vec3 ca = max(LMS2RGB * (catGain * (RGB2LMS * c)), vec3(0.0));
@@ -599,8 +611,9 @@ function material(fragmentShader: string, uniforms: Record<string, THREE.IUnifor
  * T48b「夜城不连成奶白平台」（只在夜里的窗外，门控同 T48 的 nightO × 窗外遮罩）：
  *   ① AgX 之前按眩光低通亮度 b 局部适应：x ·= 2^(−0.6 · 软铰链(log2(b / 0.18) − 3))，城区的地毯光被压回 AgX 的线性段，灯点 / 路网（低通之上的细节）照原样；
  *   ② T48 色度保持的目标改成「同色相、亮度 = AgX」，放不下时向同亮度的白去饱和（旧写法按 1/max 降亮度，把所有过曝的灯压到同一亮度）。
- *   T48c：机翼上（TM02 的 dW 判据）只压眩光那一份 + 翼面自身的 0.85；① 的低通 b 减去粗网格上的瞬态（LOCAL_FRAG，
- *     1/16 屏幕的粗网格，对数域指数平滑，变亮 τ 0.25 s / 变暗 0.1 s；瞬态按线性亮度算、3×3 腐蚀后从细低通里扣掉），频闪、闪电这类大片瞬态不当帧把周围压暗，移动的灯点仍即时适应。
+ *   T48c：机翼上（TM02 的 dW 判据）只压眩光那一份 + 翼面自身的 0.85；① 的低通 b 减去已知闪光的扣除量（LOCAL_FRAG：main.ts 写 Exposure.flash，
+ *     只在频闪 / 闪电期间，屏幕 1/16 粗网格的线性亮度状态按 τ 0.3 s 跟，扣除量 = 当帧 − 闪光前的状态，再取 3×3 最小值），
+ *     闪光那一份不吃局部适应；不闪时扣除量 0，与 T48b 逐位相同。
  * 各项都是 min / smoothstep 的组合，对 o、c、h 连续；o、c、h 本身经过时间适应，所以不会闪。
  * 参数的来源：六个场景的统计（apps/voyage/scripts/cabin-luminance.playwright.js + cabin_luminance.py），
  * 目标是用户给的屏幕亮度（白天舱壁 150–185、关灯夜里 25–45、窗最亮）。这是经验模型，不是视觉科学的定量结果。
@@ -697,7 +710,7 @@ export class Exposure {
     true,
   );
 
-  /** T48c 夜间局部适应的闪光扣除（见 LOCAL_FRAG）：眩光纹理 1/8 尺寸（屏幕 1/16）、同类型的 RG ping-pong（R = 状态、G = 扣除量），第一次 render 时按眩光纹理建 */
+  /** T48c 夜间局部适应的闪光扣除（见 LOCAL_FRAG）：眩光纹理 1/8 尺寸（屏幕 1/16）、同类型的 RG ping-pong（R = 状态、G = 扣除量）+ 一张取过 3×3 最小值的扣除量，第一次 render 时按眩光纹理建 */
   private local: THREE.WebGLRenderTarget[] = [];
   private localReset = true;
   /** 闪光期间状态跟随的 τ：0.3 s（频闪 50 ms、闪电 0.1–0.2 s 基本不进适应；0.25 时 50 ms 频闪结束时机翼上变暗 ≤ 3 级的像素约 210 个，0.3 时约 110） */
@@ -709,7 +722,10 @@ export class Exposure {
     uLocalRate: { value: 1 / 0.3 },
     uFlash: { value: 0 },
     uDt: { value: 0 },
+    uMode: { value: 0 },
   });
+  /** 取过 3×3 最小值的扣除量（R），最终合成读它 */
+  private localEroded: THREE.WebGLRenderTarget | null = null;
   /**
    * 闪光程度（0–1）：main.ts 每帧写（翼尖频闪开关、闪电亮度），只有它大于 0 时局部适应才把新增的亮度当闪光扣掉。
    * 不接线时恒为 0，逐位退回 T48b。
@@ -737,8 +753,10 @@ export class Exposure {
     const w = Math.max(1, Math.ceil(img.width / LOCAL_CELL)), h = Math.max(1, Math.ceil(img.height / LOCAL_CELL));
     if (!this.local.length || this.local[0].width !== w || this.local[0].height !== h || this.local[0].texture.type !== bloom.type) {
       for (const t of this.local) t.dispose();
+      this.localEroded?.dispose();
       const opts = { type: bloom.type, format: THREE.RGFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
       this.local = [new THREE.WebGLRenderTarget(w, h, opts), new THREE.WebGLRenderTarget(w, h, opts)];
+      this.localEroded = new THREE.WebGLRenderTarget(w, h, { ...opts, format: THREE.RedFormat });
       this.localReset = true;
     }
     const [prev, next] = this.local;
@@ -748,10 +766,14 @@ export class Exposure {
     u.uPrevLocal.value = prev.texture;
     u.uDt.value = this.localReset ? 1e9 : this.localDt ?? (dt > 0 ? dt : 1e9);
     u.uFlash.value = Math.min(Math.max(this.flash, 0), 1);
+    u.uMode.value = 0;
     this.pass.render(this.localMat, next);
+    u.uPrevLocal.value = next.texture;
+    u.uMode.value = 1;
+    this.pass.render(this.localMat, this.localEroded!);
     this.local = [next, prev];
     this.localReset = false;
-    this.finalMat.uniforms.uLocalLum.value = next.texture;
+    this.finalMat.uniforms.uLocalLum.value = this.localEroded!.texture;
   }
   render(hdr: THREE.Texture, bloom: THREE.Texture, dt: number) {
     this.finalMat.uniforms.uBloom.value = bloom;
