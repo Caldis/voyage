@@ -545,6 +545,11 @@ void main() {
     if (refineOn) {
       float hT = length(ro + rd * t) - BOTTOM;
       if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;
+#ifdef CLOUD_STORM_SKIP
+      // TW04：只落在砧盾那一段（不在塔的包围柱、也不在层状云包络里）的空白再放宽一倍：砧盾是软边的冰晶云，不做表面细化，
+      // 巡航高度常在砧的高度层里，近水平的视线要在层里空走上百公里（砧盾把「够得着雷暴」的视线变多，这一段是新增开销的大头）
+      if (!(t >= wxSeg.x && t < wxSeg.y) && !(t >= laySeg.x && t < laySeg.y)) emptyK = 4.0;
+#endif
     }
     float dt = fine > 0 ? fineDt : dtBase;
     float stepLen = (fine > 0 || (!wasEmpty && !wasThin)) ? dt : emptyK * dt;
@@ -575,6 +580,9 @@ void main() {
 #ifdef CLOUD_WEATHER
     float stormW = gStormW;
     float stormAO = gStormAO;
+#ifdef CLOUD_STORM
+    bool pileusHit = gStormPileus > 0.5;   // 幞状云（TW04，受光加虹彩，见下）
+#endif
     bool soft = SOFT_SKIP && gStormSoft > 0.5;
     // 只在进入雷暴 / 台风时细化（层状云不必，保持原样）；这段会被小步重新采样，进云那一步的密度并没有丢
     if (dens > 0.002 && stormW > 0.5 && !soft && wasEmpty && fine == 0 && dtBase > 0.1 && t > seg.x) {
@@ -751,6 +759,18 @@ void main() {
       // 所以晴天积云只取 0.2；飞机在云里（uCloudImmersion，看到的全是云体深处）取 2，雷暴 / 台风塔身（stormW，只在天气宏里）取 1
       sunScatter += (tailK / (4.0 * M_PI)) * (1.0 / (1.0 + 0.1125 * od) - exp(-od));
       vec3 sunLight = keyLight(r, up) * sunScatter;
+#ifdef CLOUD_STORM
+      // 幞状云的虹彩（TW04 / SPEC-PILEUS）：新生云滴小而均匀，太阳附近 10–30° 的衍射在薄云上分成淡淡的粉 / 绿色带（虹彩云）。
+      // 色带按离太阳的角度排，角度周期随这片云的云滴大小变（沿云面缓慢变化，带子不是同心圆的整齐一圈）；
+      // 只调制直射那一份的颜色（能量近似不变），离太阳远（> 35°）或正对太阳（< 6°，被日晕 / 眩光盖住）淡出
+      if (pileusHit) {
+        float ang = acos(clamp(cosT, -1.0, 1.0));
+        float per = 0.13 + 0.05 * sin(dot(p.xz + uCloudOffset, vec2(0.9, 0.7)));
+        vec3 irid = 0.5 + 0.5 * cos(6.2831853 * (ang / per + vec3(0.0, 0.33, 0.67)));
+        float wI = smoothstep(0.1, 0.2, ang) * (1.0 - smoothstep(0.45, 0.62, ang));
+        sunLight *= mix(vec3(1.0), 0.45 + 1.1 * irid, 0.55 * wI);
+      }
+#endif
 #ifdef WONDER_LAYER
       // 奇观的投影椭球挡住直射光（岛在云海上的影子）
       float tp = t + stepLen * jitter;
