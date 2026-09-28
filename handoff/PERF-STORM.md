@@ -1,4 +1,4 @@
-# PERF-STORM · 雷暴 / 浓云海场景云步进降到预算内（交接，进行中）
+# PERF-STORM · 雷暴 / 浓云海场景云步进降到预算内（交付）
 
 - 分支 `worktree-agent-ae5c1bc2f798e9a35`，开发端口 **5268**（简报给的 5258 被 VOY-DEFAULT 的 worktree 占用），对照（master 92b97ee）`D:\Code\opus-test\tmp\perfstorm-base` 端口 5328。
 - 改动：`src/clouds/clouds.ts`（天气宏里的步进）、`src/clouds/clouds.glsl.ts`（**只动乳状云 `pouchField` / `mammatusDensity` 两处，几何逐位不变**；C-TOFU 在同文件改形状，合并时请协调者处理）。
@@ -45,10 +45,11 @@
 | 程序 | master | 交付 | Δmin |
 | --- | ---: | ---: | --- |
 | cloud-march | 939 | 855 | −8.9%（默认程序预处理后与 master 逐字相同，属噪声） |
-| cloud-march-storm | 4414 | 4991 | **+13.1%**（第 4 轮 CPU 57%，负载下；待定因） |
+| cloud-march-storm | 4414 | 4991 | **+13.1%**（第 4 轮 CPU 57%，负载下；拆分见下） |
 | cloud-march-typhoon | 8345 | 8144 | −2.4% |
 
-cloud-march-storm 的 +13% 超了「不升」的要求，正在拆是 ① 的 `continue`（循环里多了动态分支）还是 ② 的跳跃（见「正在做」）。
+拆分（`shader-budget --variants handoff/PERF-STORM-fxc-variants.mjs --only cloud-march-storm --rounds 5`，相对交付版按最小值）：撤掉 ② 空域跳跃 −7.4%，撤掉 ① 的 `continue` +1.6%、撤掉深度剪枝 −1.6%（都在噪声内），三项全撤 −9.9%。即**增量主要来自 ②（约 +7~8%），① 基本不花编译**；合计约 +10~13%，贴着单任务 10% 门槛、超了简报「不升」的要求。把 `continue` 写成 if 块（earlyIf）−4.3%，量级在噪声内，没有换。
+**这些数都是负载下测的（CPU 30–57%），待安静窗口复测**；compile-ledger 没有追加（负载下的数字进账本会误导，协调者要求收尾，留给 PERF-15 在安静窗口跑 `shader-budget --ledger --only cloud-march,cloud-march-storm,cloud-march-typhoon`）。若复测后仍超，可选：撤掉 ②（GPU 从 ×0.744 回到 ×0.887，冷编译回到约 +2%）。
 
 ## 做过、不采用的（数字都是 gpu-ab 配对比）
 
@@ -65,12 +66,17 @@ cloud-march-storm 的 +13% 超了「不升」的要求，正在拆是 ① 的 `c
 
 台风的开销拆分（只作定位，关掉部分画面是错的）：完整雨带 58%、受光版雨带 23%、受光用解析大形 ×0.76、卷云盖 5%、眼壁 9%。
 
-## 正在做 / 下一步
+## 还不够 / 留给后续（协调者 2026-09-29 要求收尾交付，以下不再追）
 
-1. 冷编译 +13% 定因：`shader-budget --variants` 按 ①、② 分别撤回；若是 ① 的 `continue`，试把条件写成不带 `continue` 的 `if` 块。
-2. 用户分辨率补测 sea-sc-low / noon-cumulus / night-city 整帧。
-3. compile-ledger 追加一行（`shader-budget --ledger --only cloud-march,cloud-march-storm,cloud-march-typhoon`）。
-4. 交付前关 5268 / 5328、删 `tmp/perfstorm-base`。
+1. storm-sc-low 按预审口径约 4.2 ms，没到 ≤ 4 ms；用户分辨率雷暴天整帧仍 121–155% 预算。剩下的大头是受光（关掉受光 ×0.61–0.72）和砧本身，都要改画面才能省，需要美术取舍。
+2. 台风没降：台风变体对寄存器极敏感，试过的等价写法都不省（上表）；可省的只有「受光用解析大形」（×0.76）等改画面的做法。
+3. 冷编译与 compile-ledger 待安静窗口复测（上节）。
+4. 用户分辨率的晴天 / 夜城整帧没补测（sea-sc-low 场景加载超时；默认程序预处理后与 master 逐字相同，1600×1200 gpu-ab 在离散内）。
+
+## 坑
+
+- `ab` / `gpu-ab` 里 storm-graze（场景对象，altitude 3）和 sea-sc-low 偶发 `page.waitForFunction: Timeout 180000ms`，整个工具随之退出、后面的 job 全丢。重跑一般能过；长链路建议每个 job 单独跑。
+- `passes` 副本在负载下同场景两次差 30–100%，已写进 README 性能坑点。
 
 ## 复现
 
