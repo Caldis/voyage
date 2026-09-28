@@ -1,0 +1,4 @@
+[
+  { "name": "noon-cumulus-close", "scene": { "name": "noon-cumulus-close", "p": { "preset": "wpac", "time": 720, "wing-pos": "8" }, "head": [0, 0.0, -0.03] } },
+  { "name": "noon-cumulus", "scene": "noon-cumulus" }
+]

@@ -1,0 +1,3 @@
+[
+  { "name": "fz-panel-dev", "p": { "preset": "wpac", "time": 720, "wing-pos": "8" }, "js": "const p = document.getElementById('panel'); p.classList.remove('hidden'); const s = document.getElementById('dev-section'); s.hidden = false; s.scrollIntoView({ block: 'center' }); const r = s.getBoundingClientRect(); return { sectionH: Math.round(r.height), panelScrollH: p.scrollHeight, outs: ['focus-mag-out', 'focus-ms-out', 'focus-vignette-out'].map((id) => document.getElementById(id).textContent) };" }
+]

@@ -48,6 +48,16 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 #info { margin: 0; white-space: pre-wrap; font: 12px/1.6 ui-monospace, Consolas, monospace; color: var(--text); }
 .hint { margin: 0; color: var(--muted); font-size: 12px; }
 .credits { margin: 0; color: var(--muted); font-size: 11px; }
+/* 开发者区（FOCUS-ZOOM 起建）：与用户控件隔一道细线 */
+.dev-section { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.12); }
+.dev-section h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.dev-section h2 small { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: 6px; }
+.dev-section output { font-variant-numeric: tabular-nums; }
+/* 聚焦观察的暗角：中心 55% 半径内完全透明，往四角压到 45% 黑；整体不透明度由 focus-zoom.ts 按过渡进度 × 强度设 */
+#focus-vignette {
+  position: fixed; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.45) 100%);
+}
 .credits a { color: var(--text); }
 
 @media (max-width: 600px) {

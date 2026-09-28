@@ -827,6 +827,7 @@ uniform bool uResetDepth;   // 右半（深度）这一帧从停用变回启用�
 uniform vec2 uCloudResolution;
 uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；与步进程序、曝光的 uWhiteout 同一个 uniform 对象，C11）
 uniform float uSinceReset;     // 自上次 reset 起的帧数（reset 帧 = 0，C12b 审查）
+uniform float uPrevTanHalfFov; // 上一帧的垂直半视场正切（FOCUS-ZOOM：历史按它投影，视场不变时与 uTanHalfFov 相同）
 varying vec2 vUv;
 // 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半是云的深度——窗外程序要拿它判断云在山前还是山后
 // （clouds.glsl.ts 的 cloudBeforeGround），放进同一张纹理，窗外 / 机翼程序不多占 sampler。两半各自时间累积、各自邻域夹取。
@@ -916,7 +917,7 @@ void main() {
   float blend = 0.12;
   vec2 puv = vec2(-1.0);
   if (v.z < 0.0) {
-    vec2 ndc = v.xy / (-v.z) / uTanHalfFov;
+    vec2 ndc = v.xy / (-v.z) / uPrevTanHalfFov;  // 上一帧的视场（FOCUS-ZOOM：聚焦时视场逐帧变）
     ndc.x /= uResolution.x / uResolution.y;
     puv = ndc * 0.5 + 0.5;
   }
@@ -1240,6 +1241,8 @@ export class Clouds {
   /** 云的渲染分辨率相对全屏的比例 */
   resolutionScale = 1;
   private reset = true;
+  /** FOCUS-ZOOM：视场变化的帧把 resolve 的「reset 后帧数」压到不超过它（见 render）；设成 Infinity 就是改前的行为（测量对照用） */
+  zoomSinceResetCap = 8;
   private readonly prevCamBasis = new THREE.Matrix3();
   private readonly prevCabinToWorld = new THREE.Matrix3();
 
@@ -1439,6 +1442,7 @@ export class Clouds {
         uCloudResolution: this.marchMat.uniforms.uCloudResolution,
         uCloudImmersion: EXPOSURE_WHITEOUT, // 云里的空间平均（C11，见 RESOLVE_FRAG）
         uSinceReset: { value: 0 },
+        uPrevTanHalfFov: { value: (viewUniforms.uTanHalfFov?.value as number | undefined) ?? 1 },
       },
     });
   }
@@ -1933,6 +1937,12 @@ export class Clouds {
     r.uReset.value = this.reset;
     // reset 后的帧计数（C12b 审查：reset 后按等权平均兜底收敛，见 RESOLVE_FRAG 末尾）
     r.uSinceReset.value = this.reset ? 0 : Math.min(r.uSinceReset.value + 1, 1e4);
+    // FOCUS-ZOOM：视场这一帧变了（聚焦放大 / 还原的过渡）——历史已按上一帧视场正确投影（uPrevTanHalfFov），但放大时历史的
+    // 角分辨率比这一帧粗（被拉伸、发糊），缩小时是欠采样。把「reset 后帧数」压到 ≤ zoomSinceResetCap，resolve 的等权兜底
+    // blend ≥ 1/(n+1) 让新样本多占一些、历史照样保留（不清空，不出 1 spp 噪点）。实测（handoff/FOCUS-ZOOM.md，sea-sc 4×）：
+    // 过渡中误差与不压持平，过渡结束后第 4 / 8 / 16 帧对真值误差 −12% / −17% / −15%；压到 ≤ 4 过渡中更噪，≤ 8 两头都不吃亏
+    const tanNow = this.view.uTanHalfFov?.value as number | undefined;
+    if (tanNow !== undefined && tanNow !== r.uPrevTanHalfFov.value) r.uSinceReset.value = Math.min(r.uSinceReset.value, this.zoomSinceResetCap);
     // 云缓冲右半（云的平均深度，T38）只在附近有高出海面的真实地形时写（PERF-11）：它只用来判断「云在山前还是山后」，
     // 海面 / 没开真实地理时用不上，却让 resolve 多一倍像素。停用期间右半不更新（窗外按 uCloudDepthOn = 0 不读），
     // 重新启用的那一帧右半不取历史（旧内容早已过时）
@@ -1952,5 +1962,7 @@ export class Clouds {
     this.reset = false;
     this.prevCamBasis.copy(camBasis);
     this.prevCabinToWorld.copy(cabinToWorld);
+    // FOCUS-ZOOM：记下这一帧的视场，下一帧 resolve 按它把历史投影回来（聚焦过渡时视场逐帧变，按当前视场投影会把历史整体缩放错位）
+    if (v.uTanHalfFov) r.uPrevTanHalfFov.value = v.uTanHalfFov.value;
   }
 }

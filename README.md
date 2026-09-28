@@ -47,6 +47,9 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 
 - 启动：仓库根目录 `pnpm dev:voyage`，打开 http://127.0.0.1:5181
 - 在画面上按住拖动 = 转头（窗框视差），滚轮 = 前后挪（靠近 / 远离舷窗），双击复位；`H` 隐藏面板
+- 聚焦观察（FOCUS-ZOOM）：在画面上**按住不动**约 0.2 秒（位移不超过 5 px），视场平滑收窄到「默认 / 倍率」（默认 2.5×，缓入缓出约 0.2 秒），松开平滑还原；按下就拖走的仍是转头。聚焦中照样可以拖动转头，灵敏度按倍率降低。触屏长按同理；键盘按住 `Z` 等价（焦点在输入框 / 下拉里时不触发）。聚焦时四角轻微压暗（CSS 叠层，不进渲染管线）
+- 头部左右限位（FOCUS-ZOOM 追加）：头往舷窗前伸得越多、视场越宽，左右能挪的就越少——保证视锥永远看不到没建模的前后机舱（纯黑 / 空白侧壁）和本窗很斜时的窗洞黑带；聚焦（视场变窄）时可以转得更偏。拖到限位附近有弹性阻尼，前伸或松开聚焦使限位收紧时头部被平滑拉回。限位表与判据见 `handoff/FOCUS-ZOOM.md`，离线重算 `node --experimental-transform-types --no-warnings apps/voyage/handoff/FOCUS-ZOOM-limits.mts`
+- 开发者区（`?dev`、`?dev=1` 或 `Shift + D` 显示，记在 localStorage `voyage.pref.panel`）：聚焦倍率（1.5–8×）、聚焦过渡（0–600 ms）、聚焦暗角（0–100%），双击复位。URL `?zoom=4` / `?zoomms=300` 本次优先（`zoom` 允许 1 = 关掉聚焦，对照用）且不写记忆；亲手调过的值记在 `voyage.focus`（`{v:1, mag, ms, vignette}`，只记 `isTrusted` 的操作）
 - 快捷键（UX-1a 统一守卫）：`H` / `B` / `M` / `N` 在焦点位于文字输入框、日期框、下拉时不触发（焦点在复选框、滑条、按钮上照常），带 `Ctrl` / `Alt` / `Meta` 时也不触发；方向键在焦点位于任何输入框 / 下拉时归控件自己。面板下拉用鼠标选完会把焦点还给画面（键盘在下拉里挑选项时不抢焦点）
 - 声音（T11）：默认关；面板勾选「声音」或按 `M` 开启（浏览器要求用户手势），背景板模式下照常播放、`M` 仍可开关
 - 时间：日期 + 当地时刻滑块，或用 60× / 600× 快进看日落
@@ -79,7 +82,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/main.ts` | 创建渲染器与各系统、主循环编排（各 pass 调度）、`setPreset` / `snapAll` / `resize`、调试句柄 `window.__voyage` |
 | `src/state.ts` | 共享类型 `VoyageState` / `Preset`、`CRUISE_PITCH_DEG`、`$` 小工具 |
 | `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进）；自动驾驶（T49，`autopilotOf(state)`：沿航线 / 手动航向 / 直飞 / 跑道形等待航线，坡度与滚转速率按真实时间限制） |
-| `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步 |
+| `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`、时间 / 高度控件同步；开发者区（`?dev` / `Shift + D`）与聚焦设置、`Z` 键 |
+| `src/view-presets.ts` / `src/focus-zoom.ts` / `src/head-limits.ts` | 视角预设与画布输入（按住拖动转头、滚轮前后、双击复位、按住不动聚焦）；聚焦观察（视场过渡、设置与记忆、暗角叠层）；头部左右限位（按前伸 / 视场 / 座位 / 舱等求不露出未建模区域的上限，拖动弹性阻尼）（FOCUS-ZOOM） |
 | `src/astro.ts` | 太阳 / 月亮位置、月相、当地→赤道坐标矩阵（astronomy-engine） |
 | `src/sky-assets.ts` | 星图（RGB：BSC5 星表格子，每格最多一颗星，T41；A 通道是银河）、月面贴图 |
 | `src/light-pollution.ts` | 城市光污染的天空背景（T09）：从地面夜光估算，只压银河的可见度 |
@@ -151,6 +155,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
 - **航向 / 接力调试**（T49）：面板底部「立即触发到达 / 接下一段（调试）」按钮 = `__voyage.director.forceArrive()`：不等飞到终点，立即走一次「到达」（自动航线接下一段，要掉头 > 90° 时照常排进遮挡队列；直飞模式转入盘旋）。其他句柄：`__voyage.director.ap`（自动驾驶：`mode` / `selHeading` / `turnDir` / `timeScale` / `hold` / `nextCourse` / `holdCourse`）、`director.setHeading(deg, dir?)`、`director.turnBy(±deg)`、`director.hold()`、`director.directTo("ITM")`、`director.resumeRoute()`、`director.nextLeg`（离终点 400 km 内预挑的下一段）、`director.describeNav()`。离线复现 / 单测（不开浏览器，几秒跑完）：`node --import ./handoff/T49-resolve.mjs --experimental-transform-types --no-warnings handoff/T49-test.mts`；按真实时间打印航向 / 坡度曲线与 > 60° 转向事件：同样的前缀跑 `handoff/T49-sim.mts [流速] [真实分钟] [预设]`。
 - `window.__voyageStartup`：启动各阶段耗时。
+- **聚焦 / 头部限位**（FOCUS-ZOOM）：`__voyage.focus`（`mag` / `durationMs` / `vignette`、`factor` 当前放大倍数、`progress` 过渡进度、`hold('script', true|false)` 脚本按住 / 松开；冻结时要直接到位就再设 `progress = 1`）；`__voyage.headLimits`（`pos` / `neg` 这一帧头部 x 两侧的上限，`clamp(x)`）；`__voyage.clouds.zoomSinceResetCap`（视场变化帧的「reset 后帧数」上限，默认 8，`Infinity` = 改前行为）。截图时聚焦要走 `focus`，直接改 `sceneMat.uniforms.uTanHalfFov` 会在下一帧被主循环写回。测量脚本：`handoff/FOCUS-ZOOM-input.mjs`（真实鼠标 / 键盘 / 触摸验收）、`FOCUS-ZOOM-cloud.mjs`（视场变化时云时间累积对真值误差）、`FOCUS-ZOOM-gpu-*.json`（`gpu-ab` 1× / 4× / 8×）。
 - **CPU / GPU 进程剖析（PERF-CPU，`scripts/cpu-prof.mjs`，默认有头 Chrome）**：`node scripts/cpu-prof.mjs --port <端口> [--scenes default,noon-cumulus,night-city,storm-day,in-cloud,route-1x,route-60x] [--seconds 6] [--viewport 2560x1300 --dpr 1.5] [--angle d3d11|d3d11-warp] [--trace] [--no-gl] [--out tmp/perfcpu/x.json]`。每个场景输出：rAF 间隔中位 / p95 / 最大、每个 rAF 回调里主循环 JS 的耗时；主线程忙碌比例（`Performance.getMetrics`）；各进程 CPU（`SystemInfo.getProcessInfo`，100% = 一核）与最忙的线程（带 Chrome 线程名：`CrRendererMain` / `CrGpuMain` / `DedicatedWorker thread` / `VizCompositorThread` / `ThreadPoolForegroundWorker`…，`scripts/lib/thread-cpu.ps1`，仅 Windows）；Worker 消息频率；主线程 JS 自耗时 Top N（CDP Profiler，ms/帧）；WebGL 调用统计（每帧次数 / 耗时，另列 getError / readPixels / getParameter / clientWaitSync 这类同步调用）；`--trace` 再录一段 Performance trace，按线程列事件自耗时（样式 / 布局 / 绘制 / GPU 命令解码）。场景除 `scenarios.mjs` 的名字外还有 `default`（打开页面什么都不设）、`route-1x` / `route-60x`（hnd-cts 连续航程）、`same`（不重设再量一次）、`wait<N>`（等 N 秒）、`A` / `B`（执行 `--jsA` / `--jsB` 后再量，同页交替对照；代码可写 `file:<路径>`）。持测量锁。
 - URL 参数 `?lut16`：大气 LUT 强制用半精度（T36 改前的行为、没有 32 位浮点线性过滤的设备），用来对照深暮光的阶梯。
 - 截图前：把 `head` 固定在 `{tx:0, ty:0.02, x:0, y:0.02, tz:-0.3, z:-0.3}`、`uCloudOffset` 归零或设成固定值、隐藏面板（加 `hidden` 类），前后对比才有意义；截图放 `tmp/screenshot/voyage-*.png`。
@@ -373,6 +378,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 
 <a id="pit-cloud"></a>
 ### 云
+
+- **视场会变了（FOCUS-ZOOM 聚焦）：resolve 必须按上一帧的视场投影历史**。现象：只改 `uTanHalfFov`、resolve 还拿本帧视场去算历史的 ndc，放大 / 还原的 0.2 秒里整片云缓冲被按错误的比例取历史，云边拖出一圈缩放方向的重影（`handoff/FOCUS-ZOOM-cloud.mjs` sea-sc 4×：过渡中对真值误差 0.41–0.47、云边梯度能量比 0.36–0.65，正确投影后 0.12–0.13 / 0.80）。修法：`uPrevTanHalfFov`（`clouds.render` 末尾记下这一帧的视场）；视场不变时两者相等，resolve 逐位不变。另外放大时历史的角分辨率比这一帧粗（被拉伸、发糊），视场变化的帧把「reset 后帧数」压到 ≤ 8（`zoomSinceResetCap`），resolve 的等权兜底让新样本多占一些，过渡后第 4 / 8 / 16 帧误差 −12% / −17% / −15%；直接 reset 过渡中是 1 spp 噪点（误差 0.47–0.51），不可取。以后别处再改视场 / 投影（例如宽屏、换相机模型），同样要让 resolve 知道上一帧的投影。
 
 - **天气渐变不能走 `clouds.applyPreset` / `snap()`**（T19b）：会清掉时间累积，并让云影图整张在一帧里重建（3–8 ms）；连续航程每 0.25 s 推进一次云量，就会变成持续卡顿。修法：`clouds.setParams(p, true)`（gradual），云影图按后台分片节奏跟上；借遮挡的硬切才用 `setParams(p, false)`。
 - **占据网格只保护 ±128 km 内的雷暴 / 台风**（T19b）：网格外照样逐点求值，4 个单体在 300 km 外仍 +1–1.5 ms/帧，台风在 750 km 外 +2–3 ms/帧（`handoff/T19b-storm-cost.mjs`）。天气驱动因此只在 280 km（雷暴）/ 600 km（台风）内摆放；以后要放得更远，先在云程序里给网格外的雷暴 / 台风做 LOD。
@@ -683,6 +690,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   坑一：按真实折射率算，偏折是几十度 = 上百像素，点采样会在水珠里画出放射状条纹（像图钉），还读到窗板开口以外（那里 alpha = 0，黑）；`WATER_DEFLECT` 因此缩到物理值的约 1/10，开口外的样本退回不偏折。
   坑二：整圈暗环 = 空心圆圈；均匀的雾里折射前后一样，暗环是唯一可见的东西，必须弱且只留下缘。
   另：湿度按 ISA 气温门限（`flight.ts` 的 `outsideAirTempC`），高于约 4.6 km（ISA −15°C）不再挂水，已有的水按升华 / 吹干消退。
+- **舱内只建了侧壁（沿机身无限长）、本排与前一排座椅**（FOCUS-ZOOM 追加）：头前伸贴窗再往两侧挪（相机总看向窗板中心，于是斜着沿舱壁看），视锥边上的视线平行 / 背离侧壁时什么都打不到——纯黑（`rd.z < 1e-4` 一支）；再斜一点是消失点附近无限重复的窗；往下看更远处是「该有座椅却只有光秃侧壁」的空白舱。修法不在着色器补模型，而在相机上限位（`src/head-limits.ts`，每帧按前伸、高度、视场、画面宽高比、座位、舱等求头部 x 两侧的上限）：① 视线必须打到侧壁，且打到的点沿机身方向离眼睛不超过「眼睛所在深度处、与侧壁成 12° 的水平视线」的落点（消失点只在沿机身方向；上下方向侧壁弯回来，俯仰不受限，头最高 / 最低贴窗的截图都没露馅）；② 视线在碰到真有的两排座椅或侧壁之前，不能进入按同一排距外推的「幽灵座椅」包围盒；③ 下一条的窗洞黑带。识别：截图里窗框外侧出现大片纯黑 / 灰白无细节区，或 `__voyage.headLimits.pos/neg` 与头部位置对不上。以后要是补建了更多排座椅 / 过道 / 行李架，把 `head-limits.ts` 的判据放宽（`PHANTOM_ROWS`、`MIN_GRAZE_DEG`），限位表用 `handoff/FOCUS-ZOOM-limits.mts` 重算。
+- **很斜地看本窗时，窗板开口近侧有一条竖直纯黑带**（FOCUS-ZOOM 发现，着色器缺陷未修）：眼睛到窗板开口近侧边缘（x = ±0.12、z = 0.075）的视线与窗板法线夹角 ≥ 约 35° 时出现、越斜越宽（网格实测见 `handoff/FOCUS-ZOOM.md`；默认坐姿的视角到不了，前伸 + 侧挪 + 聚焦才看得到）。根因没查清（猜测是窗洞内衬挡住窗板的那一条，`scene.ts` 按窗板平面的 `inPane` 合成成窗外、而那里窗外 / 内衬都没有有效着色——**是假设，未验证**；`uDebug` 1 / 4 可以从这里查起）。现在由 `head-limits.ts` 的 `PANE_EDGE_MAX_DEG = 33°` 在相机上避开；修好 `scene.ts` 的合成后可以放宽。
 - **`fwidth` 做抗锯齿要设上限**：视线几乎贴着舱壁时，平面交点在无穷远处，导数巨大，会把遮光板、内衬、舱壁的颜色混在一起。
 - 舱内色适应不能拿舱内平均色直接当白点（灰世界）：舱壁本身是暖白，平均色偏暖就会被当成暖光抵消，白天舱壁依然冷灰。要先除以饰面的平均反照率（`uCabinRefAlbedo`）得到光源色。改了舱内主材的反照率要同步这个值。
 - **机翼自阴影用的距离场必须处处是真实距离的下界，包围要覆盖各个方向**（T22）：襟翼滑轨整流罩旧版只按展向 `|z − zf|` 包围，翼面上方几米高的点也只报几十厘米；软阴影估计 `14·d / 走过的距离` 把它当成「擦边」，整片上翼面被压暗，而且按步进采样离散成一圈圈年轮纹（夜景最明显），穿云时成迷彩块，小翼上成竖向分面、像镀铬。识别：`uWingDebug` 的 8（去自阴影）一开纹就没了；1（去鼓包）、4（去环境反射）无效。修法：包围加上竖直方向，最终距离再对包围取大兜底。改任何部件的距离场后都用 8 位对照一次。
@@ -798,12 +807,15 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   - 根因：前一晚 23:59:37 NVIDIA 驱动重装（系统日志 UserPnp 20003「为设备添加服务 nvlddmkm」），Chrome 的 GPU 进程 4 秒后重启时拿不到硬件 D3D 设备，退到 **WARP**（`Microsoft Basic Render Driver`，D3D11 的 CPU 软件光栅），之后一直不会自己切回（浏览器进程从 9/13 起没重启过）。本页在 WARP 上约 2.4 fps，WARP 的光栅线程占约 26 个核。硬件模式（RTX 5090、有头、1600×1200 或 2560×1300@1.5）各场景稳态都顶在 160 fps vsync，主线程 JS 约 1 ms/帧，**不是回归**。
   - 修法：用户侧完全重启 Chrome（`chrome://restart`），再到 `chrome://gpu` 确认「WebGL: Hardware accelerated」。代码侧：`src/boot/software-gl.ts` 启动时读渲染器字符串，命中 Basic Render / SwiftShader / llvmpipe 就在页面顶部提示原因与办法（`?swgl=1` 强制显示，`__voyage.softwareRenderer` 看判定）。
   - 识别：①页面顶部出现上述提示；②PowerShell `(Get-Process -Id <Chrome GPU 进程>).Modules | ? ModuleName -match 'nvwgf|Warp'`：有 `D3D10Warp.dll`、没有 `nvwgf2umx.dll` 就是 WARP（Chrome GPU 进程 pid 用命令行里的 `--type=gpu-process` 找）；③复现：`node scripts/cpu-prof.mjs --port <端口> --angle d3d11-warp --no-gl`（注意 `--use-angle=warp` 不是合法值，会退到 SwiftShader）。
+- **聚焦（放大）时整帧 GPU 约 ×1.2–1.6，主要是窗外占满全屏，不是 LOD 失控**（FOCUS-ZOOM，`gpu-ab` 8 轮带 A/A，1600×1200）：整帧 4× 时 sea-sc ×1.16、noon-cumulus ×1.43、fuji-day ×1.55、night-city ×1.56、sunset-wing ×1.41；分 pass 看云 ×1.18–1.89、机翼 ×1.3–2.2（机翼占满画面）、窗外 + 舱内 ×1.07–1.20。对照：不聚焦、头贴窗（z = −0.03，窗也占满全屏）的 noon-cumulus 本来就比默认坐姿贵 22%，4× 聚焦只比它再多 17%。用户分辨率下晴天积云约 5.4 → 7.7 ms，超 160 Hz 预算；所以聚焦中（含还原后 1.5 s）暂停自动调档（`quality.pauseDecisions`），宁可这几秒掉一点帧，也不在用户凝神细看时降档、云缓冲重置整片糊一下。以后若要真正省：聚焦时按倍率降云缓冲分辨率（窗外角分辨率已经高了 N 倍），或机翼在放大时减步数——另开 PERF 任务。
 - **每帧 WebGL 调用的大头是空气透视 3D LUT**（PERF-CPU）：原来内散射 / 透射率分两遍各画 32 层，占全帧 111 次 draw 中的 64 次（每层一次 `framebufferTextureLayer` + three 的整套 `render()`），同一段 `integrateSegment` 算两遍。改成两附件 MRT 一遍画出（`luts.ts` 的 `aerialTarget`：three 的 `WebGL3DRenderTarget` 给 `count: 2` 时多出来的 `textures[1]` 仍是 2D `Texture`，要手动换成同设置的 `Data3DTexture`），draw 111 → 79，与旧做法逐 texel 逐位相同（`node handoff/PERF-CPU-aerial-check.mjs <端口>`）。
 - **冗余的 GL 状态调用不是瓶颈**（PERF-CPU 实测）：three 每次 `render()` 末尾把深度测试 / 深度写入复位，全屏 pass 的材质又关掉，每帧约 220 次 `depthMask`、各 110 次 `enable` / `disable`（占调用数 40%）。在 JS 侧去重后同页交替对照，GPU 进程 CPU 在噪声内没有变化——ANGLE 把状态推迟到 draw 时才下发，这类调用很便宜。不值得绕开 three 的状态管理。
 - **测 CPU / GPU 进程开销用 `scripts/cpu-prof.mjs`**（PERF-CPU，见「调试与验证」）：GPU 进程 CPU 同场景两次能差 ±30%（45–90%），前后对照要同页交替（`--scenes 场景,A,B,A,B --jsA … --jsB …`）或多轮交替跑两个端口，不要单次比。启动后头 10 s 与换场景后的几秒里，GPU 进程的 `ThreadPoolForegroundWorker`（后台变体着色器编译）会占 4–7 个核，是一次性的，量稳态要等过去。
 
 <a id="pit-tools"></a>
 ### 工具与环境
+
+- **测量工具的 URL 带 `?dev=<时间戳>`（防缓存），开发者区的 `?dev` 开关只认空值 / `1` / `true` / `on`**（FOCUS-ZOOM）：面板规范（`research/PANEL_UX_GUIDE.md` §2.1）用 `?dev` 打开开发者区，而 `dev-browser.mjs` 的 `openPage` 一直用 `dev=<时间戳>` 破缓存；按「有没有 dev 参数」判断的话，所有工具页面都会显示开发者区（UX 类任务截面板时面板变高、面积测量不对）。以后新增 URL 开关先 grep 一下 `scripts/` 里有没有同名参数。
 
 - **面板元素设了 `display` 就会盖住 `hidden` 属性**（T49、UX-1 各踩一次）：现象：代码里 `el.hidden = true`，截图里那一行照样在（连续航程关着时的「航程流速」、自动曝光开着时的「手动曝光」）。根因：`#panel label { display: flex }`、`.row { display: flex }` 的优先级高于浏览器自带的 `[hidden] { display: none }`。修法（UX-1a）：`style.css` 全局 `[hidden] { display: none !important; }`，显示 / 隐藏一律用 `hidden` 属性，不要再给单个选择器补 `xxx[hidden]`。识别：截图场景 `js` 里对照 `el.hidden` 与 `getComputedStyle(el).display`（`handoff/UX-1a-scenes-panel.json` 的 `ux1a-default-bottom`）。
 - **页面默认开启连续航程，测量脚本不带 `voyage=0` 截图就不确定**（VOY-DEFAULT）：现象：自写脚本 / 手动在 Playwright 里打开页面再 `applyScene`，同代码两次截图的云型、云影、海面、舱灯对不上。根因：载入到设场景之间导演已经按天气场硬切云参数（`type` / `density` 不在面板上）、摆了雷暴、写了海面风与舱灯，`applyScene` 的 `setActive(false)` 只停导演不撤回。修法：导航 URL 带 `?voyage=0`（仓库里的工具都已带，见「调试与验证」`applyScene` 一条）。识别：`__voyage.director.telemetry.legs.length > 0` 或 `director.weather.log` 非空，说明这一页进过连续航程。另：首载开启时机头直接对准第一段航线（`setActive(true, true)`）——默认地点西太平洋向南飞，前方没有机场，接入的第一段（羽田 → 关西）在西北，不对准的话首屏是 140° 的大坡度右转。
