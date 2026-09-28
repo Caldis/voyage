@@ -1,7 +1,7 @@
 import { haversineKm } from "./flight";
 import type { CloudParams } from "./clouds/clouds";
 import type { CoverKind, Director, DirectorHost, SwitchRequest } from "./director";
-import { REGIME_FAMILY, REGIME_NAMES, WeatherField, WeatherSystem, type CloudRegime, type StormSystemSample, type TyphoonSample, type WeatherSample } from "./weather";
+import { REGIME_FAMILY, REGIME_NAMES, WeatherField, WeatherSystem, windSpeed, type CloudRegime, type StormSystemSample, type TyphoonSample, type WeatherSample, type WindProfile } from "./weather";
 
 /**
  * 天气驱动（T19b）：连续航程开着时，按天气场（weather.ts 的 WeatherField）让天气随位置与时间演变。导演（director.ts）持有它。
@@ -55,6 +55,21 @@ const TY_PASS_KM = 220;
 const COMPOSE_CROSS_KM = 200;
 /** 奇观之门演示：间隔（模拟秒） */
 const GATE_DEMO_EVERY_SIM_S = 2 * 3600;
+/**
+ * 海面风速的最大变化率（m/s / 模拟秒，WX11g）：约 4 m/s / 模拟小时。海况跟着风走要时间——短波与白浪几分钟到半小时、
+ * 风浪的波高要几个小时（风时 / 风区关系，[教科书] 量级），这里取折中；天气场自己 1 小时的变化 p99 约 5%，
+ * 沿航线 900 km/h 穿过风带时，这个速率让海况大约一刻钟变 1 m/s，看不出台阶。海面按档位混合（ocean/waves.ts），风速连续写入即可
+ */
+const SEA_WIND_RATE = 4 / 3600;
+
+/**
+ * 海面 10 m 风速（m/s）：直接用 weather.ts 按周围海陆比例算好的地面风（z₀ 在海面 Charnock 与陆地 0.2 m 之间按陆地比例插值）。
+ * 审查 D1：第一版在陆地 / 近岸格点上改用开阔海面的 Charnock 推导，骏河湾 1 月中位 13.8 m/s，偏高——
+ * 近岸的海被陆地包着（风区短、背风），海陆比例插值后的值更接近窗外那片海的实际风
+ */
+function seaSurfaceWind(p: WindProfile) {
+  return windSpeed(p.sfc);
+}
 
 interface LocalCell {
   id: string;
@@ -111,6 +126,10 @@ export class WeatherDirector {
   regime: CloudRegime = "clear";
   readonly log: WeatherLogEntry[] = [];
   readonly telemetry: WeatherTelemetry = { maxCoverageStep: 0, maxTopStep: 0, hardSwitches: {}, pushes: 0 };
+  /** 海面风速（WX11g）：天气场给的目标（m/s，最近一次取样）；null = 还没取样 / 连续航程关着，面板滑条说了算 */
+  seaWindGoal: number | null = null;
+  /** 当前写进 state.wind 的海面风速（限速逼近 seaWindGoal） */
+  private seaWind: number | null = null;
 
   private cur: CloudParams | null = null;
   private pushed: CloudParams | null = null;
@@ -149,6 +168,7 @@ export class WeatherDirector {
     this.cancelAll();
     this.cur = null;
     this.lastSampleT = -Infinity;
+    this.seaWindGoal = this.seaWind = null;
   }
 
   private cancelAll() {
@@ -177,6 +197,7 @@ export class WeatherDirector {
       this.sampleField(lat, lon, t);
     }
     this.stepParams(simDt);
+    this.stepSeaWind(simDt);
     if (this.gateDemo && t - this.lastGateT > GATE_DEMO_EVERY_SIM_S * 1000 && !this.d.hasPending("wonder-gate")) {
       this.lastGateT = t;
       this.openGate({ onCover: (how) => this.note(`奇观之门（演示）：穿过云墙`, how) });
@@ -190,12 +211,15 @@ export class WeatherDirector {
     // 用户跳变（换预设）本身就是一次硬切：云型、雷暴、台风都直接对齐天气场，不再等遮挡（WX10：否则白天的台风几乎摆不出来，
     // 它的卷云盖半径约 300 km，整组落在视野外的条件在巡航中很难满足）
     const jump = this.snapNext;
+    this.seaWindGoal = seaSurfaceWind(s.wind);
     if (jump) {
       this.snapNext = false;
       this.regime = s.regime;
       this.cur = pick(s);
       this.push(true);
-      this.note(`对齐天气场：${REGIME_NAMES[s.regime]}`, "jump");
+      // 跳变本身就是硬切：海面风直接对齐（海面在 Worker 算好新档位之前停在旧海况上，最多几十毫秒）
+      this.seaWind = this.host.state.wind = this.seaWindGoal;
+      this.note(`对齐天气场：${REGIME_NAMES[s.regime]}，海面风 ${this.seaWindGoal.toFixed(1)} m/s`, "jump");
     } else this.planRegime(s, t);
     this.planStorms(lat, lon, t, jump);
     this.planTyphoon(lat, lon, t, jump);
@@ -268,6 +292,19 @@ export class WeatherDirector {
     const moved = Math.abs(cur.coverage - p.coverage) > 0.002 || Math.abs(cur.top - p.top) > 0.01 || Math.abs(cur.bottom - p.bottom) > 0.01 || Math.abs(cur.type - p.type) > 0.004 || Math.abs(cur.density - p.density) > 0.004;
     const settled = !sameParams(cur, p) && sameParams(cur, goal);
     if ((moved || settled) && this.realTime - this.lastPushReal >= PUSH_MIN_REAL_S) this.push(false);
+  }
+
+  /**
+   * 海面风（WX11g）：限速逼近天气场的地面风，写进 state.wind（main.ts 每帧交给海面与着色器的 uWind）。
+   * 海面按风速档位混合两份预算好的频谱（ocean/waves.ts），风速连续变化不重算频谱，所以这里不量化、不借遮挡；
+   * 用户拖了面板滑条（state.wind 被别人改了）就从新值接着走，下一次取样再慢慢拉回天气场
+   */
+  private stepSeaWind(simDt: number) {
+    const st = this.host.state;
+    if (this.seaWindGoal === null) return;
+    if (this.seaWind === null || st.wind !== this.seaWind) this.seaWind = st.wind;
+    if (simDt > 0) this.seaWind = approach(this.seaWind, this.seaWindGoal, SEA_WIND_RATE, simDt, 2);
+    st.wind = this.seaWind;
   }
 
   private push(hard: boolean) {
@@ -547,6 +584,7 @@ export class WeatherDirector {
     if (this.switching) out += ` → ${REGIME_NAMES[this.switching]}`;
     if (storms.length) out += `，雷暴 ${storms.length} 个（最近 ${nearest} km）`;
     if (w.hurricane) out += `，台风（中心 ${Math.round(Math.hypot(w.hurricane.x - px, w.hurricane.z - pz))} km）`;
+    if (this.seaWind !== null) out += `，海面风 ${this.seaWind.toFixed(1)} m/s`;
     return out;
   }
 }

@@ -1,0 +1,5 @@
+[
+  { "name": "w7" },
+  { "name": "oldGust", "patch": { "outsideMat": [["w * uOceanFoam.z", "w * (uWind * uTime * 1e-3)"]] } },
+  { "name": "master7", "materials": { "outsideMat": "base" } }
+]
