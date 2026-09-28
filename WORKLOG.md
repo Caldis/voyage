@@ -23,7 +23,7 @@
 | --- | --- | --- | --- |
 | PERF-WING 机翼冷编译 | a8dcd60b2b0aec1e1 | 开发中（5246 / 5306） | 交付后按冷编译纪律审；之后按余量重启 W-EDGE B′ |
 | W-EDGE（暂停） | 分支 park/W-EDGE（aac90f8，含 handoff/W-EDGE.md 与 B′ 补丁） | 方案 A 飞行中爬行变差不合；B′ 冷编译 +10% | 先派 PERF-WING（压缩 wingTrace 冷编译 + cold --repeat 定关键路径），再重启 B′ |
-| C10c 浓云海近处变暗 | adf86f983a310129d | 画质部分已交付（532489b），**因 PERF-CPU 暂停，GPU / 冷编译 / flight / 云里待复测** | PERF-CPU 结论后 SendMessage 让它复测，再派审查 |
+| C10c 浓云海近处变暗 | 实现 adf86f983a310129d；审查见 TASKS | 复测完（55eb1f0），**独立审查中**（tmp/c10crev，5250） | 通过即合并 |
 
 ### 待派（按优先）
 1. PERF-15 安静窗口性能复核（主线 vs 今早 7436ba1 逐场景，逐合并归因）——在途结束后。
