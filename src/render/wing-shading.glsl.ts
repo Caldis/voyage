@@ -397,23 +397,19 @@ vec3 wingLights(vec3 ro, vec3 rd) {
       vec3 Iavg = wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;
       float integ = (p1 - p0) / hh;
       // 频闪（STROBE-FLASH）：旧版用朝眼睛的满光强 1500 cd、各向同性的相函数照雾，夜里在云中每闪一次整窗纯白（+180 级）。
-      // 改成沿视线按角度 φ（u = s − t = h·tanφ，ds / r² = dφ / h）数值积分 I(灯 → 该点的方向) × 云滴的 HG 相函数（相对各向同性）：
-      // · 云滴强烈前向散射（g 取 0.85，水云滴单次散射的典型值；灯到舷窗约 15 m、光学厚度 0.5–0.7，单次散射为主），侧向 90° 只有各向同性的约 1/8，背向更少；
-      //   视线离灯最近那一段正是侧向，所以远离灯的雾只是微微一亮，灯周（前向）才是一团亮雾——雾中看灯的真实样子；
-      // · 前向散射那一段在眼睛和灯之间，拿到的是灯朝内（舷窗一侧）的漏光 0.15，不是朝外的满光强。
-      // 试过「只按最近点的方向取配光」：配光的棱角被放大成十字形亮瓣；逐点积分以后是平滑的
+      // 改成沿视线按角度 φ 积分（u = s − t = h·tanφ，ds / r² = dφ / h）云滴的前向散射相函数：
+      // · 云滴强烈前向散射（g 0.85，水云滴单次散射的典型值；灯到舷窗约 15 m、光学厚度 0.5–0.7，单次散射为主），侧向 90° 只有各向同性的
+      //   约 1/8、背向更少。视线离灯最近那一段正是侧向，所以远离灯的雾只是微微一亮，灯周（前向）才是一团亮雾——雾中看灯的真实样子；
+      // · 相函数用 Schlick 近似 4πp = (1 − k²)/(1 − k cosθ)²（k = 1.55g − 0.55g³ ≈ 0.98），cosθ = −sinφ，
+      //   ∫ (1 − k²)/(1 + k sinφ)² dφ 有初等原函数 k cosφ/(1 + k sinφ) + 2/√(1 − k²) · atan((tan(φ/2) + k)/√(1 − k²))，不用逐点积分；
+      // · 前向那一半（φ < 0，眼睛和灯之间）拿到的是灯朝内（舷窗一侧）的漏光：0.15 × 竖直分布约 0.6；另一半按配光平均 0.2。
+      // 试过：逐点按「灯 → 视线最近点」方向取配光——十字形亮瓣；12 点数值积分配光 × HG——平滑，但离线 FXC wing +11%、wing-wet +22%
       if (i == 1) {
-        vec3 q0 = rd * t - d;          // 灯 → 视线上最近点（座舱系）
-        float acc = 0.0;
-        const float G = 0.85;
-        for (int k = min(uWingSteps, 0); k < 12; k++) {
-          float ph = mix(p0, p1, (float(k) + 0.5) / 12.0);
-          float sn = sin(ph);
-          vec3 pl = normalize(q0 + rd * (hh * sn / max(cos(ph), 1e-3)));   // 灯 → 该点
-          float hg = (1.0 - G * G) / pow(1.0 + G * G + 2.0 * G * sn, 1.5); // cosθ = dot(pl, −rd) = −sinφ
-          acc += strobeDistribution(vec3(uSeatSign * pl.x, pl.y, pl.z)) * hg;
-        }
-        Iavg = vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * acc / 12.0;
+        const float K = 0.98, SM = 0.199;   // SM = √(1 − K²)
+        float pm = clamp(0.0, p0, p1);
+        vec3 fq = vec3(p0, pm, p1);
+        vec3 F = K * cos(fq) / (1.0 + K * sin(fq)) + 2.0 / SM * atan((tan(0.5 * fq) + K) / SM);
+        Iavg = vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * (0.09 * (F.y - F.x) + 0.2 * (F.z - F.y)) / max(p1 - p0, 1e-4);
       }
       L += sigma * Iavg / (4.0 * M_PI) * integ * exp(-sigma * max(t, 0.0)) * 1e-3;
     }
