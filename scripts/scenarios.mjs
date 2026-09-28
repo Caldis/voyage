@@ -57,6 +57,10 @@ export const SCENES = [
   // 进云首样本的受光深度把近处 0–60 km 压暗）。14:00 与 17:10（低太阳，受光随深度衰减最陡、最敏感）；日期写死只为太阳位置可复现
   { name: "sea-sc", p: { preset: "wpac", date: "2026-09-28", time: 840, "cloud-preset": "stratocumulus", coverage: 0.7, "wing-pos": "-4" } },
   { name: "sea-sc-low", p: { preset: "wpac", date: "2026-09-28", time: 1030, "cloud-preset": "stratocumulus", coverage: 0.7, "wing-pos": "-4" } },
+  // C10c 审查：同一片云海加雷暴（天气程序；近雷暴的点走另一支受光）。与 sea-sc / sea-sc-low 对比，查切程序时近处云海有没有整片跳变、
+  // 雷暴半径边界上有没有亮度带
+  { name: "storm-sc", p: { preset: "wpac", date: "2026-09-28", time: 840, "cloud-preset": "stratocumulus", coverage: 0.7, weather: "storm", "wing-pos": "-4" } },
+  { name: "storm-sc-low", p: { preset: "wpac", date: "2026-09-28", time: 1030, "cloud-preset": "stratocumulus", coverage: 0.7, weather: "storm", "wing-pos": "-4" } },
   // DX-07：wpac 17:48 本地，2026-02-16 太阳高度 −4.7°（与旧行为的「当天」量级一致，地影拱仍在合适位置），
   // 月亮高度 −19.3°（新月相位 1%，在地平线下），不会露头
   { name: "dusk-earthshadow", p: { preset: "wpac", seat: "left", date: "2026-02-16", time: 1068, "wing-pos": "-4" } },
