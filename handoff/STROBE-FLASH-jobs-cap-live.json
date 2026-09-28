@@ -1,0 +1,34 @@
+[
+ {
+  "name": "night-city",
+  "scene": "night-city",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "curNF",
+    "js": " Object.defineProperty(v.exposure, 'flash', { get() { return 0; }, set() {}, configurable: true }); keep({ set flash(x) { delete v.exposure.flash; v.exposure.flash = 0; } }, 'flash');"
+   },
+   {
+    "name": "dirNF",
+    "js": "patch(v.wingMat, [[\"if (i == 1) return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe;\", \"if (i == 1) { float hh = length(dir.xz); float s2 = dir.y * dir.y; float fv = 0.2 + 0.8 * (0.7 * exp(-s2 / 0.0149) + 0.3 * exp(-s2 / 0.147)); float fh = mix(0.15, 1.0, smoothstep(-0.25, 0.25, dir.z / max(hh, 1e-6))); return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * fv * mix(0.575, fh, smoothstep(0.05, 0.3, hh)); }\"], [\"vec3 Iavg = i == 1 ? I : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;\", \"vec3 Iavg = i == 1 ? vec3(1.0, 0.98, 1.0) * 1500.0 * 0.2 * uStrobe : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;\"]]); Object.defineProperty(v.exposure, 'flash', { get() { return 0; }, set() {}, configurable: true }); keep({ set flash(x) { delete v.exposure.flash; v.exposure.flash = 0; } }, 'flash');"
+   },
+   {
+    "name": "dirC60NF",
+    "js": "patch(v.wingMat, [[\"if (i == 1) return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe;\", \"if (i == 1) { float hh = length(dir.xz); float s2 = dir.y * dir.y; float fv = 0.2 + 0.8 * (0.7 * exp(-s2 / 0.0149) + 0.3 * exp(-s2 / 0.147)); float fh = mix(0.15, 1.0, smoothstep(-0.25, 0.25, dir.z / max(hh, 1e-6))); return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * fv * mix(0.575, fh, smoothstep(0.05, 0.3, hh)); }\"], [\"L += I / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m\\u00b2 \\u2192 kcd/m\\u00b2\", \"L += (i == 1 ? I / (1.0 + I.g / 60.0) : I) / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m\\u00b2 \\u2192 kcd/m\\u00b2\"], [\"vec3 Iavg = i == 1 ? I : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;\", \"vec3 Iavg = i == 1 ? vec3(1.0, 0.98, 1.0) * 1500.0 * 0.2 * uStrobe : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;\"]]); Object.defineProperty(v.exposure, 'flash', { get() { return 0; }, set() {}, configurable: true }); keep({ set flash(x) { delete v.exposure.flash; v.exposure.flash = 0; } }, 'flash');"
+   },
+   {
+    "name": "dirC20NF",
+    "js": "patch(v.wingMat, [[\"if (i == 1) return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe;\", \"if (i == 1) { float hh = length(dir.xz); float s2 = dir.y * dir.y; float fv = 0.2 + 0.8 * (0.7 * exp(-s2 / 0.0149) + 0.3 * exp(-s2 / 0.147)); float fh = mix(0.15, 1.0, smoothstep(-0.25, 0.25, dir.z / max(hh, 1e-6))); return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * fv * mix(0.575, fh, smoothstep(0.05, 0.3, hh)); }\"], [\"L += I / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m\\u00b2 \\u2192 kcd/m\\u00b2\", \"L += (i == 1 ? I / (1.0 + I.g / 20.0) : I) / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m\\u00b2 \\u2192 kcd/m\\u00b2\"], [\"vec3 Iavg = i == 1 ? I : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;\", \"vec3 Iavg = i == 1 ? vec3(1.0, 0.98, 1.0) * 1500.0 * 0.2 * uStrobe : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;\"]]); Object.defineProperty(v.exposure, 'flash', { get() { return 0; }, set() {}, configurable: true }); keep({ set flash(x) { delete v.exposure.flash; v.exposure.flash = 0; } }, 'flash');"
+   },
+   {
+    "name": "dirC60",
+    "js": "patch(v.wingMat, [[\"if (i == 1) return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe;\", \"if (i == 1) { float hh = length(dir.xz); float s2 = dir.y * dir.y; float fv = 0.2 + 0.8 * (0.7 * exp(-s2 / 0.0149) + 0.3 * exp(-s2 / 0.147)); float fh = mix(0.15, 1.0, smoothstep(-0.25, 0.25, dir.z / max(hh, 1e-6))); return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * fv * mix(0.575, fh, smoothstep(0.05, 0.3, hh)); }\"], [\"L += I / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m\\u00b2 \\u2192 kcd/m\\u00b2\", \"L += (i == 1 ? I / (1.0 + I.g / 60.0) : I) / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m\\u00b2 \\u2192 kcd/m\\u00b2\"], [\"vec3 Iavg = i == 1 ? I : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;\", \"vec3 Iavg = i == 1 ? vec3(1.0, 0.98, 1.0) * 1500.0 * 0.2 * uStrobe : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;\"]]);"
+   },
+   {
+    "name": "cur2"
+   }
+  ]
+ }
+]

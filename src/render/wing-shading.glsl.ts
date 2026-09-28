@@ -37,9 +37,18 @@ vec3 wingLampAt(int i) { return i == 0 ? gWingLamp0 : (i == 1 ? gWingLamp1 : gWi
 
 // 灯在 dir 方向（机体系，从灯出发）上的发光强度（cd）。
 // 航行灯按 FAR 25.1389–1391：正前方 0–10° 至少 40 cd，10–20° 30 cd，20–110°（朝外侧）5 cd；
-// 光区之外只剩灯罩的散射漏光（这里取 3 cd，经验值）。尾灯：向后 ±70° 内 20 cd。频闪：各向约 1500 cd（LED 防撞灯的峰值量级）。
+// 光区之外只剩灯罩的散射漏光（这里取 3 cd，经验值）。尾灯：向后 ±70° 内 20 cd。
+// 频闪：峰值约 1500 cd（LED 防撞灯的量级），配光同下面 wingLampSurfI 的 i == 1（STROBE-FLASH）：朝外半个空间照、上下集中在水平面附近，
+// 朝内（机身、舷窗一侧）只有灯罩侧面的漏光 0.15。旧版这里各向同性 1500 cd——照翼面按 0.15 漏光、照眼睛却按满光强，
+// 自相矛盾，眼睛看到的灯芯比翼面「该看到的」亮约 7 倍，光晕铺满整个舷窗（handoff/STROBE-FLASH.md）
 vec3 wingLampIntensity(int i, vec3 dir) {
-  if (i == 1) return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe;
+  if (i == 1) {
+    float h = length(dir.xz);
+    float s2 = dir.y * dir.y;
+    float fv = 0.2 + 0.8 * (0.7 * exp(-s2 / 0.0149) + 0.3 * exp(-s2 / 0.147));
+    float fh = mix(0.15, 1.0, smoothstep(-0.25, 0.25, dir.z / max(h, 1e-6)));
+    return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * fv * mix(0.575, fh, smoothstep(0.05, 0.3, h));
+  }
   vec2 hz = normalize(dir.xz + vec2(1e-5, 0.0));
   float ang = atan(hz.y, hz.x);   // 0 = 正前方，正值朝外侧（+Z）
   float a = abs(degrees(ang));
@@ -354,6 +363,7 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
 
 // 翼尖的航行灯（右绿左红）、白色频闪、尾灯：小光源 + 周围的光晕（光晕靠后面的眩光处理放大）；
 // 在云里时再加上灯光照亮周围云雾的散射光（频闪一闪，整片雾跟着亮一下）
+#define STROBE_CORE_CD 30.0
 vec3 wingLights(vec3 ro, vec3 rd) {
   vec3 L = vec3(0.0);
   float sigma = uCameraFog * 1e-3;   // 云雾的消光系数，1/m（云滴几乎不吸收，散射系数取同一个值）
@@ -369,12 +379,18 @@ vec3 wingLights(vec3 ro, vec3 rd) {
     // 发光强度（cd）换算成一个 3 cm 光球的亮度
     if (t > 0.0) {
       float core = 1.0 - smoothstep(0.02, 0.03, dist);
-      L += I / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m² → kcd/m²
+      // 频闪的灯芯按软上限 STROBE_CORE_CD 画（STROBE-FLASH）：夜里窗外曝光比灯芯低十几个数量级，灯芯本身怎样都是纯白，
+      // 它的亮度只通过眩光（bloom 的点扩散，4% 能量铺到 1/θ² 的宽尾巴）显出来——按真实光强（朝舷窗约 100–300 cd）铺，
+      // 50 ms 一闪整窗远处也亮 10–40 级、灯周 100 px 死白。这里是显示上的取舍，不是物理：眩光只给到常亮航行灯正前方（40 cd）
+      // 同量级，频闪读成翼尖一个刺眼的点 + 翼面被照亮（翼面照度仍按 wingLampSurfI 的真实光强），不再是整个窗户爆白
+      vec3 Ic = i == 1 ? I / (1.0 + I.g / STROBE_CORE_CD) : I;
+      L += Ic / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m² → kcd/m²
     }
     // 云雾里的单次散射：沿视线积分 σ·I/(4π r²)，r² = h² + (s − t)²，有解析解。
-    // 用灯的平均强度（各方向）近似；视线穿过的雾同时也衰减一部分
+    // 用灯的平均强度（各方向）近似；视线穿过的雾同时也衰减一部分。
+    // 频闪按配光的球面平均（STROBE-FLASH）：竖直分布均值约 0.34、水平朝外 1 / 朝内 0.15 均值约 0.575，合 0.2；旧版用朝眼睛的满光强
     if (sigma > 0.0) {
-      vec3 Iavg = i == 1 ? I : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;
+      vec3 Iavg = i == 1 ? vec3(1.0, 0.98, 1.0) * 1500.0 * 0.2 * uStrobe : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;
       float hh = max(dist, 0.05);
       float s1 = 60.0;
       float integ = (atan((s1 - t) / hh) - atan(-t / hh)) / hh;
