@@ -1,0 +1,360 @@
+[
+ {
+  "name": "cruise-ground",
+  "scene": {
+   "name": "cruise-ground",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 780,
+    "altitude": 10.7,
+    "coverage": 0.05,
+    "wing-pos": "8"
+   },
+   "ground": true,
+   "head": [
+    0,
+    0.14,
+    -0.2
+   ]
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; v.__outCur.uniforms.uHaze = v.atmosphere.hazeUniforms.uHaze; v.__outCur.uniforms.uHazeShape = v.atmosphere.hazeUniforms.uHazeShape; return 'haze=' + v.atmosphere.hazeUniforms.uHaze.value.toArray().map((x) => x.toFixed(3)) + ' shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "exactAP24",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 24.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactAP64",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "lutAP48",
+    "patch": {
+     "atmosphere.aerialMaterial": [
+      [
+       "dist, 24.0, T);",
+       "dist, 48.0, T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "lutAP64",
+    "patch": {
+     "atmosphere.aerialMaterial": [
+      [
+       "dist, 24.0, T);",
+       "dist, 64.0, T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "reflClamp",
+    "patch": {
+     "__outCur": [
+      [
+       "fView * max(skyCam - gh.apL, vec3(0.0))",
+       "fView * clamp(skyCam - gh.apL, vec3(0.0), gh.apT * skyCam)"
+      ],
+      [
+       "      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n",
+       "      vec3 refl = fView * clamp(skyCam - inscatter, vec3(0.0), tView * skyCam);\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   700,
+   60,
+   550,
+   260
+  ]
+ },
+ {
+  "name": "hnd-low-day",
+  "scene": {
+   "name": "hnd-low-day",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 900,
+    "altitude": 1.5,
+    "coverage": 0.1,
+    "wing-pos": "-4"
+   },
+   "ground": true
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "reflClamp",
+    "patch": {
+     "__outCur": [
+      [
+       "fView * max(skyCam - gh.apL, vec3(0.0))",
+       "fView * clamp(skyCam - gh.apL, vec3(0.0), gh.apT * skyCam)"
+      ],
+      [
+       "      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n",
+       "      vec3 refl = fView * clamp(skyCam - inscatter, vec3(0.0), tView * skyCam);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "lutAP64",
+    "patch": {
+     "atmosphere.aerialMaterial": [
+      [
+       "dist, 24.0, T);",
+       "dist, 64.0, T);"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   400,
+   400,
+   800,
+   300
+  ]
+ },
+ {
+  "name": "hnd-low-day-26",
+  "scene": {
+   "name": "hnd-low-day-26",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 900,
+    "altitude": 2.6,
+    "coverage": 0.1,
+    "wing-pos": "-4"
+   },
+   "ground": true
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "reflClamp",
+    "patch": {
+     "__outCur": [
+      [
+       "fView * max(skyCam - gh.apL, vec3(0.0))",
+       "fView * clamp(skyCam - gh.apL, vec3(0.0), gh.apT * skyCam)"
+      ],
+      [
+       "      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n",
+       "      vec3 refl = fView * clamp(skyCam - inscatter, vec3(0.0), tView * skyCam);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "lutAP64",
+    "patch": {
+     "atmosphere.aerialMaterial": [
+      [
+       "dist, 24.0, T);",
+       "dist, 64.0, T);"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   400,
+   400,
+   800,
+   300
+  ]
+ },
+ {
+  "name": "sea-mod-low",
+  "scene": {
+   "name": "sea-mod-low",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 870,
+    "coverage": 0.1,
+    "altitude": 0.8,
+    "wind": 8,
+    "wing-pos": "-4"
+   }
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "reflClamp",
+    "patch": {
+     "__outCur": [
+      [
+       "fView * max(skyCam - gh.apL, vec3(0.0))",
+       "fView * clamp(skyCam - gh.apL, vec3(0.0), gh.apT * skyCam)"
+      ],
+      [
+       "      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n",
+       "      vec3 refl = fView * clamp(skyCam - inscatter, vec3(0.0), tView * skyCam);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "lutAP64",
+    "patch": {
+     "atmosphere.aerialMaterial": [
+      [
+       "dist, 24.0, T);",
+       "dist, 64.0, T);"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   400,
+   400,
+   800,
+   600
+  ]
+ },
+ {
+  "name": "wpac-cruise",
+  "scene": {
+   "name": "wpac-cruise",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 870,
+    "coverage": 0.05,
+    "altitude": 10.7,
+    "wind": 7,
+    "wing-pos": "8"
+   },
+   "head": [
+    0,
+    0.14,
+    -0.2
+   ]
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "reflClamp",
+    "patch": {
+     "__outCur": [
+      [
+       "fView * max(skyCam - gh.apL, vec3(0.0))",
+       "fView * clamp(skyCam - gh.apL, vec3(0.0), gh.apT * skyCam)"
+      ],
+      [
+       "      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n",
+       "      vec3 refl = fView * clamp(skyCam - inscatter, vec3(0.0), tView * skyCam);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "lutAP64",
+    "patch": {
+     "atmosphere.aerialMaterial": [
+      [
+       "dist, 24.0, T);",
+       "dist, 64.0, T);"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   400,
+   100,
+   800,
+   800
+  ]
+ },
+ {
+  "name": "noon-cumulus",
+  "scene": {
+   "name": "noon-cumulus",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 720,
+    "wing-pos": "8"
+   }
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "reflClamp",
+    "patch": {
+     "__outCur": [
+      [
+       "fView * max(skyCam - gh.apL, vec3(0.0))",
+       "fView * clamp(skyCam - gh.apL, vec3(0.0), gh.apT * skyCam)"
+      ],
+      [
+       "      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n",
+       "      vec3 refl = fView * clamp(skyCam - inscatter, vec3(0.0), tView * skyCam);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "lutAP64",
+    "patch": {
+     "atmosphere.aerialMaterial": [
+      [
+       "dist, 24.0, T);",
+       "dist, 64.0, T);"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   400,
+   100,
+   800,
+   800
+  ]
+ }
+]

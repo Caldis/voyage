@@ -91,6 +91,25 @@ bool groundHit(vec3 ro, vec3 rd, out GroundHit gh) {
   }
   // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）
   vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);
+  // SEA-3（远海横纹）：天顶角方向不交给硬件线性插值。LUT 每一行在同一距离上取值，陡的那一行早已打到海面（积分截在海面），
+  // 平的那一行还在半空、少穿一截霾，两行线性混合是折线——平滑的海面上每行一条马赫带（巡航约 40 px 一条）。
+  // 改成上下两行各取「到它自己那条视线的海平面交点的同一比例」处的值，再按行插值（地形高出海面时比例 < 1，照样成立）；
+  // 视线或某一行打不到海平面（地平线以上的山）时那一行退回同距离取值。多 2 次取样、3 次球面求交，LUT 本身不变
+  float tB = raySphere(ro, rd, BOTTOM);
+  float yRow = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (AERIAL_SIZE.y - 1.0);
+  float kRow = min(floor(yRow), AERIAL_SIZE.y - 2.0);
+  vec2 yk = vec2(kRow, kRow + 1.0) / (AERIAL_SIZE.y - 1.0);
+  vec2 ck = 1.0 - 2.0 * yk;
+  vec2 vz = sign(ck) * ck * ck;                              // 两行的视线天顶余弦
+  vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));
+  vec2 vs = sqrt(max(1.0 - vz * vz, 0.0));
+  float tk0 = raySphere(ro, vec3(hz.x * vs.x, vz.x, hz.y * vs.x), BOTTOM);
+  float tk1 = raySphere(ro, vec3(hz.x * vs.y, vz.y, hz.y * vs.y), BOTTOM);
+  vec2 dk = vec2(tB > 0.0 && tk0 > 0.0 ? tT * tk0 / tB : tT, tB > 0.0 && tk1 > 0.0 ? tT * tk1 / tB : tT);
+  vec2 zk = sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0));
+  vec3 q0 = vec3(uvw.x, unitToUv(yk.x, AERIAL_SIZE.y), unitToUv(zk.x, AERIAL_SIZE.z));
+  vec3 q1 = vec3(uvw.x, unitToUv(yk.y, AERIAL_SIZE.y), unitToUv(zk.y, AERIAL_SIZE.z));
+  float wRow = clamp(yRow - kRow, 0.0, 1.0);
   gh.P = P;
   gh.up = up;
   gh.g = g;
@@ -101,8 +120,8 @@ bool groundHit(vec3 ro, vec3 rd, out GroundHit gh) {
   gh.alb = alb;
   gh.wat = wat;
   gh.nT = nT;
-  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
-  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;
+  gh.apL = mix(texture(uAerialInscatterS, q0).rgb, texture(uAerialInscatterS, q1).rgb, wRow) * uSunIlluminance;
+  gh.apT = mix(texture(uAerialTransmittanceS, q0).rgb, texture(uAerialTransmittanceS, q1).rgb, wRow);
   return true;
 #endif
 }
