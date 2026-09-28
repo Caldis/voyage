@@ -486,6 +486,11 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   识别 / 测量：`ab --cloud-live` 加「高度出口」补丁（`L = vec3(length(ro + rd*depth) - BOTTOM) * (1 - T)`，cloudDump 的 Y/α = 云的加权高度 km）与 `cloud-dist`，
   按距离带数轮廓的竖壁游程（同一列连续 ≥ 5 行的侧边像素比例）和平顶游程（同一行连续 ≥ 12 列的顶边比例）、顶边高度 IQR；脚本见 `handoff/C-TOFU-metrics.py`。
   层积云 / 高积云 / 卷云不受影响。代价：云变高后视线在云里的步数变多，云 pass noon +5.5%、cu-6000 +9%、clouds-variety +12%、cu-side +15%（`gpu-ab` 8 轮带 A/A）。
+- **新云种接进云步进：用宏换掉 main 里的调用，别改调用处的文本；远处的小区间要单独求交、中间空隙跳过**（SPEC-FUJI，`src/clouds/lenticular.glsl.ts`，`handoff/SPEC-FUJI.md`）：
+  笠云 / 吊し雲做成 `CLOUD_LENTICULAR` 变体（键 `L`，`wantedKey` 里在 `uLens.w > 0.5` 且无奇观层时加）。①默认程序逐字不变的写法：变体里在 `main` 之前 `#define cloudDensity cloudDensityLens`、`#define layerDensity layerDensityLens`，包装函数内部照常调原函数（宏定义在包装函数之后，不会自递归）；同名函数写两份会被 `check:glsl` 的重名检查报错（它不展开条件编译），换名字 + 宏就没这个问题。验证：`node handoff/SPEC-FUJI-parity.mjs <合并基点的 apps/voyage>`，43 个已有程序预处理后逐字相同。
+  ②**不能把透镜云的高度并进 `uShellTop` 让主循环走过去**：透镜云常在几十到一百多公里外，主循环近处 60 m 一步，空走过去就用完 384 步。做法：`lensRayInterval` 单独求包围盒区间，和普通云区间合并，中间的空隙（`lensGap`）在循环开头一步跳过。识别：远处的云「一格一格半透明 / 截出直边」先看是不是步数用完（`builtin: cloud-steps`）。
+  ③变体里 `uCoverage = 0`（晴空）时原来的早退要绕开，否则晴天看不到笠云。④受光步进用的全局副产物（`gLensW` / `gLensH01`）会被展开的受光循环覆盖，主采样之后立刻存下来。
+  ⑤冻结的同页 A/B（`ab` 冻结截图）对云是瞎的：只改 `weather` 状态的变体（如撤掉透镜云）截图逐位相同，不说明没生效；时间行为用 `live`，代价用 `gpu-ab`（本任务 `handoff/SPEC-FUJI-gpu-jobs.json`，js 变体要自己在每个变体里把状态设回来，ab 不复原 js 改的东西）。
 
 <a id="pit-atmos"></a>
 ### 大气与曝光

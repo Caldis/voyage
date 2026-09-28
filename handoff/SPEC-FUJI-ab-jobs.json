@@ -1,0 +1,37 @@
+[
+  {
+    "name": "fuji-cap-low-live",
+    "scene": { "name": "fuji-cap-low", "p": { "preset": "fuji", "date": "2026-05-15", "time": 720, "altitude": 3.5, "coverage": 0, "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-24, -12] },
+    "crop": [880, 410, 260, 140],
+    "variants": [
+      { "name": "cur" },
+      { "name": "cur2" },
+      { "name": "nolens", "js": "v.weather.setLenticular(null)" }
+    ],
+    "live": {
+      "crop": [880, 410, 260, 140],
+      "frames": 360,
+      "regions": { "笠云": [20, 20, 220, 80], "山顶": [60, 90, 150, 45] },
+      "thr": 16,
+      "frac": 0.05,
+      "variants": ["cur", "cur2", "nolens"]
+    }
+  },
+  {
+    "name": "fuji-cap-cruise-live",
+    "scene": { "name": "fuji-cap-cruise", "p": { "preset": "fuji", "date": "2026-05-15", "time": 510, "altitude": 10, "coverage": 0, "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-10, 10] },
+    "crop": [500, 580, 660, 110],
+    "variants": [
+      { "name": "cur" },
+      { "name": "cur2" }
+    ],
+    "live": {
+      "crop": [500, 580, 660, 110],
+      "frames": 360,
+      "regions": { "笠云": [0, 60, 140, 50], "吊し雲1": [230, 30, 190, 40], "吊し雲2": [490, 10, 160, 30] },
+      "thr": 16,
+      "frac": 0.05,
+      "variants": ["cur", "cur2"]
+    }
+  }
+]

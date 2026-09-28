@@ -1,0 +1,11 @@
+[
+  { "name": "fuji-cap-low-gpu",
+    "scene": { "name": "fuji-cap-low", "p": { "preset": "fuji", "date": "2026-05-15", "time": 720, "altitude": 3.5, "coverage": 0, "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-24, -12] },
+    "variants": [ { "name": "lens", "js": "window.__fujiL = window.__fujiL || v.weather.lenticular; v.weather.setLenticular(window.__fujiL)" }, { "name": "lens2", "js": "v.weather.setLenticular(window.__fujiL)" }, { "name": "nolens", "js": "window.__fujiL = window.__fujiL || v.weather.lenticular; v.weather.setLenticular(null)" } ] },
+  { "name": "fuji-cap-cruise-gpu",
+    "scene": { "name": "fuji-cap-cruise", "p": { "preset": "fuji", "date": "2026-05-15", "time": 510, "altitude": 10, "coverage": 0, "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-10, 10] },
+    "variants": [ { "name": "lens", "js": "window.__fujiL = window.__fujiL || v.weather.lenticular; v.weather.setLenticular(window.__fujiL)" }, { "name": "lens2", "js": "v.weather.setLenticular(window.__fujiL)" }, { "name": "nolens", "js": "window.__fujiL = window.__fujiL || v.weather.lenticular; v.weather.setLenticular(null)" } ] },
+  { "name": "fuji-cap-sc-gpu",
+    "scene": { "name": "fuji-cap-sc", "p": { "preset": "fuji", "date": "2026-05-15", "time": 600, "altitude": 8, "coverage": 0.5, "cloud-preset": "stratocumulus", "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-10, 10] },
+    "variants": [ { "name": "lens", "js": "window.__fujiL = window.__fujiL || v.weather.lenticular; v.weather.setLenticular(window.__fujiL)" }, { "name": "lens2", "js": "v.weather.setLenticular(window.__fujiL)" }, { "name": "nolens", "js": "window.__fujiL = window.__fujiL || v.weather.lenticular; v.weather.setLenticular(null)" } ] }
+]
