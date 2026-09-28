@@ -1,0 +1,4 @@
+[
+  { "name": "new" },
+  { "name": "old", "patch": { "clouds.marchMat": [["(bis > 0 || (dens > 0.002 && wasEmpty && t < 60.0))", "(bis > 0)"], ["return min(d * mix(4.5, 1.5, cir), 1.0) * uCloudDensity;", "return min(d * mix(3.5, 1.5, cir), 1.0) * uCloudDensity;"]] } }
+]
