@@ -46,9 +46,11 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 ## 使用
 
 - 启动：仓库根目录 `pnpm dev:voyage`，打开 http://127.0.0.1:5181
-- 鼠标移动 = 挪动头部（窗框视差），滚轮 = 靠近 / 远离舷窗，`H` 隐藏面板
+- 在画面上按住拖动 = 转头（窗框视差），滚轮 = 前后挪（靠近 / 远离舷窗），双击复位；`H` 隐藏面板
+- 快捷键（UX-1a 统一守卫）：`H` / `B` / `M` / `N` 在焦点位于文字输入框、日期框、下拉时不触发（焦点在复选框、滑条、按钮上照常），带 `Ctrl` / `Alt` / `Meta` 时也不触发；方向键在焦点位于任何输入框 / 下拉时归控件自己。面板下拉用鼠标选完会把焦点还给画面（键盘在下拉里挑选项时不抢焦点）
 - 声音（T11）：默认关；面板勾选「声音」或按 `M` 开启（浏览器要求用户手势），背景板模式下照常播放、`M` 仍可开关
 - 时间：日期 + 当地时刻滑块，或用 60× / 600× 快进看日落
+- 连续航程（VOY-DEFAULT 起**默认开启**）：打开页面就按当天的默认时刻、从默认地点接入东亚航线网，1× 流速、时间与飞行一起流逝，云由天气场驱动（首帧直接对齐天气场，机头直接对准第一段航线，不在首屏做大坡度转弯）。面板取消勾选后记住（localStorage `voyage.continuousJourney` = `0`，只记真实点击，脚本 `dispatchEvent` 的切换不写），下次载入保持关；URL `?voyage=1` / `?voyage=0`（也认 `on/off`、`true/false`；同名参数多个时以最后一个为准）强制本次开 / 关，且不改写记住的选择
 - 航向（T49）：面板「航向」一栏——「自动航线」（默认：沿大圆航线飞，到达终点后自动接下一段）、「保持航向」、「盘旋」（以当前位置为等待点飞跑道形等待航线，一直看同一片地面）；「◀ 左转 / 右转 ▶」点一下 15°、按住连续转，或拖「选定航向」滑块；「直飞机场」选 15 个东亚机场之一，沿大圆航线飞过去、到达后在上空盘旋。键盘 `←` / `→` 每次 5°（`Shift` 15°；焦点在输入框 / 下拉框里时不响应）。转弯按真实客机：坡度 ≤ 25°，滚转约 3°/s（25° 要 8 秒多才压满）
 - 调试小地图（DX-06）：面板勾选「调试小地图」或按 `N` 开启（默认关），左下角显示航向 / 轨迹 / 航线 / 云回波 / 交通 / 奇观；点击地图切换 50 / 200 / 800 km 量程
 
@@ -203,6 +205,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   **`--query '<url 参数>'`（DX-12）**：附加到导航 URL（`?dev=<时间戳>&<这里给的参数>`），例如 `--query eox=2024` 或 `--query "optics=all"`（带不带开头的 `?` 都可以）。给「只受 URL 参数控制、面板上没有对应控件」的行为用，比如地面影像切年份（`?eox=`）、强制罕见光学现象（`?optics=`）。
   **场景 `p` 支持 `"view-preset"`（DX-12）**：给了这个键（值是 `seated` / `close` / `wing` / `ahead` / `behind` 等 `view-presets.ts` 里的预设 id）且没有同时给 `head` 时，头部位置由面板「视角」下拉本来就有的 `setView()` 决定，不用再像 `economy-ahead` 那样手抄一遍预设的 `fwd`/`y`/`z` 到 `head` 数组（抄错座位方向的符号就会看反）；显式给了 `head` 仍然优先。
   **`applyScene` 默认关闭连续航程与时间流速（DX-12）**：每个场景开始时都会 `director.setActive(false)` 且 `state.playRate = 0`，避免「上一个场景开着连续航程 / 加速播放，下一个场景在等地面瓦片 / 舱等 / 云变体编译的这几秒到几十秒里飞机继续跑、天继续暗」这种串味（任务背景见下面 `--pair`）。场景确实想要连续航程 / 加速播放时给 `continuousJourney: true` / `playRate: <倍率>`（和 `head` / `offset` 一样是场景 JSON 的顶层字段），或者在 `p` 里给 `"voyage-on": true`（有真实面板控件，走 `set()` 那条路一样能打开，且在默认关闭之后执行，会覆盖它）。
+  **测量工具打开页面一律带 `voyage=0`（VOY-DEFAULT）**：页面默认开启连续航程后，载入到 `applyScene` 之间的几秒里导演会先按天气场改云（含 `type` / `density`、云影图分片状态）、摆雷暴、改海面风、改舱灯与航向，`setActive(false)` 不会把这些都撤回。所以 `dev-browser.mjs`（`openPage`：check / shots / ab / flight / gpu-ab / bench 等全部子命令，以及 `cold`）、`passes.mjs`、`probe.mjs`、`cpu-prof.mjs`、`regression.playwright.js`、`cabin-luminance.playwright.js` 的导航 URL 都带 `voyage=0`，页面从载入起就不进连续航程，与改动前的页面同一状态。要测「默认开启」的真实首载 / 控制台：`--query "&voyage=1"`（同名参数以最后一个为准）。自己手写脚本打开页面时也要带 `?voyage=0`。
 - **回归场景的固定日期（DX-07）**：`scenarios.mjs` / `regression.playwright.js` 里依赖月相 / 星空的夜景、黄昏场景都写了固定 `date`（不写 `date` 就用「打开页面当天」，月相每天都在变，跨波对比会误判——第 6 波美术总监报告撞上过一次，见 `research/ART_REVIEW_wave6.md`）。`night-city` 系列、`route-hnd-cts-night`、`dusk-earthshadow` 用的是无月夜（月亮在地平线下，日期与高度写在场景条目的注释里）；`night-sea-milkyway`（T09）和新增的 `night-sea-fullmoon`（DX-07，满月、高度 58°、方位几乎正对左座窗外）各自固定在原来的月相上。月亮高度 / 方位都是用仓库自带的 `astronomy-engine`（`src/astro.ts` 的 `moonState`，T09 用过的同一套）算的。
 - **`applyScene` 跨版本容错（DX-10）**：`scenarios.mjs` 的 `applyScene`（`shots` / `passes` / `flicker` / `bench` 都靠它设场景）现在能对着**老版本页面**跑而不崩——控件不存在（`document.getElementById(id)` 是 `null`）或下拉框没有这个选项，打印一句 `console.warn` 并跳过这一项，不再 `Cannot read properties of null` 整段中断；`sc.js` 执行失败也只把失败原因塞进返回的 `info`（`console.warn` 一并记一句），不抛出、不中断同一批的后面场景。用真实老提交验证过：`7436ba1`（早于经济舱 / 奇观功能）的页面完全没有 `cabin-class` 控件，`DEFAULTS` 里照常带着这个键，`shots` 照样能跑完并出截图。给 `--baseline` / `--chain` 这类跨版本对照腾出了「同一份场景表两边都能用」的前提，不用再像性能工程师第 6 波那样现场写一份容错副本（`tmp/perf-w6/w6_patch_scen.py`，没有进仓库）。
 - **截图并排对照 / 量亮度 / 逐像素求差（DX-05 / DX-07 / DX-08）**：`node scripts/compare.mjs --out <输出.png> [--crop x,y,w,h] [--zoom N] <图1> [<图2> ...]`，把多张截图拼成一张，每张左上角标文件名（父目录/文件名，便于区分不同批次的同名场景）；不给 `--crop` 就是整图并排，给了就先裁剪再按 `--zoom` 用最近邻放大（不模糊，专门给锯齿 / 闪烁这类像素级问题用）。**`--out` 同样相对仓库根解析**（也支持绝对路径）。泛化自 `handoff/T35-crop.py`（Python + Pillow），改用 Node + Canvas2D（借一次性 headless 页面做合成，复用 `lib/chrome.mjs` 找 `chrome.exe` 的逻辑，但不需要真实 GPU）避免依赖本机 Python 环境。
@@ -579,6 +582,9 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   修法：反射贡献 = F·(L相机(反射方向) − 内散射(相机→海面))。LUT 的地平线夹取也保留了，它本身没错。
 - **低空时耀斑侧面有一道「竖直断层」，不是 bug**：那是耀斑波瓣的边缘。耀斑中心过曝，又是平滑的高斯分布，所以边界显得锐利；换风速后边界会跟着移动。
   排查时先后怀疑过风痕（确实太陡，已经放软）、闪烁、云影，用 `uDebug` 5–10 逐项排除后才确认。以后判断方法：改风速，看边界是否移动。
+- **耀斑闪点不能照泊松抽成「全黑 / 亮 1/λ 倍」两值**（WX11g-b，ART-8 #4）：现象是低风速（0–3 m/s）耀斑两侧和近处成千上万个孤立的单像素亮点 / 黑点（椒盐），飞行中逐帧跳；大风时耀斑外缘同样是一片闪烁的碎点。根因：`oceanRadiance` 的闪点项把「像素里闪点数 N ~ 泊松(λ)」直接抽样，λ < 1 时像素要么全黑、要么亮 1/pHit 倍，一个闪点的亮度 ∝ 1/(σ²·足迹面积)，σ² 小（低风速）、足迹小（近处）时点点过曝；随机数每 1/8 s 硬换一次，格子只有 1–2 个像素大，飞机一动像素就换格子。粗糙度本身没错（σ² 已含 LEAN 过滤掉的方差 + Cox–Munk 毛细波），错在分布。
+  修法：相对起伏改成 0.5·√λ/(1+λ)、均值 1 的连续随机数（λ → 0 回到连续的期望亮度，λ ≫ 1 时 ∝ 1/√λ），期望逐像素不变；两个时隙的随机数 smoothstep 过渡并按 √(w₀²+w₁²) 归一化（约 6 Hz），不再硬跳。实测（`handoff/WX11g-b.md`）：1.5 m/s 孤立亮点 632 → 9、飞行中闪烁像素 61278 → 2541–6402；14 m/s 闪烁像素 130389 → 647–1490，耀斑区平均亮度 +0.2–5%（原来闪点过曝被夹掉的能量回来了），非海面逐位 0。代价：大风时耀斑外缘从「黑底上的稀疏亮点」变成连续的暗金色，碎金质感只剩可分辨的 FFT 波面给的那部分。
+  识别：同页 `ab` 对照（`handoff/WX11g-b-mkjobs.py` 生成的 jobs，old 变体把闪点段换回改前原文）+ `handoff/WX11g-b-metrics.py`（孤立亮 / 暗点、单像素死白块、非海面逐位差）；飞行中用 `ab` 的 `job.live`。**低空（< 4 km）画的是低空细节变体，换 `outsideMat` 碰不到**：job 的 `pre` 把 `groundDetail` 实际画的材质挂到 `__voyage.__outCur` 再 patch 它（见 mkjobs 的 `PRE`）。以后再往耀斑里加随机项，先问「λ < 1 时它会不会造出孤立的单像素点」。
 - **海平面近处求交**：从 r≈6360 km 出发的通用球面求交在近处有约半米误差，会让海浪纹理出现与视角相关的颗粒噪点；`oceanRadiance` 里用 t = c / (−b + √(b²−c)) 重算。
 - **海浪频谱不能在主线程随风速重算**（WX11g）：`buildSpectrum` 实测每次 20–40 ms（Node 与页面同量级，旧注释写的「十几毫秒」偏乐观），风速一变就同步重算、必掉帧；风速连续变化（连续航程按天气场写 `state.wind`）时每帧都会重算。
   修法（`ocean/waves.ts`）：频谱只在 `WIND_LEVELS`（0 / 1.5 / 3 / 5 / 7 / 10 / 13.5 / 17.5 / 22 m/s，一档约一个蒲福风级，7 必须是一档——面板默认值，默认场景逐位不变）上算，在 `ocean/spectrum.worker.ts` 里做，两侧各预取一档；风速在两档之间时相位推进 pass 按比例混合两档的 h0（`uH0` / `uH0b` / `uMix`，同一组高斯随机数，振幅线性混合，海况连续过渡），所以风速可以每帧连续写、不量化不限频；缺档时这一帧海况保持原样（`stats.holds`），只有启动第一帧同步算。方差按「标准差线性混合」估算、白浪阈值按实际风速的 Monahan 覆盖率连续算。
@@ -778,6 +784,8 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 <a id="pit-tools"></a>
 ### 工具与环境
 
+- **面板元素设了 `display` 就会盖住 `hidden` 属性**（T49、UX-1 各踩一次）：现象：代码里 `el.hidden = true`，截图里那一行照样在（连续航程关着时的「航程流速」、自动曝光开着时的「手动曝光」）。根因：`#panel label { display: flex }`、`.row { display: flex }` 的优先级高于浏览器自带的 `[hidden] { display: none }`。修法（UX-1a）：`style.css` 全局 `[hidden] { display: none !important; }`，显示 / 隐藏一律用 `hidden` 属性，不要再给单个选择器补 `xxx[hidden]`。识别：截图场景 `js` 里对照 `el.hidden` 与 `getComputedStyle(el).display`（`handoff/UX-1a-scenes-panel.json` 的 `ux1a-default-bottom`）。
+- **页面默认开启连续航程，测量脚本不带 `voyage=0` 截图就不确定**（VOY-DEFAULT）：现象：自写脚本 / 手动在 Playwright 里打开页面再 `applyScene`，同代码两次截图的云型、云影、海面、舱灯对不上。根因：载入到设场景之间导演已经按天气场硬切云参数（`type` / `density` 不在面板上）、摆了雷暴、写了海面风与舱灯，`applyScene` 的 `setActive(false)` 只停导演不撤回。修法：导航 URL 带 `?voyage=0`（仓库里的工具都已带，见「调试与验证」`applyScene` 一条）。识别：`__voyage.director.telemetry.legs.length > 0` 或 `director.weather.log` 非空，说明这一页进过连续航程。另：首载开启时机头直接对准第一段航线（`setActive(true, true)`）——默认地点西太平洋向南飞，前方没有机场，接入的第一段（羽田 → 关西）在西北，不对准的话首屏是 140° 的大坡度右转。
 - **长时间帧测量期间别改 `src/` 里的任何文件**（G08 踩过）：vite 开发服务器热更新 / 整页重载，测量脚本 `Execution context was destroyed` 直接退出（持的测量锁由 finally 释放，但半小时白跑）。先提交再开测，测量期间只写文档 / 读结果。
 - **node 直接跑 .ts（类型剥离）不支持参数属性、也不补 `.ts` 扩展名**（TR02）：`ground/geo.ts` 这类用了 `constructor(readonly x…)` 的模块会报 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`；项目里 import 不写扩展名，node 找不到。
   `src/rail/rail.test.mjs` 用 `module.registerHooks` 补扩展名；想被 node 单测直接加载的模块（`src/rail/` 下除 mode.ts 以外）不要用参数属性、enum 这类非「可擦除」语法。

@@ -105,7 +105,8 @@ async function main() {
     page.on("console", (m) => {
       if (m.type() === "error") console.log("[console.error]", m.text().slice(0, 400));
     });
-    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "commit", timeout: 180000 });
+    // VOY-DEFAULT：页面默认开连续航程，探针页从载入起就关掉，画面才确定
+    await page.goto(`http://127.0.0.1:${port}/?voyage=0`, { waitUntil: "commit", timeout: 180000 });
     await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 500 });
 
     // 页面内小工具：点号路径解析、打补丁（含原文缓存 + 还原）、按目标读区域（含半精度解码）

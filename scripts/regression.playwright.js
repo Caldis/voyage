@@ -113,7 +113,8 @@ async (page) => {
     { name: "rail-oito-curve", p: { vehicle: "train", date: "2026-08-05", time: 720 }, wait: 3000, js: "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(1790, 1, 0); for (let i = 0; i < 90 && v.ground.pending > 0; i++) await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(1790, 1, 0); return v.rail.describe() + \" · \" + (v.groundDetail.railStatus ?? v.groundDetail.status);" },
   ];
 
-  await page.goto(`${origin}/?regression=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
+  // VOY-DEFAULT：页面默认开连续航程，回归从载入起就关掉（场景要开的用 continuousJourney）
+  await page.goto(`${origin}/?regression=${Date.now()}&voyage=0`, { waitUntil: "commit", timeout: 180000 });
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 180000, polling: 500 });
 

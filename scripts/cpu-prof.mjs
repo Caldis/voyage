@@ -296,7 +296,7 @@ async function main() {
     });
     page.on("pageerror", (e) => errors.push(e.message));
     await page.addInitScript(initScript);
-    await page.goto(`http://127.0.0.1:${args.port}/?dev=${Date.now()}${args.query || ""}`, { waitUntil: "commit", timeout: 180000 });
+    await page.goto(`http://127.0.0.1:${args.port}/?dev=${Date.now()}&voyage=0${args.query || ""}`, { waitUntil: "commit", timeout: 180000 });
     await page.bringToFront();
     await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 500 });
     const startedAt = Date.now();
