@@ -1,0 +1,10 @@
+[
+  {"name": "biz", "scene": {"name": "biz-seated-noon", "p": {"preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business"}, "head": [0, 0.02, -0.42]}, "hdr": "hdrWing",
+   "variants": [
+     {"name": "old", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}},
+     {"name": "new"},
+     {"name": "newB", "patch": {"wingMat,wingMat.wet": [["  gWingLamp0 = wingLampPos(0);\n  gWingLamp1 = wingLampPos(1);\n  gWingLamp2 = wingLampPos(2);\n", "  for (int i = min(uWingSteps, 0); i < 3; i++) {\n    vec3 p = wingLampPos(i);\n    if (i == 0) gWingLamp0 = p; else if (i == 1) gWingLamp1 = p; else gWingLamp2 = p;\n  }\n"]]}},
+     {"name": "noLamp", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}, "uniforms": {"sceneMat.uniforms.uWingDebug.value": 2}},
+     {"name": "stats", "js": "const H = window.__dxHdr; const out = {}; const B = H.old; for (const k of ['new', 'newB']) { const A = H[k]; let n = 0, nRel3 = 0, maxRel = 0, at = -1, maxAbs = 0, alphaDiff = 0; for (let p = 0; p < A.length; p += 4) { if (A[p + 3] !== B[p + 3]) alphaDiff++; let d = 0, r = 0; for (let c = 0; c < 3; c++) { const e = Math.abs(A[p + c] - B[p + c]); d = Math.max(d, e); r = Math.max(r, e / Math.max(Math.abs(B[p + c]), 1e-9)); } if (d > 0) { n++; if (r > 1e-3) nRel3++; if (r > maxRel) { maxRel = r; at = p / 4; } if (d > maxAbs) maxAbs = d; } } out[k] = { n, nRel3, maxRel, maxAbs, alphaDiff, at, atVal: at >= 0 ? [B[at * 4], B[at * 4 + 1], B[at * 4 + 2]] : null, atNew: at >= 0 ? [A[at * 4], A[at * 4 + 1], A[at * 4 + 2]] : null }; } return out;"}
+   ]}
+]

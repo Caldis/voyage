@@ -1,0 +1,323 @@
+[
+ {
+  "name": "sun",
+  "scene": "sunset-wing",
+  "hdr": "hdrWing",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "noLamp",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    },
+    "uniforms": {
+     "sceneMat.uniforms.uWingDebug.value": 2
+    }
+   },
+   {
+    "name": "cov",
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "gl_FragColor = sc;\n",
+       "gl_FragColor = vec4(0.0);\n"
+      ],
+      [
+       "gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);",
+       "gl_FragColor = vec4(wing.a, 0.0, m, 1.0);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldNG",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    },
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "  col += wingLights(ro, rd) * WING_PANE_T * m;",
+       ""
+      ]
+     ]
+    }
+   },
+   {
+    "name": "newNG",
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "  col += wingLights(ro, rd) * WING_PANE_T * m;",
+       ""
+      ]
+     ]
+    }
+   },
+   {
+    "name": "stats",
+    "js": "const H = window.__dxHdr; const out = {}; const C = H.cov, M = H.noLamp;\nconst cmp = (A, B) => { const r = { wing: 0, nonWing: 0, lampLit: 0, other: 0, maxRelWing: 0, maxAbsWing: 0, maxRelNonWing: 0, maxAbsNonWing: 0, alphaDiff: 0, wingPx: 0 };\n  for (let p = 0; p < A.length; p += 4) { const isWing = C[p] > 0; if (isWing) r.wingPx++; if (A[p + 3] !== B[p + 3]) r.alphaDiff++;\n    let d = 0, q = 0, lamp = false;\n    for (let c = 0; c < 3; c++) { const e = Math.abs(A[p + c] - B[p + c]); d = Math.max(d, e); q = Math.max(q, e / Math.max(Math.abs(B[p + c]), 1e-9)); if (M[p + c] !== H.old[p + c]) lamp = true; }\n    if (d > 0) { if (lamp) r.lampLit++; else r.other++;\n      if (isWing) { r.wing++; r.maxRelWing = Math.max(r.maxRelWing, q); r.maxAbsWing = Math.max(r.maxAbsWing, d); }\n      else { r.nonWing++; r.maxRelNonWing = Math.max(r.maxRelNonWing, q); r.maxAbsNonWing = Math.max(r.maxAbsNonWing, d); } } }\n  return r; };\nout.new_vs_old = cmp(H.new, H.old);\nout.newNG_vs_oldNG = cmp(H.newNG, H.oldNG);\nreturn out;"
+   }
+  ]
+ },
+ {
+  "name": "biz",
+  "scene": {
+   "name": "biz-seated-noon",
+   "p": {
+    "preset": "wpac",
+    "time": 720,
+    "wing-pos": "8",
+    "cabin-class": "business"
+   },
+   "head": [
+    0,
+    0.02,
+    -0.42
+   ]
+  },
+  "hdr": "hdrWing",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "noLamp",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    },
+    "uniforms": {
+     "sceneMat.uniforms.uWingDebug.value": 2
+    }
+   },
+   {
+    "name": "cov",
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "gl_FragColor = sc;\n",
+       "gl_FragColor = vec4(0.0);\n"
+      ],
+      [
+       "gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);",
+       "gl_FragColor = vec4(wing.a, 0.0, m, 1.0);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldNG",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    },
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "  col += wingLights(ro, rd) * WING_PANE_T * m;",
+       ""
+      ]
+     ]
+    }
+   },
+   {
+    "name": "newNG",
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "  col += wingLights(ro, rd) * WING_PANE_T * m;",
+       ""
+      ]
+     ]
+    }
+   },
+   {
+    "name": "stats",
+    "js": "const H = window.__dxHdr; const out = {}; const C = H.cov, M = H.noLamp;\nconst cmp = (A, B) => { const r = { wing: 0, nonWing: 0, lampLit: 0, other: 0, maxRelWing: 0, maxAbsWing: 0, maxRelNonWing: 0, maxAbsNonWing: 0, alphaDiff: 0, wingPx: 0 };\n  for (let p = 0; p < A.length; p += 4) { const isWing = C[p] > 0; if (isWing) r.wingPx++; if (A[p + 3] !== B[p + 3]) r.alphaDiff++;\n    let d = 0, q = 0, lamp = false;\n    for (let c = 0; c < 3; c++) { const e = Math.abs(A[p + c] - B[p + c]); d = Math.max(d, e); q = Math.max(q, e / Math.max(Math.abs(B[p + c]), 1e-9)); if (M[p + c] !== H.old[p + c]) lamp = true; }\n    if (d > 0) { if (lamp) r.lampLit++; else r.other++;\n      if (isWing) { r.wing++; r.maxRelWing = Math.max(r.maxRelWing, q); r.maxAbsWing = Math.max(r.maxAbsWing, d); }\n      else { r.nonWing++; r.maxRelNonWing = Math.max(r.maxRelNonWing, q); r.maxAbsNonWing = Math.max(r.maxAbsNonWing, d); } } }\n  return r; };\nout.new_vs_old = cmp(H.new, H.old);\nout.newNG_vs_oldNG = cmp(H.newNG, H.oldNG);\nreturn out;"
+   }
+  ]
+ },
+ {
+  "name": "ic",
+  "scene": "in-cloud",
+  "offset": [
+   -10,
+   -5
+  ],
+  "hdr": "hdrWing",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "noLamp",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    },
+    "uniforms": {
+     "sceneMat.uniforms.uWingDebug.value": 2
+    }
+   },
+   {
+    "name": "cov",
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "gl_FragColor = sc;\n",
+       "gl_FragColor = vec4(0.0);\n"
+      ],
+      [
+       "gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);",
+       "gl_FragColor = vec4(wing.a, 0.0, m, 1.0);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldNG",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    },
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "  col += wingLights(ro, rd) * WING_PANE_T * m;",
+       ""
+      ]
+     ]
+    }
+   },
+   {
+    "name": "newNG",
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "  col += wingLights(ro, rd) * WING_PANE_T * m;",
+       ""
+      ]
+     ]
+    }
+   },
+   {
+    "name": "stats",
+    "js": "const H = window.__dxHdr; const out = {}; const C = H.cov, M = H.noLamp;\nconst cmp = (A, B) => { const r = { wing: 0, nonWing: 0, lampLit: 0, other: 0, maxRelWing: 0, maxAbsWing: 0, maxRelNonWing: 0, maxAbsNonWing: 0, alphaDiff: 0, wingPx: 0 };\n  for (let p = 0; p < A.length; p += 4) { const isWing = C[p] > 0; if (isWing) r.wingPx++; if (A[p + 3] !== B[p + 3]) r.alphaDiff++;\n    let d = 0, q = 0, lamp = false;\n    for (let c = 0; c < 3; c++) { const e = Math.abs(A[p + c] - B[p + c]); d = Math.max(d, e); q = Math.max(q, e / Math.max(Math.abs(B[p + c]), 1e-9)); if (M[p + c] !== H.old[p + c]) lamp = true; }\n    if (d > 0) { if (lamp) r.lampLit++; else r.other++;\n      if (isWing) { r.wing++; r.maxRelWing = Math.max(r.maxRelWing, q); r.maxAbsWing = Math.max(r.maxAbsWing, d); }\n      else { r.nonWing++; r.maxRelNonWing = Math.max(r.maxRelNonWing, q); r.maxAbsNonWing = Math.max(r.maxAbsNonWing, d); } } }\n  return r; };\nout.new_vs_old = cmp(H.new, H.old);\nout.newNG_vs_oldNG = cmp(H.newNG, H.oldNG);\nreturn out;"
+   }
+  ]
+ },
+ {
+  "name": "night",
+  "scene": {
+   "name": "night-city-low",
+   "p": {
+    "preset": "fuji",
+    "date": "2026-01-16",
+    "time": 1260,
+    "altitude": 1,
+    "coverage": 0.15,
+    "cabin-light": "off"
+   },
+   "offset": [
+    0,
+    -25
+   ],
+   "ground": true,
+   "head": -0.25
+  },
+  "hdr": "hdrWing",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "noLamp",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    },
+    "uniforms": {
+     "sceneMat.uniforms.uWingDebug.value": 2
+    }
+   },
+   {
+    "name": "cov",
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "gl_FragColor = sc;\n",
+       "gl_FragColor = vec4(0.0);\n"
+      ],
+      [
+       "gl_FragColor = vec4(min(col, vec3(uHdrMax)), sc.a);",
+       "gl_FragColor = vec4(wing.a, 0.0, m, 1.0);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldNG",
+    "materials": {
+     "wingMat": "base",
+     "wingMat.wet": "base:wingMat"
+    },
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "  col += wingLights(ro, rd) * WING_PANE_T * m;",
+       ""
+      ]
+     ]
+    }
+   },
+   {
+    "name": "newNG",
+    "patch": {
+     "wingMat,wingMat.wet": [
+      [
+       "  col += wingLights(ro, rd) * WING_PANE_T * m;",
+       ""
+      ]
+     ]
+    }
+   },
+   {
+    "name": "stats",
+    "js": "const H = window.__dxHdr; const out = {}; const C = H.cov, M = H.noLamp;\nconst cmp = (A, B) => { const r = { wing: 0, nonWing: 0, lampLit: 0, other: 0, maxRelWing: 0, maxAbsWing: 0, maxRelNonWing: 0, maxAbsNonWing: 0, alphaDiff: 0, wingPx: 0 };\n  for (let p = 0; p < A.length; p += 4) { const isWing = C[p] > 0; if (isWing) r.wingPx++; if (A[p + 3] !== B[p + 3]) r.alphaDiff++;\n    let d = 0, q = 0, lamp = false;\n    for (let c = 0; c < 3; c++) { const e = Math.abs(A[p + c] - B[p + c]); d = Math.max(d, e); q = Math.max(q, e / Math.max(Math.abs(B[p + c]), 1e-9)); if (M[p + c] !== H.old[p + c]) lamp = true; }\n    if (d > 0) { if (lamp) r.lampLit++; else r.other++;\n      if (isWing) { r.wing++; r.maxRelWing = Math.max(r.maxRelWing, q); r.maxAbsWing = Math.max(r.maxAbsWing, d); }\n      else { r.nonWing++; r.maxRelNonWing = Math.max(r.maxRelNonWing, q); r.maxAbsNonWing = Math.max(r.maxAbsNonWing, d); } } }\n  return r; };\nout.new_vs_old = cmp(H.new, H.old);\nout.newNG_vs_oldNG = cmp(H.newNG, H.oldNG);\nreturn out;"
+   }
+  ]
+ }
+]
