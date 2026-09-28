@@ -1,0 +1,8 @@
+[
+  { "name": "in-cloud", "scene": "in-cloud", "cloudDump": { "warm": 96, "frames": 16 }, "variants": [
+    { "name": "old", "uniforms": { "clouds.marchMat.uniforms.uCloudImmersion.value": 0.997 }, "patch": { "clouds.marchMat": [["const float CLOUD_MS_STEEP = 2.0;", "const float CLOUD_MS_STEEP = 1.0;"], ["mix(1.0, powder, powderW *", "mix(1.0, powder, 0.5 *"]] } },
+    { "name": "new", "uniforms": { "clouds.marchMat.uniforms.uCloudImmersion.value": 0.997 } } ] },
+  { "name": "dusk-earthshadow", "scene": "dusk-earthshadow", "cloudDump": { "warm": 96, "frames": 16 } },
+  { "name": "night-sea-fullmoon", "scene": "night-sea-fullmoon", "cloudDump": { "warm": 96, "frames": 16 } },
+  { "name": "cirrus-noon", "scene": "cirrus-noon", "cloudDump": { "warm": 96, "frames": 16 } }
+]
