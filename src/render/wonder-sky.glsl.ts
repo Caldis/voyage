@@ -1,25 +1,33 @@
 /**
- * 天幕层奇观（W01 / W01b）：天梯 / 建木——一根从地平线下升起、直入太空的极细的线，以及挂在它身上的「让人遐想」的东西（GLSL）。
+ * 天幕层奇观（W01 / W01b / WS01）：天梯 / 建木——从地平线附近升起、直入太空的巨构（GLSL）。
  * 依赖 ATMOSPHERE_COMMON、VIEW_COMMON、LIGHTS_COMMON、NOISE_COMMON、TRAFFIC_COMMON（空气透视的两个 3D 纹理在那里声明，本段不新增 sampler）。
  *
  * 几何：地心坐标（和 outsideRadiance 一样，相机在 (0, uCamR, 0)，y 朝天顶、x 朝东、−z 朝北）。
- * 主体是一条过地心的射线上的细圆柱：基座 B = uWonderAxis × BOTTOM，向上一直延伸到太空。
+ * 主体是一条过地心的射线上的柱：基座 B = uWonderAxis × BOTTOM，向上一直延伸到太空。
  * 视线与轴线求最近点，得到视线到轴线的有符号横向距离 X、最近点沿视线的距离 t、沿轴线离基座的高度 s。
  * 所有运算都相对基座做（几百 km 量级），不用地心的 6000 多 km 大数相减，float 精度够分辨 1/10 像素。
  *
- * 像面坐标（W01b）：几百 km 外、几 km 大的东西近似正交投影。像面上以轴线为纵轴：横向 = X，纵向 = s·sin(视线与轴线夹角)。
- * 挂在轴线上的东西（中继站、舱体、航标灯）只要换算到这个坐标里，覆盖率就能和线本身一样解析积分（三角核，±1 像素），
- * 亚像素时按面积摊薄、能量守恒，不会逐帧闪；从轴线伸出去的「撑杆」（天梯的稳定缆、建木的枝）把三维曲线投到同一坐标里求横向距离。
+ * 像面坐标（W01b，WS01 补全）：每个像素有一组正交基 (nh, up, rd)：nh = rd × a 归一（横向），up = (a − b·rd)/sn（纵向），
+ * 相对基座的一点 p 在像面上是 (p·nh, p·up)，本像素自己是 (X, Y) = (w0·nh, w0·up)，Y = s·sn。
+ * 视线穿过 p 当且仅当两者相等——所以「视线打不打得中」按像面判断是精确的（沿视线的正交投影），
+ * 覆盖率在像面上按三角核（±1 像素）解析积分：亚像素时按面积摊薄、能量守恒，不会逐帧闪。
+ * 轴线上高 h、半径 R 的水平圆在像面上是椭圆：横半轴 R、纵半轴 |b|·R（b = rd·a），中心 (0, sn·h)；
+ * 朝相机的半圈在 b > 0（仰视）时是上半个椭圆，俯视时是下半个。锚塔、环站、扶壁、灯都按这一条换算。
  *
- * 天梯（skin 0，致敬《流浪地球 2》太空电梯）：
- * - 中继站：缆上七个扁椭球平台（16 km 起按约 1.85 倍往上排，大小不一），下面看是一道横在线上的短划；
- *   向阳时是亮点，日落后地影以上的几个还亮着，是「遐想」最强的时刻。边缘有一圈慢转的金属面板，
- *   太阳、面板、相机正好对上时「闪一下」（像铱星闪光：平面金属的镜面反射，白天也看得见）。
- * - 舱体：上行 / 下行两条轨道上稀疏的长椭球，约 200 / 130 km/h（在 370 km 外每秒挪 0.2 像素，要盯一会儿才发现在动）。
- * - 稳定缆：从最低的两个中继站斜拉到海上的六个锚点（18–52 km 外），比主缆细得多、淡得多。
- * - 海上系留平台：基座处一块宽而扁的平台，贴着地平线、在霾里若隐若现；夜里是一串灯群。
- * - 航标灯（节律）：夜里缆上每 30 km 一盏红灯，全部同步慢闪（高耸结构的障碍灯就是同步的）；
- *   白天改成中继站两端的高强度白色频闪，从下往上依次闪一遍（白天红灯看不见，真实的高塔也是白天白闪、夜里红闪）。
+ * 天梯（skin 0，致敬《流浪地球 2》太空电梯；WS01 巨构化，尺寸由 wonders/tether-shape.ts 按种子随机）：
+ * - 锚塔：30–40 km 高、3–4 级退台的截锥（底宽 14–18 km），粗野主义混凝土（反照率约 0.3，受光面 / 背光面大块明暗），
+ *   面上只有横向施工缝和竖向雨痕两种纹理（按像素足迹积分，远处平均掉）；4–6 片放射状扶壁伸到海上。
+ *   比雷暴云顶高一倍：窗里是一整块实心的体量，塔顶高过视平线约 8°，脚埋在地平线的霾里。
+ * - 缆束：直径约 2 km，里面 3 根子缆（近处看得见之间的缝），300 km 以上收到一半。
+ * - 环形站：3–5 只（环半径 12–35 km、环管 1–3 km，4–8 根辐条接到缆上）；从下面仰看是横在天上的扁椭圆，
+ *   近侧的半圈挡在缆前面、远侧的在缆后面。
+ * - 稳定缆：从塔顶斜拉到 45–70 km 外海上的六根细线（夜里是塔两侧淡淡的「帐篷」）。
+ * - 舱体：上行 / 下行两条轨道，贴在缆束两侧，约 200 / 130 km/h。
+ * - 夜灯（按用户「极简」的取向，放大不等于点亮）：缆上每 30 km 一盏红色障碍灯全部同步慢闪（保留）；
+ *   缆上每 2 km 一盏暗白灯，每隔约 20 s 有一道光脉冲以约 2 km/s 往上爬（一分钟左右爬出窗口，用时间给出尺度）；
+ *   锚塔每级退台朝相机的一圈轮廓灯（描出体量）；塔顶红灯同步慢闪。塔身灯格是开发者开关（uWonderSky.w，默认关）。
+ *   白天：环站两端高强度白色频闪，从下往上依次闪（真实高塔白天白闪、夜里红闪）。
+ * - 云的前后：塔在 200–260 km 外，比它远的云要排到它后面（outside-pass.ts 按 gWonderCov / gWonderT 调 cloudBeforeGround）。
  * 建木（skin 1，《淮南子·地形训》「众帝所自上下」、《山海经·海内经》「百仞无枝，上有九欘」）：
  * - 九欘：高处（55 km 以上）九根弯着往上长的枝，树冠在窗里的高处，向阳一侧被照亮。
  * - 云气缭绕：12–30 km 高处树干上挂着的三圈云环（圈间有薄雾相连），远看是横在树干上、顺风拖向一侧的云絮（真实的旗云 / 帽云：
@@ -31,19 +39,29 @@
  * - 光照是真的：太阳 / 月亮在该点的透射率（大气层内查透射率 LUT，层外按光线近地点判断地影），
  *   所以黄昏时下段已经在地球的影子里、上段还被（染红的）阳光照着，分界线的高度随太阳高度自然移动；
  *   下方地球（海面 + 云）反上来的光照亮平台的底面和线的侧面。
- * - 空气透视：乘到它那一点的透射率，再加上相机到它之间的内散射，下半截自然融进地平线的霾。
- * - 白天的可见性（W00 查因：正午线与天空的对比 < 1/255）：暗色细线本来就看不见（天空亮度几乎全来自它前面的空气）；
- *   白天被注意到的是反照率高的东西（中继站、舱体、云气）、镜面闪光和频闪灯，它们比天空亮，而不是比天空暗。
+ * - 空气透视：乘到它那一点的透射率，再加上相机到它之间的内散射，下半截自然融进地平线的霾（锚塔的脚蓝灰、反差低，上段衬在深蓝的天上更清楚）。
+ * - 白天的可见性（W00 查因：正午线与天空的对比 < 1/255）：暗色细线本来就看不见；WS01 起靠体量（锚塔、环站）。
  * 只有一个调用点（outsideRadiance 的合成处）；uWonderOn = 0 时第一行就返回，关掉奇观模式时画面与原来逐像素一致。
  * PERF-13：整段只拼进窗外程序的 OUTSIDE_WONDER 变体（outside-pass.ts 里包在 #ifdef 中），默认程序预处理后不含它；
  * uWonderOn = 1 时才选这个变体（wantedOutsideKey），没编好之前不画天幕层奇观（浮现本来就从地平线的霾里开始）。
- * 循环只有「撑杆」一个（上界 9 + uLoopGuard，FXC 不展开），重函数（透射率 / 辐照度 / 空气透视查表）各只算一次、各部分共用。
+ * 重函数（透射率 / 辐照度 / 空气透视查表）各只算一次、各部分共用；天梯先只算几何覆盖率，一个像素什么都没盖到就不查表直接返回。
+ * 循环（撑杆、退台、扶壁、环站、辐条）上界都写成「常数 + uLoopGuard」，FXC 不展开。
  */
 export const WONDER_SKY_COMMON = /* glsl */ `
 uniform float uWonderOn;     // 1 = 有天幕层奇观要画（奇观模式开着且有奇观在场），0 = 整段早退
 uniform vec3 uWonderAxis;    // 轴线方向：地心 → 基座（窗外坐标，单位向量）
 uniform vec4 uWonderShape;   // x = 底部半径（km），y = 可见前沿高度（km，浮现编排用），z = 皮肤（0 天梯 / 1 建木），w = 航标灯与舱体 0/1
 uniform vec3 uWonderAlbedo;  // 表面反照率
+// 天梯的巨构尺寸（WS01，wonders/tether-shape.ts 按种子生成）
+uniform vec4 uWonderSky;       // x 退台级数、y 环站个数、z 扶壁片数、w 塔身灯格（开发者开关 0/1）
+uniform vec4 uWonderTower;     // x 塔高、y 底半径、z 顶半径（km）、w 方位起点（弧度）
+uniform vec4 uWonderFin;       // x 扶壁伸出长度、y 扶壁半厚（km）
+uniform vec4 uWonderTiers[4];  // 每级退台：底高、顶高、底半径、顶半径（km）
+uniform vec4 uWonderRings[5];  // 每只环站：中心高度、环半径、环管半径（km）、辐条数
+
+// 给 outside-pass 排远云用（WS01）：这个像素被奇观的实体盖住多少、奇观离相机多远（km）
+float gWonderCov = 0.0;
+float gWonderT = 0.0;
 
 // 三角核（半宽 1 像素、面积 1）的累积分布
 float wonderTentCdf(float x) {
@@ -87,15 +105,7 @@ float wonderCylinderPhase(vec3 lightDir, vec3 V, vec3 a, out float perp) {
   return (sin(alpha) + (M_PI - alpha) * cosA) * 0.25;
 }
 
-// 天梯的中继站：k = 0..6，高度 16 km 起按约 1.85 倍往上排（带 ±8% 的不规则），半径 0.9–2.6 km，第 2 个（约 55 km）是大的中继站
-float wonderStationS(float k) {
-  return 16.0 * pow(1.85, k) * (0.92 + 0.16 * hash12(vec2(k, 3.7)));
-}
-float wonderStationR(float k) {
-  return k == 2.0 ? 3.1 : 0.9 + 1.7 * hash12(vec2(k, 9.1));
-}
-
-// 挂在轴线上的旋转椭球（中继站：扁；舱体：长；系留平台：又宽又扁）。sc 中心高度，R 赤道半径，H 极半径（km）。
+// 挂在轴线上的旋转椭球（舱体：长）。sc 中心高度，R 赤道半径，H 极半径（km）。
 // 返回 rgb = 表面辐亮度（还没乘空气透视），a = 像素覆盖率。覆盖率在像面上按椭圆的弦解析积分（三角核），
 // 法线由视线与椭球求交得到（没打中时取轮廓上的点）；光照：太阳 / 月亮直射 + 上半球天光 + 下方地球反光
 vec4 wonderSpheroid(vec3 w0, vec3 rd, vec3 a, float sc, float R, float H, float x, float s, float wPix, float sn, float b,
@@ -159,6 +169,85 @@ float wonderStrut(float X, float s, float sn, float b, vec3 nh, vec3 rd, vec3 h,
   return wonderStrip(perp / wPix, mix(thA, thB, u) / wPix);
 }
 
+// ---- WS01 天梯巨构的几何小工具（全部在像面坐标里，km）
+
+// 一级退台（截锥 tier = 底高、顶高、底半径、顶半径）的像素覆盖率：横向按这一高度的半径（轮廓上的点正好在 h = Y/sn），
+// 纵向上下沿是顶圆 / 底圆投影成的椭圆（竖半轴 |b|·r），所以退台的上沿在仰视、俯视时都是一道缓弧
+float wonderFrustum(float X, float Y, float sn, float ab, float wPix, vec4 tr) {
+  float hq = clamp(Y / sn, tr.x, tr.y);
+  float rq = mix(tr.z, tr.w, (hq - tr.x) / max(tr.y - tr.x, 1e-3));
+  float top = sn * tr.y + ab * sqrt(max(tr.w * tr.w - X * X, 0.0));
+  float bot = sn * tr.x - ab * sqrt(max(tr.z * tr.z - X * X, 0.0));
+  return wonderStrip(X / wPix, rq / wPix) * wonderStrip((Y - 0.5 * (top + bot)) / wPix, 0.5 * (top - bot) / wPix);
+}
+
+// 凸多边形有符号距离（Inigo Quilez 的 sdPolygon，四个顶点；里面为负）
+void wonderEdge(vec2 p, vec2 vi, vec2 vj, inout float d, inout float sg) {
+  vec2 e = vj - vi;
+  vec2 w = p - vi;
+  vec2 q = w - e * clamp(dot(w, e) / max(dot(e, e), 1e-12), 0.0, 1.0);
+  d = min(d, dot(q, q));
+  bvec3 c = bvec3(p.y >= vi.y, p.y < vj.y, e.x * w.y > e.y * w.x);
+  if (all(c) || all(not(c))) sg = -sg;
+}
+float wonderSdQuad(vec2 p, vec2 v0, vec2 v1, vec2 v2, vec2 v3) {
+  float d = 1e20;
+  float sg = 1.0;
+  wonderEdge(p, v0, v3, d, sg);
+  wonderEdge(p, v1, v0, d, sg);
+  wonderEdge(p, v2, v1, d, sg);
+  wonderEdge(p, v3, v2, d, sg);
+  return sg * sqrt(d);
+}
+
+// 点到线段的距离
+float wonderSeg(vec2 p, vec2 a0, vec2 a1) {
+  vec2 e = a1 - a0;
+  vec2 w = p - a0;
+  return length(w - e * clamp(dot(w, e) / max(dot(e, e), 1e-12), 0.0, 1.0));
+}
+
+// 点 p 到轴对齐椭圆（半轴 A、B）的最近点（迭代三次，误差远小于像素）
+vec2 wonderEllipseNearest(vec2 p, float A, float B) {
+  vec2 pa = abs(p);
+  float tx = 0.70710678;
+  float ty = 0.70710678;
+  for (int i = 0; i < 3; i++) {
+    float ex = (A * A - B * B) * tx * tx * tx / A;
+    float ey = (B * B - A * A) * ty * ty * ty / B;
+    vec2 r = vec2(A * tx - ex, B * ty - ey);
+    vec2 q = pa - vec2(ex, ey);
+    float k = length(r) / max(length(q), 1e-9);
+    tx = clamp((q.x * k + ex) / A, 0.0, 1.0);
+    ty = clamp((q.y * k + ey) / B, 0.0, 1.0);
+    float tl = inversesqrt(tx * tx + ty * ty);
+    tx *= tl;
+    ty *= tl;
+  }
+  return vec2(A * tx, B * ty) * sign(p + 1e-9);
+}
+
+// 区间 [x − f/2, x + f/2] 落在「每 P 一条、宽 w 的带」里的比例：按像素足迹 f 做的盒式积分（施工缝、楼层，远处自然平均掉，不闪）
+float wonderBandInt(float x, float P, float w) {
+  return floor(x / P) * w + min(fract(x / P) * P, w);
+}
+float wonderBands(float x, float f, float P, float w) {
+  f = max(f, 1e-4);
+  return (wonderBandInt(x + 0.5 * f, P, w) - wonderBandInt(x - 0.5 * f, P, w)) / f;
+}
+
+// 环站外壳的反照率：朝上 / 朝外的一面是浅灰的隔热外壳（0.33，不做金属高光），朝下的一面铺着深色的散热 / 光伏板（0.07）。
+// 从下面仰看时环管中间一道暗带、两侧亮边，是「一节节的工程结构」而不是一只均匀发白的甜甜圈
+vec3 wonderRingAlb(vec3 n, vec3 a) {
+  return mix(vec3(0.32, 0.33, 0.34), vec3(0.06, 0.065, 0.08), smoothstep(-0.15, -0.55, dot(n, a)));
+}
+
+// 漫反射照度：太阳 / 月亮直射 + 上半球天光 + 下方地球反光（n 为单位法线）
+vec3 wonderIrr(vec3 n, vec3 a, vec3 eSun, vec3 eMoon, vec3 eSkyUp, vec3 eUp) {
+  float up = dot(n, a);
+  return eSun * max(dot(n, uSunDir), 0.0) + eMoon * max(dot(n, uMoonDir), 0.0) + eSkyUp * (0.5 + 0.5 * up) + eUp * (0.5 - 0.5 * up);
+}
+
 // L：线背后的背景辐亮度（天空含内散射，地面 / 海面已含空气透视）；tLimit：这条视线打到地面的距离（打不到传一个大数）
 vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   if (uWonderOn < 0.5) return L;
@@ -176,28 +265,216 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   float e = dot(a, w0);
   float t = (b * e - d) / nn;                    // 最近点沿视线的距离（km）
   float s = (e - b * d) / nn;                    // 最近点离基座的高度（km）
-  if (t <= 0.0 || t > tLimit || s < -1.5) return L;
   bool tether = uWonderShape.z < 0.5;
+  // 天梯的锚塔很粗（底半径 7–9 km）：塔的正面比轴线近一个半径，塔脚的边由锚塔自己的解析下沿（海面 h = 0）给，
+  // 地面只在「明显比整座塔都近」时才挡（真实地形挡在前面）
+  float tNear = tether ? t - uWonderTower.y - 1.0 : t;
+  if (t <= 0.0 || tNear > tLimit || s < -1.5) return L;
 
   float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
   float wPix = t * pixelAngle;                   // 一个像素在那个距离上有多宽（km）
-  // 越往上越细
-  float radius = uWonderShape.x * mix(1.0, 0.45, smoothstep(0.0, 600.0, s));
+  // 越往上越细（天梯的缆束 150–350 km 收到一半）
+  float radius = uWonderShape.x * (tether ? mix(1.0, 0.5, smoothstep(150.0, 350.0, s)) : mix(1.0, 0.45, smoothstep(0.0, 600.0, s)));
   float haloPx = 5.0;
-  // 这一高度上最远的东西离轴线多远：稳定缆 / 系留平台（天梯低处）、云气（建木 9–34 km）、树冠与萤光（建木 46 km 以上）
-  float reach = max(radius + haloPx * 3.0 * wPix, 4.0);
-  if (tether) { if (s < 34.0) reach = 58.0; }
-  else if (s > 46.0) reach = 46.0;
-  else if (s > 9.0 && s < 34.0) reach = 40.0;
-  if (dist > reach) return L;
-
+  float x = X / wPix;                            // 横向像素偏移（有符号）
+  float T = uTime;
+  // 水平面上的两个正交方向（撑杆的方位、面板的方位用）
+  vec3 e1 = normalize(cross(vec3(0.0, 0.0, 1.0), a));
+  vec3 e2 = cross(a, e1);
   // 可见前沿（浮现 / 退场的编排）：前沿以上是长渐变，不是硬边
   float front = uWonderShape.y;
   float visF = (1.0 - smoothstep(0.35 * front, front, s)) * smoothstep(-1.5, 0.0, s);
   if (visF <= 0.0) return L;
-  // 下半截沉进霾与云海：离地几公里以内被低空的霾层吞掉，不给看清基座——「看不到它从哪里来」（系留平台不乘这一项，靠真实的空气透视）
-  float sink = smoothstep(0.0, 9.0, s);
+
+  // ---- 天梯：先只算几何覆盖率（锚塔、扶壁、缆束、环站、辐条、稳定缆），什么都没盖到、附近也没有灯就直接返回（不查表）
+  float Y = s * sn;                              // 本像素在像面上的纵坐标（km）
+  float ab = abs(b);
+  vec3 mh = (rd - a * b) / sn;                   // 水平面里「沿视线往远处」的单位向量（像面的深度方向）
+  vec3 uph = (a - rd * b) / sn;                  // 像面纵轴
+  float H = uWonderTower.x;
+  float covTower = 0.0;
+  vec4 tierHit = uWonderTiers[0];
+  float covFinN = 0.0, covFinF = 0.0;            // 扶壁：朝相机一侧（画在塔前）/ 背向一侧（画在塔后）
+  vec3 nFinN = vec3(0.0), nFinF = vec3(0.0);
+  float covRingN = 0.0, covRingF = 0.0;          // 环站：近侧半圈（挡在缆前）/ 远侧半圈（在缆后）
+  vec3 nRingN = vec3(0.0), nRingF = vec3(0.0);
+  float segN = 1.0, segF = 1.0;                  // 环站舱段接缝的明暗
+  float covSpokeN = 0.0, covSpokeF = 0.0;
+  float ringLamp = -1.0;                         // 离本像素最近的环站编号（灯用）
+  if (tether) {
+    // 锚塔：各级退台的覆盖率相加（相邻两级在接缝处各 0.5，加起来正好 1，不会有细缝）
+    if (s < H + 3.0 && dist < uWonderTower.y + 3.0 * wPix) {
+      float cMax = 0.0;
+      for (int k = 0; k < 4 + uLoopGuard; k++) {
+        if (float(k) >= uWonderSky.x) break;
+        vec4 tr = uWonderTiers[k];
+        float ck = wonderFrustum(X, Y, sn, ab, wPix, tr);
+        covTower += ck;
+        if (ck > cMax) { cMax = ck; tierHit = tr; }
+      }
+      covTower = min(covTower, 1.0);
+    }
+    // 扶壁：放射状的混凝土板，从塔脚伸到海上（高到第一级退台）。像面上是一个凸四边形，按板厚往外扩；
+    // 板正对 / 背对相机时退化成一条竖直的窄条，照样成立
+    vec4 t0 = uWonderTiers[0];
+    float finR = t0.z + uWonderFin.x;
+    if (s < 0.5 * t0.y + 1.5 && dist < finR + 1.0 + 2.0 * wPix) {
+      for (int i = 0; i < 6 + uLoopGuard; i++) {
+        if (float(i) >= uWonderSky.z) break;
+        float fi = float(i);
+        float phi = uWonderTower.w + fi * 6.2832 / uWonderSky.z + 0.35 * (hash12(vec2(fi, 71.0)) - 0.5);
+        vec3 hd = cos(phi) * e1 + sin(phi) * e2;
+        vec3 q = cross(a, hd);
+        vec2 hI = vec2(dot(hd, nh), dot(hd, uph));
+        // 板的侧面是梯形：贴塔一侧高到第一级退台的 45%，外端还有 30% 那么高（一块敦实的墩，而不是往外张开的裙摆）
+        float hTop = t0.y * 0.45;
+        float rTop = mix(t0.z, t0.w, 0.45);
+        vec2 p0 = hI * t0.z * 0.8;
+        vec2 p1 = hI * finR;
+        vec2 p2 = hI * finR + vec2(0.0, sn * 0.3 * hTop);
+        vec2 p3 = hI * rTop + vec2(0.0, sn * hTop);
+        float sd = wonderSdQuad(vec2(X, Y), p0, p1, p2, p3) - uWonderFin.y * length(vec2(dot(q, nh), dot(q, uph)));
+        float cf = wonderTentCdf(-sd / wPix);
+        vec3 nq = q * -sign(dot(q, rd));
+        if (dot(hd, rd) < 0.0) { if (cf > covFinN) { covFinN = cf; nFinN = nq; } }
+        else if (cf > covFinF) { covFinF = cf; nFinF = nq; }
+      }
+    }
+    // 环形站：环的中心线在像面上是椭圆（横半轴 R、纵半轴 |b|R），环管是它两侧 rt 以内的带；辐条是从轴线到环上的线段
+    for (int k = 0; k < 5 + uLoopGuard; k++) {
+      if (float(k) >= uWonderSky.y) break;
+      vec4 rg = uWonderRings[k];
+      float yc = Y - sn * rg.x;
+      float Bv = max(ab, 0.03) * rg.y;
+      float m2 = 2.2 * rg.z + 2.0 * wPix;
+      if (abs(X) > rg.y + m2 || abs(yc) > Bv + m2) continue;
+      ringLamp = float(k);
+      vec2 cp = wonderEllipseNearest(vec2(X, yc), rg.y, Bv);
+      vec2 dl = vec2(X, yc) - cp;
+      float cr = wonderStrip(length(dl) / wPix, rg.z / wPix);
+      // 环上这一点的方位：像面 (R cosφ, −b R sinφ)；sinφ < 0 是朝相机的一侧
+      float cphi = clamp(cp.x / rg.y, -1.0, 1.0);
+      float sphi = -cp.y / (b * rg.y + (b < 0.0 ? -1e-6 : 1e-6));
+      vec3 rad = normalize(cphi * nh + sphi * mh);
+      vec3 tng = cross(a, rad);
+      // 环管的法线：像面偏移换回三维，再补上朝相机的分量（冒充球），去掉沿环的切向分量
+      vec3 nr = (dl.x * nh + dl.y * uph) / rg.z;
+      nr += -rd * sqrt(max(1.0 - dot(nr, nr), 0.0));
+      nr = normalize(nr - tng * dot(nr, tng) + 1e-6 * rad);
+      // 环是一节节舱段拼起来的：每 7.5° 一道暗缝（按像素足迹在方位上积分，透视压缩的两端自然平均掉）
+      float phiR = atan(sphi, cphi);
+      float fphi = wPix / (rg.y * sqrt(sphi * sphi + b * b * cphi * cphi) + 1e-4);
+      float seg = 1.0 - 0.45 * wonderBands(phiR + 3.1416, fphi, 0.1309, 0.012);
+      if (sphi < 0.0) { if (cr > covRingN) { covRingN = cr; nRingN = nr; segN = seg; } }
+      else if (cr > covRingF) { covRingF = cr; nRingF = nr; segF = seg; }
+      // 辐条：细的张拉索（粗约为环管的 0.08），远看只是几根很淡的线，不读成车轮；
+      // 每根辐条接在环上的一个节点舱（直径约为环管的 3 倍的球），环的轮廓因此不再是一根均匀的管子
+      float ph0 = hash12(vec2(float(k), 53.0)) * 6.2832;
+      for (int j = 0; j < 8 + uLoopGuard; j++) {
+        if (float(j) >= rg.w) break;
+        float ps = ph0 + float(j) * 6.2832 / rg.w;
+        float sps = sin(ps);
+        vec2 end = vec2(rg.y * cos(ps), -b * rg.y * sps);
+        float cs = wonderStrip(wonderSeg(vec2(X, yc), vec2(0.0), end) / wPix, 0.035 * rg.z / wPix);
+        if (sps < 0.0) covSpokeN = max(covSpokeN, cs);
+        else covSpokeF = max(covSpokeF, cs);
+        // 节点舱大小不一（1.1–2.1 倍环管），有的位置空着（只有辐条）
+        float hn = hash12(vec2(float(j) + 8.0 * float(k), 29.0));
+        float rn = (1.1 + 1.0 * hn) * rg.z * step(0.25, hn);
+        vec2 dn = vec2(X, yc) - end;
+        float cn = wonderTentCdf((rn - length(dn)) / wPix);
+        if (rn > 0.0 && cn > 0.0) {
+          vec3 nn3 = (dn.x * nh + dn.y * uph) / rn;
+          nn3 = normalize(nn3 - rd * sqrt(max(1.0 - dot(nn3, nn3), 0.0)) + 1e-6 * a);
+          if (sps < 0.0) { if (cn > covRingN) { covRingN = cn; nRingN = nn3; segN = 1.0; } }
+          else if (cn > covRingF) { covRingF = cn; nRingF = nn3; segF = 1.0; }
+        }
+      }
+    }
+  }
+
+  // 这一高度上最远的东西离轴线多远：稳定缆（天梯塔顶以下）、云气（建木 9–34 km）、树冠与萤光（建木 46 km 以上）
+  float reach = max(radius + haloPx * 3.0 * wPix, 4.0);
+  if (tether) {
+    if (s < H + 2.0) reach = 72.0;
+    if (ringLamp >= 0.0) reach = 1e9;
+  }
+  else if (s > 46.0) reach = 46.0;
+  else if (s > 9.0 && s < 34.0) reach = 40.0;
+  if (dist > reach) return L;
+
+  // 天梯的部件都画在真实位置、只靠物理的空气透视融进霾里；建木（W01b）保留「下半截沉进霾与云海」的写法——
+  // 离地几公里以内被低空的霾层吞掉，不给看清基座（「看不到它从哪里来」）
+  float sink = tether ? 1.0 : smoothstep(0.0, 9.0, s);
   float vis = visF * sink * sink;
+
+  // 缆束 / 树干 + 撑杆（同一种材质）。天梯的缆束里是三根子缆（绕轴线 0.55 倍半径排开），近处看得见之间的缝；
+  // 缆从塔顶里伸出来，塔顶以下不画
+  float cov;
+  if (tether) {
+    float rs = 0.46 * radius;
+    cov = 0.0;
+    for (int j = 0; j < 3; j++) {
+      float pj = float(j) * 2.0944 + 0.4;
+      float oj = 0.55 * radius * dot(cos(pj) * e1 + sin(pj) * e2, nh);
+      cov += wonderStrip((X - oj) / wPix, rs / wPix);
+    }
+    cov = min(cov, 1.0) * smoothstep(H - 1.0, H, s);
+  } else {
+    cov = wonderStrip(x, radius / wPix);
+  }
+  int nStrut = tether ? (s < H ? 6 : 0) : (s > 46.0 ? 9 : 0);
+  float covS = 0.0;
+  for (int i = 0; i < 9 + uLoopGuard; i++) {
+    if (i >= nStrut) break;
+    float fi = float(i);
+    float h1 = hash12(vec2(fi, 11.0 + uWonderShape.z));
+    float h2 = hash12(vec2(fi, 23.0 + uWonderShape.z));
+    float h3 = hash12(vec2(fi, 37.0 + uWonderShape.z));
+    float sa, sb, rA, rB, bend, thA, thB, phi;
+    if (tether) {
+      // 稳定缆：从塔顶边缘斜拉到 45–70 km 外的海上墩台，六根方位错开（夜里是塔两侧淡淡的「帐篷」）
+      sa = 0.0;
+      sb = H - 0.3;
+      rA = 45.0 + 25.0 * h1;
+      rB = uWonderTower.z;
+      bend = 0.0;
+      thA = 0.12;
+      thB = 0.08;
+      phi = uWonderTower.w + fi * 1.0472 + 0.5 + 0.3 * h2;
+    } else {
+      // 九欘：55–125 km 高处长出来，弯着往上、往外伸 12–38 km，越往梢越细
+      sa = 55.0 + 70.0 * h1;
+      sb = sa + 35.0 + 45.0 * h2;
+      rA = 0.0;
+      rB = 12.0 + 26.0 * h3;
+      bend = 1.0;
+      thA = 0.26;
+      thB = 0.04;
+      phi = fi * 0.6981 + 0.5 * h2;
+    }
+    vec3 h = cos(phi) * e1 + sin(phi) * e2;
+    covS += wonderStrut(X, s, sn, b, nh, rd, h, wPix, sa, sb, rA, rB, bend, thA, thB);
+  }
+
+  // ---- 舱体 / 光团：上行、下行两条轨道，间隔不规则（有的格子空着）
+  float sU = (floor((s - 0.055 * T) / 61.0 + 0.5)) * 61.0 + 0.055 * T;
+  float kU = floor((s - 0.055 * T) / 61.0 + 0.5);
+  float sD = (floor((s + 0.036 * T) / 83.0 + 0.5)) * 83.0 - 0.036 * T;
+  float kD = floor((s + 0.036 * T) / 83.0 + 0.5);
+  bool okU = hash12(vec2(kU, 5.3 + uWonderShape.z)) > 0.3 && sU > 7.0;
+  bool okD = hash12(vec2(kD, 8.9 + uWonderShape.z)) > 0.45 && sD > 7.0;
+  float sPod = okU ? sU : sD;
+  if (okU && okD && abs(s - sD) < abs(s - sU)) sPod = sD;
+  bool hasPod = okU || okD;
+
+  if (tether) {
+    // 什么都没盖到、也不在灯串 / 轮廓灯 / 环站灯附近：不查表
+    float anyCov = covTower + covFinN + covFinF + covRingN + covRingF + covSpokeN + covSpokeF + cov + covS;
+    // 缆的光晕（半宽约 15 像素）、灯串、舱体（贴在缆束外侧）都在轴线附近
+    bool nearLamp = (dist < radius + 1.0 + 16.0 * wPix && s > H - 2.0) || ringLamp >= 0.0 || (s < H + 1.0 && dist < uWonderTower.y + 3.0 * wPix);
+    if (anyCov <= 0.0 && !nearLamp) return L;
+  }
 
   // ---- 光照（各部分共用，查表各一次）：太阳、月亮的直射（真实地影）、上半球天光、下方地球（海面 + 云，反照率约 0.3）反上来的光
   float sP = max(s, 0.0);
@@ -242,52 +519,156 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   // 白天（太阳在地平线以上）放宽到 4 倍：正午的中继站、云气本来就只比天空亮一点，不受影响
   float capLum = mix(4.0, mix(1.3, 2.0, smoothstep(10.0, 150.0, s)), duskW) * wonderLum(Lbg);
   float capScale;
-
-  float x = X / wPix;                            // 横向像素偏移（有符号）
-  float T = uTime;
   // 白天（太阳在地平线以上约 −6° 起）用白色频闪，夜里用红色障碍灯
   float dayF = smoothstep(-0.10, 0.02, uSunDir.y);
 
-  // ---- 主缆 / 树干 + 撑杆（同一种材质）
-  float cov = wonderStrip(x, radius / wPix);
-  // 水平面上的两个正交方向（撑杆的方位、面板的方位用）
-  vec3 e1 = normalize(cross(vec3(0.0, 0.0, 1.0), a));
-  vec3 e2 = cross(a, e1);
-  int nStrut = tether ? (s < 34.0 ? 6 : 0) : (s > 46.0 ? 9 : 0);
-  float covS = 0.0;
-  for (int i = 0; i < 9 + uLoopGuard; i++) {
-    if (i >= nStrut) break;
-    float fi = float(i);
-    float h1 = hash12(vec2(fi, 11.0 + uWonderShape.z));
-    float h2 = hash12(vec2(fi, 23.0 + uWonderShape.z));
-    float h3 = hash12(vec2(fi, 37.0 + uWonderShape.z));
-    float sa, sb, rA, rB, bend, thA, thB, phi;
-    if (tether) {
-      // 稳定缆：前三根从最低的中继站拉到 18–24 km 外，后三根从第二个拉到 40–52 km 外；方位错开
-      bool lo = i < 3;
-      float fj = lo ? fi : fi - 3.0;
-      sa = 0.0;
-      sb = wonderStationS(lo ? 0.0 : 1.0);
-      rA = lo ? 18.0 + 6.0 * h1 : 40.0 + 12.0 * h1;
-      rB = 0.0;
-      bend = 0.0;
-      thA = 0.05;
-      thB = 0.035;
-      phi = fj * 2.0944 + (lo ? 0.35 : 1.4) + 0.25 * h2;
-    } else {
-      // 九欘：55–125 km 高处长出来，弯着往上、往外伸 12–38 km，越往梢越细
-      sa = 55.0 + 70.0 * h1;
-      sb = sa + 35.0 + 45.0 * h2;
-      rA = 0.0;
-      rB = 12.0 + 26.0 * h3;
-      bend = 1.0;
-      thA = 0.26;
-      thB = 0.04;
-      phi = fi * 0.6981 + 0.5 * h2;
+  // ---- 点光源：累加「光强 × 像素权重」（kcd），最后统一换成辐亮度
+  vec3 lamp = vec3(0.0);
+  float tm = t * 1000.0;
+
+  if (tether) {
+    float phb = fract(T / 2.0);
+    float blink = 0.1 + 0.9 * smoothstep(0.0, 0.12, phb) * (1.0 - smoothstep(0.4, 0.62, phb));
+    // 远侧的扶壁、环站远侧的半圈与辐条（在缆和塔的后面）
+    const vec3 CONCRETE = vec3(0.31, 0.30, 0.285);
+    float capO;
+    if (covFinF > 0.0) {
+      vec3 Lf = CONCRETE / M_PI * wonderIrr(nFinF, a, eSun, eMoon, eSkyUp, eUp);
+      L = mix(L, wonderCap(lFront + apT * Lf, Lbg, capLum, capO), covFinF * vis);
     }
-    vec3 h = cos(phi) * e1 + sin(phi) * e2;
-    covS += wonderStrut(X, s, sn, b, nh, rd, h, wPix, sa, sb, rA, rB, bend, thA, thB);
+    vec3 Lsp = 0.12 / M_PI * (eSun * 0.3 + 0.5 * (eSkyUp + eUp) + eMoon * 0.3);
+    if (covSpokeF > 0.0) L = mix(L, wonderCap(lFront + apT * Lsp, Lbg, capLum, capO), covSpokeF * vis);
+    if (covRingF > 0.0) {
+      vec3 Lr = wonderRingAlb(nRingF, a) * segF / M_PI * wonderIrr(nRingF, a, eSun, eMoon, eSkyUp, eUp);
+      L = mix(L, wonderCap(lFront + apT * Lr, Lbg, capLum, capO), covRingF * vis);
+    }
+    // 稳定缆 + 缆束
+    float c = min(cov + covS, 1.0) * vis;
+    L = mix(L, wonderCap(lFront + apT * Lt, Lbg, capLum, capScale), c);
+    float lineW = min(2.0 * radius / wPix, 1.0);
+    L += capScale * apT * direct * vis * lineW * 0.012 * exp(-x * x / (2.0 * haloPx * haloPx)) * step(H, s);
+    // 舱体：贴在缆束两侧（上行在 e1 一侧、下行在 −e1 一侧），朝相机的那一侧挡在缆前面
+    if (hasPod && sPod > H + 1.0 && uWonderShape.w > 0.5) {
+      bool up = okU && (!okD || abs(s - sU) < abs(s - sD));
+      vec3 off = (up ? e1 : -e1) * (radius + 0.45);
+      float xo = (X - dot(off, nh)) / wPix;
+      float so = s - dot(off, uph) / sn;
+      if (abs(xo) < 0.6 / wPix + 2.0) {
+        vec4 o = wonderSpheroid(w0 - off, rd, a, sPod, 0.4, 1.25, xo, so, wPix, sn, b, eSun, eMoon, eSkyUp, eUp, 0.4);
+        float podVis = dot(off, rd) < 0.0 ? 1.0 : 1.0 - min(cov, 1.0);
+        L = mix(L, wonderCap(lFront + apT * o.rgb, Lbg, capLum, capO), o.a * vis * podVis);
+        lamp += vec3(1.0, 0.97, 0.92) * 6.0 * (1.0 - dayF) * podVis * wonderPoint(xo, (so - sPod) * sn / wPix);
+      }
+    }
+    // 锚塔：粗野主义混凝土。受光面 / 背光面按太阳方向大块分明；面上只有横向施工缝（每 1.05 km）和竖向雨痕，
+    // 都按像素足迹积分（远处平均成均匀的一层灰）。俯视时（b < 0）退台顶面朝上受光
+    if (covTower > 0.0) {
+      float hq = clamp(s, tierHit.x, tierHit.y);
+      float rq = mix(tierHit.z, tierHit.w, (hq - tierHit.x) / max(tierHit.y - tierHit.x, 1e-3));
+      float cphi = clamp(X / rq, -1.0, 1.0);
+      float sphi = -sqrt(1.0 - cphi * cphi);
+      // 竖肋：每 1.3 km 一道（三角波把法线绕轴线左右偏 ±0.35 rad），受光的弧面上是一条条明暗相间的竖纹——粗野主义立面的节奏。
+      // 肋距不到约 3 像素（轮廓附近透视压缩、或很远）时幅度淡到 0，平均成均匀的一层
+      float u = rq * acos(cphi);
+      float fu = wPix / max(-sphi, 0.05);
+      float ribP = 1.3;
+      float tri = abs(fract(u / ribP + tierHit.x * 0.37) - 0.5) * 4.0 - 1.0;
+      float dAz = 0.35 * tri * (1.0 - smoothstep(0.2, 0.45, fu / ribP));
+      float ca = cos(dAz), sa2 = sin(dAz);
+      vec3 radial = cphi * nh + sphi * mh;
+      vec3 tang = cross(a, radial);
+      vec3 nW = normalize(radial * ca + tang * sa2 + a * (tierHit.z - tierHit.w) / max(tierHit.y - tierHit.x, 1e-3));
+      float capF = 0.0;
+      if (b < 0.0) {
+        float yN = sn * tierHit.y - ab * sqrt(max(tierHit.w * tierHit.w - X * X, 0.0));
+        capF = clamp((Y - yN) / wPix + 0.5, 0.0, 1.0);
+      }
+      vec3 nT = normalize(mix(nW, a, capF));
+      // 纹理：每 2.1 km 一道内凹的楼板缝（暗 35%）、雨痕（沿方位的噪声，竖向拉长）、大块的面板色差。都按像素足迹积分 / 在轮廓附近淡掉
+      float fh = wPix / sn;
+      float joint = wonderBands(hq, fh, 2.1, 0.28);
+      float streak = (vnoise(vec2(u / 0.6, hq / 6.0)) - 0.5) * (1.0 - smoothstep(0.25, 0.6, fu));
+      float panel = vnoise(vec2(u / 3.0 + float(tierHit.x), hq / 4.0)) - 0.5;
+      vec3 alb = CONCRETE * (1.0 - 0.35 * joint * (1.0 - capF) + 0.14 * streak + 0.12 * panel);
+      vec3 Lw = alb / M_PI * wonderIrr(nT, a, eSun, eMoon, eSkyUp, eUp);
+      // 塔身灯格（开发者开关，默认关）：楼层 0.3 km 一层、窗带占 40%，按像素足迹积分成暗暖色横纹；按 1.2 km × 1.6 km 的块随机亮灭
+      if (uWonderSky.w > 0.5) {
+        float fl = wonderBands(hq, fh, 0.3, 0.12);
+        float lit = step(0.55, hash12(vec2(floor(hq / 1.2), floor(u / 1.6) + 17.0)));
+        Lw += vec3(1.0, 0.72, 0.45) * 2.5e-4 * fl * lit * (1.0 - capF) * (1.0 - dayF) * smoothstep(1.0, 3.0, hq);
+      }
+      L = mix(L, wonderCap(lFront + apT * Lw, Lbg, capLum, capO), covTower * vis);
+    }
+    // 近侧的扶壁、环站近侧的半圈与辐条（挡在缆和塔的前面）
+    if (covFinN > 0.0) {
+      vec3 Lf = CONCRETE / M_PI * wonderIrr(nFinN, a, eSun, eMoon, eSkyUp, eUp);
+      L = mix(L, wonderCap(lFront + apT * Lf, Lbg, capLum, capO), covFinN * vis);
+    }
+    if (covSpokeN > 0.0) L = mix(L, wonderCap(lFront + apT * Lsp, Lbg, capLum, capO), covSpokeN * vis);
+    if (covRingN > 0.0) {
+      vec3 Lr = wonderRingAlb(nRingN, a) * segN / M_PI * wonderIrr(nRingN, a, eSun, eMoon, eSkyUp, eUp);
+      L = mix(L, wonderCap(lFront + apT * Lr, Lbg, capLum, capO), covRingN * vis);
+    }
+    gWonderCov = min(max(max(covTower, max(covFinN, covFinF)), max(max(covRingN, covRingF), min(cov + covS, 1.0))), 1.0) * vis;
+    gWonderT = t;
+
+    if (uWonderShape.w > 0.5) {
+      // 缆上的红色障碍灯：塔顶以上每 30 km 一盏，全部同步慢闪（2 s 一次，像白炽灯一样缓起缓落），常亮底 10%
+      float kb = max(floor(s / 30.0 + 0.5), ceil(H / 30.0));
+      float dyb = (s - kb * 30.0) * sn / wPix;
+      lamp += vec3(1.0, 0.08, 0.03) * 130.0 * blink * (1.0 - dayF) * wonderPoint(x, dyb);
+      // 缆上的暗白灯串：每 2 km 一盏（和红灯重合的那盏让给红灯）；一道道光脉冲以 2 km/s 往上爬（每 45 km 一道）。
+      // 灯距不到 3 像素（很高很远处）时换成等能量的连续细线，不逐盏画（否则会漏掉邻灯、按帧闪）
+      if (s > H + 0.5) {
+        float kw = floor(s / 2.0 + 0.5);
+        float spacing = 2.0 * sn / wPix;
+        float dyw = (s - kw * 2.0) * sn / wPix;
+        float ph = fract((s - 2.0 * T) / 45.0);
+        float pulse = exp(-(ph - 0.5) * (ph - 0.5) * 45.0 * 45.0 / 6.0);
+        float notRed = step(0.5, abs(mod(kw, 15.0) - 0.0)) ;
+        float dense = smoothstep(3.0, 1.5, spacing);
+        float wStr = mix(wonderPoint(x, dyw) * notRed, max(0.0, 1.0 - abs(x)) / max(spacing, 1e-3), dense);
+        lamp += vec3(0.85, 0.9, 1.0) * 2.5 * (1.0 + 12.0 * pulse) * (1.0 - dayF) * wStr;
+      }
+      // 锚塔：每级退台朝相机那一圈的轮廓灯（每 0.8 km 一盏，暖白、很暗），塔顶两角各一盏同步慢闪的红灯
+      if (s < H + 1.0 && dist < uWonderTower.y + 3.0 * wPix) {
+        for (int k = 0; k < 4 + uLoopGuard; k++) {
+          if (float(k) >= uWonderSky.x) break;
+          vec4 tr = uWonderTiers[k];
+          float Rt = tr.w;
+          if (abs(X) > Rt + 2.0 * wPix) continue;
+          float yRim = sn * tr.y + b * sqrt(max(Rt * Rt - X * X, 0.0));
+          if (abs(Y - yRim) > 3.0 * wPix) continue;
+          float dph = 0.8 / Rt;
+          float phiP = -acos(clamp(X / Rt, -1.0, 1.0));
+          float j0 = floor(phiP / dph + 0.5);
+          for (int jj = -1; jj <= 1; jj++) {
+            float pj = (j0 + float(jj)) * dph;
+            if (pj > 0.0 || pj < -3.1416) continue;
+            vec2 lp = vec2(Rt * cos(pj), sn * tr.y - b * Rt * sin(pj));
+            float on = step(0.25, hash12(vec2(j0 + float(jj), float(k) + 31.0)));
+            lamp += vec3(1.0, 0.8, 0.58) * 2.5 * on * (1.0 - dayF) * wonderPoint((X - lp.x) / wPix, (Y - lp.y) / wPix);
+          }
+        }
+        vec2 topL = vec2(uWonderTower.z * 0.97, sn * H);
+        float wTop = wonderPoint((abs(X) - topL.x) / wPix, (Y - topL.y) / wPix) + wonderPoint(x, (Y - topL.y) / wPix);
+        lamp += vec3(1.0, 0.08, 0.03) * 60.0 * blink * (1.0 - dayF) * wTop;
+      }
+      // 环站两端：夜里是常亮的暖白微光（有人住）；白天是高强度白色频闪，从下往上依次闪（4 s 一轮）
+      if (ringLamp >= 0.0) {
+        vec4 rg = uWonderRings[int(ringLamp)];
+        float wEnds = wonderPoint((abs(X) - rg.y) / wPix, (Y - sn * rg.x) / wPix);
+        float ph = fract(T / 4.0 - ringLamp * 0.09);
+        float strobe = exp(-ph * ph / 0.0009);
+        lamp += vec3(1.0, 0.93, 0.8) * (6.0 * (1.0 - dayF) + 8e4 * dayF * strobe) * wEnds;
+      }
+    }
+    // 光强（kcd）→ 相机处照度（klux）= I / 距离²（m），再除以一个像素的立体角得到辐亮度
+    L += apT * lamp * vis / (tm * tm * pixelAngle * pixelAngle);
+    return L;
   }
+
+  // ---- 建木（W01b，WS01 没动它）
   float c = min(cov + covS, 1.0) * vis;
   L = mix(L, wonderCap(lFront + apT * Lt, Lbg, capLum, capScale), c);
 
@@ -295,134 +676,47 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   float lineW = min(2.0 * radius / wPix, 1.0);
   L += capScale * apT * direct * vis * lineW * 0.012 * exp(-x * x / (2.0 * haloPx * haloPx));
 
-  // ---- 点光源：累加「光强 × 像素权重」（kcd），最后统一换成辐亮度
-  vec3 lamp = vec3(0.0);
-  vec3 lampBase = vec3(0.0);                     // 系留平台的灯群：不乘「沉进霾」那一项，只靠真实的空气透视
-  float tm = t * 1000.0;
-  // 舱体 / 光团：上行、下行两条轨道，间隔不规则（有的格子空着）
-  float sU = (floor((s - 0.055 * T) / 61.0 + 0.5)) * 61.0 + 0.055 * T;
-  float kU = floor((s - 0.055 * T) / 61.0 + 0.5);
-  float sD = (floor((s + 0.036 * T) / 83.0 + 0.5)) * 83.0 - 0.036 * T;
-  float kD = floor((s + 0.036 * T) / 83.0 + 0.5);
-  bool okU = hash12(vec2(kU, 5.3 + uWonderShape.z)) > 0.3 && sU > 7.0;
-  bool okD = hash12(vec2(kD, 8.9 + uWonderShape.z)) > 0.45 && sD > 7.0;
-  float sPod = okU ? sU : sD;
-  if (okU && okD && abs(s - sD) < abs(s - sU)) sPod = sD;
-  bool hasPod = okU || okD;
-
-  if (tether && uWonderShape.w > 0.5) {
-    // ---- 中继站 / 舱体 / 系留平台：取离本像素最近的一个，走同一个椭球函数
-    float kS = clamp(floor(log(max(s, 1.0) / 16.0) / log(1.85) + 0.5), 0.0, 6.0);
-    float sSt = wonderStationS(kS);
-    float RSt = wonderStationR(kS);
-    float sc = sSt;
-    float R = RSt;
-    float H = 0.3 * RSt + 0.12;
-    float alb = 0.3;                             // 浅色金属 / 隔热涂层
-    float kind = 0.0;                            // 0 中继站、1 舱体、2 系留平台
-    if (hasPod && abs(s - sPod) < abs(s - sSt) - H) {
-      sc = sPod; R = 0.55; H = 0.9; alb = 0.4; kind = 1.0;
-    }
-    if (s < 5.0) {
-      sc = 0.6; R = 8.5; H = 1.1; alb = 0.12; kind = 2.0;
-    }
-    float objVis = kind > 1.5 ? visF : vis;
-    if (dist < R + 2.0 * wPix) {
-      vec4 o = wonderSpheroid(w0, rd, a, sc, R, H, x, s, wPix, sn, b, eSun, eMoon, eSkyUp, eUp, alb);
-      float capO;
-      L = mix(L, wonderCap(lFront + apT * o.rgb, Lbg, capLum, capO), o.a * objVis);
-    }
-    float y = (s - sc) * sn / wPix;
-    float ax = R / wPix;
-    if (kind < 0.5) {
-      // 边缘的金属面板（16 块，倾角各不相同）跟着平台慢转（约 1.5 分钟一圈）：
-      // 半角向量 H 的方位正好对上某块面板、倾角也在那块面板的范围内时，那块面板把太阳反射过来——一个短促的亮点（像铱星闪光）
-      vec3 Hv = normalize(uSunDir + V);
-      float hz = dot(Hv, a);
-      vec3 hh = Hv - a * hz;
-      float hl = length(hh);
-      if (hl > 1e-4) {
-        hh /= hl;
-        float omega = 6.2832 / (80.0 + 30.0 * hash12(vec2(kS, 2.2)));
-        float az = atan(dot(hh, e2), dot(hh, e1)) - omega * T;
-        float j = floor(az / 0.3927 + 0.5);    // 2π / 16
-        float dAz = az - j * 0.3927;
-        float tilt = (hash12(vec2(j + 16.0 * kS, 4.4)) - 0.5) * 1.6;
-        float lobe = exp(-dAz * dAz / 0.0004 - (asin(hz) - tilt) * (asin(hz) - tilt) / 0.012);
-        // 面板在轮廓上的位置（像面）：亮点落在朝向相机的那一侧边缘
-        float gx = x - R * dot(hh, nh) / wPix;
-        float gy = y + R * b * dot(hh, rd) / (sn * wPix);
-        float facing = smoothstep(0.0, 0.1, dot(hh, V));
-        // 光强 = 面板反射率 × 太阳辐亮度 × 等效面积（弯曲面板把反射摊到约 ±6°，等效 1.2 m²）：正午约是天空一个像素的 5 倍
-        lamp += tS * uSunIlluminance * 1.6e4 * lobe * facing * wonderPoint(gx, gy);
-      }
-      // 平台两端的灯：夜里是常亮的暖白微光（有人住）；白天是高强度白色频闪，从下往上依次闪（4 s 一轮）
-      float wEnds = wonderPoint(abs(x) - ax * 0.97, y);
-      float ph = fract(T / 4.0 - kS * 0.09);
-      float strobe = exp(-ph * ph / 0.0009);
-      lamp += vec3(1.0, 0.93, 0.8) * (25.0 * (1.0 - dayF) + 8e4 * dayF * strobe) * wEnds;
-    } else if (kind < 1.5) {
-      // 舱体的航行灯：夜里一点常亮的白光
-      lamp += vec3(1.0, 0.97, 0.92) * 10.0 * (1.0 - dayF) * wonderPoint(x, y);
-    } else {
-      // 系留平台上的灯群：0.5 km 一格，三层，一半的格子有灯，钠灯 / 白光混着，亮度各不相同
-      float gx = floor(X / 0.5 + 0.5);
-      float gy = clamp(floor((s - 0.35) / 0.55 + 0.5), 0.0, 2.0);
-      float hl = hash12(vec2(gx, gy + 40.0));
-      float inPlat = step(abs(gx * 0.5), R * (1.0 - 0.25 * gy));
-      vec3 col = hl > 0.75 ? vec3(0.85, 0.9, 1.0) : vec3(1.0, 0.72, 0.4);
-      float wl = wonderPoint(x - gx * 0.5 / wPix, (s - 0.35 - gy * 0.55) * sn / wPix);
-      lampBase = col * 6.0 * step(0.5, hl) * (0.4 + hl) * inPlat * (1.0 - dayF) * wl;
-    }
-    // 缆上的红色障碍灯：每 30 km 一盏，全部同步慢闪（2 s 一次，像白炽灯一样缓起缓落），常亮底 10%
-    float kb = max(floor(s / 30.0 + 0.5), 1.0);
-    float dyb = (s - kb * 30.0) * sn / wPix;
-    float phb = fract(T / 2.0);
-    float blink = 0.1 + 0.9 * smoothstep(0.0, 0.12, phb) * (1.0 - smoothstep(0.4, 0.62, phb));
-    lamp += vec3(1.0, 0.08, 0.03) * 300.0 * blink * (1.0 - dayF) * wonderPoint(x, dyb);
-  } else if (!tether) {
-    // ---- 建木：云气缭绕。树干上挂着三圈云（约 12–30 km，间隔不规则），每圈是绕着树干的一道云环，远看是横在树干上、
-    // 顺风往一侧拖长的云絮（像山顶的旗云），越往上越薄；圈与圈之间有一层很淡的薄雾把它们连起来。
-    // 噪声沿横向拉长（絮状），最细的起伏约 2 km（六七个像素），不会逐帧闪
-    if (s > 9.0 && s < 34.0) {
-      float kc = clamp(floor((s - 12.5) / 7.0 + 0.5), 0.0, 2.0);
-      float hc1 = hash12(vec2(kc, 61.0));
-      float hc2 = hash12(vec2(kc, 67.0));
-      float sc = 12.5 + 7.0 * kc + 2.4 * (hc1 - 0.5);
-      float xo = X - 3.0 * (hc1 - 0.4);
-      float wid = (6.0 + 6.0 * hc2 - kc) * (xo > 0.0 ? 1.8 : 0.7);
-      float th = (0.6 + 0.7 * hc2) * (0.6 + 0.8 * vnoise(vec2(X * 0.3 + kc * 9.0, 2.0)));
-      float ds = s - sc - 0.05 * X * (hc2 - 0.5) - 1.2 * (vnoise(vec2(X * 0.18 + T * 0.003, kc * 7.0)) - 0.5);
-      float nz = 0.6 * vnoise(vec2(X * 0.2 - T * 0.003, ds * 0.8 + kc * 13.0)) + 0.4 * vnoise(vec2(X * 0.5 + 3.0, ds * 1.3 + kc * 5.0));
-      // 最后一项：离轴线 28–38 km 渐隐到 0（上面 reach 在 40 km 处截断，不能留下硬边）
-      float tau = (2.6 - 0.7 * kc) * exp(-ds * ds / (th * th) - xo * xo / (wid * wid)) * smoothstep(0.15, 0.75, nz) * (1.0 - smoothstep(28.0, 38.0, dist));
-      // 薄雾：贴着树干、很淡，把几圈云连成「缭绕」
-      tau += 0.22 * exp(-X * X / 30.0) * smoothstep(10.0, 14.0, s) * (1.0 - smoothstep(24.0, 32.0, s)) * vnoise(vec2(X * 0.25, s * 0.3 - T * 0.002));
-      // 云：反照率约 0.8；朝太阳看时前向散射更亮
-      float fwd = 1.0 + 1.5 * pow(max(dot(rd, uSunDir), 0.0), 4.0);
-      vec3 Lc = 0.8 / M_PI * (eSun * 0.8 * fwd + eMoon * 0.8 + eSkyUp + 0.5 * eUp);
-      float capC;
-      L = mix(L, wonderCap(lFront + apT * Lc, Lbg, capLum, capC), (1.0 - exp(-tau)) * visF);
-    }
-    // 众帝上下：沿树干升降的暖色光团（夜里才看得见）
-    if (hasPod) lamp += vec3(1.0, 0.8, 0.5) * 40.0 * (1.0 - dayF) * wonderPoint(x, (s - sPod) * sn / wPix);
-    // 萤光（黄实）：树冠一带稀疏的金色光点，格子 2.6 km × 3.4 km，缓慢上飘；夜里明灭的微光，白天偶尔被阳光照到闪一下
-    if (s > 45.0 && s < 240.0) {
-      float sd = s - 0.004 * T;
-      vec2 cell = floor(vec2(X / 2.6, sd / 3.4));
-      vec2 hc = hash22(cell + 71.0);
-      float near = exp(-abs(cell.x * 2.6) / 14.0) * smoothstep(45.0, 70.0, s);
-      if (hc.x < 0.2 * near) {
-        vec2 pc = (cell + 0.5 + (hc - 0.5) * 0.5) * vec2(2.6, 3.4);
-        float tw = 0.5 + 0.5 * sin(T * (0.5 + hc.y) + hc.x * 40.0);
-        float spark = pow(max(sin(T * (0.3 + 0.5 * hc.y) + hc.y * 60.0), 0.0), 24.0);
-        vec3 glow = vec3(1.0, 0.78, 0.4) * (6.0 * tw * tw * (1.0 - dayF) + 6e5 * spark * dot(tS, vec3(0.333)));
-        lamp += glow * wonderPoint(x - pc.x / wPix, (sd - pc.y) * sn / wPix);
-      }
+  // 云气缭绕。树干上挂着三圈云（约 12–30 km，间隔不规则），每圈是绕着树干的一道云环，远看是横在树干上、
+  // 顺风往一侧拖长的云絮（像山顶的旗云），越往上越薄；圈与圈之间有一层很淡的薄雾把它们连起来。
+  // 噪声沿横向拉长（絮状），最细的起伏约 2 km（六七个像素），不会逐帧闪
+  if (s > 9.0 && s < 34.0) {
+    float kc = clamp(floor((s - 12.5) / 7.0 + 0.5), 0.0, 2.0);
+    float hc1 = hash12(vec2(kc, 61.0));
+    float hc2 = hash12(vec2(kc, 67.0));
+    float sc = 12.5 + 7.0 * kc + 2.4 * (hc1 - 0.5);
+    float xo = X - 3.0 * (hc1 - 0.4);
+    float wid = (6.0 + 6.0 * hc2 - kc) * (xo > 0.0 ? 1.8 : 0.7);
+    float th = (0.6 + 0.7 * hc2) * (0.6 + 0.8 * vnoise(vec2(X * 0.3 + kc * 9.0, 2.0)));
+    float ds = s - sc - 0.05 * X * (hc2 - 0.5) - 1.2 * (vnoise(vec2(X * 0.18 + T * 0.003, kc * 7.0)) - 0.5);
+    float nz = 0.6 * vnoise(vec2(X * 0.2 - T * 0.003, ds * 0.8 + kc * 13.0)) + 0.4 * vnoise(vec2(X * 0.5 + 3.0, ds * 1.3 + kc * 5.0));
+    // 最后一项：离轴线 28–38 km 渐隐到 0（上面 reach 在 40 km 处截断，不能留下硬边）
+    float tau = (2.6 - 0.7 * kc) * exp(-ds * ds / (th * th) - xo * xo / (wid * wid)) * smoothstep(0.15, 0.75, nz) * (1.0 - smoothstep(28.0, 38.0, dist));
+    // 薄雾：贴着树干、很淡，把几圈云连成「缭绕」
+    tau += 0.22 * exp(-X * X / 30.0) * smoothstep(10.0, 14.0, s) * (1.0 - smoothstep(24.0, 32.0, s)) * vnoise(vec2(X * 0.25, s * 0.3 - T * 0.002));
+    // 云：反照率约 0.8；朝太阳看时前向散射更亮
+    float fwd = 1.0 + 1.5 * pow(max(dot(rd, uSunDir), 0.0), 4.0);
+    vec3 Lc = 0.8 / M_PI * (eSun * 0.8 * fwd + eMoon * 0.8 + eSkyUp + 0.5 * eUp);
+    float capC;
+    L = mix(L, wonderCap(lFront + apT * Lc, Lbg, capLum, capC), (1.0 - exp(-tau)) * visF);
+  }
+  // 众帝上下：沿树干升降的暖色光团（夜里才看得见）
+  if (hasPod) lamp += vec3(1.0, 0.8, 0.5) * 40.0 * (1.0 - dayF) * wonderPoint(x, (s - sPod) * sn / wPix);
+  // 萤光（黄实）：树冠一带稀疏的金色光点，格子 2.6 km × 3.4 km，缓慢上飘；夜里明灭的微光，白天偶尔被阳光照到闪一下
+  if (s > 45.0 && s < 240.0) {
+    float sd = s - 0.004 * T;
+    vec2 cell = floor(vec2(X / 2.6, sd / 3.4));
+    vec2 hc = hash22(cell + 71.0);
+    float near = exp(-abs(cell.x * 2.6) / 14.0) * smoothstep(45.0, 70.0, s);
+    if (hc.x < 0.2 * near) {
+      vec2 pc = (cell + 0.5 + (hc - 0.5) * 0.5) * vec2(2.6, 3.4);
+      float tw = 0.5 + 0.5 * sin(T * (0.5 + hc.y) + hc.x * 40.0);
+      float spark = pow(max(sin(T * (0.3 + 0.5 * hc.y) + hc.y * 60.0), 0.0), 24.0);
+      vec3 glow = vec3(1.0, 0.78, 0.4) * (6.0 * tw * tw * (1.0 - dayF) + 6e5 * spark * dot(tS, vec3(0.333)));
+      lamp += glow * wonderPoint(x - pc.x / wPix, (sd - pc.y) * sn / wPix);
     }
   }
   // 光强（kcd）→ 相机处照度（klux）= I / 距离²（m），再除以一个像素的立体角得到辐亮度
-  L += apT * (lamp * vis + lampBase * visF) / (tm * tm * pixelAngle * pixelAngle);
+  L += apT * lamp * vis / (tm * tm * pixelAngle * pixelAngle);
   return L;
 }
 `;
