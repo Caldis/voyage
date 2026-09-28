@@ -18,7 +18,8 @@
     "passes": "node scripts/passes.mjs",
     "shader-budget": "node scripts/shader-budget.mjs",
     "shader-parity": "node scripts/shader-parity.mjs",
-    "weather-stats": "node --experimental-transform-types --no-warnings scripts/weather-stats.mts"
+    "weather-stats": "node --experimental-transform-types --no-warnings scripts/weather-stats.mts",
+    "check-routes": "node --import ./scripts/lib/ts-resolve.mjs --experimental-transform-types --no-warnings scripts/check-routes.mts"
   },
   "dependencies": {
     "@mapbox/vector-tile": "^3.0.0",
