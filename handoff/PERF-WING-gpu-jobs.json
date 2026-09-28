@@ -1,0 +1,10 @@
+[
+  {"name": "sun", "scene": "sunset-wing",
+   "variants": [{"name": "old", "materials": {"wingMat": "base"}}, {"name": "new"}, {"name": "new2"}]},
+  {"name": "biz", "scene": {"name": "biz-seated-noon", "p": {"preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business"}, "head": [0, 0.02, -0.42]},
+   "variants": [{"name": "old", "materials": {"wingMat": "base"}}, {"name": "new"}, {"name": "new2"}]},
+  {"name": "ic", "scene": "in-cloud", "offset": [-10, -5],
+   "variants": [{"name": "old", "materials": {"wingMat.wet": "base:wingMat"}}, {"name": "new"}, {"name": "new2"}]},
+  {"name": "night", "scene": {"name": "night-city-low", "p": {"preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 1, "coverage": 0.15, "cabin-light": "off"}, "offset": [0, -25], "ground": true, "head": -0.25},
+   "variants": [{"name": "old", "materials": {"wingMat": "base"}}, {"name": "new"}, {"name": "new2"}]}
+]

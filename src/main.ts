@@ -29,6 +29,7 @@ import { CabinAudio, audioInputFrom } from "./audio";
 import { LightPollution } from "./light-pollution";
 import { DebugMinimap } from "./debug/minimap";
 import { RAIL_WING_ROOT_LE, RailMode } from "./rail/mode";
+import { detectSoftwareGl, showSoftwareGlBanner } from "./boot/software-gl";
 
 const SUN_ILLUMINANCE_KLUX = 120; // 大气层外约 128 klux，这里取整；颜色暂按白光
 
@@ -38,6 +39,9 @@ renderer.toneMapping = THREE.AgXToneMapping;
 // 这里先用同一个常量把起点摆对，构造 quality 时不会再重复应用一次
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, DEFAULT_DPR_CAP));
 $("app").appendChild(renderer.domElement);
+// PERF-CPU：浏览器退到 CPU 软件渲染（驱动重装后 Chrome 的 GPU 进程掉到 WARP 等）时顶部提示原因与办法
+const softwareRenderer = detectSoftwareGl(renderer.getContext() as WebGL2RenderingContext);
+showSoftwareGlBanner(softwareRenderer);
 
 // 启动计时（调试用，结果放在 window.__voyageStartup）
 const startup: Record<string, number | string> = { 模块开始执行时离导航: Math.round(performance.now()) };
@@ -765,4 +769,4 @@ function benchFrame(n = 10) {
 // （README「着色器编译」坑点，PERF-1）。以前 dev-browser.mjs 只能退而求其次统一绑到 hdrOutside。
 // PERF-14 合并（座椅拆成单独 pass）带来 seatMat / hdrSeat（座椅材质与目标）、wingVariant（机翼湿窗变体，
 // WingWetVariant 实例，--material 用它的 pick() 结果当「当前实际画的变体」，同 clouds.marchMat 的做法）。
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, softwareRenderer, atmosphere, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };

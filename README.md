@@ -84,6 +84,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力（T49：优先向前、提前转弯、掉头借遮挡）、手动导航（`setHeading` / `turnBy` / `hold` / `directTo` / `resumeRoute`）、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
 | `src/rail/*` | 火车模式（TR02）：`data.ts` 读线路烘焙产物；`corridor.ts` 走廊坐标（里程 s、横向 d、高程）、平滑中心线、按规范公式估算的超高；`train.ts` 速度曲线（巡航 90 km/h、曲线限速、终点停车折返）与车体姿态（台车连线、超高侧倾、悬挂外倾）；`vibration.ts` 车体低频振动；`geodesy.ts` 线路 ENU ↔ 经纬度；`mode.ts` 接到 voyage 的相机 / 状态（`window.__voyage.rail`，`rail.teleport(s, dir)` 调试用）；`far-view.ts` / `far-view.glsl.ts` 窗外程序的火车远景变体（TR03，`#define RAIL`，近处国土地理院平面带、掠射步进、相对高度、轮廓抗锯齿）；单测 `node src/rail/rail.test.mjs`；飞机模式着色器零回归比对 `node src/rail/shader-parity.mjs <对照 voyage 根目录>` |
 | `src/debug/minimap.ts` | 调试小地图（DX-06）：可选的角落 2D canvas 叠层，画本机 / 轨迹 / 航线 / 交通 / 奇观，以及从天气场采样的云回波「多普勒」图；不碰任何 WebGL 程序 |
+| `src/boot/software-gl.ts` | 软件渲染检测（PERF-CPU）：渲染器字符串是 WARP / SwiftShader / llvmpipe 时页面顶部提示原因与办法，见坑点「性能」 |
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
 | `src/atmosphere/luts.ts` | 透射率 / 多次散射 / 辐照度 / 天空视图 / 空气透视 LUT；`setHaze` 设边界层霾 |
 | `src/atmosphere/haze.ts` / `src/render/haze.glsl.ts` | 低空障眼法（T18）：边界层霾参数（按时段、地区、日期）、清晨谷地辐射雾 |
@@ -146,6 +147,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
 - **航向 / 接力调试**（T49）：面板底部「立即触发到达 / 接下一段（调试）」按钮 = `__voyage.director.forceArrive()`：不等飞到终点，立即走一次「到达」（自动航线接下一段，要掉头 > 90° 时照常排进遮挡队列；直飞模式转入盘旋）。其他句柄：`__voyage.director.ap`（自动驾驶：`mode` / `selHeading` / `turnDir` / `timeScale` / `hold` / `nextCourse` / `holdCourse`）、`director.setHeading(deg, dir?)`、`director.turnBy(±deg)`、`director.hold()`、`director.directTo("ITM")`、`director.resumeRoute()`、`director.nextLeg`（离终点 400 km 内预挑的下一段）、`director.describeNav()`。离线复现 / 单测（不开浏览器，几秒跑完）：`node --import ./handoff/T49-resolve.mjs --experimental-transform-types --no-warnings handoff/T49-test.mts`；按真实时间打印航向 / 坡度曲线与 > 60° 转向事件：同样的前缀跑 `handoff/T49-sim.mts [流速] [真实分钟] [预设]`。
 - `window.__voyageStartup`：启动各阶段耗时。
+- **CPU / GPU 进程剖析（PERF-CPU，`scripts/cpu-prof.mjs`，默认有头 Chrome）**：`node scripts/cpu-prof.mjs --port <端口> [--scenes default,noon-cumulus,night-city,storm-day,in-cloud,route-1x,route-60x] [--seconds 6] [--viewport 2560x1300 --dpr 1.5] [--angle d3d11|d3d11-warp] [--trace] [--no-gl] [--out tmp/perfcpu/x.json]`。每个场景输出：rAF 间隔中位 / p95 / 最大、每个 rAF 回调里主循环 JS 的耗时；主线程忙碌比例（`Performance.getMetrics`）；各进程 CPU（`SystemInfo.getProcessInfo`，100% = 一核）与最忙的线程（带 Chrome 线程名：`CrRendererMain` / `CrGpuMain` / `DedicatedWorker thread` / `VizCompositorThread` / `ThreadPoolForegroundWorker`…，`scripts/lib/thread-cpu.ps1`，仅 Windows）；Worker 消息频率；主线程 JS 自耗时 Top N（CDP Profiler，ms/帧）；WebGL 调用统计（每帧次数 / 耗时，另列 getError / readPixels / getParameter / clientWaitSync 这类同步调用）；`--trace` 再录一段 Performance trace，按线程列事件自耗时（样式 / 布局 / 绘制 / GPU 命令解码）。场景除 `scenarios.mjs` 的名字外还有 `default`（打开页面什么都不设）、`route-1x` / `route-60x`（hnd-cts 连续航程）、`same`（不重设再量一次）、`wait<N>`（等 N 秒）、`A` / `B`（执行 `--jsA` / `--jsB` 后再量，同页交替对照；代码可写 `file:<路径>`）。持测量锁。
 - URL 参数 `?lut16`：大气 LUT 强制用半精度（T36 改前的行为、没有 32 位浮点线性过滤的设备），用来对照深暮光的阶梯。
 - 截图前：把 `head` 固定在 `{tx:0, ty:0.02, x:0, y:0.02, tz:-0.3, z:-0.3}`、`uCloudOffset` 归零或设成固定值、隐藏面板（加 `hidden` 类），前后对比才有意义；截图放 `tmp/screenshot/voyage-*.png`。
 - 测帧率前先 `page.bringToFront()`（窗口被挡住时 Chrome 会节流到 1 fps）。
@@ -358,6 +360,10 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   坑二：舱内合成和座椅 pass 的灯光必须是同一份代码（`scene.ts` 的 `CABIN_LIGHTS_SETUP` / `cabinLightsSetup`），不然座椅与侧壁的明暗会悄悄分家。舱等切换由 `CabinClassVariant` 同时编两个程序、都编好才切。
   坑三：`WingWetVariant` 按 `uWetness > 0.001` 选变体，和 `waterOnPane` 开头的 `wet <= 0.001` 返回 0 同一个门限；改其中一个要一起改。变体首帧后 120 帧后台预编（约 8 s 编好），启动就在雨里时前几秒机翼像素上少一圈水珠暗边。
   识别：`check:glsl` 的 1d 一节（舱内合成不调用 `shadeSeat` / `traceSeats`，机翼默认程序不调用 `waterOnPane`）；帧时间里多一行「座椅」（中位约 0.016 ms 的固定开销，满屏座椅的经济舱看前方舱内 + 座椅合计比原来 +0.02 ms）。
+- **机翼程序冷编译的大头在着色、不在求交；只取决于 uniform 的量放在循环里算，FXC 照样整段内联**（PERF-WING，`handoff/PERF-WING.md`）：W-STAIR + W-LAMP 之后机翼成了启动关键路径（比窗外晚 0.35 s）。消融：去掉 `shadeWing` −69%，`sdWing` 各部件合计约 −30%，W-STAIR 下界 −0.2%；着色里最贵的是翼尖灯位置 `wingLampPos(i)`（只取决于翼尖弯曲），它在 `shadeWing` 的灯循环（套在 5 条子射线的循环里）和 `wingLights` 的灯循环里各内联一份（−13% / −6%）。
+  修法：`main` 里 `wingLampsSetup()` 按**常数下标**调三次存进全局，两处灯循环读 `wingLampAt(i)`：离线 FXC wing 6.85 → 4.9 s（−28%）、wing-wet −31%，真冷启动机翼 −31%，关键路径回到窗外（机翼早约 2 s）。同页冻结 A/B 非机翼逐位 0；机翼有末几位差（相对 ≤ 3e-3），根因是旧程序里两份内联的灯位置被 FXC 和各自上下文一起重排——两边都去掉 `wingLights` 后新旧逐位相同。代价：机翼 pass 帧时间约 +2–3%（0.01–0.02 ms，gpu-ab 8 轮带 old/old A/A），「守卫循环算一次」「只提灯照那一份」「两个入口各算一次」都一样 +2–3%，不是寄存器寿命问题；「在两处灯循环前就地算」冷编译反而 +50%（又回到子射线循环里）。
+  坑：守卫循环写法（下标不是常数）只有 −12%——FXC 靠常数下标折掉 `wingLampPos` 里按 i 的分支。把含隐式求导采样的函数（`wingEnv` → `skyRadiance`）挪出不连续循环时，ANGLE 不再生成 `…Lod0` 版本，fxc 报 X3511（试图展开循环）；包一层带 `break` 的 1 次循环即可。`[loop]` / `[fastopt]` 直接加在 HLSL 上对机翼程序都在 ±2% 内（循环本来就没被展开）。
+  识别：`shader-budget --variants` 把一个只依赖 uniform 的函数换成常数，掉得多就说明它被内联在循环体里；给 W-EDGE B′ 留的余量见 handoff（新基线上 B′ +10.6% / wet +6.9%，仍比改动前 −24%）。
 - **同一个数学表达式，写成 `max`+`abs` 比写成等价的 `clamp` 平方慢，FXC 对具体写法敏感、不是只看运算量**（TM01）：曝光合成里的一处软拐角，写成 `max(g, 0) + 0.5·max(0.5 − |g|, 0)²`（每个铰链各自 `max`，中间夹一次 `abs`）时 `exposure-final` 离线 FXC **+13%**；换成数学上逐点相等的写法 `0.5·clamp(g + 0.5, 0, 1)² + max(g − 0.5, 0)`（`clamp` 一次到位，不出现 `abs`）后回到噪声内。两种写法的浮点结果逐位相同（都是同一条 C¹ 连续的软拐角曲线），纯粹是 FXC 优化器对 `abs`/`max` 组合展开出的中间表示更啰嗦。识别 / 以后怎么避免：新写分段 / 钳位类的表达式时优先用 `clamp(x, lo, hi)` 一次夹到位，而不是拆成多个 `max`/`min` 再叠 `abs`；改完用 `shader-budget.mjs --variants` 对照写法本身（不只对照有没有这段代码），`fxc /O1 /Fc` 的 `Approximately N instruction slots used` 涨了但看不出为什么时，先怀疑是不是写成了 `max`+`abs` 的组合（`handoff/TM01-fxc.mjs`）。
 
 <a id="pit-cloud"></a>
@@ -365,10 +371,12 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 
 - **天气渐变不能走 `clouds.applyPreset` / `snap()`**（T19b）：会清掉时间累积，并让云影图整张在一帧里重建（3–8 ms）；连续航程每 0.25 s 推进一次云量，就会变成持续卡顿。修法：`clouds.setParams(p, true)`（gradual），云影图按后台分片节奏跟上；借遮挡的硬切才用 `setParams(p, false)`。
 - **占据网格只保护 ±128 km 内的雷暴 / 台风**（T19b）：网格外照样逐点求值，4 个单体在 300 km 外仍 +1–1.5 ms/帧，台风在 750 km 外 +2–3 ms/帧（`handoff/T19b-storm-cost.mjs`）。天气驱动因此只在 280 km（雷暴）/ 600 km（台风）内摆放；以后要放得更远，先在云程序里给网格外的雷暴 / 台风做 LOD。
-- **改天气场（`WeatherField`）的气候倾向之前和之后都要跑 `scripts/weather-stats.mts`**（WX10；DX-11 挂进了 `package.json`）：门禁是 `pnpm --filter voyage weather-stats -- --multi`（等价于 `node --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi`，6 个种子全部通过，约 1.5 分钟，不开浏览器；不加 `--multi` 只跑一个种子并打印完整统计表，约 15 s）。它按月份和地区统计云型、雷暴、锋面、台风（100 年样本），对照气候目标区间断言，退出码非 0 就是失败；每条断言都写了依据。T19b 的天气场就是在没有这类统计的情况下，把 1 月日本海做成了 63% 晴空、把台风做成了每年 59 个。
+- **改天气场（`WeatherField`）的气候倾向之前和之后都要跑 `scripts/weather-stats.mts`**（WX10；DX-11 挂进了 `package.json`）：门禁是 `pnpm --filter voyage weather-stats -- --multi`（等价于 `node --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi`，6 个种子全部通过，约 2.5 分钟，不开浏览器；不加 `--multi` 只跑一个种子并打印完整统计表，约 15 s）。它按月份和地区统计云型、雷暴、锋面、台风（100 年样本）、风场（WX11a），对照气候目标区间断言，退出码非 0 就是失败；每条断言都写了依据。T19b 的天气场就是在没有这类统计的情况下，把 1 月日本海做成了 63% 晴空、把台风做成了每年 59 个。
   写新断言时有两个坑（WX10 审查）：①只按一个种子调通的门限会随种子翻转，比如 4 年样本里「台风 8 月最多」20 个种子有 7 个失败，所以必须用 `--multi` 验；②门限要让改前的代码失败，否则分不出改前改后（「华北七下八上晴空 ≤ 45」改前就能过，已换掉）。
 - **粗略海陆轮廓 `coarseLand` 分不出日本海一侧和太平洋一侧**（WX10）：本州是一条沿太平洋岸画的胶囊，东京落在中轴线上，新潟、金泽、秋田都算作海。拿它按「离海岸多远」判断寒潮阴雪时，北海道西部变成晴空，关东反而阴雪。修法：陆地按手画的脊梁折线 `JAPAN_SPINE` 分两侧。识别：打印 `surgeGeo(lat, lon, true)`，逐个核对札幌、新潟、东京、广岛这类城市在哪一侧。
 - **值噪声集中在 0.5 附近，不能拿阈值直接当「时间比例」**（WX10）：三维 `vnoise` 的 p10 ≈ 0.25、p90 ≈ 0.75；z 取半整数的切片更窄，p10 ≈ 0.30、p90 ≈ 0.70。要表达「某件事有 60% 的时间发生」，先用 `rank()` 拉伸，再比较「活跃度 − rank」。
+- **风场 `WeatherField.wind()` 不要每帧调，也不要把风向渐变进着色器**（WX11a）：`wind()` 约 4 µs 一次，按天气场取样的节奏（导演 300 模拟秒一次）算一条 `WindProfile` 缓存起来，每帧只用纯算术的 `windAt(profile, 高度)`（约 0.04 µs）。平流位移必须逐帧积分（`+= 风 × simDt`），不能写成 `t × 风速`（风一变云就跳）；风向只能在借遮挡硬切时换（噪声框架绕世界原点转，1000 km × 1° ≈ 17 km 平移，见 `research/WX11-DESIGN.md` 坑 A / B）。`WeatherSample.wind` 是惰性 getter，展开 / `JSON.stringify` 会触发计算。改风场同样过 `weather-stats --multi`（`--only wind` 单种子约 5 s）；地面风在海岸两侧本来就不同，连续性门限对地面放宽到 25%，云层高度（≥ 1 km）仍按 15%。雷暴系统的漂移改成出生时的引导气流（上限 60 km/h），`stormsNear` 的搜索半径随之从 +250 km 放到 +330 km。
+- **只有乘性扰动的风场，在气候态矢量平均接近 0 的地方造不出风**（WX11a-b，WX11g 审查 D2）：现象是西太预设（30°N, 139.8°E）7 月海面风中位只有 1.5–1.8 m/s，平静（< 2 m/s）57–63%，海面几乎总是镜面；南海 7 月则反过来，一整月平静 0%，海况天天一样。根因：850 hPa 扰动原来只有「转 ±25°、乘 0.7–1.3」，副高脊线、季风转换期的矢量平均本来就小，乘出来还是小。真实大气里这些地方的标量平均风速远大于矢量平均，差的就是天气尺度扰动。修法：`wind()` 在乘性扰动之后再加一个随机风矢量，u、v 各自近似正态（`(vnoise − 0.5) / VNOISE_SD`，vnoise 的标准差实测 0.185）。每个分量的标准差为 4.5 m/s，冬季中纬度升到 6 m/s；气候态矢量 ≥ 9 m/s 的强而稳定的气流里降到六成（[Mon06]：信风、季风最稳定）。时间尺度取 48 h，取 30 h 时 850 hPa 的 1 小时连续性 p99 为 18%，超过门限。另外，地面风加了日变化：陆上 ±20%、海上 ±3%，当地 14 时最大，`WindProfile.diurnal` 往上按 ln z 回到 1。以后怎么识别：`weather-stats --only wind` 的「海面风」表和断言，看中位、平静比例，并对照 [JMA平年] / [HKO] 测站。**p850 相邻 25 km 连续性 p99 在 13.8–14.4%，离 15% 的门限很近**，再往 850 hPa 加空间变化之前先看这一条。已知缺口：西太 10 月中位约 3.1，八丈島 10 月平均 5.6，因为秋季东北季风在风场里要到 11 月才开始（`wN` 季节），不属于本修法的范围。
 - **连续航程中途，白天的台风几乎摆不出来**（WX10 发现，T19b 的机制）：台风的卷云盖半径约 300 km，「整组在视野外」基本满足不了；巡航高度又在积云之上，遇不到穿云遮挡，只能等深夜。现在只有用户跳变（`onJump`）时会直接摆放，日志记 `[jump]`。截台风图的办法：场景 js 里打开连续航程，然后调用 `director.weather.onJump()`。跳变时也要先过 PERF-10 的预告门 `weatherReady`：冷启动后十几秒内换预设，如果变体还没编好，这一次不摆台风 / 雷暴。**合并时别丢掉预告门**：丢了 typecheck 照样能过，但会摆出画不出来的台风。
 - **云影起点不能正好落在球面上**：海面点 r = BOTTOM，对地球求交的根在 0 附近正负抖动，云影随机丢失。把起点抬高 10 m。
 - 渲染到 3D 目标用 `renderer.setRenderTarget(target, layer)`：第二个参数在 3D 目标上就是层号。
@@ -550,6 +558,11 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **低空时耀斑侧面有一道「竖直断层」，不是 bug**：那是耀斑波瓣的边缘。耀斑中心过曝，又是平滑的高斯分布，所以边界显得锐利；换风速后边界会跟着移动。
   排查时先后怀疑过风痕（确实太陡，已经放软）、闪烁、云影，用 `uDebug` 5–10 逐项排除后才确认。以后判断方法：改风速，看边界是否移动。
 - **海平面近处求交**：从 r≈6360 km 出发的通用球面求交在近处有约半米误差，会让海浪纹理出现与视角相关的颗粒噪点；`oceanRadiance` 里用 t = c / (−b + √(b²−c)) 重算。
+- **海浪频谱不能在主线程随风速重算**（WX11g）：`buildSpectrum` 实测每次 20–40 ms（Node 与页面同量级，旧注释写的「十几毫秒」偏乐观），风速一变就同步重算、必掉帧；风速连续变化（连续航程按天气场写 `state.wind`）时每帧都会重算。
+  修法（`ocean/waves.ts`）：频谱只在 `WIND_LEVELS`（0 / 1.5 / 3 / 5 / 7 / 10 / 13.5 / 17.5 / 22 m/s，一档约一个蒲福风级，7 必须是一档——面板默认值，默认场景逐位不变）上算，在 `ocean/spectrum.worker.ts` 里做，两侧各预取一档；风速在两档之间时相位推进 pass 按比例混合两档的 h0（`uH0` / `uH0b` / `uMix`，同一组高斯随机数，振幅线性混合，海况连续过渡），所以风速可以每帧连续写、不量化不限频；缺档时这一帧海况保持原样（`stats.holds`），只有启动第一帧同步算。方差按「标准差线性混合」估算、白浪阈值按实际风速的 Monahan 覆盖率连续算。
+  识别：`__voyage.ocean.stats`（`wind` 实际用到的风速、`level` = [下档, 上档, 混合比]、`buildMs` / `syncBuildMs` / `uploadMs` / `builds` / `holds`）；主线程长帧用 `handoff/WX11g-hitch.mjs`（跳档 + 连续扫风速，记录每次 `ocean.update` 耗时与帧间隔，`--port2` 可对照改前）。
+- **着色器里不能写「速度 × 时间」当漂移**（WX11g）：`gustFactor` 原来用 `uWind * uTime` 算阵风斑的漂移，`uTime` 是页面运行的秒数，风速一变整片阵风斑瞬移 Δ风速 × 运行秒数（运行 10 分钟后差 1 m/s 就跳 0.6 km），风速连续变化时则整片以「运行秒数 × 风速变化率」的假速度滑动。修法：漂移距离在 CPU 上逐段积分（`waves.ts` 的 `updateDrift`，放在 `uOceanFoam.z`），风速恒定时与原来的 `uWind·uTime` 至多差 1 ulp（CPU 双精度算完再转 float32，原来是着色器里 float32 相乘；耀斑闪烁格子边上可能翻转几个像素）。以后凡是随参数变化的量驱动的平移（云平流、航迹云漂移……）都要积分位移，不要写 `t × v`。识别：冻结后只改 `state.wind`，海面阵风斑 / 耀斑纹路不应当整体挪动。
+- **海面风速由导演按天气场写**（WX11g）：连续航程开着时，`weather-director.ts` 每次取样取天气场的地面 10 m 风 `windSpeed(profile.sfc)`（weather.ts 已按周围海陆比例插值 z₀；审查 D1：第一版在近岸 / 陆地格点改套开阔海面的 Charnock 推导，骏河湾 1 月中位 13.8 m/s 偏高，已推翻），以 ≤ 4 m/s / 模拟小时限速逼近、写进 `state.wind`；换预设（jump）直接对齐。面板风速滑条的显示不会跟着变（ui.ts 只在拖动时写），拖滑条后导演从新值接着走、再慢慢拉回天气场。连续航程关着（回归场景默认）时风速仍是面板值 7 m/s。
 - **影像瓦片取不到时不能露底色**：`clipmap.buildImagery` 预先给画布涂深海色 `rgb(8,22,40)`，某张瓦片偶发失败（网络 / 限流）就露出一块直边的「深海色陆地」，而 `loadBitmap` 还把失败永久缓存。修法：除最粗一级外缺瓦片处留透明，`sampleGround` 按透明度回退到粗一级；失败不缓存、重建时重试。识别：陆地上出现直边、颜色恰为深海底色的色块。测回退：`page.route` 拦掉一部分瓦片（`page.unroute` 必须传同一个正则对象，否则拦截不解除）。
 - **换预设后紧接着设高度，会被上一个地点的高度下限夹住**（T18）：回归脚本在同一帧里先切预设再设高度，这时 `state.floor` 和滑块 `min` 还是旧地点的，浏览器把 0.6 夹成了 2.6。修法：换预设 / 开关真实地理时立刻 `resetAltitudeFloor` 并同步滑块 `min`。识别：海上场景的高度恰好等于上一个陆地场景的下限。
 - **clipmap 里的细线（道路）不能存覆盖率，要存有向距离**（T08）：clipmap 纹素在巡航高度的中远处是 60–250 m，比屏幕像素在地面上的宽度大 2–3 倍，
@@ -727,6 +740,18 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **火车：斜看的影像要沿足迹长轴取样**（TR03）：1 km 外像素在地面上沿视线方向的足迹是横向的几百倍，取一个点就是严重欠采样，列车一动整片平原闪。火车变体沿长轴取最多 4 点（`railGroundSample`），级别选到每点约一个纹素；地形法线在求交时就算好（`gh.nT`），掠射角按法线算（按天顶算会把正对我们的山坡也模糊掉）。
 - **火车：远处山脊几乎和地平线平行，轮廓是 1 像素的水平台阶，列车一动就沿轮廓爬**（TR03）：两类边都要抗锯齿。①地形对天空（没打到）：步进途中记下离地形最近处（以像素竖直足迹计），在它附近两轮细找，覆盖率 = 1 − 距离，和天空按覆盖率混；②近处山脊挡远处山脊（都打到）：只记「局部最近、之后又离远」的一处，把远山的颜色按那道山脊的距离重新加一遍空气透视当作它的颜色混进来。**云的切割（`cloudBeforeGround`）也要按同一覆盖率混**，不然山脊边的云还是一刀切（第一版只改地面颜色，截图看不出变化，查了半天才发现台阶是云被切出来的）。识别：`uDebug = 26`（火车变体专用：红 = 覆盖率，绿 = 距离 / 50 km，蓝 = 近处山脊覆盖率）。仍未解决：平原上相隔几公里的低矮起伏之间的遮挡边（对比很低，放大 5 倍才看得出）。
 - **火车远景变体第一次进入火车模式时后台编译约 18–19 s（d3d11 真冷），期间沿用飞机的窗外程序，窗外会先画成海**（TR03，已知）：飞机模式不受影响（变体只在火车模式下编译）。以后若要消掉，可在面板选「火车」的同时开始编译、编好之前在状态文字里提示。
+
+<a id="pit-perf"></a>
+### 性能
+
+- **「帧率很低、CPU 打满、GPU 利用很低」先查浏览器是不是退到了软件渲染，别先当代码回归查**（PERF-CPU，2026-09-28）：
+  - 现象：用户的 Chrome 里整页 2–3 fps，任务管理器 CPU 满、显卡几乎闲着。
+  - 根因：前一晚 23:59:37 NVIDIA 驱动重装（系统日志 UserPnp 20003「为设备添加服务 nvlddmkm」），Chrome 的 GPU 进程 4 秒后重启时拿不到硬件 D3D 设备，退到 **WARP**（`Microsoft Basic Render Driver`，D3D11 的 CPU 软件光栅），之后一直不会自己切回（浏览器进程从 9/13 起没重启过）。本页在 WARP 上约 2.4 fps，WARP 的光栅线程占约 26 个核。硬件模式（RTX 5090、有头、1600×1200 或 2560×1300@1.5）各场景稳态都顶在 160 fps vsync，主线程 JS 约 1 ms/帧，**不是回归**。
+  - 修法：用户侧完全重启 Chrome（`chrome://restart`），再到 `chrome://gpu` 确认「WebGL: Hardware accelerated」。代码侧：`src/boot/software-gl.ts` 启动时读渲染器字符串，命中 Basic Render / SwiftShader / llvmpipe 就在页面顶部提示原因与办法（`?swgl=1` 强制显示，`__voyage.softwareRenderer` 看判定）。
+  - 识别：①页面顶部出现上述提示；②PowerShell `(Get-Process -Id <Chrome GPU 进程>).Modules | ? ModuleName -match 'nvwgf|Warp'`：有 `D3D10Warp.dll`、没有 `nvwgf2umx.dll` 就是 WARP（Chrome GPU 进程 pid 用命令行里的 `--type=gpu-process` 找）；③复现：`node scripts/cpu-prof.mjs --port <端口> --angle d3d11-warp --no-gl`（注意 `--use-angle=warp` 不是合法值，会退到 SwiftShader）。
+- **每帧 WebGL 调用的大头是空气透视 3D LUT**（PERF-CPU）：原来内散射 / 透射率分两遍各画 32 层，占全帧 111 次 draw 中的 64 次（每层一次 `framebufferTextureLayer` + three 的整套 `render()`），同一段 `integrateSegment` 算两遍。改成两附件 MRT 一遍画出（`luts.ts` 的 `aerialTarget`：three 的 `WebGL3DRenderTarget` 给 `count: 2` 时多出来的 `textures[1]` 仍是 2D `Texture`，要手动换成同设置的 `Data3DTexture`），draw 111 → 79，与旧做法逐 texel 逐位相同（`node handoff/PERF-CPU-aerial-check.mjs <端口>`）。
+- **冗余的 GL 状态调用不是瓶颈**（PERF-CPU 实测）：three 每次 `render()` 末尾把深度测试 / 深度写入复位，全屏 pass 的材质又关掉，每帧约 220 次 `depthMask`、各 110 次 `enable` / `disable`（占调用数 40%）。在 JS 侧去重后同页交替对照，GPU 进程 CPU 在噪声内没有变化——ANGLE 把状态推迟到 draw 时才下发，这类调用很便宜。不值得绕开 three 的状态管理。
+- **测 CPU / GPU 进程开销用 `scripts/cpu-prof.mjs`**（PERF-CPU，见「调试与验证」）：GPU 进程 CPU 同场景两次能差 ±30%（45–90%），前后对照要同页交替（`--scenes 场景,A,B,A,B --jsA … --jsB …`）或多轮交替跑两个端口，不要单次比。启动后头 10 s 与换场景后的几秒里，GPU 进程的 `ThreadPoolForegroundWorker`（后台变体着色器编译）会占 4–7 个核，是一次性的，量稳态要等过去。
 
 <a id="pit-tools"></a>
 ### 工具与环境

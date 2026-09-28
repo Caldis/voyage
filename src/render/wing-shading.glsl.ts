@@ -20,6 +20,21 @@ vec3 wingLampPos(int i) {
   return wingTipToAircraft(sg, n, x);
 }
 
+// 三盏灯的位置只取决于 uniform（翼尖弯曲 uWingFlex），每个像素在 main 里算一次（wingLampsSetup），着色和光晕都读这里（PERF-WING）。
+// 以前在 shadeWing 的灯循环（套在子射线循环里）和 wingLights 的灯循环里各调一次 wingLampPos：翼尖路径的 atan / sin / cos、
+// wingTipLE / wingTipChord 整段内联在两个循环体里，占机翼程序离线 FXC 的约 19%（消融：着色里 −13%、光晕里 −6%）。
+// 写成三次常数下标的调用（不是守卫循环）：常数 i 让 FXC 折掉 wingLampPos 里按 i 的分支，三份共用的翼尖角度也只算一遍——
+// 离线 FXC wing −27%，守卫循环写法只有 −12%。结果与原来逐位相同（同一份算式、同样的输入）
+vec3 gWingLamp0 = vec3(0.0);
+vec3 gWingLamp1 = vec3(0.0);
+vec3 gWingLamp2 = vec3(0.0);
+void wingLampsSetup() {
+  gWingLamp0 = wingLampPos(0);
+  gWingLamp1 = wingLampPos(1);
+  gWingLamp2 = wingLampPos(2);
+}
+vec3 wingLampAt(int i) { return i == 0 ? gWingLamp0 : (i == 1 ? gWingLamp1 : gWingLamp2); }
+
 // 灯在 dir 方向（机体系，从灯出发）上的发光强度（cd）。
 // 航行灯按 FAR 25.1389–1391：正前方 0–10° 至少 40 cd，10–20° 30 cd，20–110°（朝外侧）5 cd；
 // 光区之外只剩灯罩的散射漏光（这里取 3 cd，经验值）。尾灯：向后 ±70° 内 20 cd。频闪：各向约 1500 cd（LED 防撞灯的峰值量级）。
@@ -169,7 +184,7 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 e
   float aCoatL = max(sqrt(cr2 * cr2 + 2.0 * max(w.bumpVar, 0.0)), 0.02);
   float aBaseL = max(sqrt(m.rough * m.rough * m.rough * m.rough + 2.0 * max(w.bumpVar, 0.0)), 0.02);
   for (int i = min(uWingSteps, 0); i < 3; i++) {  // 起点依赖 uniform：不让 FXC 展开成三份
-    vec3 d = wingLampPos(i) - P;
+    vec3 d = wingLampAt(i) - P;
     float dd = dot(d, d);
     vec3 l = d * inversesqrt(max(dd, 1e-8));
     float nlL = dot(nG, l);
@@ -344,7 +359,7 @@ vec3 wingLights(vec3 ro, vec3 rd) {
   float sigma = uCameraFog * 1e-3;   // 云雾的消光系数，1/m（云滴几乎不吸收，散射系数取同一个值）
   vec3 rdA = vec3(uSeatSign * rd.x, rd.y, rd.z);  // 机体系里的视线方向
   for (int i = min(uWingSteps, 0); i < 3; i++) {  // 起点依赖 uniform：不让 FXC 展开成三份
-    vec3 a = wingLampPos(i);
+    vec3 a = wingLampAt(i);
     vec3 c = wingAircraftToCabin(a);
     vec3 d = c - ro;
     float t = dot(d, rd);

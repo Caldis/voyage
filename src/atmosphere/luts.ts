@@ -143,13 +143,16 @@ void main() {
 }
 `;
 
-// 空气透视 LUT：每一层是一个距离，存「从相机到该距离」的内散射（RGB）和透射率（另一张图的 RGB）
+// 空气透视 LUT：每一层是一个距离，存「从相机到该距离」的内散射（RGB）和透射率（另一张图的 RGB）。
+// PERF-CPU：两张图一次画出（MRT：location 0 = 内散射，即 three 的 gl_FragColor；location 1 = 透射率）。
+// 以前按 uOutputTransmittance 分两遍各画 32 层，同一段 integrateSegment 算两次、每帧 64 次 draw（全帧 111 次里的 64 次），
+// 现在 32 次；两张图的数值与分两遍时逐位相同（同一段代码、同样的输入）
 const AERIAL_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
 uniform float uCamR;
 uniform vec3 uSunDirLocal;   // 太阳方向，已经转到「太阳方位角 = 0」的坐标里
 uniform float uLayer;
-uniform bool uOutputTransmittance;
+layout(location = 1) out highp vec4 aerialTransmittanceOut;
 varying vec2 vUv;
 void main() {
   float x = uvToUnit(gl_FragCoord.x / AERIAL_SIZE.x, AERIAL_SIZE.x);
@@ -163,10 +166,12 @@ void main() {
   float dist = z * z * AERIAL_MAX_DISTANCE;
   vec3 T;
   vec3 L = integrateSegment(vec3(0.0, max(uCamR, BOTTOM + 0.01), 0.0), rd, uSunDirLocal, dist, 24.0, T);
-  gl_FragColor = vec4(uOutputTransmittance ? T : L, 1.0);
+  gl_FragColor = vec4(L, 1.0);
+  aerialTransmittanceOut = vec4(T, 1.0);
 }
 `;
 
+/** 空气透视的 3D 目标，两个颜色附件（textures[0] 内散射、textures[1] 透射率，见 AERIAL_FRAG） */
 function aerialTarget() {
   const [w, h, d] = LUT_SIZE.aerial;
   const rt = new THREE.WebGL3DRenderTarget(w, h, d, {
@@ -175,8 +180,17 @@ function aerialTarget() {
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
     depthBuffer: false,
+    count: 2,
   });
-  rt.texture.wrapR = THREE.ClampToEdgeWrapping;
+  // three 的 WebGL3DRenderTarget 只把 textures[0] 换成 Data3DTexture，count: 2 多出来的 textures[1] 还是 2D Texture：
+  // 换成同样设置的 Data3DTexture（three 的多目标 3D 分支按 TEXTURE_3D 分配、逐附件 framebufferTextureLayer）
+  const t0 = rt.textures[0];
+  const t1 = new THREE.Data3DTexture(null, w, h, d);
+  for (const k of ["type", "format", "minFilter", "magFilter", "generateMipmaps", "flipY", "internalFormat", "isRenderTargetTexture"] as const)
+    (t1 as unknown as Record<string, unknown>)[k] = t0[k];
+  t1.renderTarget = rt;
+  rt.textures[1] = t1;
+  for (const t of rt.textures) t.wrapS = t.wrapT = t.wrapR = THREE.ClampToEdgeWrapping;
   return rt;
 }
 
@@ -211,8 +225,10 @@ export class Atmosphere {
   readonly skyView = lutTarget(LUT_SIZE.skyView);
   /** 同一张天空视图 LUT，光源换成月亮（结果同样以「光源照度 = 1」为单位） */
   readonly skyViewMoon = lutTarget(LUT_SIZE.skyView);
-  readonly aerialInscatter = aerialTarget();
-  readonly aerialTransmittance = aerialTarget();
+  /** 空气透视：一个两附件的 3D 目标（PERF-CPU）；下面两个字段保持原来「`.texture` 取纹理」的用法 */
+  private readonly aerial = aerialTarget();
+  readonly aerialInscatter = { texture: this.aerial.textures[0] as THREE.Data3DTexture };
+  readonly aerialTransmittance = { texture: this.aerial.textures[1] as THREE.Data3DTexture };
 
   /** 所有用到大气 LUT 的着色器共享这两个 uniform */
   readonly sharedUniforms = {
@@ -251,7 +267,6 @@ export class Atmosphere {
     uCamR: { value: 6370 },
     uSunDirLocal: { value: new THREE.Vector3() },
     uLayer: { value: 0 },
-    uOutputTransmittance: { value: false },
   });
 
   /** LUT 是否存成 32 位浮点（T36）：能线性过滤 32 位浮点纹理时为 true，否则退回半精度（深暮光会有块状阶梯） */
@@ -268,10 +283,8 @@ export class Atmosphere {
     const forceHalf = typeof location !== "undefined" && new URLSearchParams(location.search).has("lut16");
     this.float32 = !!ext && !forceHalf && ext.has("OES_texture_float_linear") && ext.has("EXT_color_buffer_float");
     if (this.float32) {
-      for (const rt of [
-        this.transmittance, this.multiScattering, this.irradiance, this.skyView, this.skyViewMoon,
-        this.aerialInscatter, this.aerialTransmittance,
-      ]) rt.texture.type = THREE.FloatType;
+      for (const rt of [this.transmittance, this.multiScattering, this.irradiance, this.skyView, this.skyViewMoon, this.aerial])
+        for (const t of rt.textures) t.type = THREE.FloatType;
     }
     // 透射率 → 多次散射 → 辐照度：只依赖大气参数，启动时算一次；霾参数变化够大时再重算（见 setHaze）
     this.renderStatic();
@@ -319,12 +332,9 @@ export class Atmosphere {
     const u = this.aerialMaterial.uniforms;
     u.uCamR.value = camR;
     u.uSunDirLocal.value.set(Math.sqrt(Math.max(0, 1 - sunCosZenith * sunCosZenith)), sunCosZenith, 0);
-    for (const [target, isT] of [[this.aerialInscatter, false], [this.aerialTransmittance, true]] as const) {
-      u.uOutputTransmittance.value = isT;
-      for (let layer = 0; layer < LUT_SIZE.aerial[2]; layer++) {
-        u.uLayer.value = layer;
-        this.pass.render(this.aerialMaterial, target, layer);
-      }
+    for (let layer = 0; layer < LUT_SIZE.aerial[2]; layer++) {
+      u.uLayer.value = layer;
+      this.pass.render(this.aerialMaterial, this.aerial, layer);
     }
   }
 }

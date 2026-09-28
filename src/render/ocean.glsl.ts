@@ -16,7 +16,7 @@ uniform vec3 uOceanTile;            // 各级平铺尺寸（m）
 uniform vec4 uOceanHex[3];          // 各级：相机在斜格坐标里的整数部分（xy）和小数部分（zw）（CPU 双精度拆好）
 uniform vec4 uOceanCam;             // xy：相机的世界位置对 4096 m 取余（m），闪烁格子用
 uniform vec3 uOceanVar;             // 各级整张平铺的总斜率方差 ⟨sx² + sz²⟩
-uniform vec4 uOceanFoam;            // x：白浪阈值 τ（对前两级的 Σ|k|h），y：1 = FFT 海浪已接入
+uniform vec4 uOceanFoam;            // x：白浪阈值 τ（对前两级的 Σ|k|h），y：1 = FFT 海浪已接入，z：阵风斑随风漂移的距离（km，CPU 逐段积分）
 
 // 格子密度：每个平铺尺寸内约 2 个格点（六边形约半个平铺大），整张平铺永远不会完整出现；与 src/ocean/waves.ts 一致
 const float OCEAN_HEX_SCALE = 2.0;
@@ -117,10 +117,11 @@ SeaSlope seaSlope(vec2 xzM, vec2 dir2, float footAlong, float footAcross, float 
   return s;
 }
 
-// 阵风斑（「猫爪」）：几百米到公里级、顺风拉长的阵风区，毛细波和短波更密，粗糙度更高；随风漂移
+// 阵风斑（「猫爪」）：几百米到公里级、顺风拉长的阵风区，毛细波和短波更密，粗糙度更高；随风漂移。
+// 漂移距离由 CPU 逐段积分（uOceanFoam.z，WX11g）：写成 uWind·uTime 时风速一变整片阵风斑就瞬移 Δ风速 × 运行秒数
 float gustFactor(vec2 xzKm) {
   vec2 w = vec2(cos(WIND_DIR), sin(WIND_DIR));
-  vec2 q = xzKm - w * (uWind * uTime * 1e-3);
+  vec2 q = xzKm - w * uOceanFoam.z;
   vec2 p = vec2(dot(q, w) * 0.9, dot(q, vec2(-w.y, w.x)) * 1.7);
   p += (vec2(vnoise(p * 0.5 + 5.3), vnoise(p * 0.5 + 9.1)) - 0.5) * 1.5;
   float g = fbm2(p + 11.3);

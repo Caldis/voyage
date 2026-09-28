@@ -409,6 +409,26 @@
           "mad": 111
         }
       }
+    },
+    {
+      "date": "2026-09-28",
+      "commit": "94dc148",
+      "label": "shader-budget --ledger（--only wing,wing-wet）",
+      "quick": false,
+      "jobs": 8,
+      "rounds": 5,
+      "programs": {
+        "wing": {
+          "min": 4723,
+          "median": 4820,
+          "mad": 20
+        },
+        "wing-wet": {
+          "min": 5661,
+          "median": 5726,
+          "mad": 65
+        }
+      }
     }
   ]
 }
