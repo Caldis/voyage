@@ -1,0 +1,8 @@
+[
+  { "name": "off", "js": "v.exposure.localDt = null; v.wingDebug.strobe = 0;" },
+  { "name": "S-inst", "js": "v.exposure.localDt = null; v.wingDebug.strobe = 1;" },
+  { "name": "S-50", "js": "v.exposure.localDt = null; v.wingDebug.strobe = 0; v.benchFrame(1); v.exposure.localDt = 0.05; v.wingDebug.strobe = 1; v.benchFrame(1); v.exposure.localDt = 0;" },
+  { "name": "offLin", "js": "const m = v.exposure.finalMat; const k = 'lFine * exp2(-min(tl.y, 4.0))'; if (!m.fragmentShader.includes(k)) return 'NOKEY'; m.fragmentShader = m.fragmentShader.replace(k, '1e30'); m.needsUpdate = true; v.exposure.localDt = null; v.wingDebug.strobe = 0; for (let i = 0; i < 4; i++) await new Promise((r) => requestAnimationFrame(r)); return 'ok';" },
+  { "name": "S50Lin", "js": "const m = v.exposure.finalMat; const k = 'lFine * exp2(-min(tl.y, 4.0))'; m.fragmentShader = m.fragmentShader.replace(k, '1e30'); m.needsUpdate = true; v.exposure.localDt = null; v.wingDebug.strobe = 0; for (let i = 0; i < 4; i++) await new Promise((r) => requestAnimationFrame(r)); v.benchFrame(1); v.exposure.localDt = 0.05; v.wingDebug.strobe = 1; v.benchFrame(1); v.exposure.localDt = 0; return 'ok';" },
+  { "name": "noLocalS", "js": "v.exposure.localDt = null; v.wingDebug.strobe = 1; u.uNightLocal.value.y = 0;" }
+]

@@ -1,0 +1,7 @@
+[
+  { "name": "off", "js": "v.exposure.localDt = null; v.wingDebug.strobe = 0;" },
+  { "name": "S50-t25", "js": "v.exposure.localMat.uniforms.uLocalRate.value = 4; v.exposure.localDt = null; v.wingDebug.strobe = 0; v.benchFrame(1); v.exposure.localDt = 0.05; v.wingDebug.strobe = 1; v.benchFrame(1); v.exposure.localDt = 0;" },
+  { "name": "S50-t30", "js": "v.exposure.localMat.uniforms.uLocalRate.value = 1 / 0.3; v.exposure.localDt = null; v.wingDebug.strobe = 0; v.benchFrame(1); v.exposure.localDt = 0.05; v.wingDebug.strobe = 1; v.benchFrame(1); v.exposure.localDt = 0;" },
+  { "name": "S50-3f", "js": "v.exposure.localMat.uniforms.uLocalRate.value = 4; v.exposure.localDt = null; v.wingDebug.strobe = 0; v.benchFrame(1); v.exposure.localDt = 0.0167; v.wingDebug.strobe = 1; v.benchFrame(3); v.exposure.localDt = 0;" },
+  { "name": "restore", "js": "v.exposure.localMat.uniforms.uLocalRate.value = 4;" }
+]

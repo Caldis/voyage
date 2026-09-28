@@ -76,10 +76,26 @@ try {
     await page.waitForFunction(() => !window.__voyage.ground || window.__voyage.ground.pending === 0, null, { timeout: 120000, polling: 500 }).catch(() => console.log(`  ${sc.name}: 等瓦片超时`));
     await page.waitForTimeout(2000);
     console.log(`  ${sc.name}: 冻结后等瓦片 ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    // T48c（T48b 审查 P2-2）：先拍一张丢弃的预热图。冻结、pending 0、再等 2 s 之后，有城的黄昏第一张仍与后面各张差 141–211 级
+    //   （2–5 万像素，城区灯点），排在第一个的变体总是不可比。拍到连续两张 PNG 逐字节相同为止（最多 6 张）
+    {
+      let prev = await page.screenshot({ timeout: 60000 });
+      let n = 1;
+      for (; n < 6; n++) {
+        await raf2(page);
+        const cur = await page.screenshot({ timeout: 60000 });
+        if (cur.equals(prev)) break;
+        prev = cur;
+      }
+      console.log(`  ${sc.name}: 预热 ${Math.min(n + 1, 6)} 张${n >= 6 ? "（仍未稳定）" : ""}`);
+    }
     for (const va of variants) {
       const out = await page.evaluate(async ({ js, src }) => {
         const v = window.__voyage, m = v.exposure.finalMat, u = m.uniforms;
         for (const [k, a] of Object.entries(window.__t48bInit)) { if (Array.isArray(a)) u[k].value.fromArray(a); else u[k].value = a; }
+        // T48c 审查 P3-4：每个变体开头复原频闪（钉灭）与局部适应的 dt 覆盖，结果不再依赖变体的排列顺序
+        if (v.wingDebug) v.wingDebug.strobe = 0;
+        if ("localDt" in v.exposure) v.exposure.localDt = null;
         const want = src || window.__t48bSrc;
         if (m.fragmentShader !== want) { m.fragmentShader = want; m.needsUpdate = true; }
         let r = null;
@@ -111,6 +127,7 @@ try {
       if (m.fragmentShader !== window.__t48bSrc) { m.fragmentShader = window.__t48bSrc; m.needsUpdate = true; }
       window.__voyage.freeze(false);
       const w = window.__voyage.wingDebug; if (w) w.strobe = null;
+      if ("localDt" in window.__voyage.exposure) window.__voyage.exposure.localDt = null; // T48c 调试句柄，变体里可能改过
     });
   }
   console.log(errors.length ? `console error ${errors.length} 条，前 3 条：${errors.slice(0, 3).join(" | ")}` : "没有 console error");

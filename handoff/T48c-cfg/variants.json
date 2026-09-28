@@ -1,0 +1,6 @@
+[
+  { "name": "master" },
+  { "name": "final" },
+  { "name": "noLocal", "js": "u.uNightLocal.value.y = 0;" },
+  { "name": "final2" }
+]

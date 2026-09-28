@@ -1,0 +1,10 @@
+[
+  { "name": "night-city-off", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 4, "coverage": 0.15, "cabin-light": "off", "quality": "high" }, "offset": [0, -25], "ground": true, "head": -0.25 },
+  { "name": "night-city-on", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 4, "coverage": 0.15, "cabin-light": true, "quality": "high" }, "offset": [0, -25], "ground": true, "head": -0.25 },
+  { "name": "night-city-low", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 1.0, "coverage": 0.15, "cabin-light": "off", "quality": "high" }, "offset": [0, -25], "ground": true, "head": -0.25 },
+  { "name": "night-sea-milkyway", "p": { "preset": "scs", "seat": "left", "date": "2026-05-15", "time": 1350, "coverage": 0.15, "cabin-light": "off", "wing-pos": "-4", "quality": "high" } },
+  { "name": "noon-cumulus", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "quality": "high" } },
+  { "name": "sunset-wing", "p": { "preset": "wpac", "time": 1040, "wing-pos": "8", "quality": "high" } },
+  { "name": "dusk-earthshadow", "p": { "preset": "wpac", "seat": "left", "date": "2026-02-16", "time": 1068, "wing-pos": "-4", "quality": "high" } },
+  { "name": "dusk-city", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1025, "altitude": 4, "coverage": 0.15, "cabin-light": "off", "quality": "high" }, "offset": [0, -25], "ground": true, "head": -0.25 }
+]

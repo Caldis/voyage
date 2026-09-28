@@ -1,0 +1,8 @@
+[
+  { "name": "master" },
+  { "name": "a7", "js": "u.uNightLocal.value.z = 0.7;" },
+  { "name": "a8", "js": "u.uNightLocal.value.z = 0.8;" },
+  { "name": "a85", "js": "u.uNightLocal.value.z = 0.85;" },
+  { "name": "a9", "js": "u.uNightLocal.value.z = 0.9;" },
+  { "name": "noLocal", "js": "u.uNightLocal.value.y = 0;" }
+]

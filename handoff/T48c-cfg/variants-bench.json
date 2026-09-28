@@ -1,0 +1,6 @@
+[
+  { "name": "off", "js": "v.exposure.localDt = null; v.wingDebug.strobe = 0;" },
+  { "name": "offBench", "js": "v.exposure.localDt = null; v.wingDebug.strobe = 0; v.benchFrame(1); v.exposure.localDt = 0;" },
+  { "name": "offBenchNoLocal", "js": "v.exposure.localDt = null; v.wingDebug.strobe = 0; v.benchFrame(1); v.exposure.localDt = 0; u.uNightLocal.value.y = 0;" },
+  { "name": "noLocalOff", "js": "v.exposure.localDt = null; v.wingDebug.strobe = 0; u.uNightLocal.value.y = 0;" }
+]
