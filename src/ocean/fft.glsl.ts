@@ -18,6 +18,8 @@ vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y *
 export const EVOLVE_FRAG = /* glsl */ `
 ${COMMON}
 uniform sampler2D uH0;
+uniform sampler2D uH0b; // 下一个风速档的 h0（WX11g）：两档用同一组高斯随机数，振幅线性混合，海况在两档之间连续过渡
+uniform float uMix;     // 0 = 只用 uH0，1 = 只用 uH0b
 uniform vec3 uSize;     // 各级平铺尺寸（m）
 uniform float uTau;     // (t mod T) / T
 uniform float uOmega0;  // 2π / T
@@ -32,6 +34,7 @@ void main() {
   vec2 kv = vec2(mx, mz) * (2.0 * M_PI / L);
   float k = length(kv);
   vec4 h0 = texelFetch(uH0, p, 0);
+  if (uMix > 0.0) h0 = mix(h0, texelFetch(uH0b, p, 0), uMix);
   // 深水色散关系，带表面张力修正（k_m = 370 rad/m，只影响厘米级的波）
   float w = sqrt(9.81 * k * (1.0 + k * k / (370.0 * 370.0)));
   float nw = floor(w / uOmega0);

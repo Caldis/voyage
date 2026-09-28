@@ -1,0 +1,10 @@
+[
+  { "name": "w7", "js": "v.state.wind = 7; for (let i = 0; i < 600 && v.ocean.stats.wind !== 7; i++) await new Promise((r) => requestAnimationFrame(r)); return JSON.stringify(v.ocean.stats);" },
+  { "name": "master7", "materials": { "outsideMat": "base" }, "js": "v.state.wind = 7; for (let i = 0; i < 600 && v.ocean.stats.wind !== 7; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;" },
+  { "name": "w0", "js": "v.state.wind = 0; for (let i = 0; i < 600 && v.ocean.stats.wind !== 0; i++) await new Promise((r) => requestAnimationFrame(r)); return JSON.stringify(v.ocean.stats);" },
+  { "name": "w3", "js": "v.state.wind = 3; for (let i = 0; i < 600 && v.ocean.stats.wind !== 3; i++) await new Promise((r) => requestAnimationFrame(r)); return JSON.stringify(v.ocean.stats);" },
+  { "name": "w8.5", "js": "v.state.wind = 8.5; for (let i = 0; i < 600 && v.ocean.stats.wind !== 8.5; i++) await new Promise((r) => requestAnimationFrame(r)); return JSON.stringify(v.ocean.stats);" },
+  { "name": "w10", "js": "v.state.wind = 10; for (let i = 0; i < 600 && v.ocean.stats.wind !== 10; i++) await new Promise((r) => requestAnimationFrame(r)); return JSON.stringify(v.ocean.stats);" },
+  { "name": "w14", "js": "v.state.wind = 14; for (let i = 0; i < 600 && v.ocean.stats.wind !== 14; i++) await new Promise((r) => requestAnimationFrame(r)); return JSON.stringify(v.ocean.stats);" },
+  { "name": "w20", "js": "v.state.wind = 20; for (let i = 0; i < 600 && v.ocean.stats.wind !== 20; i++) await new Promise((r) => requestAnimationFrame(r)); return JSON.stringify(v.ocean.stats);" }
+]
