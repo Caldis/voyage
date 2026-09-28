@@ -3,5 +3,7 @@
     "js": "return JSON.stringify({v: v.clouds.variantStatus, lens: v.weather.lenticular && {x: v.weather.lenticular.x, z: v.weather.lenticular.z}})" },
   { "name": "fuji-cap-low", "p": { "preset": "fuji", "date": "2026-05-15", "time": 720, "altitude": 3.5, "coverage": 0, "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-24, -12] },
   { "name": "fuji-cap-dusk", "p": { "preset": "fuji", "date": "2026-05-15", "time": 1110, "altitude": 7, "coverage": 0.15, "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-10, 10] },
-  { "name": "fuji-cap-sc", "p": { "preset": "fuji", "date": "2026-05-15", "time": 600, "altitude": 8, "coverage": 0.5, "cloud-preset": "stratocumulus", "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-28, 5] }
+  { "name": "fuji-cap-sc", "p": { "preset": "fuji", "date": "2026-05-15", "time": 600, "altitude": 8, "coverage": 0.5, "cloud-preset": "stratocumulus", "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-28, 5] },
+  { "name": "fuji-cap-storm", "p": { "preset": "fuji", "date": "2026-05-15", "time": 600, "altitude": 8, "coverage": 0.3, "weather": "fuji-cap", "wing-pos": "-4" }, "ground": true, "offset": [-10, 10],
+    "js": "v.weather.addStorm({ id: \"t#0\", x: 5, z: -70, radius: 6.5, top: 13.5, quiet: true }); await new Promise((r) => setTimeout(r, 1500)); for (let i = 0; i < 240 && v.clouds.cloudVariantPending; i++) await new Promise((r) => setTimeout(r, 250)); return JSON.stringify({n: v.weather.storms.length, u: v.cloudUniforms.uStormCount.value, st: v.clouds.variantStatus})" }
 ]

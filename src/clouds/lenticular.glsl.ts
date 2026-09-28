@@ -65,12 +65,12 @@ float lensCapDepth(vec2 q, float alt, float flow) {
   vec3 wob = cloudHash3(ivec3(int(uLensCap.w * 4096.0), 12, 5)) - 0.5;
   // 生消：盘从山顶上空长出来 / 缩回去（水平尺寸按 √强度，厚度按强度）
   float grow = sqrt(s);
-  // 主盘：半轴 1.7–2.3 × 2.0–2.8 km（顶部锥体的尺度，富士山 3 km 高处的山体半径约 2 km），中心略偏下风
-  vec2 R = vec2(1.7 + 0.6 * h.x, 2.0 + 0.8 * h.y) * mix(0.35, 1.0, grow);
+  // 主盘：半轴 1.4–1.9 × 1.7–2.3 km（顶部锥体的尺度，富士山 3 km 高处的山体半径约 2 km），中心略偏下风
+  vec2 R = vec2(1.4 + 0.5 * h.x, 1.7 + 0.6 * h.y) * mix(0.35, 1.0, grow);
   vec2 qc = q - vec2(0.3 + 0.4 * h.z, 0.0);
-  float tUp = (0.42 + 0.2 * h.y) * s;
-  float tDn = (0.38 + 0.12 * h.x) * s;
-  float sag = (0.55 + 0.3 * h.z) * s;
+  float tUp = (0.3 + 0.15 * h.y) * s;
+  float tDn = (0.32 + 0.1 * h.x) * s;
+  float sag = (0.45 + 0.25 * h.z) * s;
   float d = lensPlateDepth(qc, alt - uLensCap.y, R, tUp, tDn, sag, 0.04, wob);
   float hMain = gLensPlateH;
   float pMain = gLensProf;
@@ -81,8 +81,8 @@ float lensCapDepth(vec2 q, float alt, float flow) {
     float gap = 0.24 + 0.08 * h.z;
     float base = uLensCap.y + tUp + 0.12;
     float k = clamp(floor((alt - base) / gap + 0.5), 0.0, nUp - 1.0);
-    vec2 Rk = R * (0.95 - 0.12 * k);
-    float dk = lensPlateDepth(qc - vec2(0.3 * (k + 1.0), 0.0), alt - (base + gap * k), Rk, 0.08 * s, 0.06 * s, sag * 0.8, 0.03, wob.yzx);
+    vec2 Rk = R * (1.02 - 0.12 * k);
+    float dk = lensPlateDepth(qc - vec2(0.2 * (k + 1.0), 0.0), alt - (base + gap * k), Rk, 0.1 * s, 0.07 * s, sag * 0.35, 0.02, wob.yzx * 0.5);
     if (dk > d) d = dk;
     else {
       gLensPlateH = hMain;
