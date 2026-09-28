@@ -791,7 +791,9 @@ export class Exposure {
 
     const [prev, next] = this.adapted;
     this.adaptMat.uniforms.uPrev.value = prev.texture;
-    this.adaptMat.uniforms.uDt.value = dt;
+    // STROBE-FLASH：已知的闪光（频闪、闪电，main.ts 写的 flash）期间全局适应不前进。人眼的明适应要几百毫秒，50 ms 的频闪进不了适应；
+    // 以前测光照单全收，夜里在云中每闪一次窗外对数均值抬 0.3–0.5 档，闪完整窗先暗一截再按 2.5 s 慢慢亮回来（1 Hz 的「呼吸」）
+    this.adaptMat.uniforms.uDt.value = dt * (1 - Math.min(Math.max(this.flash, 0), 1));
     this.adaptMat.uniforms.uReset.value = this.reset;
     this.pass.render(this.adaptMat, next);
     this.adapted = [next, prev];

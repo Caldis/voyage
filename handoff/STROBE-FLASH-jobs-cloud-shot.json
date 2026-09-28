@@ -1,0 +1,12 @@
+[
+  { "name": "night-incloud", "scene": { "name": "night-incloud", "p": { "preset": "wpac", "date": "2026-01-16", "time": 1320, "cloud-preset": "stratocumulus", "coverage": 0.95, "altitude": 1.35, "wing-pos": "8", "cabin-light": false }, "offset": [-10, -5], "wait": 6000 },
+    "variants": [
+      { "name": "fog", "probe": true, "js": "const u = v.wingMat.uniforms; return { fog: u.uCameraFog && u.uCameraFog.value, adapted: (() => { const b = new Float32Array(8); v.clouds.pass.renderer.readRenderTargetPixels(v.exposure.adapted[0], 0, 0, 2, 1, b); return Array.from(b); })() };" },
+      { "name": "x", "shot": true }
+    ] },
+  { "name": "night-mist", "scene": { "name": "night-mist", "p": { "preset": "wpac", "date": "2026-01-16", "time": 1320, "cloud-preset": "stratocumulus", "coverage": 0.55, "altitude": 1.3, "wing-pos": "8", "cabin-light": false }, "offset": [-10, -5], "wait": 6000 },
+    "variants": [
+      { "name": "fog", "probe": true, "js": "const u = v.wingMat.uniforms; return { fog: u.uCameraFog && u.uCameraFog.value };" },
+      { "name": "x", "shot": true }
+    ] }
+]

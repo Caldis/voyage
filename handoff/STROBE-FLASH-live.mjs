@@ -64,7 +64,7 @@ try {
     await page.evaluate(() => new Promise((r) => { let k = 0; const f = () => (++k >= 90 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }));
     if (sc.ground) { await page.evaluate(() => window.__voyage.freeze(true)); await groundSettle(page, 120000).catch(() => {}); await page.evaluate(() => window.__voyage.freeze(false)); }
     // 区域掩码：窗外遮罩 + 灯芯位置（冻结、频闪钉亮 / 钉灭）
-    const geo = await page.evaluate(async () => {
+    const geo = await page.evaluate(async (lamp) => {
       const v = window.__voyage;
       const gl = v.clouds.pass.renderer.getContext();
       const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
@@ -77,12 +77,17 @@ try {
       v.wingDebug.strobe = 1; await raf(4); const a = read();
       v.wingDebug.strobe = 0; await raf(4); const b = read();
       v.wingDebug.strobe = null;
+      // 按 16×16 块求钉亮 − 钉灭的差之和，取最大的块中心（单像素的镜面高光不会被当成灯芯）
       let best = -1, bx = 0, by = 0;
-      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-        const k = (y * W + x) * 4;
-        const d = (a[k] + a[k + 1] + a[k + 2]) - (b[k] + b[k + 1] + b[k + 2]);
-        if (d > best) { best = d; bx = x; by = y; }
+      for (let y0 = 0; y0 + 16 <= H; y0 += 8) for (let x0 = 0; x0 + 16 <= W; x0 += 8) {
+        let d = 0;
+        for (let y = y0; y < y0 + 16; y += 2) for (let x = x0; x < x0 + 16; x += 2) {
+          const k = (y * W + x) * 4;
+          d += (a[k] + a[k + 1] + a[k + 2]) - (b[k] + b[k + 1] + b[k + 2]);
+        }
+        if (d > best) { best = d; bx = x0 + 8; by = y0 + 8; }
       }
+      if (lamp) { bx = lamp[0]; by = H - 1 - lamp[1]; } // job.lamp：固定灯芯屏幕位置（显示像素，自上而下），两个端口对照时分区一致
       // 区域编号（按 GL 行序，自下而上）：0 舱内、1 窗内近、2 窗内中、3 窗内远
       const reg = new Uint8Array(W * H);
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -94,7 +99,7 @@ try {
       window.__sfReg = reg;
       v.freeze(false);
       return { W, H, lampX: bx, lampY: H - 1 - by, lampDiff: best };
-    });
+    }, job.lamp || null);
     console.log(`\n== ${job.name}（${renderer.slice(0, 60)}…）灯芯屏幕位置 ${geo.lampX},${geo.lampY}（钉亮 − 钉灭 RGB 和 ${geo.lampDiff}）`);
     results[job.name] = { geo, variants: {} };
     for (const va of job.variants) {
@@ -178,7 +183,7 @@ try {
             const L = 0.2126 * buf[4 * k] + 0.7152 * buf[4 * k + 1] + 0.0722 * buf[4 * k + 2];
             s[reg[k]] += L; n[reg[k]]++;
           }
-          out.mean.push(s.map((x, i) => x / Math.max(1, n[i])));
+          out.mean.push([...s.map((x, i) => x / Math.max(1, n[i])), (s[1] + s[2] + s[3]) / Math.max(1, n[1] + n[2] + n[3])]);
           const sm = new Uint8Array(w4 * h4);
           for (let y = 0; y < h4; y++) for (let x = 0; x < w4; x++) {
             const k = (y * S) * W + x * S;
@@ -243,10 +248,10 @@ try {
       const st = rec.strobe.map((x) => x >= 0.5);
       const segs = [];
       for (let i = 1; i < st.length; i++) if (st[i] && !st[i - 1]) { let j = i; while (j < st.length && st[j]) j++; if (i >= 3 && j < st.length) segs.push([i, j]); i = j; }
-      const regN = ["舱内", "窗内近", "窗内中", "窗内远"];
+      const regN = ["舱内", "窗内近", "窗内中", "窗内远", "整窗"];
       const jumps = regN.map(() => []);
       for (const [a, b] of segs) {
-        for (let r = 0; r < 4; r++) {
+        for (let r = 0; r < 5; r++) {
           const pre = (rec.mean[a - 1][r] + rec.mean[a - 2][r] + rec.mean[a - 3][r]) / 3;
           let mx = -1e9; for (let i = a; i < b; i++) mx = Math.max(mx, rec.mean[i][r]);
           jumps[r].push(mx - pre);
@@ -269,7 +274,7 @@ try {
       };
       results[job.name].variants[va.name] = row;
       fs.writeFileSync(path.join(outDir, `${job.name}_${va.name}_series.json`), JSON.stringify({ strobe: rec.strobe, t: rec.t, mean: rec.mean, adapt: rec.adapt }));
-      console.log(`${va.name}: 频闪段 ${row.segs}，跳变 均/最大（级）舱内 ${row.jump["舱内"]} 近 ${row.jump["窗内近"]} 中 ${row.jump["窗内中"]} 远 ${row.jump["窗内远"]}；基线 ${JSON.stringify(row.base)}；远区爆闪像素 ${(row.flashFarFrac * 100).toFixed(1)}%；近中变暗像素 ${row.darkNearMid}；非频闪闪烁像素 中远 ${flick} 近 ${flickNear}（${used} 帧）；适应 o 抬升 ${row.adaptJumpLog2} 档；帧间隔 ${row.dtMedian} ms`);
+      console.log(`${va.name}: 频闪段 ${row.segs}，跳变 均/最大（级）整窗 ${row.jump["整窗"]} 舱内 ${row.jump["舱内"]} 近 ${row.jump["窗内近"]} 中 ${row.jump["窗内中"]} 远 ${row.jump["窗内远"]}；基线 ${JSON.stringify(row.base)}；远区爆闪像素 ${(row.flashFarFrac * 100).toFixed(1)}%；近中变暗像素 ${row.darkNearMid}；非频闪闪烁像素 中远 ${flick} 近 ${flickNear}（${used} 帧）；适应 o 抬升 ${row.adaptJumpLog2} 档；帧间隔 ${row.dtMedian} ms`);
     }
     if (errors.length) console.log(`console error ${errors.length}：${errors.slice(0, 3).join(" | ")}`);
     results[job.name].errors = errors.length;
