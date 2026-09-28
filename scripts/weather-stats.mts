@@ -72,6 +72,37 @@ const SEA_PRESETS: Record<string, [number, number][]> = {
   "hnd-cts 沿途": [[36.2, 140.3], [37.8, 140.7], [39.5, 141.0], [41.1, 141.3], [42.78, 141.69]],
 };
 
+/**
+ * TW01：高耸对流云（浓积云 / 积雨云）统计的取样点。前 7 个与 research/TOWERING.md 表 1.3 同点（长江取武汉），
+ * 后面是 src/flight.ts 的海上 / 沿海预设坐标（「各预设夏季午后」断言用）
+ */
+const TW_POINTS: Record<string, [number, number]> = {
+  华南沿海: [22.3, 115],
+  华南内陆: [24.8, 113.6],
+  南海中部: [15, 115],
+  东海: [29, 125],
+  冲绳: [26.2, 127.7],
+  长江: [30.6, 114.3],
+  关东: [35.8, 139.6],
+  "scs 预设": [18.0, 115.0],
+  "wpac 预设": [30.0, 139.8],
+  "ecs 预设": [31.2, 126.0],
+  "yangtze 预设": [29.55, 115.9],
+};
+/** TW01 的「午后」：当地 11 / 13 / 15 / 17 时（与 TOWERING 表 1.3 同口径） */
+const TW_HOURS = [11, 13, 15, 17];
+/**
+ * 雷暴日对照的测站：香港天文台总部、那霸。雷暴日平年值（1991–2020，日 / 月）：
+ *   [HKO雷暴] 香港 1 月 0.23、7 月 7.97、8 月 8.90（年 42.27）https://www.hko.gov.hk/en/cis/normal/1991_2020/normals.htm
+ *   [JMA那霸] 那霸 1 月 0.3、7 月 2.7、8 月 3.5（年 20.4）https://www.data.jma.go.jp/stats/etrn/view/nml_sfc_ym.php?prec_no=91&block_no=47936
+ */
+const THUNDER_STATIONS: Record<string, { at: [number, number]; jan: number; julAug: number }> = {
+  香港: { at: [22.3, 114.17], jan: 0.23, julAug: 7.97 + 8.9 },
+  那霸: { at: [26.21, 127.68], jan: 0.3, julAug: 2.7 + 3.5 },
+};
+/** 「听到雷」的距离：离单体边缘 20 km 内。[教科书] 雷声一般能传 15–25 km，取中间 */
+const THUNDER_HEAR_KM = 20;
+
 type Tally = { n: number; reg: Record<CloudRegime, number>; storm: number; stormN: number };
 const empty = (): Tally => ({ n: 0, reg: { clear: 0, cumulus: 0, towering: 0, stratocumulus: 0, altocumulus: 0, cirrus: 0 }, storm: 0, stormN: 0 });
 const pct = (a: number, n: number) => (n ? (100 * a) / n : 0);
@@ -167,6 +198,84 @@ function runSeed(seed: number) {
     };
   }
 
+  /**
+   * TW01：高耸对流云。每个点、给定月份的 1–28 日 × years × 当地 hours 时：
+   *   tower = 头顶云型为浓积云（sample().regime === "towering"）的比例；cb150 / cb280 / cb400 = 该半径内有活跃雷暴系统的比例；
+   *   sys / cells = 400 km 内系统数、单体数的均值（cellsMax 最大）；tops = 400 km 内单体砧顶（km）的全部样本
+   */
+  function toweringPoint(lat: number, lon: number, months: number[], hours = TW_HOURS) {
+    let n = 0, tower = 0, cb150 = 0, cb280 = 0, cb400 = 0, sys = 0, cells = 0, cellsMax = 0;
+    const tops: number[] = [];
+    for (const y of years)
+      for (const m of months)
+        for (let d = 1; d <= 28; d++)
+          for (const h of hours) {
+            const t = Date.UTC(y, m - 1, d) + (h - lon / 15) * H;
+            n++;
+            if (field.sample(lat, lon, t).regime === "towering") tower++;
+            const near = field.stormsNear(lat, lon, t, 400);
+            if (near.length) cb400++;
+            let c = 0, in280 = false, in150 = false;
+            for (const s of near) {
+              const dd = gc(lat, lon, s.lat, s.lon);
+              if (dd <= 280) in280 = true;
+              if (dd <= 150) in150 = true;
+              c += s.cells.length;
+              for (const cell of s.cells) tops.push(cell.top);
+            }
+            if (in280) cb280++;
+            if (in150) cb150++;
+            sys += near.length;
+            cells += c;
+            cellsMax = Math.max(cellsMax, c);
+          }
+    tops.sort((a, b) => a - b);
+    const q = (p: number) => (tops.length ? tops[Math.min(tops.length - 1, Math.floor(p * tops.length))] : NaN);
+    return {
+      n, tower: pct(tower, n), cb150: pct(cb150, n), cb280: pct(cb280, n), cb400: pct(cb400, n),
+      sys: sys / n, cells: cells / n, cellsMax, top50: q(0.5), top10: q(0.1), top90: q(0.9),
+    };
+  }
+  /**
+   * 模型里的「雷暴日」：某月 1–28 日里，当地 0–23 时逐时检查，只要有一个单体离测站 ≤ 单体半径 + THUNDER_HEAR_KM 就算这一天「听到雷」。
+   * 用来和测站的雷暴日平年值（单站、目视 / 听觉口径）直接对照。返回每天的比例（%）
+   */
+  function thunderDayPct(lat: number, lon: number, months: number[]) {
+    let n = 0, hit = 0;
+    for (const y of years)
+      for (const m of months)
+        for (let d = 1; d <= 28; d++) {
+          n++;
+          const day0 = Date.UTC(y, m - 1, d) - (lon / 15) * H;
+          let heard = false;
+          for (let h = 0; h < 24 && !heard; h++)
+            for (const s of field.stormsNear(lat, lon, day0 + h * H, 80)) {
+              if (s.cells.some((c) => gc(lat, lon, c.lat, c.lon) <= c.radius + THUNDER_HEAR_KM)) {
+                heard = true;
+                break;
+              }
+            }
+          if (heard) hit++;
+        }
+    return pct(hit, n);
+  }
+  function toweringStats() {
+    const summer: Record<string, ReturnType<typeof toweringPoint>> = {};
+    const at15: Record<string, ReturnType<typeof toweringPoint>> = {};
+    for (const [name, [la, lo]] of Object.entries(TW_POINTS)) {
+      summer[name] = toweringPoint(la, lo, [7, 8]);
+      at15[name] = toweringPoint(la, lo, [7, 8], [15]);
+    }
+    const jan: Record<string, ReturnType<typeof toweringPoint>> = {};
+    for (const name of ["冲绳", "南海中部", "华南沿海"]) jan[name] = toweringPoint(TW_POINTS[name][0], TW_POINTS[name][1], [1]);
+    // 日变化：华南内陆 7–8 月，当地 5 时与 15 时的浓积云比例（陆上对流午后强、清晨弱）
+    const [la, lo] = TW_POINTS["华南内陆"];
+    const inland5 = toweringPoint(la, lo, [7, 8], [5]);
+    const thunder: Record<string, { jan: number; julAug: number }> = {};
+    for (const [name, st] of Object.entries(THUNDER_STATIONS)) thunder[name] = { jan: thunderDayPct(st.at[0], st.at[1], [1]), julAug: thunderDayPct(st.at[0], st.at[1], [7, 8]) };
+    return { summer, at15, jan, inland5, thunder };
+  }
+
   // ---------- 统计 ----------
   const t0 = performance.now();
   const table: Record<string, Record<number, Tally>> = {};
@@ -192,6 +301,7 @@ function runSeed(seed: number) {
     hbFront = (a.band * 12 + b.band * 10) / 22;
   }
   const ty = only.has("ty") ? typhoonStats() : null;
+  const tw = only.has("towering") ? toweringStats() : null;
   // 改前的 weather.ts 没有风场：记一条失败的断言（而不是崩溃），这样「改前必须失败」可以直接用同一个脚本验
   const hasWind = typeof (field as { wind?: unknown }).wind === "function";
   const wind = only.has("wind") && hasWind ? windStats() : null;
@@ -380,6 +490,16 @@ function runSeed(seed: number) {
       console.log(`平年值：1–12 月 0.3 0.3 0.3 0.6 1.0 1.7 3.7 5.7 5.0 3.4 2.2 1.0`);
       console.log(`7–9 月 600 km 内有台风的时间比例：${Object.entries(ty.near).map(([c, v]) => `${c} ${v.toFixed(1)}%`).join("，")}\n`);
     }
+    if (tw) {
+      console.log("## 高耸对流云（TW01）：7–8 月、当地 11 / 13 / 15 / 17 时\n");
+      console.log("| 地点 | 头顶浓积云 % | 150 km 内有雷暴 % | 280 km 内 % | 400 km 内 % | 15 时 400 km 内 % | 400 km 内系统数均值 | 400 km 内单体 均值 / 最大 | 砧顶 中位（p10–p90）km |");
+      console.log("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+      for (const [name, s] of Object.entries(tw.summer))
+        console.log(`| ${name} | ${f0(s.tower)} | ${f0(s.cb150)} | ${f0(s.cb280)} | ${f0(s.cb400)} | ${f0(tw.at15[name].cb400)} | ${s.sys.toFixed(2)} | ${s.cells.toFixed(2)} / ${s.cellsMax} | ${s.top50.toFixed(1)}（${s.top10.toFixed(1)}–${s.top90.toFixed(1)}） |`);
+      console.log(`\n1 月（同口径）：${Object.entries(tw.jan).map(([k, s]) => `${k} 浓积云 ${f0(s.tower)}%、400 km 内雷暴 ${f0(s.cb400)}%`).join("；")}`);
+      console.log(`雷暴日（模型：单体边缘 ${THUNDER_HEAR_KM} km 内，逐时；% 天）：${Object.entries(tw.thunder).map(([k, v]) => `${k} 1 月 ${v.jan.toFixed(1)}（平年 ${((100 * THUNDER_STATIONS[k].jan) / 31).toFixed(1)}）、7–8 月 ${v.julAug.toFixed(1)}（平年 ${((100 * THUNDER_STATIONS[k].julAug) / 62).toFixed(1)}）`).join("；")}`);
+      console.log(`华南内陆 7–8 月 5 时浓积云 ${f0(tw.inland5.tower)}%（对照午后 ${f0(tw.summer["华南内陆"].tower)}%）\n`);
+    }
     if (wind) {
       const w = wind;
       console.log("## 风场（WX11a）\n");
@@ -511,7 +631,7 @@ function runSeed(seed: number) {
     check("风 海面 骏河湾 7 月中位 m/s", fj.med, fj.med >= 2.0, "≥ 2.0", "[JMA平年] 石廊崎（伊豆半岛南端、开阔岬角）7 月 4.3；预设点按陆地粗糙度（陆地比例高），取一半作下限 [估算]");
     check("风 海面 hnd-cts 沿途 7 月中位 m/s", hc.med, hc.med >= 2.0, "≥ 2.0", "[JMA平年] 銚子 7 月 5.3（开阔海岸）；航线大半在陆上（z₀ 大），取测站的四成作下限 [估算]");
   }
-  return { seed, checks, elapsed, table, frontM, ty, wind };
+  return { seed, checks, elapsed, table, frontM, ty, wind, tw };
 }
 
 // ---------- 与种子无关的确定性断言 ----------

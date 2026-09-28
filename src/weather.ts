@@ -700,12 +700,54 @@ export class WeatherField {
     // WX10：副热带洋面的深对流季节性很强（冬季几乎没有，1 月冲绳以东原来 15 时有 21% 的雷暴）；只有 12°N 以南的深热带常年都有
     const deepTrop = smooth(20, 12, Math.abs(lat));
     const seaSeason = 0.08 + 0.92 * summer + (0.47 - 0.47 * summer) * deepTrop;
-    const base = land
-      ? (0.12 + 0.88 * circ(15, 3.2)) * (0.3 + 0.7 * summer) * (0.35 + 0.65 * trop)
-      : (0.3 + 0.25 * circ(5, 4)) * (0.35 + 0.65 * trop) * seaSeason;
+    const landBase = (0.12 + 0.88 * circ(15, 3.2)) * (0.3 + 0.7 * summer) * (0.35 + 0.65 * trop);
+    const sh = this.subtropicalHigh(lat, lon, t);
+    let base: number;
+    if (land) base = landBase;
+    else {
+      base = (0.3 + 0.25 * circ(5, 4)) * (0.35 + 0.65 * trop) * seaSeason;
+      // TW01：夏季暖洋面的深对流。改前海上对流潜势只有陆地午后的一半，7–8 月南海 / 东海 / 冲绳午后「头顶浓积云」全是 0%，
+      // 400 km 内有雷暴的时间只有 15–30%（research/TOWERING.md 表 1.3）；而西太暖池里浓积云占降水性对流云的一半以上
+      // [气候，Johnson et al. 1999, J. Climate 12:2397]，那霸 7–8 月平均每月 3 个雷暴日、香港 8–9 个 [气候，JMA / HKO 1991–2020 平年值]。
+      //   · 季风槽：南海—菲律宾海的夏季风区（约 5–22°N），洋面对流全天都有、清晨略强 [气候，TRMM 统计的海上清晨峰]；
+      //   · 副热带暖洋面（26–33°N 以南、盛夏海温 ≥ 28 °C）：比季风槽弱，副高控制时被压住（见下面的 sh）。
+      // 两项的量级都是 [估算]，按 weather-stats 的雷暴日对照（香港 / 那霸）与「海上夏季午后浓积云」断言定
+      const mon = this.monsoonTrough(lat, lon, t);
+      const warm = this.warmOcean(lat, lon, t);
+      base += (0.42 * mon + 0.3 * warm) * (0.8 + 0.2 * circ(5, 5)) * (1 - 0.6 * sh);
+      // 沿海：陆上午后的对流（海风辐合带在岸上几十公里内）从近海看就在窗外；按周围约 90 km 内的陆地比例混入陆地的日变化 [估算]
+      const coast = this.nearbyLand(lat, lon);
+      base = base * (1 - coast) + Math.max(base, landBase) * coast;
+    }
     const n = fbm(lon / 3.5, lat / 3.5, t / H / 8, this.seed + 11);
     // 副高下沉区压制对流
-    return clamp01(base * (0.35 + 1.3 * n) * (1 - 0.3 * this.subtropicalHigh(lat, lon, t)));
+    return clamp01(base * (0.35 + 1.3 * n) * (1 - 0.3 * sh));
+  }
+
+  /**
+   * 夏季风槽 0..1（TW01）：6–9 月南海—菲律宾海 5–22°N、105–155°E 的季风区（西南季风与东风信风的辐合带，洋面深对流最多的地方）。
+   * 这里没有信风逆温，信风积云让给季风对流。范围与季节是 [教科书] 的定性结论，边界的平滑宽度是 [估算]
+   */
+  monsoonTrough(lat: number, lon: number, t: number) {
+    const s = smooth(0.6, 0.9, this.summer(t, lat));
+    if (s <= 0) return 0;
+    // 季风的活跃期 / 中断期（季节内振荡，一轮约 30–60 天 [教科书]）：几千公里、两三周的尺度上时强时弱，不是整个夏天一样
+    const phase = 0.3 + 0.9 * rank(vnoise(lon / 40, lat / 25, t / H / 24 / 12, this.seed + 81));
+    return clamp01(s * phase) * smooth(24, 19, lat) * smooth(2, 6, lat) * smooth(100, 106, lon) * smooth(162, 150, lon);
+  }
+
+  /**
+   * 盛夏副热带暖洋面 0..1（TW01）：7–9 月 33°N 以南（黑潮、东海南部、冲绳—菲律宾海北部，盛夏海温 ≥ 28 °C [教科书]），季风槽里的部分不重复算。
+   * 季节与纬度边界是 [估算]
+   */
+  warmOcean(lat: number, lon: number, t: number) {
+    return smooth(0.7, 0.95, this.summer(t, lat)) * smooth(33, 26, lat) * (1 - this.monsoonTrough(lat, lon, t));
+  }
+
+  /** 周围约 90 km 内的陆地比例 0..1（中心 + 上下左右各 0.8°，五点平均 landFraction）。海上的点离岸远近 */
+  nearbyLand(lat: number, lon: number) {
+    const d = 0.8;
+    return (this.landFraction(lat, lon) + this.landFraction(lat + d, lon) + this.landFraction(lat - d, lon) + this.landFraction(lat, lon + d) + this.landFraction(lat, lon - d)) / 5;
   }
 
   /** 锋面带此刻在经度 lon 处的中心纬度与季节活跃度（按 FRONT_SCHEDULE，东北—西南走向，沿经度和时间起伏） */
@@ -992,7 +1034,8 @@ export class WeatherField {
     const conv = this.convection(lat, lon, t, isLand);
     const fr = this.front(lat, lon, t);
     const front = fr.strength;
-    const trade = isLand ? 0 : smooth(28, 18, lat) * smooth(2, 8, lat);
+    // TW01：夏季风槽里吹的是西南季风、没有信风逆温，信风积云的加分让给季风对流
+    const trade = isLand ? 0 : smooth(28, 18, lat) * smooth(2, 8, lat) * (1 - 0.75 * this.monsoonTrough(lat, lon, t));
     // WX10 气候态项：副高（晴空 / 信风积云）、冬季风寒潮（雪云街 / 背风晴空）、中国东部冷季层云
     // 台风周围几百公里是外围雨带和卷云盖，不会是副高下的晴空
     const tyI = this.typhoonInfluence(lat, lon, t);
@@ -1008,7 +1051,9 @@ export class WeatherField {
       // 副高下是晴空或零散的淡积云（信风积云），所以副高同时给积云加分
       cumulus: 0.08 + 0.45 * trade + 0.55 * Math.min(conv, 0.5) + 0.3 * (cl - 0.5) + 0.35 * sh + 1.2 * surge.streets + 0.3 * tyI,
       // 副高下暖洋面上午后也会长出零星浓积云（盖在信风逆温下的对流），[估算]
-      towering: -0.2 + 1.05 * conv + 0.15 * trade * conv + 0.3 * sh * Math.max(0, nMid - 0.4),
+      // TW01：盛夏暖洋面上，副高边缘的信风逆温弱，对流稍强的地方就冲出几座浓积云塔（冲绳 7–8 月平均每月 3 个雷暴日 [JMA那霸]，
+      // 浓积云比积雨云常见得多 [气候，Johnson 1999 的三峰分布]）；系数 [估算]，按「海上夏季午后浓积云」断言定
+      towering: -0.2 + 1.05 * conv + 0.15 * trade * conv + 0.3 * sh * Math.max(0, nMid - 0.4) + (isLand ? 0 : 0.4 * this.warmOcean(lat, lon, t) * conv),
       stratocumulus: -0.15 + 0.95 * front * (fr.north ? 0.55 : 1) + 0.9 * Math.max(0, cl - 0.5) * (isLand ? 0.5 : 1) + 0.25 * cool - 0.2 * sh + 1.0 * ecs,
       altocumulus: -0.25 + 0.9 * front * (fr.north ? 1 : 0.4) + 0.8 * Math.max(0, nMid - 0.5) - 0.2 * sh,
       // 副高下的高云：远处对流吹来的砧残留 / 高空冷涡带来的卷云，夏季洋面常见 [估算]
@@ -1063,8 +1108,23 @@ export class WeatherField {
     return out;
   }
 
-  /** 某个格子—窗口里有没有雷暴系统；有就返回它的静态描述（出生点、出生时刻、寿命、漂移、单体排布） */
+  /**
+   * stormSeed 的结果只和 (i, j, k, seed) 有关，缓存起来（TW01）：stormsNear 每次要扫几百个格子—窗口，
+   * 导演每 300 模拟秒、统计脚本逐时取样都在重复算同一批（出生概率要算对流、锋面，出生了还要算一次风廓线）
+   */
+  private readonly stormSeedCache = new Map<string, ReturnType<WeatherField["stormSeedRaw"]>>();
   private stormSeed(i: number, j: number, k: number) {
+    const key = `${i},${j},${k}`;
+    const hit = this.stormSeedCache.get(key);
+    if (hit !== undefined) return hit;
+    const v = this.stormSeedRaw(i, j, k);
+    if (this.stormSeedCache.size > 50000) this.stormSeedCache.clear();
+    this.stormSeedCache.set(key, v);
+    return v;
+  }
+
+  /** 某个格子—窗口里有没有雷暴系统；有就返回它的静态描述（出生点、出生时刻、寿命、漂移、单体排布） */
+  private stormSeedRaw(i: number, j: number, k: number) {
     const s = this.seed + 101;
     const r0 = hash(i, j, k, s);
     const lat = (j + hash(i, j, k, s + 1)) * STORM_CELL_DEG;
@@ -1089,19 +1149,29 @@ export class WeatherField {
     const cap = Math.min(1, STORM_MAX_DRIFT_KMH / Math.max(windSpeed(dv), 1e-6));
     const ve = dv.u * cap, vn = dv.v * cap;
     const trop = smooth(40, 20, Math.abs(lat));
-    const cells: { dx: number; dz: number; radius: number; top: number }[] = [];
+    // TW01：砧顶跟着对流层顶走。改前 11.2–14.4 km 只随纬度变；热带 / 盛夏副热带的对流层顶约 16 km
+    // [气候，Johnson et al. 1999 的 COARE 稳定层]，砧在对流层顶下方铺开，上冲云顶再高出约 1 km（着色器的 STORM_OVERSHOOT）。
+    // 对流层顶：西风急流轴以南是热带对流层顶（约 16.5 km），以北降到约 11.5 km（中纬度），急流轴随月份南北移（JET_LAT，[Zhang06]）[教科书]；
+    // 砧顶比对流层顶低 3 km（热带）到 4 km（中纬度、对流弱），再加 0–1.8 km 的个体差异 [估算]。华南 / 南海盛夏中位约 14.4 km、p90 约 15 km
+    const jet = monthly(dayOfYear(tBirth), JET_LAT);
+    const tropopause = 11.5 + 5 * smooth(jet + 3, jet - 5, lat);
+    const anvilBase = tropopause - 3 - (1 - trop);
+    // 飑线（TW01）：单体数 3–4、间距 10–22 km 按系统随机（改前固定 4 个、间距 16 km，并排时像一排等距的桌腿，TOWERING §2.2 第 2 条）
+    const sqN = kind === "squall" ? n - (hash(i, j, k, s + 12) < 0.4 ? 1 : 0) : n;
+    const sqGap = 10 + 12 * hash(i, j, k, s + 13);
     const axis = hash(i, j, k, s + 8) * Math.PI;
-    for (let c = 0; c < n; c++) {
+    const cells: { dx: number; dz: number; radius: number; top: number }[] = [];
+    for (let c = 0; c < sqN; c++) {
       const u = hash(i, j, k, s + 20 + c);
       const v = hash(i, j, k, s + 40 + c);
-      // 飑线：一排、间距约 16 km；团簇：半径 15 km 内散开
-      const along = kind === "squall" ? (c - 1.5) * 16 + (u - 0.5) * 4 : kind === "cluster" ? (u - 0.5) * 30 : 0;
-      const across = kind === "squall" ? (v - 0.5) * 6 : kind === "cluster" ? (v - 0.5) * 22 : 0;
+      // 飑线：一排、间距 sqGap，每个单体沿线再错开 ±30%；团簇：半径 15 km 内散开
+      const along = kind === "squall" ? (c - (sqN - 1) / 2) * sqGap + (u - 0.5) * 0.6 * sqGap : kind === "cluster" ? (u - 0.5) * 30 : 0;
+      const across = kind === "squall" ? (v - 0.5) * 8 : kind === "cluster" ? (v - 0.5) * 22 : 0;
       cells.push({
         dx: Math.cos(axis) * along - Math.sin(axis) * across,
         dz: Math.sin(axis) * along + Math.cos(axis) * across,
         radius: 4 + 2.5 * hash(i, j, k, s + 60 + c),
-        top: 11.2 + 1.6 * trop + 1.6 * hash(i, j, k, s + 80 + c),
+        top: anvilBase + 1.8 * hash(i, j, k, s + 80 + c),
       });
     }
     return { id: `s${i}_${j}_${k}`, lat, lon, tBirth, life, ve, vn, kind, cells };
