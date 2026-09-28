@@ -263,8 +263,12 @@ export class Director {
     if (this.active) this.weather.onJump();
   }
 
-  /** 开启 / 关闭连续航程 */
-  setActive(on: boolean) {
+  /** 开启 / 关闭连续航程。
+   *  jump（VOY-DEFAULT）：页面载入时默认开启用 true——还没有「当前画面」可言，按跳变处理（与换预设同一条路）：
+   *  天气直接对齐天气场，首屏就是天气场的云；机头直接对准第一段航线（默认的西太平洋起点向南飞，前方没有机场，
+   *  接入的第一段在西北方，不对准的话首屏就是一个 140° 的大坡度转弯，要转两三分钟）。
+   *  用户中途勾选开启时 false：从面板当前的云接着渐变、照常转弯，不跳 */
+  setActive(on: boolean, jump = false) {
     this.active = on;
     this.cabinNight = null;
     if (!on) {
@@ -275,6 +279,15 @@ export class Director {
     }
     if (!this.leg) this.joinNetwork();
     this.phase = this.host.state.altitudeKm < (this.leg?.cruiseKm ?? 10) - 0.2 ? "climb" : "cruise";
+    if (!jump) return;
+    this.weather.onJump();
+    const s = this.host.state;
+    if (this.ap.mode === "route" && s.preset.dest) {
+      const [lat, lon] = this.host.geo();
+      s.heading = greatCircleBearing(lat, lon, s.preset.dest[0], s.preset.dest[1]);
+      s.bankDeg = 0;
+      this.prevHeading = s.heading; // 跳变不算进转弯率遥测
+    }
   }
 
   /** 从当前位置（非航线预设）接入航线网：朝机头前方的机场飞 */

@@ -346,8 +346,10 @@ function setupVoyageUi(director: Director) {
     if (!director.backdrop) body.classList.remove("backdrop-idle");
   }
 
-  voyageBox.addEventListener("change", () => {
+  voyageBox.addEventListener("change", (e) => {
     director.setActive(voyageBox.checked);
+    // 只记用户亲手点的（isTrusted）：回归 / 测量脚本 dispatchEvent 出来的切换不写，免得共享浏览器里把用户的选择改掉
+    if (e.isTrusted) saveVoyagePref(voyageBox.checked);
     sync();
   });
   rateBtns.forEach((b) =>
@@ -382,8 +384,48 @@ function setupVoyageUi(director: Director) {
   });
   hint.hidden = false;
   sync();
+  voyageSync = sync;
   // 调试 / 测试脚本用
   (window as unknown as { __voyageUi?: unknown }).__voyageUi = { setBackdrop, sync };
+}
+
+// ---------- 连续航程默认开启（VOY-DEFAULT） ----------
+
+/** 用户上次手动开 / 关连续航程的选择（"1" / "0"）；没选过就按默认开启 */
+const VOYAGE_PREF_KEY = "voyage.continuousJourney";
+let voyageSync: (() => void) | null = null;
+
+function saveVoyagePref(on: boolean) {
+  try {
+    globalThis.localStorage?.setItem(VOYAGE_PREF_KEY, on ? "1" : "0");
+  } catch {
+    // 隐私模式等拿不到 localStorage：不记，下次载入按默认开启
+  }
+}
+
+/**
+ * 页面载入时连续航程开不开：URL `?voyage=1 / 0`（也认 on / off、true / false；同名参数给了多个时以最后一个为准，
+ * 测量工具默认带 voyage=0、`--query "&voyage=1"` 可以覆盖）> 用户上次手动的选择（localStorage）> 默认开启。
+ * URL 强制的这一次不写 localStorage。
+ */
+export function initialVoyageOn(): boolean {
+  const all = new URLSearchParams(globalThis.location?.search ?? "").getAll("voyage");
+  const q = all.length ? all[all.length - 1].toLowerCase() : "";
+  if (["1", "on", "true"].includes(q)) return true;
+  if (["0", "off", "false"].includes(q)) return false;
+  try {
+    if (globalThis.localStorage?.getItem(VOYAGE_PREF_KEY) === "0") return false;
+  } catch {
+    // 拿不到 localStorage：按默认开启
+  }
+  return true;
+}
+
+/** main.ts 在首次 setPreset 之后调用：按 initialVoyageOn() 开启连续航程（天气直接对齐天气场），面板开关跟上 */
+export function startVoyageByDefault(director: Director) {
+  if (!initialVoyageOn()) return;
+  director.setActive(true, true);
+  voyageSync?.();
 }
 
 // ---------- 航向控制（T49） ----------

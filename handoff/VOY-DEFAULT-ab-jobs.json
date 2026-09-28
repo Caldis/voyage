@@ -1,0 +1,6 @@
+[
+  { "name": "default", "scene": { "name": "default", "p": {} }, "variants": [{ "name": "a" }, { "name": "b" }] },
+  { "name": "noon-cumulus", "scene": "noon-cumulus", "variants": [{ "name": "a" }, { "name": "b" }] },
+  { "name": "sea-sc", "scene": "sea-sc", "variants": [{ "name": "a" }, { "name": "b" }] },
+  { "name": "fuji-day", "scene": "fuji-day", "variants": [{ "name": "a" }, { "name": "b" }] }
+]
