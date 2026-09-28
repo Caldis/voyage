@@ -4,8 +4,8 @@
   "patch": {
    "clouds.marchMat": [
     [
-     "        pL = p - rd * (min(0.3 * stepLen, 4.0 / kv) * smoothstep(1.0, 3.0, sigL) * (1.0 - uCloudImmersion));\n",
-     "        pL = p;\n"
+     "        odCut = min(0.4 * stepLen * kv, 2.0) * smoothstep(1.0, 3.0, sigL);\n",
+     ""
     ]
    ]
   },
@@ -15,40 +15,6 @@
  },
  {
   "name": "cur",
-  "uniforms": {
-   "clouds.marchMat.uniforms.uCloudImmersion.value": 0.997
-  }
- },
- {
-  "name": "cur2",
-  "uniforms": {
-   "clouds.marchMat.uniforms.uCloudImmersion.value": 0.997
-  }
- },
- {
-  "name": "zero",
-  "patch": {
-   "clouds.marchMat": [
-    [
-     "        pL = p - rd * (min(0.3 * stepLen, 4.0 / kv) * smoothstep(1.0, 3.0, sigL) * (1.0 - uCloudImmersion));\n",
-     "        pL = p - rd * (min(0.3 * stepLen, 4.0 / kv) * smoothstep(1.0, 3.0, sigL) * 0.0);\n"
-    ]
-   ]
-  },
-  "uniforms": {
-   "clouds.marchMat.uniforms.uCloudImmersion.value": 0.997
-  }
- },
- {
-  "name": "noimm",
-  "patch": {
-   "clouds.marchMat": [
-    [
-     "        pL = p - rd * (min(0.3 * stepLen, 4.0 / kv) * smoothstep(1.0, 3.0, sigL) * (1.0 - uCloudImmersion));\n",
-     "        pL = p - rd * (min(0.3 * stepLen, 4.0 / kv) * smoothstep(1.0, 3.0, sigL));\n"
-    ]
-   ]
-  },
   "uniforms": {
    "clouds.marchMat.uniforms.uCloudImmersion.value": 0.997
   }

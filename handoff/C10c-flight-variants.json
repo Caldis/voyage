@@ -4,16 +4,13 @@
   "patch": {
    "clouds.marchMat": [
     [
-     "        pL = p - rd * (min(0.3 * stepLen, 4.0 / kv) * smoothstep(1.0, 3.0, sigL) * (1.0 - uCloudImmersion));\n",
-     "        pL = p;\n"
+     "        odCut = min(0.4 * stepLen * kv, 2.0) * smoothstep(1.0, 3.0, sigL);\n",
+     ""
     ]
    ]
   }
  },
  {
   "name": "cur"
- },
- {
-  "name": "cur2"
  }
 ]
