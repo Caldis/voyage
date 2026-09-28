@@ -7,6 +7,7 @@ import { LIGHTS_COMMON } from "../render/lights.glsl";
 import { VIEW_COMMON } from "../render/view.glsl";
 import { createWonderCloudUniforms, wonderCloudGlsl, wonderMarchGlsl } from "../wonders/wonder-cloud.glsl";
 import { CLOUD_COMMON, CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES, OCC_LAYERS, OCC_N, OCC_SPACING } from "./clouds.glsl";
+import { LENTICULAR_GLSL } from "./lenticular.glsl";
 import type { CloudNoise } from "./noise";
 import { BLUE_NOISE_RG8_BASE64, BLUE_NOISE_SIZE } from "./blue-noise";
 
@@ -42,6 +43,9 @@ ${VIEW_COMMON}
 #endif
 ${CLOUD_COMMON}
 ${LIGHTS_COMMON}
+#ifdef CLOUD_LENTICULAR
+${LENTICULAR_GLSL}
+#endif
 #ifdef WONDER_LAYER
 ${wonderMarchGlsl()}
 uniform sampler2D uWonderSurf;   // 奇观 pass 的结果（WONDER_SURF_FRAG）：rgb 预乘辐亮度，a = floor(tW·8) + 不透明度·0.998
@@ -232,6 +236,12 @@ const vec3 CLOUD_MS_TAIL = vec3(0.2, 2.0, 1.0);
 // 雷暴 / 台风塔身（天气宏里 stormW）也退回 1（塔身另有尾巴与表面细化的标定）。见 handoff/C-FLAT.md
 const float CLOUD_MS_STEEP = 2.0;
 
+#ifdef CLOUD_LENTICULAR
+// 笠云 / 吊し雲变体（SPEC-FUJI）：main 里的主采样与展开的受光步进改取「普通云 + 透镜云」（见 lenticular.glsl.ts），
+// 用宏替换而不改调用处的文本：默认程序预处理后与改动前逐字相同
+#define cloudDensity cloudDensityLens
+#define layerDensity layerDensityLens
+#endif
 void main() {
   // 深度写进深度附件（单输出，见文件头）。写了 gl_FragDepth 的程序每条路径都要写，否则深度未定义
   gl_FragDepth = 1.0;
@@ -245,7 +255,12 @@ void main() {
   bool wonderOn = uWonderVol > 0.5;
   if ((!anyWeather && !wonderOn) || paneDistance(uHead, rdC) > 0.02) return;
 #else
+#ifdef CLOUD_LENTICULAR
+  // 笠云 / 吊し雲不看普通云的云量：晴空里也会有（山地波只要一层湿的稳定层）
+  if ((!anyWeather && uLens.w < 0.5) || paneDistance(uHead, rdC) > 0.02) return;
+#else
   if (!anyWeather || paneDistance(uHead, rdC) > 0.02) return;
+#endif
 #endif
   vec3 rd = uCabinToWorld * rdC;
   vec3 ro = vec3(0.0, uCamR, 0.0);
@@ -276,7 +291,15 @@ void main() {
 #else
   vec2 seg = cloudShellInterval(ro, rd);
   seg.y = min(seg.y, AERIAL_MAX_DISTANCE);
+#ifdef CLOUD_LENTICULAR
+  // 透镜云的包围盒区间（和普通云 / 天气的区间分开算，最后合并；中间的空隙整段跳过，见循环开头）
+  vec2 lensSeg = lensRayInterval(ro, rd);
+  bool lensHere = lensSeg.y > lensSeg.x;
+  if (!anyWeather) seg = vec2(1.0, 0.0);
+  if (seg.y <= seg.x && !lensHere) return;
+#else
   if (seg.y <= seg.x) return;
+#endif
 #ifdef CLOUD_WEATHER
   // 这条视线够不着雷暴 / 台风：整条按普通云走（T33）。uWeatherCull = 0 时关掉（对照用）
   bvec2 nearW = uWeatherCull > 0.5 ? cloudRayNearWeather(rd, seg) : bvec2(cloudStormsOn() || cloudHurOn(), cloudHurOn());
@@ -309,12 +332,31 @@ void main() {
   vec3 shQ = vec3(0.0);
   vec2 shSeg = wonderCasterSegment(rd, shQ);
 #else
+#ifdef CLOUD_LENTICULAR
+  if (!nearW.x) {
+    seg = uCoverage <= 0.0 ? vec2(1.0, 0.0) : cloudShellIntervalH(ro, rd, uCloudBottom, uCloudTop);
+    seg.y = min(seg.y, AERIAL_MAX_DISTANCE);
+  }
+  // 合并两段区间。不相交时中间是一段确定没有云的空隙（lensGap），步进到那里直接跳过去：
+  // 透镜云常在几十到一百多公里外，从相机空步走过去要几百步（近处 60 m 一步），会用完 384 步的上限
+  vec2 lensGap = vec2(1e9, -1e9);
+  if (lensHere) {
+    if (seg.y <= seg.x) seg = lensSeg;
+    else {
+      if (lensSeg.x > seg.y) lensGap = vec2(seg.y, lensSeg.x);
+      else if (seg.x > lensSeg.y) lensGap = vec2(lensSeg.y, seg.x);
+      seg = vec2(min(seg.x, lensSeg.x), max(seg.y, lensSeg.y));
+    }
+  }
+  if (seg.y <= seg.x) return;
+#else
   if (!nearW.x) {
     if (uCoverage <= 0.0) return;
     seg = cloudShellIntervalH(ro, rd, uCloudBottom, uCloudTop);
     seg.y = min(seg.y, AERIAL_MAX_DISTANCE);
     if (seg.y <= seg.x) return;
   }
+#endif
 #endif
 
   // 直射主光源：白天是太阳，夜里是月亮（月光照亮云海）
@@ -390,6 +432,9 @@ void main() {
 #else
     if (t >= seg.y || T < 0.005 || i >= 384) break;
 #endif
+#ifdef CLOUD_LENTICULAR
+    if (t > lensGap.x && t < lensGap.y) t = lensGap.y;
+#endif
     // 步长随距离变长：近处 60 m，远处 2 km
     float dtBase = clamp(t * 0.008, 0.06, 2.0);
     // 这一步代表的区间长度：空白处走 2 倍步长。抖动必须覆盖整个区间——旧版只抖动 dt、却走 2dt，
@@ -435,6 +480,11 @@ void main() {
     //    64 帧只走 0.09 圈），单独当一维序列时分层也与 φ 相当（0.7549 在 TAA 的约 8 帧窗口里只落在约 4 个值上，闪烁偏低频）
     gDetailRnd = fract(bn.y + uFrame * 0.41421356 + float(i) * 0.6180339);
     float dens = cloudDensity(p, lod, t < 150.0);
+#ifdef CLOUD_LENTICULAR
+    // 受光步进（layerDensityLens）会覆盖这两个全局量，先存下来
+    bool lensHit = gLensW > 0.5;
+    float lensH01 = gLensH01;
+#endif
 #ifdef CLOUD_WEATHER
     float stormW = gStormW;
     float stormAO = gStormAO;
@@ -637,6 +687,10 @@ void main() {
                                : clamp((r - BOTTOM - uCloudBottom) / max(uCloudTop - uCloudBottom, 1e-3), 0.0, 1.0);
 #else
       float h01 = clamp((r - BOTTOM - uCloudBottom) / max(uCloudTop - uCloudBottom, 1e-3), 0.0, 1.0);
+#endif
+#ifdef CLOUD_LENTICULAR
+      // 透镜云按它自己那片盘的高度归一（盘底暗、盘顶亮）；盘只有几百米厚，底面仍看得到大半个天，h01 从 0.3 起（不像厚云层底那样压到 12%）
+      if (lensHit) h01 = 0.3 + 0.7 * lensH01;
 #endif
       vec3 eSky = skyIrradiance(r, up);
       float ambFloor = 0.12;
@@ -1112,6 +1166,11 @@ export function createCloudUniforms(noise: CloudNoise) {
     uCloudShadowCenter: { value: new THREE.Vector3(0, 0, 0) },
     // 云缓冲右半（深度）这一帧写了没有（PERF-11）：Clouds.render 每帧设，窗外程序的 cloudBufferDepth 读
     uCloudDepthOn: { value: 0 },
+    // 笠云 / 吊し雲（SPEC-FUJI）：只有 CLOUD_LENTICULAR 变体声明这几个 uniform，含义见 lenticular.glsl.ts；由 weather.ts 的 WeatherSystem 写
+    uLens: { value: new THREE.Vector4(0, 0, 3.776, 0) },
+    uLensWind: { value: new THREE.Vector4(1, 0, 10, 0) },
+    uLensCap: { value: new THREE.Vector4(0, 4.0, 1, 0) },
+    uLensChain: { value: new THREE.Vector4(0, 0, 5.2, 0) },
   };
 }
 export type CloudUniforms = ReturnType<typeof createCloudUniforms>;
@@ -1202,6 +1261,8 @@ type VariantState = "idle" | "compiling" | "ready" | "failed";
 const MARCH_FEATURES = [
   { id: "W", define: "WONDER_LAYER", weight: 2 },
   { id: "C", define: "CLOUD_CIRRUS", weight: 1 },
+  // 笠云 / 吊し雲（SPEC-FUJI，lenticular.glsl.ts）：只在富士山附近条件满足时出现，和奇观层不同时要（wantedKey）
+  { id: "L", define: "CLOUD_LENTICULAR", weight: 3 },
   { id: "S", define: "CLOUD_STORM", weight: 4 },
   { id: "T", define: "CLOUD_TYPHOON", weight: 8 },
 ] as const;
@@ -1525,7 +1586,9 @@ export class Clouds {
     const wonder = this.wonderState === "ready" && this.marchMat.uniforms.uWonderVol.value > 0.5;
     const cirrus = u.uCloudType.value < 0.2;
     const w = this.weatherKey() + extra;
-    return (wonder ? "WC" : cirrus ? "C" : "") + (w.includes("S") ? "S" : "") + (w.includes("T") ? "T" : "");
+    // 笠云 / 吊し雲（SPEC-FUJI）：奇观层在场时不画（两者都是罕见的「天上的大东西」，不做 W × L 组合，免得变体再翻倍）
+    const lens = !wonder && (u.uLens?.value.w ?? 0) > 0.5;
+    return (wonder ? "WC" : cirrus ? "C" : "") + (lens ? "L" : "") + (w.includes("S") ? "S" : "") + (w.includes("T") ? "T" : "");
   }
 
   /** 天气小程序（占据网格、云影图 / 探针天气版）这一帧用不用：只在步进实际画的变体带雷暴 / 台风时用，三者始终一致 */

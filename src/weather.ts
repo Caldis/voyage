@@ -23,7 +23,41 @@ export const WEATHER_PRESETS: WeatherPreset[] = [
   { id: "typhoon-bands", name: "台风外围螺旋雨带" },
   { id: "typhoon-eye", name: "台风眼内（体育场效应）" },
   { id: "typhoon-outer", name: "台风外围（在卷云盖外缘下俯看雨带）" },
+  { id: "fuji-cap", name: "富士山笠云 + 吊し雲（演示，需在富士山附近）" },
 ];
+
+/** 富士山剣ヶ峰（国土地理院：北纬 35°21′38″、东经 138°43′39″，标高 3775.6 m） */
+export const FUJI_SUMMIT = { lat: 35.3606, lon: 138.7275, km: 3.776 } as const;
+
+/**
+ * 笠云 / 吊し雲的一次「过程」（SPEC-FUJI）：固定在山上（本地公里坐标），风向在一次过程里不变。
+ * cap / chain 是此刻的强度（0..1，生消时盘从中心长大 / 缩回，由导演按模拟时间推进）
+ */
+export interface Lenticular {
+  id: string;
+  /** 山顶的本地坐标（km，x 东 z 南） */
+  x: number;
+  z: number;
+  summitKm: number;
+  /** 下风方向（本地坐标单位向量） */
+  windX: number;
+  windZ: number;
+  /** 山顶高度的风速（m/s）：气流穿过云的速度（表面细纹流过去的快慢） */
+  speed: number;
+  /** 山地波波长（km） */
+  wavelengthKm: number;
+  cap: number;
+  chain: number;
+  /** 笠云叠盘片数 1..3 */
+  capLayers: number;
+  /** 笠云主盘中心海拔（km） */
+  capKm: number;
+  /** 吊し雲个数 0..5、基准海拔（km） */
+  chainCount: number;
+  chainKm: number;
+  /** 形态随机数 0..1（每次过程不同） */
+  seed: number;
+}
 
 export interface Storm {
   /** 天气场放进来的单体带 id（「系统 id#序号」，T19b）；面板预设放的没有 id */
@@ -47,6 +81,12 @@ const MAX_BOLT_POINTS = 16;
 export class WeatherSystem {
   storms: Storm[] = [];
   hurricane: { id?: string; x: number; z: number; eye: number } | null = null;
+  /** 富士山笠云 / 吊し雲（SPEC-FUJI）：null = 没有 */
+  lenticular: Lenticular | null = null;
+  /** 气流穿过透镜云的累计位移（km，按真实时间推进；冻结时 dt = 0 不动） */
+  private lensFlowKm = 0;
+  /** 经纬度 → 本地坐标（km）。导演（WeatherDirector）构造时挂上；面板「富士山笠云（演示）」预设要用 */
+  toLocal: ((lat: number, lon: number) => [number, number]) | null = null;
   private strokes: Stroke[] = [];
   private flashPos = new THREE.Vector3();
   private flashEnd = new THREE.Vector3();
@@ -83,7 +123,31 @@ export class WeatherSystem {
     if (id === "typhoon-eye") this.hurricane = { ...at(0, 12), eye: 20 };
     // 外围：离中心约 220 km，卷云盖外缘只剩一层薄卷云，下面是一条条弯向中心的雨带
     if (id === "typhoon-outer") this.hurricane = { ...at(30, 220), eye: 20 };
+    // 富士山笠云 + 吊し雲（SPEC-FUJI 演示）：固定在真实山顶上，典型的西南西风（Kusaka et al. 2025：笠云 / 吊し雲多在西南西风时出现）。
+    // 不在富士山附近时照样摆在山顶（远处看不见）；toLocal 没挂上（导演还没建）时不摆
+    this.lenticular = id === "fuji-cap" && this.toLocal ? lenticularDemo(this.toLocal(FUJI_SUMMIT.lat, FUJI_SUMMIT.lon)) : null;
     this.syncUniforms();
+  }
+
+  /** 放置 / 移除笠云 / 吊し雲（SPEC-FUJI）。强度的推进由调用方（导演）每帧写 cap / chain 后调 syncLens() */
+  setLenticular(l: Lenticular | null) {
+    this.lenticular = l;
+    this.syncUniforms();
+  }
+
+  /** 只同步透镜云的 uniform（导演每帧推进强度时用，不重算外壳） */
+  syncLens() {
+    const u = this.u;
+    const l = this.lenticular;
+    if (!u.uLens) return;
+    if (!l || (l.cap <= 0 && l.chain <= 0)) {
+      u.uLens.value.w = 0;
+      return;
+    }
+    u.uLens.value.set(l.x, l.z, l.summitKm, 1);
+    u.uLensWind.value.set(l.windX, l.windZ, l.wavelengthKm, this.lensFlowKm);
+    u.uLensCap.value.set(Math.min(Math.max(l.cap, 0), 1), l.capKm, l.capLayers, l.seed);
+    u.uLensChain.value.set(Math.min(Math.max(l.chain, 0), 1), l.chainCount, l.chainKm, (l.seed * 7.31) % 1);
   }
 
   /** 同一时刻最多几个雷暴单体（uStorms 的长度） */
@@ -120,6 +184,10 @@ export class WeatherSystem {
       this.hurricane.x -= dx;
       this.hurricane.z -= dz;
     }
+    if (this.lenticular) {
+      this.lenticular.x -= dx;
+      this.lenticular.z -= dz;
+    }
     for (const b of this.bolt) {
       b.x -= dx;
       b.z -= dz;
@@ -137,6 +205,7 @@ export class WeatherSystem {
     this.storms.forEach((s, i) => u.uStorms.value[i].set(s.x, s.z, s.radius, s.top));
     if (this.hurricane) u.uHurricane.value.set(this.hurricane.x, this.hurricane.z, this.hurricane.eye, 1);
     else u.uHurricane.value.w = 0;
+    this.syncLens();
     this.updateShell();
   }
 
@@ -160,6 +229,11 @@ export class WeatherSystem {
 
   update(dt: number) {
     this.time += dt;
+    if (this.lenticular) {
+      // 空气以山顶风速穿过透镜云（云不动，表面细纹顺风流过）；按纹理顺风方向的平铺周期（9 km，lensFlow）的整数倍取模，无缝，且浮点精度不随时间变差
+      this.lensFlowKm = (this.lensFlowKm + (this.lenticular.speed * dt) / 1000) % 630;
+      if (this.u.uLensWind) this.u.uLensWind.value.w = this.lensFlowKm;
+    }
     if (this.hold) {
       this.u.uFlash.value.set(this.flashPos.x, this.flashPos.y, this.flashPos.z, this.heldIntensity);
       this.u.uFlashB.value.copy(this.flashEnd);
@@ -628,6 +702,75 @@ export const windFromDeg = (w: Wind) => (((Math.atan2(-w.u, -w.v) / D2R) % 360) 
 /** 换到场景本地坐标（x 东、z 南），m/s */
 export const windToLocal = (w: Wind) => ({ x: w.u, z: -w.v });
 
+// ---------- 富士山笠云 / 吊し雲（SPEC-FUJI）----------
+/**
+ * 山地波的浮力频率 N（s⁻¹）：稳定的对流层中层约 0.01–0.012 [教科书：Durran 2003, Lee waves and mountain waves]。
+ * 背风波波长 λ ≈ 2πU / N（U 是山顶高度的风速）：U = 15–25 m/s 时约 9–14 km，落在 METEOROLOGY.md W15 的 5–25 km 里
+ */
+const LENS_N = 0.011;
+/** 条件分 → 出现的标定系数（handoff/SPEC-FUJI-stats.mts 按河口湖测候所的出现频度标定：笠云约 10%、吊し雲约 3% 的时刻） */
+const LENS_K_CAP = 0.55;
+const LENS_K_CHAIN = 0.2;
+export const mountainWavelengthKm = (speed: number) => Math.min(Math.max((2 * Math.PI * speed) / LENS_N / 1000, 5), 25);
+/** 笠云 / 吊し雲最常见的风向（气象来向，度）：西南西，大致垂直于富士山的长轴 [Kusaka et al. 2025, Weather, doi:10.1002/wea.7774] */
+export const LENS_BEST_FROM_DEG = 247.5;
+
+/** 天气场给的一处一刻的笠云 / 吊し雲条件（WeatherField.orographic） */
+export interface OrographicSample {
+  /** 0..1：此刻有没有笠云 / 吊し雲（过了抽签门槛的软值，导演 > 0.5 当作「有」） */
+  cap: number;
+  chain: number;
+  /** 山顶高度（3.8 km）的风速 m/s、来向（度） */
+  speed: number;
+  fromDeg: number;
+  /** 山顶到 6 km 的风速差（m/s）：吊し雲偏好竖直切变小的时候 [Kusaka 2025] */
+  shear: number;
+  wavelengthKm: number;
+  /** 各项因子（调试 / 统计用） */
+  fSpeed: number;
+  fDir: number;
+  moist: number;
+  stable: number;
+  score: number;
+}
+
+/** 由条件和山顶本地坐标拼一次过程；seed 决定这次的形态（叠几片、吊し雲的位置大小） */
+export function lenticularFrom(o: { speed: number; fromDeg: number; wavelengthKm: number }, xz: [number, number], seed: number, strength = { cap: 1, chain: 1 }): Lenticular {
+  const to = ((o.fromDeg + 180) * Math.PI) / 180;
+  const h = (k: number) => {
+    const v = Math.sin((seed + 1) * 12.9898 * (k + 1) + k * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  return {
+    id: `lens-${Math.floor(seed * 1e6)}`,
+    x: xz[0],
+    z: xz[1],
+    summitKm: FUJI_SUMMIT.km,
+    windX: Math.sin(to),
+    windZ: -Math.cos(to),
+    speed: o.speed,
+    wavelengthKm: o.wavelengthKm,
+    cap: strength.cap,
+    chain: strength.chain,
+    // 一片（接地笠）最常见，二重笠次之，三重笠少见 [Kusaka 2025 的主型是接地笠；比例是 [估算]]
+    capLayers: h(1) < 0.55 ? 1 : h(1) < 0.87 ? 2 : 3,
+    // 主盘中心在山顶上方 0.15–0.35 km：主盘下表面比中心低 0.55–0.7 km，山顶包在云里（接地笠）
+    capKm: FUJI_SUMMIT.km + 0.15 + 0.2 * h(2),
+    // 2–5 个；吊し雲的湿层比笠云「略高」[Kusaka 2025]：基准 4.8–6.0 km [估算]
+    chainCount: 2 + Math.floor(h(3) * 3.99),
+    chainKm: 4.8 + 1.2 * h(4),
+    seed,
+  };
+}
+
+/** 演示用（面板预设「富士山笠云」、?fujiCap=1）：典型的西南西 20 m/s，二重笠 + 4 个吊し雲 */
+export function lenticularDemo(xz: [number, number], seed = 0.37): Lenticular {
+  const l = lenticularFrom({ speed: 20, fromDeg: LENS_BEST_FROM_DEG, wavelengthKm: mountainWavelengthKm(20) }, xz, seed);
+  l.capLayers = 2;
+  l.chainCount = 4;
+  return l;
+}
+
 /**
  * 风廓线在高度 altKm 处的风（纯算术，约几十纳秒，可以每帧调用；wind() 本身才贵，应当按天气场取样的节奏缓存 profile）。
  *   · ≤ 10 m：返回 sfc（10 m 风）；
@@ -1017,6 +1160,46 @@ export class WeatherField {
   /** 便捷：一处一刻、某高度（km）的风。要反复查同一处时先 wind() 再 windAt(profile, 高度)，别重复算整条廓线 */
   windAt(lat: number, lon: number, t: number, altKm: number): Wind {
     return windAt(this.wind(lat, lon, t), altKm);
+  }
+
+  /**
+   * 富士山的笠云 / 吊し雲条件（SPEC-FUJI；METEOROLOGY.md W15）。成因：稳定层结里足够强、大致垂直于山体的气流翻过孤立山峰，
+   * 激起山地波，湿层在波峰处被抬到凝结高度 [FAA AC 00-6B 山地波一章；Durran 2003]。天气场没有湿度 / 稳定度，按现有量代理：
+   *  - 风速：山顶高度（3.8 km，WX11a 的 windAt）≥ 约 15 m/s 才明显（W15），10 → 17 m/s 软门槛 [估算]；
+   *  - 风向：西南西（247.5°，垂直于富士山长轴）最多 [Kusaka et al. 2025]，孤立山峰其他方向也有、少一些（×0.3 下限 [估算]）；
+   *  - 湿：大尺度云量 cloudiness、锋面 front（低压 / 锋面接近：「笠雲がかかると雨」，出现后 24 h 内下雨的比例笠云 72%、吊し雲 82%，
+   *    河口湖测候所 1933–52 年 [富士山NET〈富士山と気象〉山頂にかかる雲]）、暖季水汽多 [Kusaka 2025：笠云 / 吊し雲夏季最多]；
+   *  - 稳定：对流潜势强时山地波被对流打乱（积云 / 雷暴天气里没有光滑的荚状云）[教科书]；
+   *  - 早晨多 [Kusaka 2025]：当地 7 时峰值 ±40% [估算]；
+   *  - 吊し雲另要竖直风切变小 [Kusaka 2025]：山顶到 6 km 风速差 6 → 16 m/s 渐减 [估算]。
+   * 过程的有无按「条件分 × 标定系数 − 5 小时尺度的抽签」：出现时间比例标定到河口湖测候所 20 年观测的量级——
+   * 笠云月平均 6.1 回、吊し雲 2.0 回（每天两次观测，约 60 次 / 月 → 约 10% / 3% 的观测时刻）[富士山NET，同上]；标定见 handoff/SPEC-FUJI.md。
+   * 同样的 (t, seed) 永远给出同样的结果
+   */
+  orographic(t: number): OrographicSample {
+    const { lat, lon, km } = FUJI_SUMMIT;
+    const prof = this.wind(lat, lon, t);
+    const w = windAt(prof, km + 0.05);
+    const w6 = windAt(prof, 6.0);
+    const speed = windSpeed(w);
+    const fromDeg = windFromDeg(w);
+    const shear = Math.hypot(w6.u - w.u, w6.v - w.v);
+    const s = this.sample(lat, lon, t, true);
+    const summer = this.summer(t, lat);
+    const fSpeed = smooth(8, 16, speed);
+    const dAng = Math.abs(((fromDeg - LENS_BEST_FROM_DEG + 540) % 360) - 180);
+    const fDir = 0.3 + 0.7 * Math.max(0, Math.cos(dAng * D2R)) ** 1.5;
+    const moist = clamp01(0.05 + 0.6 * summer + 0.7 * (s.cloudiness - 0.35) + 0.6 * s.front);
+    const stable = 1 - smooth(0.45, 0.85, s.convection);
+    const hourLocal = (((t / H + lon / 15) % 24) + 24) % 24;
+    const morning = 1 + 0.4 * Math.cos((2 * Math.PI * (hourLocal - 7)) / 24);
+    const score = fSpeed * fDir * moist * stable * morning;
+    const hours = t / H;
+    const dCap = rank(vnoise(hours / 3, 0.37, 0.71, this.seed + 301));
+    const dChain = rank(vnoise(hours / 3, 1.93, 0.29, this.seed + 302));
+    const cap = smooth(0, 0.08, LENS_K_CAP * score - dCap);
+    const chain = smooth(0, 0.08, LENS_K_CHAIN * score * (1 - smooth(6, 16, shear)) - dChain);
+    return { cap, chain, speed, fromDeg, shear, wavelengthKm: mountainWavelengthKm(speed), fSpeed, fDir, moist, stable, score };
   }
 
   /** 取样一处的云层。land 省略时按粗略海陆分布 */
