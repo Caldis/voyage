@@ -5,6 +5,14 @@
 状态：**完成，待审查**。归属文件（`index.html` / `src/ui.ts` / `src/style.css`）改动已做完，typecheck / build / check:glsl
 全部通过，40 个回归场景 `panel` 字段与 master 逐项比对零差异，UX-2 / UX-1a / FOCUS-ZOOM / REFLECT-OFF 行为自测全部通过。
 
+**开发期间 master 前进了一波**（STROBE-CLOUD / SPEC-BOW / SEA-3 / W-EDGE 合并），已 `git merge master` 拉平
+（合并提交 `da5fe24`）。唯一的真实冲突在 `ui.ts` 的 `updateInfo`：STROBE-CLOUD 给它加了 `strobeCloudOff` 参数，
+追加一行「频闪：夜间云中自动关闭…」到 `#info`（当时 `#info` 还是普通区可见的）。手工解决时**没有简单二选一**，
+而是保留了 STROBE-CLOUD「不对用户静默」的原意：新增 `#now-line3`（常驻摘要的第三行，accent 色、不适用时
+`hidden`），`strobeCloudOff` 为真时把这行状态放在这里，继续对普通用户可见；`#info` 里的完整版本也保留
+（现在在开发者区）。合并后重新跑过 typecheck / build / check:glsl / 全部回归场景（新增 3 个 bow-* 场景，共 43 个）
+/ 面板字段合并前后对比（0 差异），确认合并没有引入问题。
+
 ## 前后对比
 
 截图：`tmp/screenshot/ux3/before/ux3-before-top.png`（master，`scrollHeight` 2681 px，面板从标题栏一路平铺到「高度」还没完）
@@ -44,7 +52,7 @@ vs `tmp/screenshot/ux3/measure11/ux3-default-1600.png`（本分支默认状态�
 | 声音开关、音量、空调、提示音、钢轨接缝 | **声音**（默认折叠，标题行本身带开关） | `sound-on` 挪进 `<summary>`；`click` 加 `stopPropagation`（否则点开关会连带把区折叠 / 展开）；summary 摘要「开 · NN%」/「关」 |
 | 画质、地面精度、真实地理数据、人眼式自动曝光、曝光补偿 | **画质**（默认折叠，summary 摘要「自动 → 高」/「高（固定）」，复用 `#quality-status` 文字去掉括号里的 GPU ms） | 纯搬家 |
 | 手动曝光（`manual-row`）、调试小地图、立即到达、召唤 + 立即召唤 + 让它退场、完整信息栏（`#info`） | **开发者区**（`#dev-section`，FOCUS-ZOOM 已建，本任务只搬家） | 标签去「（调试）」；`debug-arrive` 按钮文案「立即触发到达 / 接下一段（调试）」→「立即到达」；`minimap-on` 「调试小地图（…）」→「小地图 `<kbd>N</kbd>`」+ title |
-| 信息栏（`<pre id="info">`） | 拆两份：完整版留在 `#info`（开发者区，id 不变，`dev-browser.mjs` 的截图 JSON `info` 字段读它） + 新的「此刻」摘要 `#now-line1` / `#now-line2`（常驻，不折叠） | `updateInfo()` 内部拆分，导出签名不变，main.ts 调用点不用改 |
+| 信息栏（`<pre id="info">`） | 拆两份：完整版留在 `#info`（开发者区，id 不变，`dev-browser.mjs` 的截图 JSON `info` 字段读它） + 新的「此刻」摘要 `#now-line1` / `#now-line2` / `#now-line3`（常驻，不折叠） | `updateInfo()` 内部拆分，导出签名保持与合并后的 master 一致（`strobeCloudOff` 参数不变，main.ts 调用点不用改）；`#now-line3` 是合并 STROBE-CLOUD 时新加的，只在夜间云中自动关频闪时显示 |
 | 数据来源与许可（`.credits`） | **页脚**（默认折叠为一行） | 纯搬家 |
 
 **控件 id / 选项 value 一个没改**（唯一的 id 改动见下面「顺手修复的 bug」，不影响任何场景表用到的 id）。
