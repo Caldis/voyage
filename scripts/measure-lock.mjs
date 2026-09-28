@@ -5,20 +5,29 @@
 // 之前，先手工看一眼有没有人在测量（约定，不是强制，因为我们管不到 vite 自己的 CLI）。
 //
 // 用法：
-//   node scripts/measure-lock.mjs check            # 查一次，锁存在就打印持有者信息，退出码 0（仅提示，不阻塞）
+//   node scripts/measure-lock.mjs check            # 查一次，锁存在就打印持有者信息与排队名单，退出码 0（仅提示，不阻塞）
 //   node scripts/measure-lock.mjs wait              # 轮询等到锁释放（默认最多 20 分钟）再退出（退出码 0）
 //   node scripts/measure-lock.mjs wait --timeout 5  # 自定义超时分钟数，超时也退出码 0（不算失败，只是放弃等待）
+//   node scripts/measure-lock.mjs run [--timeout 分钟] -- <命令> [参数…]
+//                                                   # DX-26：等锁、持锁、跑命令（子进程继承锁令牌），命令结束释放；
+//                                                   # 子命令里的 ab / flight / gpu-ab / passes / cold / shader-budget 看到同一令牌不再等锁（可重入）。
+//                                                   # 自写的 handoff 脚本要持锁跑一串工具时用它，不必自己管锁
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readLock, noticeIfLocked, waitForRelease } from "./lib/measure-lock.mjs";
+import { readLock, noticeIfLocked, waitForRelease, acquireOrWait, listQueue } from "./lib/measure-lock.mjs";
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
 
 function parseArgs(argv) {
-  const out = { _: [] };
+  const out = { _: [], rest: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    if (a === "--") {
+      out.rest = argv.slice(i + 1);
+      break;
+    }
     if (a.startsWith("--")) {
       const key = a.slice(2);
       const next = argv[i + 1];
@@ -31,23 +40,42 @@ function parseArgs(argv) {
   return out;
 }
 
+function printQueue() {
+  const q = listQueue(REPO_ROOT);
+  if (q.length) console.log(`[measure-lock] 排队中 ${q.length} 个：\n` + q.map((e, i) => `  ${i + 1}. ${e.owner.split("\n")[0]}（pid ${e.pid}，等了 ${((Date.now() - e.since) / 60000).toFixed(1)} 分钟）`).join("\n"));
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const sub = args._[0] || "check";
+  const timeoutMs = args.timeout ? Number(args.timeout) * 60000 : 20 * 60 * 1000;
   if (sub === "check") {
     const lock = noticeIfLocked(REPO_ROOT, "手工查锁");
     if (!lock) console.log("[measure-lock] 没有测量锁，可以放心跑 vite 构建 / 开发命令。");
+    printQueue();
   } else if (sub === "wait") {
-    const timeoutMs = args.timeout ? Number(args.timeout) * 60000 : 20 * 60 * 1000;
     const lock = readLock(REPO_ROOT);
     if (!lock) {
       console.log("[measure-lock] 没有测量锁，无需等待。");
       return;
     }
-    const released = await waitForRelease(REPO_ROOT, { timeoutMs });
+    const released = await waitForRelease(REPO_ROOT, { timeoutMs, owner: `measure-lock.mjs wait（pid ${process.pid}）` });
     console.log(released ? "[measure-lock] 锁已释放。" : "[measure-lock] 等待超时，锁可能仍被占用，请自行判断是否继续。");
+  } else if (sub === "run") {
+    if (args.rest.length === 0) throw new Error("run 需要在 -- 之后给命令，如：node scripts/measure-lock.mjs run -- node handoff/X.mjs");
+    const owner = `measure-lock.mjs run：${args.rest.join(" ").slice(0, 120)}（pid ${process.pid}）`;
+    const release = await acquireOrWait(REPO_ROOT, owner, (s) => console.log(s), { timeoutMs });
+    let code = 1;
+    try {
+      // 令牌已在 acquireOrWait 里写进 process.env，spawnSync 默认继承环境变量
+      const r = spawnSync(args.rest[0], args.rest.slice(1), { stdio: "inherit", shell: process.platform === "win32" });
+      code = r.status ?? 1;
+    } finally {
+      release();
+    }
+    process.exit(code);
   } else {
-    console.error("用法：node scripts/measure-lock.mjs <check|wait> [--timeout 分钟数]");
+    console.error("用法：node scripts/measure-lock.mjs <check|wait|run> [--timeout 分钟数] [-- 命令 …]");
     process.exit(1);
   }
 }

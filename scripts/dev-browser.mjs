@@ -105,6 +105,7 @@ import { tryAcquire, readLock, noticeIfLocked, waitForRelease } from "./lib/meas
 import { resolveExistingDirRoot, resolveCommitRoot } from "./lib/baseline-root.mjs";
 import { collectPrograms } from "./lint-shaders.mjs";
 import { cmdAb, cmdFlight } from "./lib/ab.mjs";
+import { cmdGpuAb } from "./lib/gpu-ab.mjs";
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
@@ -392,15 +393,22 @@ async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr =
   // DX-23：EOX 地面影像瓦片跨域 / 加载失败的报错每批能刷 600+ 条（T48b / C09 审查反馈），淹没真正的错误。
   // 这类报错不进 errors，只计数（tileErrors.n，首条原文留在 tileErrors.first），结尾聚合成一行打印；
   // ab 会按每张图记 corsErrors，期间有就把那张标作废（地面可能缺瓦片）。
-  const tileErrors = { n: 0, first: null };
-  const isTileError = (t) => /eox\.at|tiles\.maps|CORS policy|net::ERR_FAILED/i.test(t);
+  const tileErrors = { n: 0, first: null, kinds: {} };
+  // DX-26：`Failed to load resource: net::ERR_CONNECTION_CLOSED` 这类报错的文本里没有 URL（W-LAMP / G08c 反馈：被当成真错误），
+  // 改为同时看 console 消息的来源 URL：外站（不是本页开发服务器）的任何 net::ERR_*，以及 EOX / 地图瓦片域名、CORS 报错，一律算瓦片 / 网络错误
+  const own = originFor(port);
+  const isTileError = (t, url) =>
+    /eox\.at|tiles\.maps|CORS policy/i.test(t) || /eox\.at|tiles\.maps/i.test(url) || (/net::ERR_[A-Z_]+/.test(t) && (!url || !url.startsWith(own)));
   if (opts.collectErrors) {
     page.on("console", (m) => {
       if (m.type() !== "error") return;
       const t = m.text();
-      if (isTileError(t)) {
+      const url = (m.location && m.location().url) || "";
+      if (isTileError(t, url)) {
         tileErrors.n++;
-        tileErrors.first ??= t.slice(0, 200);
+        const kind = (t.match(/net::ERR_[A-Z_]+/) || [/CORS policy/i.test(t) ? "CORS" : "其他"])[0];
+        tileErrors.kinds[kind] = (tileErrors.kinds[kind] || 0) + 1;
+        tileErrors.first ??= `${t.slice(0, 160)}${url ? `（${url.slice(0, 80)}）` : ""}`;
       } else errors.push({ type: "console", text: t });
     });
     page.on("pageerror", (e) => errors.push({ type: "pageerror", text: e.message }));
@@ -416,7 +424,7 @@ async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr =
 
 /** 聚合打印 EOX 瓦片报错（DX-23），没有就不打印 */
 function printTileErrors(tileErrors) {
-  if (tileErrors && tileErrors.n > 0) console.log(`[dev-browser] EOX 地面瓦片跨域 / 加载失败 ${tileErrors.n} 条（已聚合，不计入 console error；首条：${tileErrors.first}）`);
+  if (tileErrors && tileErrors.n > 0) console.log(`[dev-browser] 地面瓦片 / 外站网络错误 ${tileErrors.n} 条（已聚合，不计入 console error；分类 ${JSON.stringify(tileErrors.kinds || {})}；首条：${tileErrors.first}）`);
 }
 
 /** DX-23：画质档。自动档会在截图 / 测量期间按帧时间悄悄降档（云半分辨率），同一批截图前后不可比（T48b / C09 反馈），
@@ -1301,7 +1309,7 @@ async function main() {
   else if (sub === "cold") result = await cmdCold(args);
   else if (sub === "bench") result = await cmdBench(args);
   else if (sub === "flicker") result = await cmdFlicker(args);
-  else if (sub === "ab" || sub === "flight") {
+  else if (sub === "ab" || sub === "flight" || sub === "gpu-ab") {
     const helpers = {
       REPO_ROOT,
       openPage,
@@ -1316,10 +1324,10 @@ async function main() {
       setQualityTier,
       log: (s) => console.log(`[dev-browser ${sub}] ${s}`),
     };
-    result = sub === "ab" ? await cmdAb(args, helpers) : await cmdFlight(args, helpers);
+    result = sub === "ab" ? await cmdAb(args, helpers) : sub === "gpu-ab" ? await cmdGpuAb(args, helpers) : await cmdFlight(args, helpers);
   } else {
     console.error(
-      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker|ab|flight> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--scenes-file 路径.json] [--query '<url参数>'] [--out 路径] [--allow-flash] [--freeze] [--settle] [--pair '<js1>' --pair '<js2>' | --base-shader <端口|目录|提交>] [--baseline 端口] [--frames N] [--rounds N] [--repeat N] [--wait-quiet] [--respect-lock]",
+      "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker|ab|flight|gpu-ab> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--scenes-file 路径.json] [--query '<url参数>'] [--out 路径] [--allow-flash] [--freeze] [--settle] [--pair '<js1>' --pair '<js2>' | --base-shader <端口|目录|提交>] [--baseline 端口] [--frames N] [--rounds N] [--repeat N] [--wait-quiet] [--respect-lock]",
     );
     console.error("  check           只开页面、等启动完成、收集 console error / pageerror，有错误就非 0 退出");
     console.error("  --wait-quiet    仅 cold（DX-10）：测量前先等 CPU 占用降到 50% 以下再开始");
@@ -1338,6 +1346,13 @@ async function main() {
     console.error("                  （着色器来源 current|base|base:<材质>|file:<路径>、文本补丁、#define、uniform 覆盖、js，可一次换多个材质），");
     console.error("                  每张预热到连续两张逐字节相同、记 pending / 瓦片跨域数（有则标作废），最后打印指标表与噪声底；");
     console.error("                  job 可带 crop（测量区）、zoom、hdr（读回渲染目标逐位对照，如 hdrWing）+ hdrMask、bench（benchWing 等）、pre（js）");
+    console.error("                  DX-26：job / 变体可带 ground {开关: 值}（自动 rebuildAll + 等瓦片）；变体可带 builtin: cloud-ref|cloud-dist|cloud-steps（云诊断出口）；");
+    console.error("                  job.cloudDump（读回云缓冲，有 cloud-ref 变体时自动出「按距离分带的边宽 / 对真值 α 分档」）；");
+    console.error("                  job.live {crop, frames, record:{名:uniform 路径}, skip:'uStrobe>=0.5', regions:{名:[x,y,w,h]}, thr, frac}（解冻逐帧录全部帧 + 时间二阶差分区统计）；");
+    console.error("                  patch 可写 {re, to, flags?, optional?}（正则）");
+    console.error("  gpu-ab --jobs 路径.json [--variants 路径.json] [--base 对照端口] [--rounds 8] [--n 20] [--time clouds|frame|wing|scene]（DX-26）");
+    console.error("                  同页 GPU 计时查询、多轮 ABBA 配对：报中位 / 最小 / 离散度与对第一个变体的配对比（四分位不跨 1 才算显著）；");
+    console.error("                  核对程序真的切换了、计时区间里真的画到了被改的材质，否则直接报错（替代 passes.mjs 在负载下的变体比较）");
     console.error("  flight --jobs 路径.json [--variants 路径.json] [--modes static,reset,cruise,turn,exit,live]（DX-23）");
     console.error("                  确定性航迹重放（云的时间行为）：全冻结后手动推进云，航迹逐位可复现；对静止真值（raw 等权平均 --truth 帧）");
     console.error("                  算误差 / 等效模糊 σ（云边宽度）/ 云边梯度能量比，reset 后第 k 帧收敛，live 为解冻后页内逐帧 readPixels 的抖动");

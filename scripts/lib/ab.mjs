@@ -23,12 +23,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { DEFAULTS, SCENES, applyScene, pinGeometry } from "../scenarios.mjs";
 import { resolveRepoPath } from "./chrome.mjs";
-import { tryAcquire, waitForRelease } from "./measure-lock.mjs";
+import { acquireOrWait } from "./measure-lock.mjs";
+import { groundSettle, readGround, setGround, dumpClouds, saveCloudDump, runLive, printLive } from "./ab-live.mjs";
+import { cloudMetrics, printCloudMetrics } from "./cloud-metrics.mjs";
 
 // ---------- 小工具 ----------
-const raf = (page, n = 2) => page.evaluate((n) => new Promise((r) => { let k = 0; const f = () => (++k >= n ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }), n);
+export const raf = (page, n = 2) => page.evaluate((n) => new Promise((r) => { let k = 0; const f = () => (++k >= n ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }), n);
 
-function readJson(repoRoot, p, label) {
+export function readJson(repoRoot, p, label) {
   if (!p) throw new Error(`缺少 ${label}`);
   const abs = resolveRepoPath(repoRoot, String(p));
   if (!fs.existsSync(abs)) throw new Error(`${label} 找不到文件：${p}`);
@@ -40,7 +42,7 @@ function readJson(repoRoot, p, label) {
 }
 
 /** job.scene：场景名（scenarios.mjs 的 SCENES）或场景对象；job.offset 覆盖云偏移（多姿态） */
-function sceneOf(job) {
+export function sceneOf(job) {
   let sc = typeof job.scene === "string" ? SCENES.find((s) => s.name === job.scene) : job.scene;
   if (!sc) throw new Error(`job "${job.name}"：没有场景 "${job.scene}"（已知：${SCENES.map((s) => s.name).join(", ")}）`);
   sc = { p: {}, ...sc };
@@ -49,22 +51,14 @@ function sceneOf(job) {
   return sc;
 }
 
-/** 等测量锁并持锁（ab / flight 都是逐像素 / 时间行为测量，别人的冷编译会让预热判据和帧间隔失真） */
+/** 等测量锁并持锁（ab / flight 都是逐像素 / 时间行为测量，别人的冷编译会让预热判据和帧间隔失真）。
+ * DX-26：转给 lib/measure-lock.mjs 的 acquireOrWait——外层已持锁（同进程或带同一令牌的父进程）时不再自锁 */
 export async function acquireMeasureLock(repoRoot, owner, log) {
-  for (let i = 0; i < 100; i++) {
-    const rel = tryAcquire(repoRoot, owner);
-    if (rel) return rel;
-    const ok = await waitForRelease(repoRoot, { log });
-    if (!ok) {
-      log("测量锁等待超时，不持锁继续（结果可能受别的测量影响）");
-      return () => {};
-    }
-  }
-  return () => {};
+  return acquireOrWait(repoRoot, owner, log);
 }
 
 // ---------- 页面内：变体库（page.evaluate 只序列化函数本身，全部内联） ----------
-function installVariantLib() {
+export function installVariantLib() {
   const v = window.__voyage;
   function resolveLiveMaterial(materialPath) {
     if (materialPath === "cabinClass.current" && v.cabinClass && v.cabinClass.mats) {
@@ -119,6 +113,10 @@ function installVariantLib() {
       for (const p of uniPaths) if (!origUni.has(p)) origUni.set(p, snapVal(getPath(p)));
       return [...touched.keys()];
     },
+    /** DX-26：prepare 记下的材质对象本身（gpu-ab 核对「计时区间里真的画到了它」用） */
+    mat(p) {
+      return touched.get(p) || resolveLiveMaterial(p);
+    },
     original(p) {
       const m = touched.get(p) || resolveLiveMaterial(p);
       return origSrc.has(m) ? origSrc.get(m).src : m && m.fragmentShader;
@@ -139,9 +137,25 @@ function installVariantLib() {
       const changed = new Set();
       for (const [p, m] of touched) {
         let s = srcByPath[p] != null ? srcByPath[p] : origSrc.get(m).src;
-        for (const [a, b] of patches[p] || []) {
-          if (!s.includes(a)) throw new Error(`patch：材质 "${p}" 里找不到查找文本：${a.slice(0, 100)}`);
-          s = s.split(a).join(b);
+        for (const pr of patches[p] || []) {
+          // DX-26：补丁除 [查找, 替换]（字面、全部替换）外，还可以是 { re, flags?, to, optional? }（正则，默认 flags "g"，
+          // to 里可用 $1）；optional: true 时找不到就跳过（内置诊断变体要同时适配几代云着色器，靠它）
+          if (Array.isArray(pr)) {
+            const [a, b, optional] = pr;
+            if (!s.includes(a)) {
+              if (optional) continue;
+              throw new Error(`patch：材质 "${p}" 里找不到查找文本：${a.slice(0, 100)}`);
+            }
+            s = s.split(a).join(b);
+          } else {
+            const re = new RegExp(pr.re, pr.flags ?? "g");
+            if (!re.test(s)) {
+              if (pr.optional) continue;
+              throw new Error(`patch：材质 "${p}" 里正则没有匹配：/${pr.re}/`);
+            }
+            re.lastIndex = 0;
+            s = s.replace(re, pr.to);
+          }
         }
         const defs = defines[p] ? { ...origSrc.get(m).defines, ...defines[p] } : null;
         if (s !== m.fragmentShader || defs) {
@@ -174,13 +188,46 @@ function installVariantLib() {
       // 云的 resolve / 步进被上面那次 render 写进了历史：若碰了云材质，snap 一下让时间累积从干净的状态开始
       if ([...touched.keys()].some((p) => p.startsWith("clouds."))) v.clouds.snap();
       if (v.sceneMat && v.sceneMat.uniforms.uClouds) v.sceneMat.uniforms.uClouds.value = v.clouds.texture;
-      return { changed: [...changed], jsOut: jsOut === undefined ? null : jsOut };
+      // DX-26：每个被碰过的材质此刻绑定的 WebGLProgram 编号（three.js 的 program.id，全局自增）与原文长度——
+      // gpu-ab 拿它确认「变体之间真的换了程序」（C10 因为换错材质误报过「GPU 持平」）
+      const programs = {};
+      const hashOf = (s) => {
+        let h = 5381;
+        for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+        return (h >>> 0).toString(16);
+      };
+      for (const [p, m] of touched) programs[p] = { id: renderer.properties.get(m)?.currentProgram?.id ?? null, hash: hashOf(m.fragmentShader + "\n" + JSON.stringify(m.defines || {})) };
+      return { changed: [...changed], jsOut: jsOut === undefined ? null : jsOut, programs };
     },
   };
 }
 
+// ---------- DX-26：内置诊断变体（收编 handoff/C10b-var*.mjs 的 ref / dist / st_*） ----------
+// 变体写 "builtin": "cloud-ref"（或数组，可与自己的 patch 叠加：先套自己的 patch，再套内置的），作用在当前实际画的云步进
+// （clouds.marchMat）。补丁用正则 + optional，同时适配 master（C10：进云二分、上限 192）与 C10b 交付版（无二分、上限 384）。
+//   cloud-ref   细步真值：步长 ×1/4（lod 仍按原步长 → 同一个密度场）、步数上限 3000、关进云二分（有的话）。
+//               很贵（云步进约 ×4），只用来当 α / 边宽的参照，别拿它的截图看观感
+//   cloud-dist  深度出口：输出 L = depth·α（α = 1 − T），配 job.cloudDump 读回后 Y/α = 这条视线上云的加权深度（km）
+//   cloud-steps 步数用量：输出 R = 这条视线用掉的步数（α 通道 = 0）；cloudDump 读 raw（单帧、不经 resolve），出热图与分位数
+export const BUILTIN_VARIANTS = {
+  "cloud-ref": [
+    ["(bis > 0 || (dens > 0.002 && wasEmpty && t < 60.0))", "(bis > 0)", true],
+    { re: "for \\(int i = 0; i < (\\d{3,}); i\\+\\+\\) \\{", to: "for (int i = 0; i < 3000; i++) {" },
+    { re: "i >= \\d{3,}(\\)+) break;", to: "i >= 3000$1 break;" },
+    { re: "float dtBase = (clamp\\(t \\* [\\d.]+, [\\d.]+, [\\d.]+\\));", to: "float dtBase0 = $1; float dtBase = 0.25 * dtBase0;" },
+    { re: "log2\\(dtBase / ", to: "log2(dtBase0 / " },
+  ],
+  "cloud-dist": [["  L = L * apT + apL * (1.0 - T);", "  L = vec3(depth) * (1.0 - T);"]],
+  "cloud-steps": [
+    { re: "\\n  for \\(int i = 0; i < (\\d{3,}); i\\+\\+\\) \\{\\n", to: "\n  float iUsed = 0.0;\n  for (int i = 0; i < $1; i++) {\n    iUsed = float(i);\n" },
+    ["gl_FragColor = vec4(min(L, vec3(60000.0)), T);", "gl_FragColor = vec4(vec3(iUsed), 0.0);"],
+    { re: "if \\(wSum <= 0\\.0\\) return;", to: "if (wSum <= 0.0) { depthSum = 1.0; wSum = 1.0; }" },
+  ],
+};
+const builtinsOf = (va) => (va.builtin ? (Array.isArray(va.builtin) ? va.builtin : [va.builtin]) : []);
+
 /** Node 侧：把变体里的「来源」解析成原文（base / base:<路径> / file: / current） */
-async function resolveSources(variants, { baseSource, repoRoot }) {
+export async function resolveSources(variants, { baseSource, repoRoot }) {
   const cache = new Map();
   const out = [];
   for (const va of variants) {
@@ -201,12 +248,16 @@ async function resolveSources(variants, { baseSource, repoRoot }) {
     // patch 的键可以是逗号分隔的多个材质路径（主 + 湿窗变体共用一组补丁）
     const patches = {};
     for (const [k, pairs] of Object.entries(va.patch || {})) for (const p of k.split(",")) patches[p.trim()] = pairs;
-    out.push({ name: va.name, srcByPath, patches, defines: va.defines || {}, uniforms: va.uniforms || {}, js: va.js || null });
+    for (const b of builtinsOf(va)) {
+      if (!BUILTIN_VARIANTS[b]) throw new Error(`变体 "${va.name}"：内置变体 "${b}" 不认识（可选 ${Object.keys(BUILTIN_VARIANTS).join(" | ")}）`);
+      patches["clouds.marchMat"] = [...(patches["clouds.marchMat"] || []), ...BUILTIN_VARIANTS[b]];
+    }
+    out.push({ name: va.name, srcByPath, patches, defines: va.defines || {}, uniforms: va.uniforms || {}, js: va.js || null, builtin: builtinsOf(va), ground: va.ground || null });
   }
   return out;
 }
 
-function collectPaths(variants) {
+export function collectPaths(variants) {
   const mats = new Set();
   const unis = new Set();
   for (const va of variants) {
@@ -214,11 +265,12 @@ function collectPaths(variants) {
     for (const k of Object.keys(va.patch || {})) for (const p of k.split(",")) mats.add(p.trim());
     for (const p of Object.keys(va.defines || {})) mats.add(p);
     for (const p of Object.keys(va.uniforms || {})) unis.add(p);
+    if (builtinsOf(va).length) mats.add("clouds.marchMat");
   }
   return { mats: [...mats], unis: [...unis] };
 }
 
-function validateVariants(variants, label) {
+export function validateVariants(variants, label) {
   if (!Array.isArray(variants) || variants.length === 0) throw new Error(`${label} 应该是非空数组`);
   const names = new Set();
   for (const va of variants) {
@@ -344,15 +396,19 @@ export async function cmdAb(args, h) {
       });
       await page.evaluate((cl) => window.__voyage.freeze(true, { cloudLive: cl }), cloudLive);
       await setWingStrobe(page, 0);
-      // 冻结状态下等地面瓦片全部到位（applyScene 的 settle 有超时；钉回机位后还可能触发新瓦片），再多等 2 s 让上传落地
-      const settled = await page
-        .waitForFunction(() => !window.__voyage.ground || window.__voyage.ground.pending === 0, null, { timeout: 120000, polling: 500 })
-        .then(() => true)
-        .catch(() => false);
+      // DX-26：job.ground 简写（{ 开关: 值 }，如 G08c 的 demNightEdgeShared）：设好、rebuildAll，下面统一等瓦片
+      if (job.ground) await setGround(page, job.ground, log, "job");
+      // 冻结状态下等地面瓦片全部到位（applyScene 的 settle 有超时；钉回机位后还可能触发新瓦片）。
+      // DX-26：判据从 pending === 0 加严到 G08c-seam 的 settled（各级 valid、不在建、上传队列空），再多等 2 s 让上传落地
+      const settle = await groundSettle(page, 120000);
       await page.waitForTimeout(2000);
-      log(`${job.name}：场景就绪 ${((Date.now() - t0) / 1000).toFixed(1)} s${settled ? "" : "（等瓦片超时，pending 仍 > 0）"}`);
+      log(`${job.name}：场景就绪 ${((Date.now() - t0) / 1000).toFixed(1)} s${settle.ok ? "" : `（等瓦片超时，pending=${settle.pending}）`}`);
       const { mats, unis } = collectPaths(variants);
       await page.evaluate(({ mats, unis }) => window.__dx.prepare(mats, unis), { mats, unis });
+      // 变体级 ground：所有变体碰过的开关先记下 job 设好后的值，没写这个开关的变体按这个值（变了才 rebuildAll）
+      const groundKeys = [...new Set(resolved.flatMap((va) => Object.keys(va.ground || {})))];
+      const groundOrig = groundKeys.length ? await readGround(page, groundKeys) : null;
+      const cloudDumpOpt = job.cloudDump ? { warm: 96, frames: 16, ...(job.cloudDump === true ? {} : job.cloudDump) } : null;
 
       const jdir = path.join(outDir, job.name);
       fs.mkdirSync(jdir, { recursive: true });
@@ -363,7 +419,16 @@ export async function cmdAb(args, h) {
           const label = r === 0 ? va.name : `${va.name}#${r + 1}`;
           const e0 = errors.length;
           const te0 = tileErrors.n;
+          if (groundOrig) await setGround(page, { ...groundOrig, ...(va.ground || {}) }, log, label);
           const res = await page.evaluate((va) => window.__dx.apply(va), va);
+          // DX-26：cloudDump——换完变体先手动推进云并读回（全冻结时 rAF 不画云，这一步也让截图里的云是本变体收敛后的样子）
+          let cloud = null;
+          if (cloudDumpOpt) {
+            const d = await dumpClouds(page, { steps: va.builtin.includes("cloud-steps"), ...cloudDumpOpt });
+            const saved = await saveCloudDump(jdir, label.replace("#", "_r"), d, anaPage);
+            cloud = { kind: d.kind, W: d.W, H: d.H, marchKey: d.marchKey, steps: saved.steps || null };
+            if (saved.steps) log(`  ${job.name}/${label} 步数用量：均值 ${saved.steps.mean}、p50/p90/p99 ${saved.steps.p50}/${saved.steps.p90}/${saved.steps.p99}、最大 ${saved.steps.max}${saved.steps.cap ? `、用满上限 ${saved.steps.cap} 的 ${saved.steps.atCapPct}%` : ""}（热图 ${label.replace("#", "_r")}.steps.png）`);
+          }
           // 预热：冻结时连续两张截图逐字节相同才算稳定（换程序后前几帧可能还在切换 / 曝光合成读的是上一帧）；
           // cloud-live 时云一直在变，改成等 30 帧（DEV_SOP：cloudLive 改参要等约 30 帧）
           let buf = null;
@@ -415,12 +480,31 @@ export async function cmdAb(args, h) {
           if (rec.void) log(`  [作废] ${job.name}/${label}：这一张期间瓦片跨域失败 ${cors} 条 / pending=${meta.groundPending}，地面可能缺瓦片，不要拿它下结论`);
           if (stable === false) log(`  [警告] ${job.name}/${label}：预热 ${warmMax} 轮仍未逐字节稳定（冻结没钉住某个状态？），差异里会混进这部分噪声`);
           if (meta.quality && meta.quality.level !== "high" && !args.quality) log(`  [警告] ${job.name}/${label}：画质档是 ${meta.quality.level}（自动降档？），与别的截图不可比`);
+          rec.cloud = cloud;
+          rec.programs = res.programs;
           shots.push(rec);
           fs.writeFileSync(file.replace(/\.png$/, ".json"), JSON.stringify(rec, null, 2));
         }
       }
+      // DX-26：live 段（解冻、页内逐帧录全部帧 + 逐帧 uniform + 时间二阶差分区统计）
+      let live = null;
+      if (job.live) live = await runLive(page, job, resolved, { setWingStrobe, log, jdir, dpr });
       await page.evaluate(() => { window.__dx.restore(); window.__voyage.freeze(false); });
       await setWingStrobe(page, null);
+      if (groundOrig) await setGround(page, groundOrig, log, "复原");
+      // DX-26：云读回指标（有 cloud-ref 变体时对它算；有 cloud-dist 变体时按距离分带）
+      let cloudRes = null;
+      if (cloudDumpOpt) {
+        const refVa = resolved.find((va) => va.builtin.includes("cloud-ref"));
+        const distVa = resolved.find((va) => va.builtin.includes("cloud-dist"));
+        const plain = resolved.filter((va) => va.builtin.length === 0).map((va) => va.name);
+        if (refVa && plain.length) {
+          const names = [...plain, ...(rounds > 1 ? plain.map((n) => `${n}_r2`) : [])];
+          cloudRes = cloudMetrics(jdir, { ref: refVa.name, dist: distVa ? distVa.name : null, variants: names });
+          printCloudMetrics(cloudRes, job.name);
+        }
+      }
+      if (live) printLive(job.name, live, job.live);
 
       // 指标表：对第一个变体第 1 轮（ref）的差异 + 裁剪区测量；同一变体两轮之差 = 噪声底
       const refLabel = shots[0].label;
@@ -472,7 +556,7 @@ export async function cmdAb(args, h) {
         for (const [l, r] of Object.entries(hdrCmp)) console.log(`    ${l}: 不同像素 ${r.diffPx}，最大差 ${r.maxAbs.toExponential(3)}${r.nonMaskPx !== undefined ? `；非遮罩区 ${r.nonMaskPx} 像素中不同 ${r.nonMaskDiffPx}，最大 ${r.nonMaskMax.toExponential(3)}` : ""}`);
       }
       for (const s of shots) if (s.bench) console.log(`  ${s.label}: ${s.bench.fn}(30) 中位 ${s.bench.median} ms / 最小 ${s.bench.min} ms`);
-      summary.push({ job: job.name, scene: sc.name, crop: job.crop || null, ref: refLabel, shots, metrics, noise, hdr: hdrCmp });
+      summary.push({ job: job.name, scene: sc.name, crop: job.crop || null, ref: refLabel, shots, metrics, noise, hdr: hdrCmp, cloud: cloudRes, live });
       fs.writeFileSync(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
     }
     const tileNote = tileErrors.n ? `；EOX 瓦片跨域 / 加载失败共 ${tileErrors.n} 条（已聚合，每张图的 corsErrors 见 json）` : "";
