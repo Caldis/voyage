@@ -28,12 +28,13 @@
  *   锚塔每级退台朝相机的一圈轮廓灯（描出体量）；塔顶红灯同步慢闪。塔身灯格是开发者开关（uWonderSky.w，默认关）。
  *   白天：环站两端高强度白色频闪，从下往上依次闪（真实高塔白天白闪、夜里红闪）。
  * - 云的前后：塔在 200–260 km 外，比它远的云要排到它后面（outside-pass.ts 按 gWonderCov / gWonderT 调 cloudBeforeGround）。
- * 建木（skin 1，《淮南子·地形训》「众帝所自上下」、《山海经·海内经》「百仞无枝，上有九欘」）：
- * - 九欘：高处（55 km 以上）九根弯着往上长的枝，树冠在窗里的高处，向阳一侧被照亮。
- * - 云气缭绕：12–30 km 高处树干上挂着的三圈云环（圈间有薄雾相连），远看是横在树干上、顺风拖向一侧的云絮（真实的旗云 / 帽云：
- *   高山、高塔身边会挂云）。云的反照率高，白天是地平线上方最先被注意到的白色云絮，黄昏被染成粉橙。
- * - 萤光：树冠一带稀疏的金色光点，夜里是缓慢明灭的微光，白天偶尔有一两点被阳光照到「闪一下」（黄实）。
- * - 众帝上下：沿树干缓慢升降的暖色光团（夜里才看得见）。
+ * 建木（skin 1，《淮南子·地形训》「众帝所自上下」、《山海经》「百仞无枝，上有九欘，下有九枸」「青叶紫茎，玄华黄实」；
+ * WS05 巨构化，尺寸按种子（uWonderShape.w = −种子）在着色器里取）：
+ * - 树干：底部直径 6–8 km（一座山那样粗），近乎直线收分到树冠处 2.4–3.4 km，笔直无枝；树皮三级细节（轮廓 → 竖向深棱 → 树皮板块）。
+ * - 九枸（板根）：九片板状巨根，贴着树干处高 7–15 km、往外越来越低，在 18–40 km 外没入脚下的云海（像面上精确反解）。
+ * - 九欘：48–62 km 起分三层的瓶形巨枝，枝梢托着 8–15 km 的扁椭球叶盘（层层的古松），第九根是托起树顶的顶枝；树冠出画。
+ * - 云：脚下一圈 48 km 的云海（真实的平板求交，挡住比它远的实体部分）；8–24 km 树干上三圈云环（云气缭绕）。
+ * - 夜里：几乎是一整片剪影（遮住星空），只有叶盘里极弱的金色光点（黄实）和沿树干升降的暖色光团（众帝上下）。
  *
  * 为什么「像真的存在」而不是一道渲染划痕（研究文档 §6.1 的最大风险）：
  * - 光照是真的：太阳 / 月亮在该点的透射率（大气层内查透射率 LUT，层外按光线近地点判断地影），
@@ -129,14 +130,20 @@ vec3 wonderCap(vec3 v, vec3 bg, float capLum, out float scale) {
   scale = min(1.0, capLum / max(wonderLum(v), 1e-9));
   return max(v * scale, bg * 0.6);
 }
+// 同上，但封顶的比例按「这个部件最亮时」vRef 定、整个部件共用（WS05）：逐像素各自封顶会把受光面和背光面压成同一个亮度，
+// 暮色里被照亮的大块叶盘 / 树干就成了一片平涂的剪纸；共用一个比例，明暗关系保留
+vec3 wonderCapRef(vec3 v, vec3 vRef, vec3 bg, float capLum) {
+  return max(v * min(1.0, capLum / max(wonderLum(vRef), 1e-9)), bg * 0.6);
+}
 
 // 从轴线伸出去的一根「撑杆」（天梯的稳定缆 / 建木的枝）：在水平方位 h（垂直于轴线的单位向量）上，
 // 高度 σ ∈ [sa, sb] 处离轴线 r(σ) = rA + (rB − rA)·g(u)，u = (σ − sa)/(sb − sa)，g(u) = u + bend·u·(1 − u)
 // （bend = 0 直线；bend = 1 时根部斜着长出、梢部转成竖直，导数处处有限），半径从 thA 渐变到 thB（km）。
 // 像面上：横向 X_Q = r·(h·n̂)，纵向 = sn·(σ − k·r)（k = b·(h·rd)/sn²，h 有朝向相机的分量时看起来会偏高 / 偏低）。
-// 解出和本像素同一纵向位置的 σ（牛顿法两步），返回像素覆盖率
+// 解出和本像素同一纵向位置的 σ（牛顿法两步），返回像素覆盖率。
+// WS05：另外输出横向距离 perpO（km，按两端截住的 u 算）和没截住的 uO（建木的叶簇要知道像素离枝多远、在枝的哪一段、有没有越过枝梢）
 float wonderStrut(float X, float s, float sn, float b, vec3 nh, vec3 rd, vec3 h, float wPix,
-                  float sa, float sb, float rA, float rB, float bend, float thA, float thB) {
+                  float sa, float sb, float rA, float rB, float bend, float thA, float thB, out float perpO, out float uO) {
   float hx = dot(h, nh);
   float k = b * dot(h, rd) / (sn * sn);
   float span = sb - sa;
@@ -147,13 +154,16 @@ float wonderStrut(float X, float s, float sn, float b, vec3 nh, vec3 rd, vec3 h,
     float dr = (rB - rA) * (1.0 + bend * (1.0 - 2.0 * u)) / span;
     sig -= (sig - s - k * r) / (1.0 - k * dr);
   }
-  float u = (sig - sa) / span;
-  if (u < 0.0 || u > 1.0) return 0.0;
+  uO = (sig - sa) / span;
+  float u = clamp(uO, 0.0, 1.0);
   float r = rA + (rB - rA) * (u + bend * u * (1.0 - u));
   float dr = (rB - rA) * (1.0 + bend * (1.0 - 2.0 * u)) / span;
   float m = dr * hx / (sn * (1.0 - k * dr));
-  float perp = abs(X - r * hx) * inversesqrt(1.0 + m * m);
-  return wonderStrip(perp / wPix, mix(thA, thB, u) / wPix);
+  perpO = abs(X - r * hx) * inversesqrt(1.0 + m * m);
+  // 牛顿法没收敛（WS05：仰看时朝着 / 背着相机伸的长枝 k 很大，两步解不出来）就当没打中，
+  // 否则会在天上画出横贯窗口的假弧线；天梯的稳定缆是直线（bend = 0），一步就精确，不受影响
+  float res = abs(sig - s - k * r) * sn;
+  return (u == uO && res < 2.0 * wPix) ? wonderStrip(perpO / wPix, mix(thA, thB, u) / wPix) : 0.0;
 }
 
 // ---- WS01 天梯巨构的几何小工具（全部在像面坐标里，km）
@@ -212,6 +222,23 @@ vec3 wonderIrr(vec3 n, vec3 a, vec3 eSun, vec3 eMoon, vec3 eSkyUp, vec3 eUp) {
 // 锚塔的混凝土（反照率约 0.3，略偏暖，不做高光）
 const vec3 WONDER_CONCRETE = vec3(0.31, 0.30, 0.285);
 
+// ---- WS05 建木巨构的小工具
+// 树干半径（km）随高度：J = (r0 底部半径, rTop 树冠处半径, sCrown 第一根枝的高度, sTip 树梢)。
+// 下粗上细（(1 − u)^1.15，接近直线收分：一根笔直的巨柱，不是细杆），脚下再加一圈往外张的根颈（接进板根）；
+// 树冠以上继续收到树梢。drO 返回 dr/ds（法线往上仰多少）
+float jmTrunkR(float s, vec4 J, out float drO) {
+  float u = clamp(s / J.z, 0.0, 1.0);
+  float fl = J.x * 0.4 * exp(-max(s, 0.0) / 2.5);
+  float r = J.y + (J.x - J.y) * pow(1.0 - u, 1.15) + fl;
+  drO = -(J.x - J.y) * 1.15 * pow(max(1.0 - u, 1e-3), 0.15) / J.z - fl / 2.5;
+  if (s > J.z) {
+    float v = clamp((s - J.z) / (J.w - J.z), 0.0, 1.0);
+    r = J.y * sqrt(1.0 - v);
+    drO = -0.5 * J.y / (sqrt(max(1.0 - v, 1e-3)) * (J.w - J.z));
+  }
+  return r;
+}
+
 
 // L：线背后的背景辐亮度（天空含内散射，地面 / 海面已含空气透视）；tLimit：这条视线打到地面的距离（打不到传一个大数）
 vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
@@ -233,13 +260,20 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   bool tether = uWonderShape.z < 0.5;
   // 天梯的锚塔很粗（底半径 7–9 km）：塔的正面比轴线近一个半径，塔脚的边由锚塔自己的解析下沿（海面 h = 0）给，
   // 地面只在「明显比整座塔都近」时才挡（真实地形挡在前面）
-  float tNear = tether ? t - uWonderTower.y - 1.0 : t;
-  if (t <= 0.0 || tNear > tLimit || s < -1.5) return L;
+  // 建木（WS05）的板根伸到 18–40 km 外、脚下还有一片 50 km 的云海：各部件自己按深度和地面比，这里只挡「整棵树都在地面后面」
+  float tNear = tether ? t - uWonderTower.y - 1.0 : t - 50.0;
+  if (t <= 0.0 || tNear > tLimit || s < (tether ? -1.5 : -4.0)) return L;
 
   float pixelAngle = 2.0 * uTanHalfFov / uResolution.y;
   float wPix = t * pixelAngle;                   // 一个像素在那个距离上有多宽（km）
   // 越往上越细（天梯的缆束 150–350 km 收到一半）
-  float radius = uWonderShape.x * (tether ? mix(1.0, 0.5, smoothstep(150.0, 350.0, s)) : mix(1.0, 0.45, smoothstep(0.0, 600.0, s)));
+  // 建木（WS05）的尺寸按每次出现的种子（uWonderShape.w = −种子）取：J = 底部半径 3–4 km（直径 6–8 km，「一座山那样粗」）、
+  // 树冠处 1.2–1.7 km、第一根枝在 48–62 km、树梢再高 44–54 km（窗里只看得到树冠以下，树梢总在画外）
+  float jSeed = -uWonderShape.w;
+  vec4 J = vec4(3.0 + 1.0 * hash12(vec2(jSeed * 91.7, 1.3)), 1.2 + 0.5 * hash12(vec2(jSeed * 91.7, 2.9)), 48.0 + 14.0 * hash12(vec2(jSeed * 91.7, 4.1)), 0.0);
+  J.w = J.z + 44.0 + 10.0 * hash12(vec2(jSeed * 91.7, 5.7));
+  float jDr;
+  float radius = tether ? uWonderShape.x * mix(1.0, 0.5, smoothstep(150.0, 350.0, s)) : jmTrunkR(s, J, jDr);
   float haloPx = 5.0;
   float x = X / wPix;                            // 横向像素偏移（有符号）
   float T = uTime;
@@ -248,7 +282,7 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   vec3 e2 = cross(a, e1);
   // 可见前沿（浮现 / 退场的编排）：前沿以上是长渐变，不是硬边
   float front = uWonderShape.y;
-  float visF = (1.0 - smoothstep(0.35 * front, front, s)) * smoothstep(-1.5, 0.0, s);
+  float visF = (1.0 - smoothstep(0.35 * front, front, s)) * (tether ? smoothstep(-1.5, 0.0, s) : 1.0);
   if (visF <= 0.0) return L;
 
   // ---- 天梯：先只算几何覆盖率（锚塔、缆束、环站、稳定缆），什么都没盖到、附近也没有灯就直接返回（不查表）
@@ -345,14 +379,15 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
     if (s < H + 2.0) reach = 72.0;
     if (ringLamp >= 0.0) reach = 1e9;
   }
-  else if (s > 46.0) reach = 46.0;
-  else if (s > 9.0 && s < 34.0) reach = 40.0;
+  // 建木（WS05）：树冠（枝伸出 38–88 km、叶簇再宽几 km）、板根与脚下的云海（50 km）、树干上的云环（45 km）
+  else if (s > J.z - 12.0) reach = 96.0;
+  else if (s < 16.0) reach = 52.0;
+  else if (s < 30.0) reach = 45.0;
   if (dist > reach) return L;
 
-  // 天梯的部件都画在真实位置、只靠物理的空气透视融进霾里；建木（W01b）保留「下半截沉进霾与云海」的写法——
-  // 离地几公里以内被低空的霾层吞掉，不给看清基座（「看不到它从哪里来」）
-  float sink = tether ? 1.0 : smoothstep(0.0, 9.0, s);
-  float vis = visF * sink * sink;
+  // 部件都画在真实位置，只靠物理的空气透视融进霾里（WS05 起建木也一样：脚埋进它自己的云海和近处的真实云里，
+  // 不再用「下半截整段淡掉」的写法——那样 5–8 km 粗的树干会像悬在半空）
+  float vis = visF;
 
   // 缆束 / 树干 + 撑杆（同一种材质）。天梯的缆束里是三根子缆（绕轴线 0.55 倍半径排开），近处看得见之间的缝；
   // 缆从塔顶里伸出来，塔顶以下不画
@@ -369,7 +404,10 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   } else {
     cov = wonderStrip(x, radius / wPix);
   }
-  int nStrut = tether ? (s < H ? 6 : 0) : (s > 46.0 ? 9 : 0);
+  // 建木的九欘（枝）与叶簇：按枝在树干前 / 后分两层（前面的盖住树干，后面的被树干挡住）
+  float woodF = 0.0, woodB = 0.0, folF = 0.0, folB = 0.0;
+  vec4 folN = vec4(0.0);                         // 盖得最多的那团叶簇的法线（xyz）与覆盖率（w）
+  int nStrut = tether ? (s < H ? 6 : 0) : (s > J.z - 12.0 ? 9 : 0);
   float covS = 0.0;
   for (int i = 0; i < 9 + uLoopGuard; i++) {
     if (i >= nStrut) break;
@@ -389,18 +427,67 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       thB = 0.08;
       phi = uWonderTower.w + fi * 1.0472 + 0.5 + 0.3 * h2;
     } else {
-      // 九欘：55–125 km 高处长出来，弯着往上、往外伸 12–38 km，越往梢越细
-      sa = 55.0 + 70.0 * h1;
-      sb = sa + 35.0 + 45.0 * h2;
+      // 九欘（WS05 放大）：前八根分三层（3 + 3 + 2），层距约 16 km。枝先贴着树干往上、再往外张开（瓶形的冠，bend < 0），
+      // 梢端伸出 20–50 km（下层长、上层短，像一棵层层的松），根部粗约 1 km、梢部 0.14 km；每层方位错开再加随机（按种子）。
+      // 第九根是顶枝：顺着树干直上，托起树顶的那片叶盘（树梢藏在里面，不露出一根针尖）
+      float tier = floor(fi / 3.0);
+      float hs = hash12(vec2(jSeed * 91.7 + fi, 8.3));
+      sa = J.z + tier * 16.0 + 4.0 * (h1 - 0.5);
+      sb = sa + 15.0 + 12.0 * h2;
       rA = 0.0;
-      rB = 12.0 + 26.0 * h3;
-      bend = 1.0;
-      thA = 0.26;
-      thB = 0.04;
-      phi = fi * 0.6981 + 0.5 * h2;
+      rB = (48.0 - 10.0 * tier) * (0.72 + 0.5 * h3);
+      bend = -0.5;
+      thA = 0.25 + 0.55 * J.y;
+      thB = 0.14;
+      phi = 6.2832 * jSeed + tier * 1.05 + mod(fi, 3.0) * 2.0944 + 0.7 * (hs - 0.5);
+      if (i == 8) {
+        sa = J.w - 12.0;
+        sb = J.w + 2.0;
+        rB = 2.0 + 3.0 * h3;
+        bend = 0.0;
+        thA = 0.5 * J.y;
+      }
     }
     vec3 h = cos(phi) * e1 + sin(phi) * e2;
-    covS += wonderStrut(X, s, sn, b, nh, rd, h, wPix, sa, sb, rA, rB, bend, thA, thB);
+    float perpS, uS;
+    float cs = wonderStrut(X, s, sn, b, nh, rd, h, wPix, sa, sb, rA, rB, bend, thA, thB, perpS, uS);
+    covS += cs;
+    if (!tether) {
+      // 叶盘（青叶）：每根枝梢托着一片平展的叶盘——主盘半径 8–15 km、厚 1.5–3 km 的扁椭球，两侧各一个小一号的副盘
+      // （层层的「云盖」，像画里的古松）。扁椭球投到像面上是椭圆：横半轴 R、纵半轴 √(R²b² + T²sn²)，
+      // 从下面仰看是一片横在天上的扁椭圆、看得见底面。边缘被噪声啃过，中间按噪声透出几处天（稀疏的冠）；
+      // 法线按椭球补出来，顶面受光、底面暗，不是剪纸
+      vec3 hp = cross(a, h);
+      bool back = dot(h, rd) > 0.0;
+      float R0 = 8.0 + 7.0 * hash12(vec2(jSeed * 91.7 + fi, 41.9));
+      for (int m = 0; m < 3 + uLoopGuard; m++) {
+        float fm = float(m);
+        float hb = hash12(vec2(jSeed * 91.7 + fi * 7.0 + fm, 31.3));
+        float side = fm < 0.5 ? 0.0 : (fm < 1.5 ? 1.0 : -1.0);
+        float Rp = R0 * (m == 0 ? 1.0 : 0.5 + 0.2 * hb);
+        float Tp = 1.5 + 1.5 * hb;
+        vec3 C = a * (sb + side * (2.5 * hb - 1.5)) + h * (rB - abs(side) * 0.3 * R0) + hp * side * (0.55 + 0.25 * hb) * R0;
+        float dx = X - dot(C, nh);
+        float dy = Y - dot(C, uph);
+        float Bv = sqrt(Rp * Rp * b * b + Tp * Tp * sn * sn);
+        if (abs(dx) > 1.3 * Rp || abs(dy) > 1.3 * Bv) continue;
+        vec2 el = vec2(dx / Rp, dy / Bv);
+        float q = length(el);
+        vec2 pn = vec2(dx, dy * Rp / Bv);
+        float nq = vnoise(pn / (0.28 * Rp) + vec2(fi * 3.1, fm * 5.7));
+        float qn = 0.8 + 0.35 * nq;
+        float gq = length(vec2(el.x / Rp, el.y / Bv)) / max(q, 1e-3);
+        // 透天的空当只在外圈（中间是实的一团）：否则满盘圆洞，像一块奶酪
+        float cf = wonderTentCdf((qn - q) / max(gq * wPix, 1e-4)) * smoothstep(0.1, 0.4, nq + 1.3 * (0.8 - q));
+        if (cf > folN.w) {
+          float ez = sqrt(max(1.0 - dot(el, el), 0.0));
+          vec3 nb = el.x * nh + el.y * uph - ez * rd;
+          folN = vec4(normalize(nb + a * dot(nb, a) * (Rp / Tp - 1.0) * 0.4), cf);
+        }
+        if (back) folB += cf; else folF += cf;
+      }
+      if (back) woodB += cs; else woodF += cs;
+    }
   }
 
   // ---- 舱体 / 光团：上行、下行两条轨道，间隔不规则（有的格子空着）
@@ -585,55 +672,178 @@ ${TOWER_WINDOWS_GLSL}
     return L;
   }
 
-  // ---- 建木（W01b，WS01 没动它）
-  float c = min(cov + covS, 1.0) * vis;
-  L = mix(L, wonderCap(lFront + apT * Lt, Lbg, capLum, capScale), c);
-
-  // 光晕：被照亮的那段在空气里的一点前向散射（能量按线的覆盖宽度折算，很弱，只在暮色、夜里的暗背景上看得出）
-  float lineW = min(2.0 * radius / wPix, 1.0);
-  L += capScale * apT * direct * vis * lineW * 0.012 * exp(-x * x / (2.0 * haloPx * haloPx));
-
-  // 云气缭绕。树干上挂着三圈云（约 12–30 km，间隔不规则），每圈是绕着树干的一道云环，远看是横在树干上、
-  // 顺风往一侧拖长的云絮（像山顶的旗云），越往上越薄；圈与圈之间有一层很淡的薄雾把它们连起来。
-  // 噪声沿横向拉长（絮状），最细的起伏约 2 km（六七个像素），不会逐帧闪
-  if (s > 9.0 && s < 34.0) {
-    float kc = clamp(floor((s - 12.5) / 7.0 + 0.5), 0.0, 2.0);
-    float hc1 = hash12(vec2(kc, 61.0));
-    float hc2 = hash12(vec2(kc, 67.0));
-    float sc = 12.5 + 7.0 * kc + 2.4 * (hc1 - 0.5);
-    float xo = X - 3.0 * (hc1 - 0.4);
-    float wid = (6.0 + 6.0 * hc2 - kc) * (xo > 0.0 ? 1.8 : 0.7);
-    float th = (0.6 + 0.7 * hc2) * (0.6 + 0.8 * vnoise(vec2(X * 0.3 + kc * 9.0, 2.0)));
-    float ds = s - sc - 0.05 * X * (hc2 - 0.5) - 1.2 * (vnoise(vec2(X * 0.18 + T * 0.003, kc * 7.0)) - 0.5);
-    float nz = 0.6 * vnoise(vec2(X * 0.2 - T * 0.003, ds * 0.8 + kc * 13.0)) + 0.4 * vnoise(vec2(X * 0.5 + 3.0, ds * 1.3 + kc * 5.0));
-    // 最后一项：离轴线 28–38 km 渐隐到 0（上面 reach 在 40 km 处截断，不能留下硬边）
-    float tau = (2.6 - 0.7 * kc) * exp(-ds * ds / (th * th) - xo * xo / (wid * wid)) * smoothstep(0.15, 0.75, nz) * (1.0 - smoothstep(28.0, 38.0, dist));
-    // 薄雾：贴着树干、很淡，把几圈云连成「缭绕」
-    tau += 0.22 * exp(-X * X / 30.0) * smoothstep(10.0, 14.0, s) * (1.0 - smoothstep(24.0, 32.0, s)) * vnoise(vec2(X * 0.25, s * 0.3 - T * 0.002));
-    // 云：反照率约 0.8；朝太阳看时前向散射更亮
-    float fwd = 1.0 + 1.5 * pow(max(dot(rd, uSunDir), 0.0), 4.0);
-    vec3 Lc = 0.8 / M_PI * (eSun * 0.8 * fwd + eMoon * 0.8 + eSkyUp + 0.5 * eUp);
-    float capC;
-    L = mix(L, wonderCap(lFront + apT * Lc, Lbg, capLum, capC), (1.0 - exp(-tau)) * visF);
-  }
-  // 众帝上下：沿树干升降的暖色光团（夜里才看得见）
-  if (hasPod) lamp += vec3(1.0, 0.8, 0.5) * 40.0 * (1.0 - dayF) * wonderPoint(x, (s - sPod) * sn / wPix);
-  // 萤光（黄实）：树冠一带稀疏的金色光点，格子 2.6 km × 3.4 km，缓慢上飘；夜里明灭的微光，白天偶尔被阳光照到闪一下
-  if (s > 45.0 && s < 240.0) {
-    float sd = s - 0.004 * T;
-    vec2 cell = floor(vec2(X / 2.6, sd / 3.4));
-    vec2 hc = hash22(cell + 71.0);
-    float near = exp(-abs(cell.x * 2.6) / 14.0) * smoothstep(45.0, 70.0, s);
-    if (hc.x < 0.2 * near) {
-      vec2 pc = (cell + 0.5 + (hc - 0.5) * 0.5) * vec2(2.6, 3.4);
-      float tw = 0.5 + 0.5 * sin(T * (0.5 + hc.y) + hc.x * 40.0);
-      float spark = pow(max(sin(T * (0.3 + 0.5 * hc.y) + hc.y * 60.0), 0.0), 24.0);
-      vec3 glow = vec3(1.0, 0.78, 0.4) * (6.0 * tw * tw * (1.0 - dayF) + 6e5 * spark * dot(tS, vec3(0.333)));
-      lamp += glow * wonderPoint(x - pc.x / wPix, (sd - pc.y) * sn / wPix);
+  // ---- 建木（WS05 巨构化，《山海经·海内经》「百仞无枝，上有九欘，下有九枸」、《海内南经》「青叶紫茎，玄华黄实」）
+  // 树干：底部直径 5–8 km 的一座「山」，往上收成一根笔直的柱（百仞无枝），树冠处 1–1.8 km，树梢在画外。
+  // 九枸（板根）：九片从树干斜伸下去的板状巨根——热带大树的板根放大到山脊的尺度：贴着树干处高 7–15 km、几乎竖直，
+  // 往外越来越低平，在 18–40 km 外没入脚下的云海。在像面上是精确的：板根所在的竖直平面（含轴线和方位 h）上一点 (ρ, σ)
+  // 投到 (ρ·(h·nh), σ·sn − ρ·b·(h·rd)/sn)，是线性的，所以按本像素的横坐标直接反解 ρ、再解 σ，和板根上沿比一下就知道盖没盖住。
+  float finF = 0.0, finB = 0.0;
+  vec3 nFin = a;
+  float tObj = 1e9;                              // 本像素被盖住的最前面那个实体的深度（km，脚下的云海排前后用）
+  if (s < 16.0) {
+    float cMax = 0.0;
+    float rJ = 0.7 * J.x;
+    for (int i = 0; i < 9 + uLoopGuard; i++) {
+      float fi = float(i);
+      float g1 = hash12(vec2(jSeed * 91.7 + fi, 13.1));
+      float g2 = hash12(vec2(jSeed * 91.7 + fi, 17.9));
+      float g3 = hash12(vec2(jSeed * 91.7 + fi, 21.7));
+      float phi = 6.2832 * jSeed + fi * 0.6981 + 0.55 * (g1 - 0.5);
+      vec3 h = cos(phi) * e1 + sin(phi) * e2;
+      float hx = dot(h, nh);
+      // 正对 / 背对相机的板根在像面上缩成树干后面的一条竖缝，交给树干
+      if (abs(hx) < 0.06) continue;
+      float hrd = dot(h, rd);
+      float rho = X / hx;
+      float Lr = 18.0 + 22.0 * g2;
+      if (rho < 0.3 * rJ || rho > Lr) continue;
+      float sig = (Y + rho * b * hrd / sn) / sn;
+      float tF = t + (sig - s) * b + rho * hrd;
+      if (tF > tLimit) continue;                 // 海面挡在前面
+      float hr = 7.0 + 8.0 * g3;
+      float q = clamp((Lr - rho) / (Lr - rJ), 0.0, 1.0);
+      // 上沿的起伏（慢波，几 km 一个）：板根不是一刀切的直线
+      float bump = 1.0 + 0.12 * sin(rho * 0.9 + g2 * 20.0);
+      float z = hr * q * q * bump;
+      float dz = -2.0 * hr * q / (Lr - rJ) * bump;
+      float slope = (sn * dz - b * hrd / sn) / hx;
+      float wF = tF * pixelAngle;
+      float cf = wonderTentCdf((z - sig) * sn / wF * inversesqrt(1.0 + slope * slope)) * smoothstep(-1.0, 0.0, sig);
+      if (hrd > 0.0) finB += cf; else finF += cf;
+      if (cf > 0.5) tObj = min(tObj, tF);
+      if (cf > cMax) {
+        cMax = cf;
+        vec3 np = cross(a, h);
+        nFin = normalize((dot(np, rd) > 0.0 ? -np : np) + 0.3 * a);
+      }
     }
   }
-  // 光强（kcd）→ 相机处照度（klux）= I / 距离²（m），再除以一个像素的立体角得到辐亮度
-  L += apT * lamp * vis / (tm * tm * pixelAngle * pixelAngle);
+  if (cov > 0.5) tObj = min(tObj, t - sqrt(max(radius * radius - X * X, 0.0)) / sn);
+
+  // 树皮（紫茎）：三级细节——轮廓（几十到几百像素）→ 竖向深棱（板根往上延伸成的棱，一圈 14–22 道，绕着树干慢慢拧，
+  // 220 km 外约 5 像素一道）→ 树皮板块（2–3 像素，按像素足迹淡出成均匀的一层）。
+  // 下段偏灰绿（苔、地衣），上段偏紫褐；受光面 / 背光面按太阳方向大块分明
+  vec3 bark = uWonderAlbedo * mix(vec3(0.9, 1.06, 0.95), vec3(1.04, 0.96, 1.06), smoothstep(4.0, 22.0, s));
+  vec3 LT = vec3(0.0);
+  if (cov > 0.0) {
+    float cphi = clamp(X / radius, -1.0, 1.0);
+    float sphi = -sqrt(1.0 - cphi * cphi);
+    vec3 radial = cphi * nh + sphi * mh;
+    // 沿方位的弧长按「离正对相机那条母线多远」量（同天梯锚塔的竖肋）：视线绕树转得极慢（250 km 外每秒 0.07°，
+    // 树皮纹理每秒挪 0.02 像素），看不出纹理跟着人转；比按世界方位 atan 省一截冷编译
+    float uA = radius * acos(cphi);
+    float nFl = floor(14.0 + 9.0 * hash12(vec2(jSeed * 91.7, 7.7)));
+    float fu = wPix / max(-sphi, 0.05);          // 一个像素沿方位在树皮上跨多少 km（轮廓附近被透视压缩）
+    float flP = 6.2832 * radius / nFl;           // 棱距（km）
+    float ph = uA / flP + 0.006 * nFl * s;
+    float amp = 1.0 - smoothstep(0.2, 0.45, fu / flP);
+    float tri = abs(fract(ph) - 0.5) * 4.0 - 1.0;
+    float dAz = 0.5 * tri * amp;
+    vec3 tang = cross(a, radial);
+    vec3 nT = normalize(radial * cos(dAz) + tang * sin(dAz) - a * jDr);
+    // 棱与棱之间的沟更暗（遮蔽）；淡出时换成它的平均值，远处亮度不变
+    float ao = 1.0 - 0.3 * mix(0.5, 0.5 - 0.5 * tri, amp);
+    float fs = wPix / sn;
+    float plate = (vnoise(vec2(uA / 0.45 + 17.0 * jSeed, s / 1.7)) - 0.5) * (1.0 - smoothstep(0.35, 0.8, max(fu / 0.45, fs / 1.7)));
+    // （0.2 km 一道的细裂纹在 200 km 外按足迹积分只剩一层均匀的暗，直接折进反照率 ×0.9，不再单算）
+    LT = bark * 0.9 * (1.0 + 0.4 * plate) * ao / M_PI * wonderIrr(nT, a, eSun, eMoon, eSkyUp, eUp);
+  }
+  // 板根（16 km 以下）和叶盘（树冠里）不会出现在同一个像素上，合成一种「另一种材质」只着色一次（冷编译：少一个
+  // wonderIrr / 封顶的调用点，FXC 按调用点整份内联）。
+  // 板根：同一种树皮，法线朝相机那一面（略往上仰），整片受光或整片在阴影里——大块的明暗面。
+  // 叶盘（青叶，深的蓝绿）：按椭球法线受光（顶面亮、底面暗），叶子透光，朝太阳看时背光面也透出一点（前向散射）；
+  // 叶盘里再有一层 1–2 km 的明暗斑驳（6–10 像素，不闪）
+  float fwd = 1.0 + 1.5 * pow(max(dot(rd, uSunDir), 0.0), 4.0);
+  bool low = s < 16.0;
+  vec3 leafA = vec3(0.035, 0.06, 0.055);
+  float mott = 0.75 + 0.5 * vnoise(vec2(X / 1.3, s * sn / 1.3) + 5.0 * jSeed);
+  vec3 albO = low ? bark * vec3(0.9, 1.0, 0.9) : leafA * mott;
+  vec3 nO = low ? nFin : (folN.w > 0.0 ? folN.xyz : a);
+  vec3 LO = albO / M_PI * (wonderIrr(nO, a, eSun, eMoon, eSkyUp, eUp) + (low ? 0.0 : 0.12 * fwd) * (eSun + eMoon));
+  float oB = min(low ? finB : folB, 1.0) * vis;
+  float oF = min(low ? finF : folF, 1.0) * vis;
+  // 各部件「最亮时」的样子（正对光源），封顶比例按它定（wonderCapRef）
+  vec3 eMax = eSun * (1.0 + 0.12 * fwd) + eMoon + eSkyUp + eUp;
+
+  // 合成（从后往前）：树干后面的叶盘 / 板根、枝 → 树干 → 前面的枝、叶盘 / 板根
+  float capO;
+  vec3 Cw = wonderCap(lFront + apT * Lt, Lbg, capLum, capScale);
+  vec3 Co = wonderCapRef(lFront + apT * LO, lFront + apT * (low ? bark : leafA * 1.25) / M_PI * eMax, Lbg, capLum);
+  L = mix(L, Co, oB);
+  L = mix(L, Cw, min(woodB, 1.0) * vis);
+  L = mix(L, wonderCapRef(lFront + apT * LT, lFront + apT * bark * 1.4 / M_PI * eMax, Lbg, capLum), cov * vis);
+  L = mix(L, Cw, min(woodF, 1.0) * vis);
+  L = mix(L, Co, oF);
+  float covAll = min(max(max(cov, min(finF + finB, 1.0)), max(min(woodF + woodB, 1.0), min(folF + folB, 1.0))), 1.0);
+
+  // 云：云反照率约 0.8；朝太阳看时前向散射更亮
+  vec3 Lc = 0.8 / M_PI * (eSun * 0.8 * fwd + eMoon * 0.8 + eSkyUp + 0.5 * eUp);
+  cc = 0.0;
+  // 脚下的云海：树脚一圈 48 km 的云层（0.9–2.9 km 高），板根斜着扎进去、树干从中间穿出来。按真实的平板求交：
+  // 视线在云层里（又在 48 km 的圆柱里）的那一段，按段中点取噪声（横向 5 km、纵深 22 km 的尺度——掠射时一行像素跨几 km 纵深，
+  // 纵深方向的噪声要粗，不然逐行跳），只取实体前面的那一段挡实体
+  if (s < 16.0 && b < -1e-4) {
+    float lat2 = 2304.0 - X * X;
+    if (lat2 > 0.0) {
+      float hc = sqrt(lat2) / sn;
+      float ta = max((2.9 - e) / b, t - hc);
+      float tb = min(min((0.9 - e) / b, t + hc), tLimit);
+      if (tb > ta) {
+        vec3 pm = w0 + rd * (0.5 * (ta + tb));
+        vec3 qh = pm - a * dot(a, pm);
+        float lx = dot(qh, nh);
+        float lz = dot(qh, mh);
+        float nzz = 0.65 * vnoise(vec2(lx / 5.0 + T * 0.002, lz / 22.0 + 7.0 * jSeed)) + 0.35 * vnoise(vec2(lx / 1.8 - T * 0.003, lz / 9.0 + 3.0));
+        float den = smoothstep(48.0, 16.0, length(qh)) * smoothstep(0.28, 0.62, nzz);
+        float tau = 0.35 * den * mix(tb - ta, max(0.0, min(tb, tObj) - ta), covAll * vis);
+        cc = (1.0 - exp(-tau)) * visF;
+        L = mix(L, wonderCap(lFront + apT * Lc, Lbg, capLum, capO), cc);
+      }
+    }
+  }
+  // 云气缭绕（W01b 的三圈云环，WS05 挪到 8–24 km、按树干放大）：每圈是绕着树干的一道云环，远看是横在树干上、
+  // 顺风往一侧拖长的云絮（像山顶的旗云），最低一圈和我们差不多高——树干从云里穿出去，被切成几段，「树比云高得多」一眼就量出来了。
+  // 噪声沿横向拉长（絮状），最细的起伏约 2 km，不会逐帧闪
+  if (s > 5.0 && s < 28.0) {
+    float kc = clamp(floor((s - 9.0) / 6.5 + 0.5), 0.0, 2.0);
+    float hc1 = hash12(vec2(kc + 11.0 * jSeed, 61.0));
+    float hc2 = hash12(vec2(kc + 11.0 * jSeed, 67.0));
+    float sc = 9.0 + 6.5 * kc + 2.0 * (hc1 - 0.5);
+    float xo = X - 5.0 * (hc1 - 0.4);
+    float wid = (radius * 2.2 + 8.0 + 9.0 * hc2 - 1.5 * kc) * (xo > 0.0 ? 1.8 : 0.8);
+    float th = (0.7 + 0.8 * hc2) * (0.6 + 0.8 * vnoise(vec2(X * 0.2 + kc * 9.0, 2.0)));
+    float ds = s - sc - 0.04 * X * (hc2 - 0.5) - 1.3 * (vnoise(vec2(X * 0.12 + T * 0.003, kc * 7.0)) - 0.5);
+    float nz = 0.6 * vnoise(vec2(X * 0.14 - T * 0.003, ds * 0.8 + kc * 13.0)) + 0.4 * vnoise(vec2(X * 0.4 + 3.0, ds * 1.3 + kc * 5.0));
+    // 最后一项：离轴线 32–43 km 渐隐到 0（上面 reach 在 45 km 处截断，不能留下硬边）
+    float tau = (2.6 - 0.6 * kc) * exp(-ds * ds / (th * th) - xo * xo / (wid * wid)) * smoothstep(0.15, 0.75, nz) * (1.0 - smoothstep(32.0, 43.0, dist));
+    // 薄雾：贴着树干、很淡，把几圈云连成「缭绕」
+    tau += 0.22 * exp(-X * X / (4.0 * radius * radius + 20.0)) * smoothstep(7.0, 10.0, s) * (1.0 - smoothstep(20.0, 26.0, s)) * nz;
+    float c2 = (1.0 - exp(-tau)) * visF;
+    L = mix(L, wonderCap(lFront + apT * Lc, Lbg, capLum, capO), c2);
+    cc = max(cc, c2);
+  }
+  gWonderCov = max(covAll * vis, cc);
+  gWonderT = t;
+
+  // 众帝上下：沿树干正面缓慢升降的暖色光团（夜里才看得见，很弱）
+  if (hasPod) lamp += vec3(1.0, 0.8, 0.5) * 12.0 * (1.0 - dayF) * wonderPoint(x, (s - sPod) * sn / wPix);
+  // 黄实：叶簇里稀疏的金色光点，格子 3 km × 3.4 km，缓慢上飘；夜里是极弱的、缓慢明灭的生物光，白天偶尔被阳光照到闪一下。
+  // 只长在叶簇上（按本像素的叶簇覆盖率）
+  float folC = min(folF + folB, 1.0);
+  if (folC > 0.0) {
+    float sd = s - 0.004 * T;
+    vec2 cell = floor(vec2(X / 3.0, sd / 3.4));
+    vec2 hc = hash22(cell + 71.0 + 13.0 * jSeed);
+    if (hc.x < 0.3) {
+      vec2 pc = (cell + 0.5 + (hc - 0.5) * 0.5) * vec2(3.0, 3.4);
+      float tw = 0.5 + 0.5 * sin(T * (0.5 + hc.y) + hc.x * 40.0);
+      float spark = pow(max(sin(T * (0.3 + 0.5 * hc.y) + hc.y * 60.0), 0.0), 24.0);
+      vec3 glow = vec3(1.0, 0.78, 0.4) * (4.0 * tw * tw * (1.0 - dayF) + 4e5 * spark * dot(tS, vec3(0.333)));
+      lamp += glow * folC * wonderPoint(x - pc.x / wPix, (sd - pc.y) * sn / wPix);
+    }
+  }
+  // 光强（kcd）→ 相机处照度（klux）= I / 距离²（m），再除以一个像素的立体角得到辐亮度（云后面的光被云挡掉）
+  L += apT * lamp * vis * (1.0 - cc) / (tm * tm * pixelAngle * pixelAngle);
   return L;
 }
 `;

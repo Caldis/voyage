@@ -1,0 +1,26 @@
+[
+  {
+    "name": "jianmu-noon-live",
+    "scene": { "name": "ws-jianmu-noon", "p": { "preset": "wpac", "seat": "left", "date": "2026-09-27", "time": 780, "cabin-light": false, "wing-pos": "-4" }, "head": [0, 0.02, -0.3], "js": "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.37 }); return v.wonders.describe();" },
+    "variants": [{ "name": "cur" }, { "name": "cur2" }],
+    "live": {
+      "crop": [560, 0, 480, 600],
+      "frames": 240,
+      "regions": { "树冠": [0, 0, 480, 250], "树干": [200, 250, 80, 180], "云环": [60, 430, 360, 110], "树脚板根": [60, 540, 360, 50] },
+      "thr": 16,
+      "frac": 0.05
+    }
+  },
+  {
+    "name": "jianmu-dusk-live",
+    "scene": { "name": "ws-jianmu-dusk", "p": { "preset": "wpac", "seat": "left", "date": "2026-09-27", "time": 1078, "coverage": 0.3, "cabin-light": false, "wing-pos": "-4" }, "head": [0, 0.02, -0.3], "js": "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.37 }); return v.wonders.describe();" },
+    "variants": [{ "name": "cur" }, { "name": "cur2" }],
+    "live": {
+      "crop": [560, 0, 480, 600],
+      "frames": 240,
+      "regions": { "树冠": [0, 0, 480, 250], "树干": [200, 250, 80, 180], "云环": [60, 430, 360, 110], "树脚板根": [60, 540, 360, 50] },
+      "thr": 16,
+      "frac": 0.05
+    }
+  }
+]
