@@ -6,7 +6,7 @@ import { CABIN_SHADING_COMMON } from "./cabin-shading.glsl";
 import { LEATHER_COMMON } from "./cabin-leather.glsl";
 import { FABRIC_COMMON } from "./fabric.glsl";
 import { SEATS_COMMON } from "./seats.glsl";
-import { CABIN_REFLECT_COMMON } from "./cabin-reflect.glsl";
+import { CABIN_REFLECT_COMMON, CABIN_REFLECT_STRENGTH } from "./cabin-reflect.glsl";
 import { EXPOSURE_MODEL, EXPOSURE_MODEL_UNIFORMS, EXPOSURE_STATE } from "./exposure";
 import { VIEW_COMMON } from "./view.glsl";
 import { GROUND_LEVELS, type GroundClipmap } from "../ground/clipmap";
@@ -341,7 +341,9 @@ void main() {
   rl.pixAng = pixAng;
   float reflMax = reflGain * dot(0.3 * (rl.eAmb + 2.5 * rl.eMain + rl.moodI) + rl.lOppWin, vec3(0.2126, 0.7152, 0.0722));
   vec3 reflAdd = vec3(0.0);
-  if (rl.readOn > 0.0 || reflMax > 0.003 * dot(view, vec3(0.2126, 0.7152, 0.0722))) {
+  // REFLECT-OFF：强度 0（默认）整段跳过；调试 31 / 33 只看倒影本身，不受强度开关影响
+  if ((uReflStrength > 0.0 || uDebug == 31 || uDebug == 33)
+      && (rl.readOn > 0.0 || reflMax > 0.003 * dot(view, vec3(0.2126, 0.7152, 0.0722)))) {
     vec3 pts;
     vec3 surf = reflGain * reflWB * cabinReflection(pPane, rr, length(pPane - ro), rl, pts);
     // T34 面状倒影的硬上限（exposure.ts ⑧）：显示亮度不超过同屏舱内均值的 k 倍（睡眠 / 全关 k 使显示 Y ≤ 舱壁一半）。
@@ -366,7 +368,7 @@ void main() {
   }
   // 调试 31：窗内只留倒影（窗外置黑，量倒影本身的显示亮度）；32：关掉倒影（T34）
   if (uDebug == 31 || uDebug == 33) view = reflAdd;
-  else if (uDebug != 32) view += reflAdd;
+  else if (uDebug != 32) view += uReflStrength * reflAdd; // 强度乘在软限幅之后：整层按比例变淡（强度 1 与改前逐位一致）
   paneK = (1.0 - 0.1 * sm) * (1.0 - WATER_RIM * wat.w)
     * (1.0 - 0.6 * smoothstep(0.0011, 0.0014, dHole) * (1.0 - smoothstep(0.0016, 0.0021, dHole)));
   }
@@ -459,6 +461,7 @@ export function createSceneMaterial(atmosphere: Atmosphere, cloudUniforms: Recor
       uHdrMax: { value: 6e4 },
       uExposureState: EXPOSURE_STATE,
       ...EXPOSURE_MODEL_UNIFORMS, // T34：倒影的亮度上限要在舱内合成里按同一个曝光模型算（与曝光 pass 共用同一批 uniform 对象）
+      uReflStrength: CABIN_REFLECT_STRENGTH, // REFLECT-OFF：窗上倒影强度（面板 / URL 设，默认 0 = 关）
       uDebug: { value: 0 },
       uLoopGuard: { value: 0 },
     },
