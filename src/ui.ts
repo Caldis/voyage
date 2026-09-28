@@ -79,6 +79,8 @@ const altInput = $<HTMLInputElement>("altitude");
 const nowLine1 = $("now-line1");
 const nowLine2 = $("now-line2");
 const nowLine3 = $("now-line3");
+// UX-4：窄屏抽屉收起时唯一可见的一行摘要（#panel-handle 里），内容跟 #now-line1 同步（见 updateInfo）
+const panelPeek = $("panel-peek");
 
 export function syncTimeUi(state: VoyageState) {
   const { date, minutes } = localParts(state.simTime, state.preset.tz);
@@ -151,6 +153,8 @@ ${legLine}` : "") +
   // 摘要第一行：连续航程 / 导航一句（有的话）；没有就退回高度（窗外朝向已经在第二行，不重复）
   const navLine = legLine.split("\n")[0] ?? "";
   nowLine1.textContent = navLine || `高度 ${state.altitudeKm.toFixed(1)} km`;
+  // UX-4：窄屏抽屉收起时的「此刻」摘要，直接跟第一行同步，不重复一份逻辑
+  panelPeek.textContent = nowLine1.textContent;
   // 摘要第二行：当地时刻 · 窗外朝向 · 天气一句。只用云型 + 云量（读已渲染好的下拉文字 / 输出文字，不重复一份天气
   // 描述逻辑）——天气系统名称较长（如「无特殊天气（只有云层）」），完整名称在展开「天气」区可见，不进摘要行
   const cloudSelEl = document.getElementById("cloud-preset") as HTMLSelectElement | null;
@@ -376,6 +380,7 @@ export function setupUi(deps: UiDeps) {
   setupVehicleUi(deps.vehicle);
   setupDevSection();
   setupPanelFoldUi();
+  setupDrawerUi();
   setupQualitySummary(quality);
   setupFocusUi(deps.focus);
 
@@ -1047,6 +1052,102 @@ function setupPanelFoldUi() {
       }
     });
   }
+}
+
+// ---------- 窄屏 / 矮屏底部抽屉（UX-4，PANEL_UX_GUIDE §9） ----------
+
+/** 与 style.css 里的媒体查询同一个断点：宽 ≤ 720px 或矮屏（高 ≤ 500px）。JS 这边只用它判断「现在是不是抽屉
+ *  模式」，抽屉本身的定位 / 尺寸全部交给 CSS；这里只切换 `#panel.drawer-collapsed` 这一个类 + 记忆展开状态 */
+const DRAWER_MEDIA = "(max-width: 720px), (max-height: 500px)";
+
+/**
+ * 底部抽屉：收起（默认）时只露 `.panel-handle` 一条（把手 + 「此刻」摘要），点击整条把手或上下拖动展开 /
+ * 收起到 ≤ 70vh、内部在 `.panel-body` 里滚动。展开状态记忆走 UX-3 同一个 `voyage.pref.panel`（try/catch、
+ * 只记 `isTrusted`，与 `setupPanelFoldUi` / `setupDevSection` 共用同一个键，各自的字段互不覆盖）。
+ * 键盘：`H`（整个面板隐藏 / 显示，`setupUi` 里已绑定）与抽屉展开状态是两件事，互不影响；把手本身是原生
+ * `<button>`，Tab 能聚焦到，Enter / Space 能触发（浏览器原生行为，不用额外写键盘事件）。
+ */
+function setupDrawerUi() {
+  const panel = $("panel");
+  const handle = $<HTMLButtonElement>("panel-handle");
+  const mq = window.matchMedia(DRAWER_MEDIA);
+  const isNarrow = () => mq.matches;
+
+  function readOpen(): boolean | null {
+    try {
+      const p = JSON.parse(localStorage.getItem(PANEL_PREF_KEY) ?? "null") as { v?: number; drawer?: boolean } | null;
+      return p?.v === 1 && typeof p.drawer === "boolean" ? p.drawer : null;
+    } catch {
+      return null; // 拿不到 localStorage：按默认（收起）
+    }
+  }
+  function writeOpen(v: boolean) {
+    try {
+      const p = (JSON.parse(localStorage.getItem(PANEL_PREF_KEY) ?? "null") as Record<string, unknown> | null) ?? {};
+      localStorage.setItem(PANEL_PREF_KEY, JSON.stringify({ ...(p.v === 1 ? p : {}), v: 1, drawer: v }));
+    } catch {
+      // 只是不记忆
+    }
+  }
+
+  // 默认收起（PANEL_UX_GUIDE §9：手机首次打开不能挡舷窗中心）；记过的话按记的来
+  let open = readOpen() ?? false;
+
+  function apply() {
+    panel.classList.toggle("drawer-collapsed", isNarrow() && !open);
+    handle.setAttribute("aria-expanded", String(open));
+    handle.setAttribute("aria-label", `${open ? "收起面板" : "展开面板"}：${panelPeek.textContent ?? ""}`);
+  }
+
+  function setOpen(v: boolean, trusted: boolean) {
+    if (open === v) return;
+    open = v;
+    apply();
+    if (trusted) writeOpen(open); // 只记用户亲手的操作（isTrusted），回归 / 截图脚本不写
+  }
+
+  // 点击整条把手切换（含键盘 Enter / Space 激活 button 时浏览器合成的 click，isTrusted 为真）；
+  // 拖动结束时会把 suppressClick 置真，吞掉紧跟着的那次 click，避免拖完又被当成一次点击再切一次
+  let suppressClick = false;
+  handle.addEventListener("click", (e) => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    setOpen(!open, e.isTrusted);
+  });
+
+  // 拖动把手（pointer events，只在触屏 / 笔上处理；鼠标点一下就够，不需要拖）：上拉（dy < 0）展开、
+  // 下拉收起；轻触（位移很小）当作点击处理，交给上面的 click 兜底
+  let dragging = false;
+  let dragMoved = false;
+  let startY = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    if (!isNarrow() || e.pointerType === "mouse") return;
+    dragging = true;
+    dragMoved = false;
+    startY = e.clientY;
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    if (Math.abs(e.clientY - startY) > 8) dragMoved = true;
+  });
+  const endDrag = (e: PointerEvent) => {
+    if (!dragging) return;
+    dragging = false;
+    if (!dragMoved) return; // 没怎么动：交给 click 处理
+    setOpen(e.clientY - startY < 0, e.isTrusted);
+    suppressClick = true;
+  };
+  handle.addEventListener("pointerup", endDrag);
+  handle.addEventListener("pointercancel", () => (dragging = false));
+
+  mq.addEventListener("change", apply);
+  apply();
+
+  // 调试 / 截图脚本用（非 isTrusted，不写记忆，与 __voyageUi.setBackdrop 同一惯例）
+  const w = window as unknown as { __voyageUi?: Record<string, unknown> };
+  w.__voyageUi = { ...w.__voyageUi, setDrawerOpen: (v: boolean) => setOpen(v, false), drawerOpen: () => open };
 }
 
 // ---------- 折叠区摘要：画质（UX-3） ----------

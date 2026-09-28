@@ -24,6 +24,12 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
   display: flex; flex-direction: column; gap: 6px; transition: opacity .3s;
 }
 #panel.hidden { opacity: 0; pointer-events: none; }
+/* UX-4：抽屉把手默认不占地方（桌面 / 未命中窄屏媒体查询时都不需要）；窄屏媒体查询里改回可见 */
+.panel-handle { display: none; }
+/* .panel-body 复刻拆分前 #panel 自己的 flex 布局（display:flex/flex-direction:column/gap:6px）：
+   桌面下 .panel-handle 不占位、不参与 gap，#panel 里实际只剩这一个可见的 flex 子项，视觉与拆分前逐位相同。
+   窄屏抽屉模式下它是把手下面唯一滚动的内容区（见下面的媒体查询） */
+.panel-body { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 #panel h1 { margin: 0; font-size: 15px; font-weight: 600; }
 #panel h1 small { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: 6px; }
 /* 控件行（UX-3）：标签文字 + 徽标 + 数值挤在第一行，下拉 / 输入框跟着长到剩余宽度；范围滑条 flex-basis 100%，
@@ -99,8 +105,36 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 }
 .credits a { color: var(--text); }
 
-@media (max-width: 600px) {
-  #panel { left: 16px; right: 16px; width: auto; top: auto; bottom: 16px; max-height: 45%; }
+/* UX-4（PANEL_UX_GUIDE §9「窄屏 / 手机」）：窄屏或矮屏下面板变成底部抽屉。断点按任务简报定为「宽 ≤ 720px
+   或高 ≤ 500px」（比指南字面的 <600px 宽一点，专门盖住手机横屏——844×390 宽 844px 不算窄，但高 390px 算矮屏）。
+   收起（默认）时只露 .panel-handle 一条：#panel 自身不设高度，交给内容自然撑开（只有把手可见时就是把手的高度，
+   实测约 38–40px，390×844 下约 4.7% 面积、844×390 下约 10%，两边都在「≤ 12%」的验收线内，也够不到舷窗中心
+   的圆），不用为了卡死一个数字给 max-height 写死具体像素、冒着和真实渲染字号对不上的风险。展开后 ≤ 70vh，
+   在 .panel-body 内部滚动（#panel 自己不再滚，否则把手会被滚出屏幕，见 ui.ts setupDrawerUi）。
+   桌面（本媒体查询之外）完全不受影响：.panel-handle 常年 display:none，#panel 逐位不变。 */
+@media (max-width: 720px), (max-height: 500px) {
+  #panel {
+    left: 0; right: 0; top: auto; bottom: 0; width: 100%; max-height: 70vh;
+    overflow: hidden; /* 换成 .panel-body 自己滚 */
+    padding: 0; border-radius: 16px 16px 0 0;
+  }
+  .panel-handle {
+    display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px;
+    padding: 9px 14px calc(9px + env(safe-area-inset-bottom, 0px)); border: 0; border-radius: 16px 16px 0 0;
+    background: var(--panel-bg-strong); color: var(--text); font: inherit; text-align: left; cursor: pointer;
+    touch-action: none; /* 拖动手势自己接管（见 ui.ts setupDrawerUi），不让浏览器当成页面滚动处理 */
+  }
+  .panel-grip { flex: none; width: 4px; height: 20px; border-radius: 2px; background: rgba(255, 255, 255, .35); }
+  .panel-peek {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; color: var(--muted);
+  }
+  .panel-handle-icon { flex: none; color: var(--muted); transition: transform .2s; }
+  /* 展开时箭头朝下（表示「点一下收起」）；收起时朝上（表示「点一下展开」，默认状态，HTML 里已经是 ▲） */
+  #panel:not(.drawer-collapsed) .panel-handle-icon { transform: rotate(180deg); }
+  .panel-body { overflow: auto; padding: 4px 16px calc(16px + env(safe-area-inset-bottom, 0px)); flex: 1 1 auto; min-height: 0; }
+  /* 收起：只留把手这一行；.panel-body 直接 display:none，#panel 的高度跟着唯一可见的子项（把手）自然收缩 */
+  #panel.drawer-collapsed .panel-body { display: none; }
 }
 
 #loading {
