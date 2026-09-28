@@ -554,11 +554,14 @@ export class FarTowers {
     for (const t of this.towers) {
       const ext = Math.max(t.R * 1.8, t.Ra * 1.55 + 1);
       const ux = t.x / t.dist, uz = t.z / t.dist; // 相机 → 塔的水平方向
+      // 上沿要包住穹顶：无砧的生长期塔圆头高 R·0.9（TW02 审查：只算 +1.6 km 时圆头被切平）
+      const domeTop = t.top + t.R * 0.9 * (1 - t.anvil) + 0.7 * t.anvil + 0.3;
+      const topAlt = Math.max(t.top + 1.6, domeTop);
       // 每座塔先求自己的包围盒，完全在屏幕外的不进并集（列表按 ±FAR_VIEW_DEG 挑，比窗户宽得多）
       let tx0 = Infinity, ty0 = Infinity, tx1 = -Infinity, ty1 = -Infinity;
       for (const along of [-ext, ext])
         for (const across of [-ext, ext])
-          for (const alt of [0, t.top + 1.6]) {
+          for (const alt of [0, topAlt]) {
             const px = t.x + ux * along - uz * across;
             const pz = t.z + uz * along + ux * across;
             const rr = (BOTTOM + alt) ** 2 - px * px - pz * pz;
