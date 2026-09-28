@@ -297,7 +297,11 @@ export class Optics {
     }
     // 3. 演示雨区
     if (this.force.bow) {
-      if (this.demoRain && Math.hypot(this.demoRain.x - off.x, this.demoRain.z - off.y) > SHOWER_RANGE_KM) this.demoRain = null;
+      // 飞出范围、或时间被拨动（太阳挪了，雨区不在虹圈上了）就重摆
+      if (this.demoRain) {
+        const g = geom(this.demoRain.x, this.demoRain.z, this.demoRain.r);
+        if (g.h > SHOWER_RANGE_KM || Math.abs(g.anti - 46) > 15) this.demoRain = null;
+      }
       if (!this.demoRain) this.demoRain = this.placeDemoRain(inp);
       if (this.demoRain) cols.push({ ...this.demoRain, rank: 1e3 });
     } else this.demoRain = null;
@@ -306,9 +310,9 @@ export class Optics {
   }
 
   /**
-   * 演示雨区：在「对日点外 42°」那一圈上挑一个点——视线朝下（打得到地面）、离窗外视线方向（窗外、往下约 25°）最近，
-   * 雨柱中心放在这条视线穿过雨层中部的地方；半径 10 km、中心消光 0.9 /km（中到大阵雨，估算）。太阳不在身后（整圈虹都在地平线以上
-   * 或背窗那一侧）时摆不出来，返回 null
+   * 演示雨区：在「对日点外 46°」那一圈（主虹 42° 与副虹 51° 之间，亚历山大暗带）上挑一个点——俯角 ≥ 10°（雨在 60 km 以内）、
+   * 离窗外视线方向（朝外、往下约 20°）最近，雨区中心放在这条视线穿过雨层中部的地方；高斯半径 18 km（一大片阵雨，主虹、副虹都落在雨上）、
+   * 中心消光 0.9 /km（中到大阵雨，估算）。太阳不在身后（整圈虹都在地平线以上或背窗那一侧）时摆不出来，返回 null
    */
   private placeDemoRain(inp: OpticsInput): RainColumn | null {
     const sd = inp.sunDir;
@@ -317,20 +321,21 @@ export class Optics {
     if (!sd || !off || !o) return null;
     const alt = inp.state.altitudeKm;
     const A = new THREE.Vector3(-sd[0], -sd[1], -sd[2]);
-    const v0 = new THREE.Vector3(o.x, 0, o.z).normalize().multiplyScalar(Math.cos(0.44)).setY(-Math.sin(0.44));
+    // 窗外视线：朝外、往下约 20°（坐姿看窗的下半部；再平就落到上百公里外，雨和虹都被霾吃掉）
+    const v0 = new THREE.Vector3(o.x, 0, o.z).normalize().multiplyScalar(Math.cos(0.35)).setY(-Math.sin(0.35));
     // 圈上的两个正交方向
     const e1 = new THREE.Vector3(0, 1, 0).cross(A);
     if (e1.lengthSq() < 1e-6) e1.set(1, 0, 0);
     e1.normalize();
     const e2 = A.clone().cross(e1).normalize();
-    const R42 = (42 * Math.PI) / 180;
+    const R46 = (46 * Math.PI) / 180;
     let best: THREE.Vector3 | null = null;
     let bestDot = -2;
     const d = new THREE.Vector3();
     for (let i = 0; i < 144; i++) {
       const a = (i / 144) * Math.PI * 2;
-      d.copy(A).multiplyScalar(Math.cos(R42)).addScaledVector(e1, Math.sin(R42) * Math.cos(a)).addScaledVector(e2, Math.sin(R42) * Math.sin(a));
-      if (d.y > -0.12) continue;
+      d.copy(A).multiplyScalar(Math.cos(R46)).addScaledVector(e1, Math.sin(R46) * Math.cos(a)).addScaledVector(e2, Math.sin(R46) * Math.sin(a));
+      if (d.y > -0.17) continue; // 俯角 ≥ 约 10°：雨柱在 60 km 以内
       const dot = d.dot(v0);
       if (dot > bestDot) {
         bestDot = dot;
@@ -339,7 +344,7 @@ export class Optics {
     }
     if (!best || bestDot < 0.5) return null;
     const t = (alt - 0.6) / -best.y;
-    return { x: off.x + best.x * t, z: off.y + best.z * t, r: 10, sigma: 0.9, top: Math.min(Math.max(inp.cloud.bottom, 1.5), 3), veil: 1, seed: 17.3, rank: 1e3 };
+    return { x: off.x + best.x * t, z: off.y + best.z * t, r: 18, sigma: 0.9, top: Math.min(Math.max(inp.cloud.bottom, 1.5), 3), veil: 1, seed: 17.3, rank: 1e3 };
   }
 
   update(inp: OpticsInput) {
@@ -386,8 +391,13 @@ export class Optics {
     // 和宝光同一片水滴云、同一段的云滴半径（宝光出现说明云顶云滴谱窄、够均匀）；宝光这一段开着时再掷一次，约六成同时有云虹（估算）。
     // 强度 1 = 着色器里按单次散射份额算出的物理量（亮带只比云海亮百分之几到十几）；云滴越大、虹越窄越亮（拟合表里已含）
     const [cbOn] = episode(tMin, 20, (k) => [hash01(s + 15, k) < 0.6 ? 1 : 0]);
-    let cloudBow = geo * liquid * typeW * distW * cbOn * Math.min(gAmp / 0.45, 1);
-    if (this.force.bow) cloudBow = geo * Math.max(typeW, 0.8) * distW;
+    // 距离冲淡按宝光那条的平方根（估算：虹圈比对日点那一小块更靠近本机的部分多）
+    const distBow = Math.sqrt(distW);
+    // 定标 ×2（估算，同宝光按照片定标的做法）：单次散射份额算出的亮带在 HDR 里约 +10%，经色调映射压到白云的肩部只剩 3–4%，
+    // 照片里与宝光同框的云虹显示对比约一成
+    const CLOUDBOW_GAIN = 2;
+    let cloudBow = CLOUDBOW_GAIN * geo * liquid * typeW * distBow * cbOn * Math.min(gAmp / 0.45, 1);
+    if (this.force.bow) cloudBow = CLOUDBOW_GAIN * geo * Math.max(typeW, 0.8) * distBow;
     if (this.disabled) cloudBow = 0;
     const cb = cloudbowParams(radius);
     const pRef = 0.5 * (cb.bIn + cb.bOut);
@@ -432,12 +442,13 @@ export class Optics {
 
     // ---- 环地平弧 / 日柱（SPEC-BOW）：和幻日同一群水平片状冰晶（这一段出了幻日就说明有），只是太阳高度条件不同 ----
     // 环地平弧：光从侧面进、底面出，n = 1.311 时要 cos²h ≤ 2 − n²，即太阳高于约 58°（这时幻日已经没了，Bravais 等效折射率 n'·sin30° ≥ 1 在 61° 附近）。
-    // 日柱：底面反射，太阳低（≲ 6°）时最常见。份额（估算，与幻日同一定标）：弧约 2 倍幻日（整条弧上铺开，峰值仍只是几倍卷云亮度），
-    // 日柱约 0.8 倍（外反射率随掠射角升高，太阳低时反而亮）
+    // 日柱：底面反射，太阳低（≲ 6°）时最常见。份额（估算，与幻日同一定标）：弧的光铺在几十度宽的方位上（归一化峰值只有幻日的约 1/100），
+    // 份额取 20 倍幻日（1e-2），峰值约为幻日的五分之一——真实的环地平弧常和幻日一样艳（高太阳时侧面进、底面出的光路很顺）；
+    // 日柱约 0.8 倍幻日（外反射率随掠射角升高，太阳低时反而亮）
     const plates = this.force.bow ? 1 : Math.max(pa, pb);
     const chaGate = smooth(57.9, 60, inp.sunAltDeg);
     const pillarGate = smooth(-1, 0.5, inp.sunAltDeg) * smooth(9, 4, inp.sunAltDeg);
-    const F_CHA = 1e-3;
+    const F_CHA = 1e-2;
     const F_PILLAR = 4e-4;
     const arcGate = cirrus * sunUp * clear * (this.disabled ? 0 : 1) * plates;
     u.uOpticsArc.value.set(F_CHA * arcGate * chaGate, F_PILLAR * arcGate * pillarGate, this.force.bow ? (1.2 * Math.PI) / 180 : tilt, 0);

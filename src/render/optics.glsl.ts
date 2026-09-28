@@ -154,7 +154,8 @@ vec3 opticsCloudBow(vec3 rd, float c, float cloudOpacity) {
   vec3 x = (theta - uBowCloudC.xyz) / uBowCloudS.xyz;
   vec3 inner = 1.0 / (1.0 + exp(x));
   vec3 m = uBowCloudP.xyz * exp(-x * x) + uBowCloudC.w * inner + uBowCloudS.w * (1.0 - inner);
-  float k = min(3.1416 / (0.75 * (max(uSunDir.y, 0.05) + max(-rd.y, 0.05))), 5.0);
+  // 掠射（太阳低、视线平）时单次散射份额更大，封顶 8（估算：此时云顶起伏的阴影也会冲淡它）
+  float k = min(3.1416 / (0.75 * (max(uSunDir.y, 0.05) + max(-rd.y, 0.05))), 8.0);
   return 1.0 + uBowOn.y * k * m * win * below * smoothstep(0.3, 0.85, cloudOpacity);
 }
 
@@ -390,8 +391,11 @@ vec4 opticsRain(vec3 rd) {
   float rP = length(P);
   vec3 nP = P / rP;
   vec3 sunT = sunTransmittance(rP, dot(nP, uSunDir)) * cloudShadow(P, uSunDir);
-  // 相机到雨的大气透射率（与开阔海面同一写法：两段都朝上）
-  vec3 viewT = min(transmittanceToTop(rP, dot(nP, -rd)) / max(transmittanceToTop(uCamR, -rd.y), vec3(1e-6)), vec3(1.0));
+  // 相机到雨之间的空气（空气透视 LUT）：雨的光要乘这段透射率；雨幕只挡它后面的东西，前面这段空气的内散射不能被雨挡掉——
+  // 背景 L 里已经含着它，所以雨幕的合成是 L·Tv + (1 − Tv)·airL（不这样做，雨幕会把前面几公里的蓝色空气光一起吃掉，成一块黑斑）
+  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tLit);
+  vec3 airL = textureLod(uAerialInscatterS, uvw, 0.0).rgb * uSunIlluminance;
+  vec3 viewT = textureLod(uAerialTransmittanceS, uvw, 0.0).rgb;
   float cosA = dot(rd, -uSunDir);
   float theta = acos(clamp(cosA, -1.0, 1.0));
   vec3 bow = theta < 1.57 ? opticsBowPhase(theta) : vec3(0.0);
@@ -407,7 +411,7 @@ vec4 opticsRain(vec3 rd) {
     float hg = (1.0 - g * g) / (12.566 * pow(1.0 + g * g + 2.0 * g * cosA, 1.5));
     vec3 pV = bow + 0.0008 + 0.43 * hg;
     Tv = exp(-tauV);
-    rgb += eSun * (0.5 - 0.5 * exp(-2.0 * tauV)) * pV + (1.0 - Tv) * viewT * skyIrradiance(rP, nP) * 0.08;
+    rgb += eSun * (0.5 - 0.5 * exp(-2.0 * tauV)) * pV + (1.0 - Tv) * (viewT * skyIrradiance(rP, nP) * 0.08 + airL);
   }
   return vec4(uBowOn.x * rgb, Tv);
 }
