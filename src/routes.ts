@@ -102,25 +102,30 @@ export function makeLeg(from: Airport, to: Airport, rnd = Math.random()): Leg {
   return { from, to, distKm, bearing: greatCircleBearing(from.lat, from.lon, to.lat, to.lon), cruiseKm: cruiseFor(distKm, rnd) };
 }
 
-/** 离某点最近的机场（km） */
-export function nearestAirport(lat: number, lon: number): { airport: Airport; distKm: number } {
-  let best = AIRPORTS.HND;
+/** 离某点最近的机场（km）；excludeCode 排除指定机场（VOY-HKG：给 airportAhead 当「起点已经占了这个机场」的排除项用） */
+export function nearestAirport(lat: number, lon: number, excludeCode?: string): { airport: Airport; distKm: number } {
+  let best: Airport | undefined;
   let bestD = Infinity;
   for (const a of Object.values(AIRPORTS)) {
+    if (a.code === excludeCode) continue;
     const d = haversineKm(lat, lon, a.lat, a.lon);
     if (d < bestD) {
       bestD = d;
       best = a;
     }
   }
-  return { airport: best, distKm: bestD };
+  return { airport: best ?? AIRPORTS.HND, distKm: bestD };
 }
 
-/** 从任意位置接入航线网：挑一个「大致在机头前方、又不太远」的机场当第一个目的地（非航线预设开启连续航程时用） */
-export function airportAhead(lat: number, lon: number, headingDeg: number): Airport {
-  let best = AIRPORTS.HND;
+/** 从任意位置接入航线网：挑一个「大致在机头前方、又不太远」的机场当第一个目的地（非航线预设开启连续航程时用）。
+ *  excludeCode（VOY-HKG）：调用方已经把这个机场当「起点」占用了，这里绝不能再选到它本身——否则前方没有
+ *  真正在航线网覆盖范围内的机场时（例如南海预设朝西南飞，航线网只覆盖东亚），会退化成「起点=终点」同一个机场、
+ *  距离却按当前位置算出一个非零值的自相矛盾航段（现象：坡度一直压着不回平，见 README 坑点）。 */
+export function airportAhead(lat: number, lon: number, headingDeg: number, excludeCode?: string): Airport {
+  let best: Airport | undefined;
   let bestScore = Infinity;
   for (const a of Object.values(AIRPORTS)) {
+    if (a.code === excludeCode) continue;
     const d = haversineKm(lat, lon, a.lat, a.lon);
     if (d < 150) continue; // 太近：还没飞起来就到了
     const turn = Math.abs(((greatCircleBearing(lat, lon, a.lat, a.lon) - headingDeg + 540) % 360) - 180);
@@ -130,7 +135,8 @@ export function airportAhead(lat: number, lon: number, headingDeg: number): Airp
       best = a;
     }
   }
-  return best;
+  // 兜底：150 km 短程规则把候选全排掉时，退回全网最近的一个（同样排掉 excludeCode，保证绝不会跟起点撞成同一个机场）
+  return best ?? nearestAirport(lat, lon, excludeCode).airport;
 }
 
 /**
