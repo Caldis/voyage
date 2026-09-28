@@ -223,6 +223,14 @@ const float CLOUD_MS_ALBEDO = 6.0;
 // 扩散尾巴的强度（C01 返工，见受光段）：x = 从外面看的积云（取小值，保住受光 / 背光的对比），y = 飞机在云里（按 uCloudImmersion 过渡；
 // 取 2：云里窗外的 2×2 棋盘纹在 1 时仍略高于 master），z = 雷暴 / 台风的塔身（只在天气宏里用）
 const vec3 CLOUD_MS_TAIL = vec3(0.2, 2.0, 1.0);
+// 多次散射各阶随受光光学厚度衰减的倍率（C-FLAT）：第 k 阶按 e^(−K·b^k·od)，K = 2 时第 1 阶与单次散射同速、第 2 阶一半。
+// 原来 K = 1（第 2 阶 e^(−0.25·od)，od 0.5 → 2.5 只降到 0.61），×6 标定后它占受光面亮度的 80% 以上，明暗交界被抹平：
+// 正午顺光时受光的那一半只跨 0.2 档（显示上 7 级，美术总监 wave8 第 2 条）。对照半无限保守散射层的反射
+// （Chandrasekhar H 函数：I ∝ μ0·H(μ0)·H(μ)/(μ + μ0)），可见样本的受光 od ≈ μ/μ0 时，od 0.5 / 1 / 2.5 / 5 应是 1 / 0.52 / 0.21 / 0.11，
+// K = 1 给 1 / 0.80 / 0.43 / 0.17（侧光、掠射的受光面亮约 2 倍），K = 2 给 1 / 0.67 / 0.23 / 0.05。a 不变，a ≤ b 仍守恒（更守恒）。
+// 只给从外面看的普通云：飞机在云里按 uCloudImmersion 退回 1（云里看到的全是深处，C01 / C11 的棋盘纹对受光 od 敏感），
+// 雷暴 / 台风塔身（天气宏里 stormW）也退回 1（塔身另有尾巴与表面细化的标定）。见 handoff/C-FLAT.md
+const float CLOUD_MS_STEEP = 2.0;
 
 void main() {
   // 深度写进深度附件（单输出，见文件头）。写了 gl_FragDepth 的程序每条路径都要写，否则深度未定义
@@ -575,18 +583,26 @@ void main() {
 #ifdef CLOUD_WEATHER
       float msDecay = stormW > 0.5 ? 0.6 : 0.5;
       float tailK = stormW > 0.5 ? CLOUD_MS_TAIL.z : mix(CLOUD_MS_TAIL.x, CLOUD_MS_TAIL.y, uCloudImmersion);
+      // C-FLAT：衰减倍率（见 CLOUD_MS_STEEP）与粉末项只留给雷暴 / 台风塔身
+      float msK = stormW > 0.5 ? 1.0 : mix(CLOUD_MS_STEEP, 1.0, uCloudImmersion);
+      float powderW = stormW > 0.5 ? 0.5 : 0.0;
 #else
       const float msDecay = 0.5;
       float tailK = mix(CLOUD_MS_TAIL.x, CLOUD_MS_TAIL.y, uCloudImmersion);
+      float msK = mix(CLOUD_MS_STEEP, 1.0, uCloudImmersion);
+      const float powderW = 0.0;
 #endif
-      // 第 k 阶：a = b = msDecay^k、g 乘 0.5^k（相函数在循环外算好，C09）
+      // 第 k 阶：a = msDecay^k、b = msK·msDecay^k、g 乘 0.5^k（相函数在循环外算好，C09）
       float msDecay2 = msDecay * msDecay;
-      float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msDecay2 * od);
+      float msScatter = msDecay * phMs1 * exp(-msK * msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);
       // Beer-Powder（Schneider 2015，原文是经验性的）：按其物理含义的解读——刚进云的那一薄层里多次散射还没「攒」起来，
       // 所以只压多次散射（C01）；单次散射在受光表面本来就是满的。
       // 原来整项一起压，顺光时把受光的云边也压暗了，和真实云朵受光面的亮边相反。逆光时薄边正是最亮的地方，淡出（T12）
+      // C-FLAT：普通云不再压（powderW = 0）。它按**受光** od 算，od 小的恰是正对太阳的受光面——顺光 / 侧光时把最亮的一面压暗 20–40%，
+      // 等于在受光面上反着余弦律走（去掉后受光面 p90 ×1.14–1.22、受光 / 背光 +8~12%）。「多次散射还没攒起来」取决于
+      // 视线方向上的厚度（薄边），不是受光 od；薄边的暗由单次散射本身和 α 决定。雷暴 / 台风塔身保留原来的 0.5（塔身的标定依赖它）
       float powder = 1.0 - exp(-2.0 * od - 0.5);
-      sunScatter += CLOUD_MS_ALBEDO * msScatter * mix(1.0, powder, 0.5 * (1.0 - smoothstep(0.3, 0.9, cosT)));
+      sunScatter += CLOUD_MS_ALBEDO * msScatter * mix(1.0, powder, powderW * (1.0 - smoothstep(0.3, 0.9, cosT)));
       // 扩散尾巴（C01 返工）：上面三阶都按 e^(−b^k·od) 衰减，od ≳ 10 时全部归零——厚云深处（雷暴 / 台风的背光塔身、飞机在云里）
       // 只剩蓝色的天空光，塔身成了深蓝剪影；云里每个样本的受光全靠对受光 od 极敏感的那一项，受光步进的随机细节被放大成 2×2 棋盘纹。
       // 真实厚云深处是扩散区，漫射光按二流近似慢慢衰减：总透射 ≈ 1 / (1 + 0.75(1 − g)·od)（g = 0.85，和 keyVisibility 同一式），

@@ -1,0 +1,14 @@
+[
+  { "name": "sea-sc-old", "scene": "sea-sc", "cloudDump": { "warm": 96, "frames": 16 }, "variants": [
+    { "name": "old", "patch": { "clouds.marchMat": [["const float CLOUD_MS_STEEP = 2.0;", "const float CLOUD_MS_STEEP = 1.0;"], ["mix(1.0, powder, powderW *", "mix(1.0, powder, 0.5 *"]] } },
+    { "name": "oldref", "builtin": "cloud-ref", "patch": { "clouds.marchMat": [["const float CLOUD_MS_STEEP = 2.0;", "const float CLOUD_MS_STEEP = 1.0;"], ["mix(1.0, powder, powderW *", "mix(1.0, powder, 0.5 *"]] } },
+    { "name": "dist", "builtin": "cloud-dist" } ] },
+  { "name": "sea-sc-new", "scene": "sea-sc", "cloudDump": { "warm": 96, "frames": 16 }, "variants": [
+    { "name": "new" }, { "name": "newref", "builtin": "cloud-ref" }, { "name": "dist", "builtin": "cloud-dist" } ] },
+  { "name": "sea-sc-low-old", "scene": "sea-sc-low", "cloudDump": { "warm": 96, "frames": 16 }, "variants": [
+    { "name": "old", "patch": { "clouds.marchMat": [["const float CLOUD_MS_STEEP = 2.0;", "const float CLOUD_MS_STEEP = 1.0;"], ["mix(1.0, powder, powderW *", "mix(1.0, powder, 0.5 *"]] } },
+    { "name": "oldref", "builtin": "cloud-ref", "patch": { "clouds.marchMat": [["const float CLOUD_MS_STEEP = 2.0;", "const float CLOUD_MS_STEEP = 1.0;"], ["mix(1.0, powder, powderW *", "mix(1.0, powder, 0.5 *"]] } },
+    { "name": "dist", "builtin": "cloud-dist" } ] },
+  { "name": "sea-sc-low-new", "scene": "sea-sc-low", "cloudDump": { "warm": 96, "frames": 16 }, "variants": [
+    { "name": "new" }, { "name": "newref", "builtin": "cloud-ref" }, { "name": "dist", "builtin": "cloud-dist" } ] }
+]
