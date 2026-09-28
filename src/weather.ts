@@ -306,6 +306,8 @@ export interface WeatherSample {
   subHigh: number;
   coldSurge: number;
   eastChinaSt: number;
+  /** 这一处的风廓线（WX11a）。惰性求值：第一次读时才算（约几微秒），小地图那种只要云型的批量取样不付这份钱 */
+  readonly wind: WindProfile;
 }
 
 export interface StormCellSample {
@@ -324,6 +326,8 @@ export interface StormSystemSample {
   strength: number;
   kind: "isolated" | "cluster" | "squall";
   cells: StormCellSample[];
+  /** 漂移速度（km/h，向东 / 向北）：出生时的引导气流（WX11a） */
+  drift: { ve: number; vn: number };
 }
 export interface TyphoonSample {
   id: string;
@@ -462,6 +466,8 @@ const H = 3.6e6; // 一小时的毫秒数
 const STORM_CELL_DEG = 2.5;
 const STORM_WINDOW_H = 3;
 const STORM_LIFE_H: [number, number] = [2.5, 5.5];
+/** 雷暴系统漂移速度上限（km/h）。[估算] 暖季对流系统常见 20–50 km/h；冬季急流下偶有更快的，截掉（也决定 stormsNear 的搜索半径） */
+const STORM_MAX_DRIFT_KMH = 60;
 /** 台风：生成窗口（小时）、寿命范围（天）。每个窗口至多生成一个，概率 = 该月平年生成数 ÷ 该月窗口数 */
 const TY_WINDOW_H = 12;
 const TY_LIFE_D: [number, number] = [4, 10];
@@ -544,6 +550,123 @@ function monthly(doy: number, table: number[]) {
 /** 把三维值噪声（集中在 0.5 附近）拉成近似均匀的 0..1（按实测分位数：p10 ≈ 0.25、p90 ≈ 0.75） */
 const rank = (v: number) => clamp01(0.5 + (v - 0.5) * 1.85);
 
+// =====================================================================================
+// 风场（WX11a）：地面（10 m）/ 850 / 500 / 250 hPa 四层风，按纬度 / 季节 / 天气型给气候态，叠种子确定、空间 / 时间相关的扰动。
+// 设计与出处：research/WX11-DESIGN.md §1–§3；数据表与断言：handoff/WX11a.md；统计门禁：scripts/weather-stats.mts（--only wind）。
+// 依据标注：[文献] 查过、有链接的来源；[教科书] Stull 1988 / Holton / Wallace & Hobbs 的共识内容（按记忆转述）；[估算] 推算或经验值。
+//   [Zhang06] Zhang et al. 2006, GRL 33, L11708：东亚副热带西风急流 1 月轴在 32°N、最大纬向风 > 70 m/s（日本东南洋面上空），
+//             4 月位置相近但明显减弱，7 月中心北移到 40°N 以北。https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2006GL026377
+//   [Kot58]   Koteswaram 1958, Tellus 10：热带东风急流核心 150 hPa、约 15°N、50–80°E、35–40 m/s。
+//             https://onlinelibrary.wiley.com/doi/abs/10.1111/j.2153-3490.1958.tb01984.x
+// 坐标：风矢量一律是 (u 向东, v 向北)，m/s，表示「吹向」；风向（气象惯例的「来向」，0 = 北风、270 = 西风）用 windFromDeg 换算。
+// 场景本地坐标是 x 东、z 南，所以换到场景里是 (x, z) = (u, −v)（windToLocal）。
+// 都是示意性的气候态，不是真实天气数据；WX23 可以用 Open-Meteo 的 850 / 500 / 250 hPa 实测风替换 wind() 的输出（接口保持不变）。
+// =====================================================================================
+
+/** 一个风矢量：u 向东、v 向北，m/s（「吹向」） */
+export interface Wind {
+  u: number;
+  v: number;
+}
+/** 一处一刻的风廓线：四个层次的风 + 边界层参数。windAt(profile, 高度) 在层次之间插值 */
+export interface WindProfile {
+  /** 地面 10 m 风（对数廓线 + 埃克曼转向，从 850 hPa 推出） */
+  sfc: Wind;
+  /** 850 hPa（≈ 1.5 km）：季风、信风、寒潮、梅雨低空急流 */
+  p850: Wind;
+  /** 500 hPa（≈ 5.5 km） */
+  p500: Wind;
+  /** 250 hPa（≈ 10.5 km）：副热带西风急流 / 夏季热带东风。数值按急流层（200–250 hPa）取 */
+  p250: Wind;
+  /** 地面粗糙度 z₀（m）：海面按 Charnock 关系随风速变，陆地取 0.1，海陆之间按陆地比例在对数上插值 */
+  z0: number;
+  /** 地面风相对边界层顶（850 hPa）风的偏角（度，正 = 逆时针「后退」，北半球） */
+  ekman: number;
+  /** 周围的陆地比例 0..1（0.5° 格点双线性插值，海岸不跳变） */
+  land: number;
+}
+
+/** 各层次的代表高度（km）。250 hPa 以上保持 250 hPa 的值；边界层顶以下按对数廓线 + 埃克曼螺旋 */
+export const WIND_LEVEL_KM = { p850: 1.5, p500: 5.5, p250: 10.5 } as const;
+/** 边界层顶（km）。[教科书] 0.5–2 km；取 1 km：用对数律从 10 m 外推到这里，得到的 10 m / 边界层顶风速比恰好落在教科书的海上 0.6–0.8、陆上 0.3–0.5 */
+export const WIND_BL_TOP_KM = 1.0;
+
+/**
+ * 东亚副热带西风急流（按月，1–12 月，值取在每月 15 日）：轴纬度（°N，140°E 附近）与急流层峰值（m/s，扰动前的气候态中心值）。
+ * 1 月 32°N、4 月与 1 月相近而减弱、7 月 ≥ 40°N 是 [Zhang06]；峰值 1 月按「月均 > 70 m/s」反推（叠上扰动与槽脊摆动后，
+ * 月均核心约 70，见 weather-stats）；夏季 30–40 m/s 是 [教科书，量级]；其余月份是 [估算]（相邻月份平滑过渡）
+ */
+const JET_LAT = [32, 32, 32.5, 33, 35, 38, 41, 42, 40, 36, 33, 32];
+const JET_PEAK = [75, 73, 68, 57, 46, 38, 35, 33, 36, 46, 60, 72];
+
+/** 冬季风的来向（气象惯例，度）：日本海 / 日本一带西北风（315°），东海 / 黄海偏北风（350°），之间线性过渡 [教科书，冬季风气候态]。寒潮云街（surgeGeo）也用它 */
+function winterMonsoonFromDeg(lon: number) {
+  return lon >= 128 ? 315 : lon <= 120 ? 350 : 350 - ((lon - 120) / 8) * 35;
+}
+/** 由来向（度）和风速得到风矢量 */
+const fromDir = (deg: number, speed: number): Wind => ({ u: -speed * Math.sin(deg * D2R), v: -speed * Math.cos(deg * D2R) });
+/** 把风矢量逆时针转 deg 度、再乘 k */
+const rotScale = (w: Wind, deg: number, k: number): Wind => {
+  const c = Math.cos(deg * D2R), s = Math.sin(deg * D2R);
+  return { u: (w.u * c - w.v * s) * k, v: (w.u * s + w.v * c) * k };
+};
+
+/** 风速（m/s） */
+export const windSpeed = (w: Wind) => Math.hypot(w.u, w.v);
+/** 风向（气象惯例的来向，度，0..360：0 = 北风、90 = 东风、270 = 西风） */
+export const windFromDeg = (w: Wind) => (((Math.atan2(-w.u, -w.v) / D2R) % 360) + 360) % 360;
+/** 换到场景本地坐标（x 东、z 南），m/s */
+export const windToLocal = (w: Wind) => ({ x: w.u, z: -w.v });
+
+/**
+ * 风廓线在高度 altKm 处的风（纯算术，约几十纳秒，可以每帧调用；wind() 本身才贵，应当按天气场取样的节奏缓存 profile）。
+ *   · ≤ 10 m：返回 sfc（10 m 风）；
+ *   · 10 m – 边界层顶（1 km）：风速按对数律 |G|·ln(z/z₀)/ln(h/z₀)（[教科书：Stull 1988 §9]，严格说只在近地层成立，外推到边界层顶是简化 [估算]），
+ *     风向从地面的逆时针偏角 ekman 按 ln z 线性转回边界层顶的方向（埃克曼螺旋：往上顺时针转，[教科书]）；
+ *   · 1–1.5 km：等于 850 hPa；1.5 / 5.5 / 10.5 km 之间分段线性；10.5 km 以上保持 250 hPa。
+ */
+export function windAt(p: WindProfile, altKm: number): Wind {
+  const zm = altKm * 1000;
+  const hm = WIND_BL_TOP_KM * 1000;
+  if (zm <= 10) return { u: p.sfc.u, v: p.sfc.v };
+  if (zm < hm) {
+    const g = p.p850;
+    const k = Math.log(zm / p.z0) / Math.log(hm / p.z0);
+    const turn = p.ekman * (1 - Math.log(zm / 10) / Math.log(hm / 10));
+    return rotScale(g, turn, k);
+  }
+  const L = WIND_LEVEL_KM;
+  const lerp = (a: Wind, b: Wind, f: number): Wind => ({ u: a.u + (b.u - a.u) * f, v: a.v + (b.v - a.v) * f });
+  if (altKm <= L.p850) return { u: p.p850.u, v: p.p850.v };
+  if (altKm <= L.p500) return lerp(p.p850, p.p500, (altKm - L.p850) / (L.p500 - L.p850));
+  if (altKm <= L.p250) return lerp(p.p500, p.p250, (altKm - L.p500) / (L.p250 - L.p500));
+  return { u: p.p250.u, v: p.p250.v };
+}
+/** 风切变：windAt(z2) − windAt(z1)（m/s；除以高度差就是 1/s 量纲的切变） */
+export function windShear(p: WindProfile, z1Km: number, z2Km: number): Wind {
+  const a = windAt(p, z1Km), b = windAt(p, z2Km);
+  return { u: b.u - a.u, v: b.v - a.v };
+}
+/** 引导气流：700 hPa（≈ 3 km）与 500 hPa 的平均，雷暴系统按它漂移 [教科书] */
+export function steeringWind(p: WindProfile): Wind {
+  const a = windAt(p, 3.0), b = windAt(p, WIND_LEVEL_KM.p500);
+  return { u: (a.u + b.u) / 2, v: (a.v + b.v) / 2 };
+}
+/** 边界层平均风：0–1.5 km 按高度加权平均（梯形积分）。云街 / 卷轴的方向用它（WX11e） */
+const BL_Z = [0.01, 0.05, 0.1, 0.2, 0.4, 0.7, 1.0, 1.5];
+export function blMeanWind(p: WindProfile): Wind {
+  let u = 0, v = 0, prev = windAt(p, BL_Z[0]);
+  for (let i = 1; i < BL_Z.length; i++) {
+    const w = windAt(p, BL_Z[i]);
+    const dz = BL_Z[i] - BL_Z[i - 1];
+    u += ((prev.u + w.u) / 2) * dz;
+    v += ((prev.v + w.v) / 2) * dz;
+    prev = w;
+  }
+  const h = BL_Z[BL_Z.length - 1] - BL_Z[0];
+  return { u: u / h, v: v / h };
+}
+
 export class WeatherField {
   constructor(public seed = 20260927) {}
 
@@ -613,7 +736,8 @@ export class WeatherField {
     if (win > 0 && !land) {
       // 海面：沿上风方向找最近的陆地（日本海 / 日本一带吹西北风，东海 / 黄海偏北风，冬季风气候态 [教科书]）。
       // 离岸几十公里内是无云区（冷空气刚出海，还没被加热加湿），之后是顺风的云街、再往下游转开放单体（[教科书；距离为量级]）
-      const az = (lo0 >= 128 ? 315 : lo0 <= 120 ? 350 : 350 - ((lo0 - 120) / 8) * 35) * D2R;
+      // WX11a：上风方位角和风场 850 hPa 冬季风的来向是同一个函数（winterMonsoonFromDeg），不能出现两套「上风方向」
+      const az = winterMonsoonFromDeg(lo0) * D2R;
       const STEP = 20, MAX = 1000;
       let fetch = MAX, la = la0, lo = lo0;
       for (let d = STEP; d <= MAX; d += STEP) {
@@ -644,9 +768,14 @@ export class WeatherField {
     if (season <= 0) return { streets: 0, lee: 0 };
     const geo = this.surgeGeo(lat, lon, land);
     if (geo.streets <= 0 && geo.lee <= 0) return { streets: 0, lee: 0 };
-    const pulse = smooth(0.22, 0.42, rank(vnoise(lon / 30, lat / 30, t / H / 60, this.seed + 51)));
+    const pulse = smooth(0.22, 0.42, this.surgeDraw(lat, lon, t));
     const k = season * pulse;
     return { streets: geo.streets * k, lee: geo.lee * k };
+  }
+
+  /** 寒潮脉动的随机量 0..1（几天的节奏）。云街（coldSurge）和冬季风风速（wind）读同一个，保证「寒潮来了 = 云街出现 = 西北风加强」 */
+  private surgeDraw(lat: number, lon: number, t: number) {
+    return rank(vnoise(lon / 30, lat / 30, t / H / 60, this.seed + 51));
   }
 
   /** 中国东部冷季层云 0..1（Klein & Hartmann 1993），25–35°N、102–122°E 的陆地；按天气尺度时有时无 */
@@ -668,10 +797,162 @@ export class WeatherField {
    */
   front(lat: number, lon: number, t: number) {
     const ax = this.frontAxis(lon, t);
-    // 这一处的噪声切片 z 取半整数，分布比三维值噪声更窄，拉伸系数 2.3（实测分位数）
-    const u = clamp01(0.5 + (vnoise(lon / 20, t / H / 60, 3.5, this.seed + 23) - 0.5) * 2.3);
-    const active = smooth(-0.1, 0.1, ax.activity - u);
+    const active = smooth(-0.1, 0.1, ax.activity - this.frontDraw(lon, t));
     return { strength: Math.exp(-(((lat - ax.lat) / 2.8) ** 2)) * active, north: lat > ax.lat };
+  }
+
+  /** 锋面「这一段此刻在不在」的随机抽签 0..1（活跃度高于它就算在）。风场的低空急流用同一个抽签，和锋面云系同进同退 */
+  private frontDraw(lon: number, t: number) {
+    // 这一处的噪声切片 z 取半整数，分布比三维值噪声更窄，拉伸系数 2.3（实测分位数）
+    return clamp01(0.5 + (vnoise(lon / 20, t / H / 60, 3.5, this.seed + 23) - 0.5) * 2.3);
+  }
+
+  // ---------- 风场（WX11a） ----------
+
+  /** 陆地比例 0..1：0.5° 格点上的 coarseLand 双线性插值（格点结果缓存）。海岸附近平滑过渡约 50 km，地面风不会在海岸线上一步跳变 */
+  private readonly landGridCache = new Map<number, number>();
+  landFraction(lat: number, lon: number) {
+    const g = (i: number, j: number) => {
+      const key = i * 100000 + j;
+      let v = this.landGridCache.get(key);
+      if (v === undefined) {
+        v = coarseLand(i * 0.5, j * 0.5) ? 1 : 0;
+        if (this.landGridCache.size > 50000) this.landGridCache.clear();
+        this.landGridCache.set(key, v);
+      }
+      return v;
+    };
+    const x = lat * 2, y = lon * 2;
+    const i = Math.floor(x), j = Math.floor(y);
+    const fx = x - i, fy = y - j;
+    return (g(i, j) * (1 - fy) + g(i, j + 1) * fy) * (1 - fx) + (g(i + 1, j) * (1 - fy) + g(i + 1, j + 1) * fy) * fx;
+  }
+
+  /**
+   * 急流层（250 hPa）的西风部分（m/s，u 向东、v 向北）：背景西风 + 副热带西风急流（按月的轴纬度与峰值 [Zhang06]、140°E 附近最强），
+   * 叠槽脊（急流轴南北摆动，向东传播）和风速扰动。v 由「风沿摆动后的轴走」得到：v = u × 轴线斜率。
+   * 夏季热带东风不在这里（见 wind()），850 hPa 的热成风部分按这里的西风取一个比例
+   */
+  private jetWesterly(lat: number, lon: number, t: number): Wind {
+    const doy = dayOfYear(t);
+    const hours = t / H;
+    const wint = 1 - this.summer(t, 30); // 冬季指数 0..1（1 月下旬最大）
+    // 槽脊：轴纬度的南北摆动，几千公里波长（经度尺度 22°）、随时间东移约 8°/天（≈ 7 m/s，[估算]：槽脊东移 5–10 m/s 的量级）、
+    // 几天内演变；冬季急流被青藏高原 / 日本上空的定常波锚住、摆动小，夏季大（幅度 [估算]）
+    const amp = 2.5 + 1.5 * (1 - wint);
+    const shift = (lo: number) => amp * Math.max(-1, Math.min(1, (vnoise((lo - hours / 3) / 22, hours / 72, 0.5, this.seed + 201) - 0.5) * 3.6));
+    const axis = monthly(doy, JET_LAT) + shift(lon);
+    // 急流轴线斜率（°纬 / °经 → 无量纲的 km/km），风沿轴走
+    const slope = ((shift(lon + 0.25) - shift(lon - 0.25)) / 0.5) * (110.57 / (111.32 * Math.max(0.2, Math.cos(lat * D2R))));
+    // 经向结构：南侧宽（冬季副热带西风一直伸到 15–20°N，[教科书]）、北侧窄；宽度 [估算]
+    const d = lat - axis;
+    const width = d < 0 ? 8 + 5 * wint : 8;
+    const core = Math.exp(-((d / width) ** 2));
+    // 急流北侧的中纬度背景西风（约 15–20 m/s，[估算]），高纬（> 65°N）减弱
+    const bg = (12 + 8 * wint) * smooth(axis - 2, axis + 10, lat) * smooth(75, 62, lat);
+    // 纬向不均匀：冬季核心在日本上空（130–150°E，[Zhang06]），上游（中国内陆）较弱；夏季沿纬圈更均匀 [估算]
+    const lonF = 1 - 0.38 * (0.4 + 0.6 * wint) * (1 - Math.exp(-(((lon - 140) / 25) ** 2)));
+    const peak = monthly(doy, JET_PEAK) * lonF;
+    // 风速扰动 ×(0.8–1.2)：急流层的月际 / 天气尺度变化比低层小 [估算]
+    const k = 0.8 + 0.4 * rank(vnoise(lon / 18, lat / 12, hours / 40, this.seed + 203));
+    const u = (bg + (peak - bg) * core) * k;
+    // 南半球 / 赤道以南没有这支急流（东亚航线用不到，简单压掉）
+    const hemi = smooth(-2, 6, lat);
+    return { u: u * hemi, v: u * slope * hemi };
+  }
+
+  /**
+   * 一处一刻的风廓线（地面 / 850 / 500 / 250 hPa）。同样的 (lat, lon, t, seed) 永远给出同样的结果。
+   * 约 3–5 µs 一次（见 handoff/WX11a.md）：导演按天气场取样的节奏调用（300 模拟秒一次），每帧只用 windAt(profile, 高度) 插值缓存的结果。
+   */
+  wind(lat: number, lon: number, t: number): WindProfile {
+    const hours = t / H;
+    const summer = this.summer(t, lat);
+
+    // ---- 250 hPa：西风急流 + 夏季热带东风 ----
+    const jet = this.jetWesterly(lat, lon, t);
+    // 夏季南亚高压南侧的东风：核心 150 hPa、约 15°N [Kot58]；急流层（250 hPa）上更弱，华南 / 南海 25°N 以南约 5–20 m/s [估算]。
+    // 6 月到 9 月（夏季指数高时），往东到西太平洋逐渐减弱 [估算]
+    const eSeason = smooth(0.75, 0.93, summer);
+    const easterly = eSeason > 0 ? -16 * eSeason * Math.exp(-(((lat - 15) / 9) ** 2)) * (0.3 + 0.7 * smooth(150, 120, lon)) : 0;
+    // 急流层整体的方向扰动 ±10°（槽脊已经给了主要的南北摆动）
+    const r250 = 10 * (2 * rank(vnoise(lon / 14, lat / 14, hours / 36, this.seed + 205)) - 1);
+    const p250 = rotScale({ u: jet.u + easterly, v: jet.v }, r250, 1);
+
+    // ---- 850 hPa：热成风部分 + 冬季风 + 信风 + 夏季西南季风 + 副高环流 + 梅雨低空急流 ----
+    // 低层西风约为急流层的一成半 [估算]；只在中纬度（约 25°N 以北）有，以南是信风 / 季风的地盘（冬季 850 hPa 东西风分界约在 25–30°N，[教科书，量级]）
+    const midLat = 0.15 * smooth(22, 32, lat);
+    let u = midLat * jet.u, v = midLat * jet.v;
+    const add = (w: Wind) => ((u += w.u), (v += w.v));
+    // 冬季风：来向与寒潮云街同源（winterMonsoonFromDeg），25°N 以南转为东北季风（南海 / 菲律宾海冬季东北风，[教科书]）；
+    // 风速随寒潮脉动（同一个随机量 surgeDraw），日本海寒潮时 850 hPa 西北风 10–20 m/s、平时 5–8 m/s（[教科书；量级]，WX11-DESIGN §1.2）
+    const wN = smooth(0.55, 0.9, 1 - summer);
+    const winW = wN * smooth(12, 18, lat) * smooth(50, 45, lat) * smooth(103, 110, lon) * smooth(155, 147, lon);
+    if (winW > 0) {
+      const ps = smooth(0.1, 0.6, this.surgeDraw(lat, lon, t)); // 比云街的阈值（0.22–0.42）软：风速连续变化，不在几小时内翻倍
+      const from = winterMonsoonFromDeg(lon) + (45 + 360 - winterMonsoonFromDeg(lon)) * smooth(28, 22, lat);
+      add(fromDir(from, winW * (4 + 8 * ps)));
+    }
+    // 夏季西南季风：华南到长江、锋面以南，约 5–10 m/s [教科书]；5 月下旬到 9 月 [估算]
+    const fax = this.frontAxis(lon, t);
+    const swSeason = smooth(0.7, 0.9, summer);
+    const swM = swSeason * smooth(6, 12, lat) * smooth(fax.lat + 2, fax.lat - 1, lat) * smooth(97, 105, lon) * smooth(132, 122, lon);
+    if (swM > 0) add(fromDir(225, 7 * swM));
+    // 信风：18–28°N 洋面偏东—东北风 5–8 m/s [教科书]；夏季季风区（南海）让给西南季风
+    const trade = smooth(6, 12, lat) * smooth(33, 27, lat) * smooth(100, 108, lon) * (1 - swM);
+    if (trade > 0) add(fromDir(75, 6 * trade));
+    // 西太平洋副高的反气旋环流：脊线以南东风、以北西风，西侧是偏南风（「副高西北侧的西南气流」，[教科书]）；
+    // 脊线、西伸位置与 subtropicalHigh() 同源，强度 5 m/s [估算]
+    const g = smooth(0.55, 0.85, summer);
+    if (g > 0) {
+      const ridge = seasonal(dayOfYear(t), FRONT_SCHEDULE, 1) - 8;
+      const west = 128 - 10 * smooth(0.85, 1, summer);
+      const ext = smooth(west - 10, west + 2, lon) * smooth(178, 168, lon);
+      const dl = lat - ridge;
+      add({
+        u: 5 * g * ext * Math.tanh(dl / 4) * Math.exp(-((dl / 12) ** 2)),
+        v: 5 * g * Math.exp(-(((lon - (west - 2)) / 9) ** 2)) * Math.exp(-(((dl - 4) / 7) ** 2)),
+      });
+    }
+    // 梅雨低空急流：锋面南侧 2–3° 纬度、850 hPa ≥ 12 m/s 的西南风 [教科书]；和锋面云系同一个抽签（frontDraw），但门槛放软，
+    // 急流不会在一两个小时里凭空出现 / 消失 [估算]
+    const warm = smooth(0.6, 0.85, summer);
+    if (warm > 0) {
+      const act = smooth(-0.35, 0.35, fax.activity - this.frontDraw(lon, t));
+      const llj = 9 * warm * act * Math.exp(-(((lat - (fax.lat - 2.5)) / 1.6) ** 2)) * smooth(103, 108, lon) * smooth(145, 138, lon);
+      if (llj > 0) add(fromDir(235, llj));
+    }
+    // 天气尺度扰动：方向 ±25°、风速 ×(0.7–1.3)，千公里 / 一两天的尺度（WX11-DESIGN §1.2 的建议值 [估算]）
+    const r850 = 25 * (2 * rank(vnoise(lon / 12, lat / 12, hours / 30, this.seed + 211)) - 1);
+    const k850 = 0.7 + 0.6 * rank(vnoise(lon / 15, lat / 15, hours / 40, this.seed + 212));
+    const p850 = rotScale({ u, v }, r850, k850);
+
+    // ---- 500 hPa：急流层与 850 hPa 的加权（0.45 / 0.35，[估算]：按 WX11-DESIGN §1.2 表里日本 1 月 500 hPa 25–40、华南 7 月 < 5 m/s 定），再加 ±15° ----
+    const r500 = 15 * (2 * rank(vnoise(lon / 13, lat / 13, hours / 32, this.seed + 221)) - 1);
+    const p500 = rotScale({ u: 0.45 * p250.u + 0.35 * p850.u, v: 0.45 * p250.v + 0.35 * p850.v }, r500, 1);
+
+    // ---- 地面：对数廓线 + 埃克曼转向 ----
+    const land = this.landFraction(lat, lon);
+    const G = windSpeed(p850);
+    const hm = WIND_BL_TOP_KM * 1000;
+    // 海面 z₀ 按 Charnock 关系 z₀ = α·u*²/g（α = 0.011，[教科书]）随风速变，下限 1e-5 m（光滑流）；陆地 0.1 m（农田—疏林，[教科书：Stull 表 9-1 量级]）
+    let z0s = 2e-4;
+    for (let it = 0; it < 3; it++) {
+      const s10 = (G * Math.log(10 / z0s)) / Math.log(hm / z0s);
+      const ustar = (0.4 * s10) / Math.log(10 / z0s);
+      z0s = Math.max(1e-5, (0.011 * ustar * ustar) / 9.81);
+    }
+    const z0 = Math.exp(Math.log(z0s) + (Math.log(0.1) - Math.log(z0s)) * land);
+    // 埃克曼：地面风比边界层顶逆时针偏 海上约 15°、陆上约 35°（[教科书] 海上 10–20°、陆上 25–45°）；赤道附近科氏力趋零，偏角压掉
+    const ekman = (15 + 20 * land) * Math.sign(lat || 1) * smooth(2, 8, Math.abs(lat));
+    const k10 = Math.log(10 / z0) / Math.log(hm / z0);
+    const sfc = rotScale(p850, ekman, k10);
+    return { sfc, p850, p500, p250, z0, ekman, land };
+  }
+
+  /** 便捷：一处一刻、某高度（km）的风。要反复查同一处时先 wind() 再 windAt(profile, 高度)，别重复算整条廓线 */
+  windAt(lat: number, lon: number, t: number, altKm: number): Wind {
+    return windAt(this.wind(lat, lon, t), altKm);
   }
 
   /** 取样一处的云层。land 省略时按粗略海陆分布 */
@@ -705,9 +986,14 @@ export class WeatherField {
     };
     let regime: CloudRegime = "clear";
     for (const k of Object.keys(scores) as CloudRegime[]) if (scores[k] > scores[regime]) regime = k;
+    const field = this; // 给下面的惰性 getter 用（getter 里的 this 是 out 本身）
+    let windCache: WindProfile | undefined;
     const out: WeatherSample = {
       regime, bottom: 1.2, top: 3.4, coverage: 0, type: 1, density: 1, scores, convection: conv, front, trade, cloudiness: cl, land: isLand,
       subHigh: sh, coldSurge: surge.streets, eastChinaSt: ecs,
+      get wind() {
+        return (windCache ??= field.wind(lat, lon, t));
+      },
     };
     // 各云型的参数：高度与 CLOUD_PRESETS 同源，云量 / 云顶随驱动量连续变化
     const cu = smooth(0.3, 0.85, conv);
@@ -766,9 +1052,12 @@ export class WeatherField {
     const rk = hash(i, j, k, s + 5);
     const kind: StormSystemSample["kind"] = rk < 0.55 ? "isolated" : rk < 0.82 ? "cluster" : "squall";
     const n = kind === "isolated" ? 1 : kind === "cluster" ? 2 + Math.floor(hash(i, j, k, s + 6) * 2) : 4;
-    // 漂移：25°N 以北随西风带往东（偏北），以南随副热带东风往西；km/h
-    const ve = lat > 25 ? 25 + 15 * hash(i, j, k, s + 7) : -(10 + 10 * hash(i, j, k, s + 7));
-    const vn = lat > 25 ? 5 : 3;
+    // 漂移（WX11a）：随引导气流（700–500 hPa 平均风，出生点、出生时刻，[教科书]），再加每个系统自己的偏差——
+    // 新塔总在上风 / 右前侧冒出，系统的移动和平均风差一个角度、偏慢（±20°、×0.7–1.0，[估算]）；上限 STORM_MAX_DRIFT_KMH。km/h
+    const st = steeringWind(this.wind(lat, lon, tBirth));
+    const dv = rotScale(st, (hash(i, j, k, s + 7) - 0.5) * 40, (0.7 + 0.3 * hash(i, j, k, s + 9)) * 3.6);
+    const cap = Math.min(1, STORM_MAX_DRIFT_KMH / Math.max(windSpeed(dv), 1e-6));
+    const ve = dv.u * cap, vn = dv.v * cap;
     const trop = smooth(40, 20, Math.abs(lat));
     const cells: { dx: number; dz: number; radius: number; top: number }[] = [];
     const axis = hash(i, j, k, s + 8) * Math.PI;
@@ -791,8 +1080,8 @@ export class WeatherField {
   /** 此刻在 (lat, lon) 周围 radiusKm 内、处于活跃期（强度 > 0.25）的雷暴系统，按距离排序 */
   stormsNear(lat: number, lon: number, t: number, radiusKm: number): StormSystemSample[] {
     const out: { d: number; s: StormSystemSample }[] = [];
-    // 系统出生后会漂移（最快约 40 km/h × 5.5 h ≈ 220 km），搜索范围放宽
-    const reachKm = radiusKm + 250;
+    // 系统出生后会漂移（最快 STORM_MAX_DRIFT_KMH × 寿命上限 5.5 h ≈ 330 km），搜索范围放宽
+    const reachKm = radiusKm + STORM_MAX_DRIFT_KMH * STORM_LIFE_H[1];
     const dj = Math.ceil(reachKm / 110.57 / STORM_CELL_DEG);
     const di = Math.ceil(reachKm / (111.32 * Math.max(0.3, Math.cos(lat * D2R))) / STORM_CELL_DEG);
     const i0 = Math.floor(lon / STORM_CELL_DEG), j0 = Math.floor(lat / STORM_CELL_DEG);
@@ -821,6 +1110,7 @@ export class WeatherField {
               lon: cLon,
               strength,
               kind: sd.kind,
+              drift: { ve: sd.ve, vn: sd.vn },
               cells: sd.cells.map((c, n) => ({ id: `${sd.id}#${n}`, lat: cLat - c.dz / 110.57, lon: cLon + c.dx / kx, radius: c.radius, top: c.top })),
             },
           });
