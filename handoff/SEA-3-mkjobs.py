@@ -383,6 +383,34 @@ def accept():
     return jobs
 
 
+NO_TAU = ("    if (tau > 1e-4) {\n", "    tau = 0.0;\n    if (tau > 1e-4) {\n")
+
+
+def accept_trail():
+    vs = [
+        {"name": "old", **patch(old_patches())},
+        {"name": "new"},
+        {"name": "noTraffic", **patch([NO_TAU])},
+        {"name": "oldNoTraffic", **patch(old_patches() + [NO_TAU])},
+    ]
+    jobs = []
+    for sc, dist, dy in (("noon-cu-close", 40, 0.3), ("noon-cumulus", 60, 0.6), ("sunset", 50, 0.3)):
+        j = job(sc, vs, crop=[380, 0, 850, 600])
+        j["name"] = f"{sc}@{dist}{'+' if dy > 0 else ''}{dy}"
+        j["pre"] = traffic_pre(dist, dy, 12)
+        jobs.append(j)
+    return jobs
+
+
+def gpu_final():
+    vs = [{"name": "old", **patch(old_patches())}, {"name": "old2", **patch(old_patches())}, {"name": "new"}]
+    jobs = [job("hnd-low-day", vs), job("cruise-ground", vs), job("sea-mod-low", vs)]
+    j = job("noon-cumulus", vs)
+    j["pre"] = traffic_pre(60, 0.6, 12)
+    jobs.append(j)
+    return jobs
+
+
 def gpu():
     surf = {"name": "reflSurf", **patch([(SKYCAM, SKYCAM_SURF), (OS_REFL, OS_REFL_SURF)])}
     fix = {"name": "fixAP", **patch([(TR_ADD, TR_FIX)])}
@@ -439,8 +467,10 @@ GROUPS = {
     "proto2": proto2,
     "diag-stripes3": diag_stripes3,
     "gpu": gpu,
+    "gpu-final": gpu_final,
     "ap-interp": ap_interp,
     "accept": accept,
+    "accept-trail": accept_trail,
 }
 
 if __name__ == "__main__":
