@@ -1129,9 +1129,7 @@ export class WeatherField {
     const warm = smooth(0.3, 0.6, this.summer(tBirth, lat));
     // 副高下也偶有孤立的午后 / 局地对流（小笠原、南西诸岛盛夏也有雷阵雨），不能一整月零雷暴：留一个很小的出生率 [估算]
     const popup = 0.035 * this.subtropicalHigh(lat, lon, tBirth + life / 2);
-    // TW01：对流项从 (conv − 0.35) × 1.8 × 0.8 提到 (conv − 0.33) × 2.0 × 0.85：按「模型雷暴日」对照香港 / 那霸平年值，
-    // 改前只有平年的 0.13 / 0.22，加了海上对流后仍贴在 0.4 的下限（weather-stats 的 TW 雷暴日断言）[估算]
-    const p = clamp01((conv - 0.33) * 2.0) * 0.85 +0.35 * warm * this.front(lat, lon, tBirth).strength + popup;
+    const p = clamp01((conv - 0.35) * 1.8) * 0.8 + 0.35 * warm * this.front(lat, lon, tBirth).strength + popup;
     if (r0 >= p) return null;
     const rk = hash(i, j, k, s + 5);
     const kind: StormSystemSample["kind"] = rk < 0.55 ? "isolated" : rk < 0.82 ? "cluster" : "squall";

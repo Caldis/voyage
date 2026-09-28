@@ -215,6 +215,8 @@ function runSeed(seed: number) {
   function toweringPoint(lat: number, lon: number, months: number[], hours = TW_HOURS) {
     let n = 0, tower = 0, cb150 = 0, cb280 = 0, cb400 = 0, sys = 0, cells = 0, cellsMax = 0;
     const tops: number[] = [];
+    /** 飑线：按系统 id 去重，记单体数与相邻单体间距（km） */
+    const squalls = new Map<string, { n: number; gaps: number[] }>();
     for (const y of years)
       for (const m of months)
         for (let d = 1; d <= 28; d++)
@@ -231,6 +233,7 @@ function runSeed(seed: number) {
               if (dd <= 150) in150 = true;
               c += s.cells.length;
               for (const cell of s.cells) tops.push(cell.top);
+              if (s.kind === "squall" && !squalls.has(s.id)) squalls.set(s.id, { n: s.cells.length, gaps: s.cells.slice(1).map((c, i) => gc(c.lat, c.lon, s.cells[i].lat, s.cells[i].lon)) });
             }
             if (in280) cb280++;
             if (in150) cb150++;
@@ -242,7 +245,7 @@ function runSeed(seed: number) {
     const q = (p: number) => (tops.length ? tops[Math.min(tops.length - 1, Math.floor(p * tops.length))] : NaN);
     return {
       n, tower: pct(tower, n), cb150: pct(cb150, n), cb280: pct(cb280, n), cb400: pct(cb400, n),
-      sys: sys / n, cells: cells / n, cellsMax, top50: q(0.5), top10: q(0.1), top90: q(0.9),
+      sys: sys / n, cells: cells / n, cellsMax, top50: q(0.5), top10: q(0.1), top90: q(0.9), squalls: [...squalls.values()],
     };
   }
   /**
@@ -651,6 +654,14 @@ function runSeed(seed: number) {
     check("TW 华南沿海 砧顶中位 km（7–8 月）", S["华南沿海"].top50, band(S["华南沿海"].top50, 13.8, 15.5), "13.8–15.5", "热带对流层顶约 16 km [Johnson99]，砧在其下 1–3 km；TOWERING TW01「华南盛夏 14–16」[估算]");
     check("TW 南海中部 砧顶中位 km（7–8 月）", S["南海中部"].top50, band(S["南海中部"].top50, 13.8, 15.5), "13.8–15.5", "同上");
     check("TW 砧顶 华南沿海 − 关东（7–8 月中位，km）", S["华南沿海"].top50 - S["关东"].top50, S["华南沿海"].top50 - S["关东"].top50 >= 0.5, "≥ 0.5", "对流层顶与对流强度随纬度降低 [教科书]；门限 [估算]");
+    // 飑线（各点 7–8 月午后见到的全部飑线，按系统去重）：单体数不能总是 4、间距不能总是 16 km（TOWERING §2.2 第 2 条「等距桌腿」，随机性铁律）
+    const sq = Object.values(S).flatMap((s) => s.squalls);
+    // 按系统的平均间距（单体各自的错位会在平均里抵消，只剩系统之间的差别）
+    const gaps = sq.filter((s) => s.gaps.length).map((s) => s.gaps.reduce((a, b) => a + b, 0) / s.gaps.length).sort((a, b) => a - b);
+    const gapSpread = gaps.length ? gaps[Math.floor(0.9 * (gaps.length - 1))] - gaps[Math.floor(0.1 * (gaps.length - 1))] : 0;
+    const three = pct(sq.filter((s) => s.n === 3).length, sq.length);
+    check("TW 飑线 平均单体间距（按系统）p90 − p10 km", gapSpread, gapSpread >= 6, "≥ 6", "改前每条飑线都是 16 km（± 2 的错位）；随机性铁律 [门限估算]");
+    check("TW 飑线 3 个单体的比例 %", three, band(three, 15, 70), "15–70", "改前全是 4 个；飑线单体数本来就不定 [教科书]，名额 4 以内 [门限估算]");
     for (const [k, p] of Object.entries(tw.picker)) {
       check(`TW 名额挑选 ${k}：挑中单体里看得见的 %`, p.visNew, p.visNew >= 90, "≥ 90", "TW01：名额只有 4 个单体，优先给挪位后在窗户这一侧、没飞过去的系统（改前按距离挑，南海 / 华南沿海约 48 / 63%）");
       check(`TW 名额挑选 ${k}：每刻看得见的单体数 新 − 旧`, p.visCellsNew - p.visCellsOld, p.visCellsNew >= p.visCellsOld, "≥ 0", "新规则不能让看得见的单体变少");

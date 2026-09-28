@@ -1,0 +1,10 @@
+[
+  {"name": "tw01-scs-0826-1500", "p": {"preset": "scs", "date": "2026-08-26", "time": 900, "wing-pos": "-4", "quality": "high"}, "continuousJourney": true, "wait": 4000,
+   "js": "const w = v.director.weather; w.onJump(); await new Promise(r => setTimeout(r, 15000)); w.onJump(); await new Promise(r => setTimeout(r, 4000)); return w.describe() + ' | tops ' + v.weather.storms.map(s => s.top.toFixed(1)).join(',');"},
+  {"name": "tw01-scs-0719-1500", "p": {"preset": "scs", "date": "2026-07-19", "time": 900, "wing-pos": "-4", "quality": "high"}, "continuousJourney": true, "wait": 4000,
+   "js": "const w = v.director.weather; w.onJump(); await new Promise(r => setTimeout(r, 15000)); w.onJump(); await new Promise(r => setTimeout(r, 4000)); return w.describe();"},
+  {"name": "tw01-scs-0804-1500-ahead", "p": {"preset": "scs", "date": "2026-08-04", "time": 900, "wing-pos": "-4", "quality": "high"}, "head": [-0.42, 0.1, -0.5], "continuousJourney": true, "wait": 4000,
+   "js": "const w = v.director.weather; w.onJump(); await new Promise(r => setTimeout(r, 15000)); w.onJump(); await new Promise(r => setTimeout(r, 4000)); return w.describe();"},
+  {"name": "tw01-ecs-0719-1500", "p": {"preset": "ecs", "date": "2026-07-19", "time": 900, "wing-pos": "-4", "quality": "high"}, "continuousJourney": true, "wait": 4000,
+   "js": "const w = v.director.weather; w.onJump(); await new Promise(r => setTimeout(r, 15000)); w.onJump(); await new Promise(r => setTimeout(r, 4000)); return w.describe();"}
+]
