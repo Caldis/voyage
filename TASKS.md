@@ -8,6 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| G-FREEZE | 第 7 波（测量可信度） | 5243 | worktree | Opus（冻结后地面仍在变：诊断换版路径、冻结期间不换版或给稳定判据、ab 检测冻结期间地面变化） | — | 进行中 |
 | C10c | 第 7 波（云，C10b 审查 P2） | 5242 | worktree | Opus（俯视浓云海近处变暗：进云首样本受光偏暗 → 区间平均 / 插值估表面，零取样；正式加 sea-sc / sea-sc-low；主循环上限改 uLoopGuard） | — | 进行中 |
 | DX-26 | 第 7 波（开发体验） | 5241 | worktree | Opus（gpu-ab 配对计时 + 程序切换校验、ab live 逐帧、诊断变体、compare 边宽分带 / α 分档、网络错误归类、ground 简写、锁排队显示、防自锁） | — | 进行中 |
 | W-EDGE | 第 7 波（锯齿，W-STAIR 遗留） | 5239 | worktree | Opus（外轮廓 SDF 解析覆盖率替代 / 补充子射线；冷编译 ≤ +2%，机翼余量已吃一半） | — | 进行中 |
@@ -23,7 +24,6 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
-| G-FREEZE | night-city-low 冻结后地面仍在变：两张设置完全相同的截图差约 20 万像素（T48c 发现，G08 合并后出现）——查冻结期间 clipmap / 拼接 Worker 是否仍在换级或回退，冻结工具加「冻结期间地面变化」检测 | 中 | ground / scripts | ground | night-city-low 同代码重拍逐位 0 |
 | T48d | T48c 遗留：50 ms 频闪时小翼后缘一条与闪光区边缘零星灯芯变暗（1067 px，均值 −4.4、最暗 −16.6；3×3 最小值在闪光边缘低估扣除量）——可试十字 5 格或按闪光区掩码放宽；低优先 | 低 | render/exposure.ts | exposure | T48c-pulse.mjs 同轮相对门限 + 变暗计数 |
 | C06 | 近处云第二级细节（菜花小卷团）：真值同样是泥塑，只能从密度场补（形状 55 m、细节 14 m 纹素是上限） | 中高 | clouds（密度） | clouds | cu-side 近景、backlit-close |
 | DX-25 | 云不透明度调试出口（exposure 加类似 uDebugMask 的开关或 ab job 导出云 alpha），让 `compare --halo` 能做真实验收；flicker 照搬 ab 逐张解码去掉 48 帧上限 | 低 | exposure（调试开关）/ scripts | exposure | ab 导出云 alpha 后 --halo 跑通 |
