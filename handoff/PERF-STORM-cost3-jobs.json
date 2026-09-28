@@ -1,0 +1,245 @@
+[
+ {
+  "name": "c3-storm-sc-low",
+  "scene": "storm-sc-low",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noAnvil",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float anvil = anvilDensity(xz, alt, c.xy, R, top, lod, aoA, geo);",
+       "  float anvil = anvilDensity(xz, alt, c.xy, R, top, lod, aoA, geo);\n  anvil = 0.0;",
+       true
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noAnvilL",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  return max(max(smoothstep(0.0, 0.25, -sdf), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo)), rainL);",
+       "  return max(smoothstep(0.0, 0.25, -sdf), rainL);",
+       true
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noMam",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float mam = mammatusDensity(xz, alt, geo);",
+       "  float mam = 0.0;",
+       true
+      ]
+     ]
+    }
+   },
+   {
+    "name": "softL4",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;\n      if (gStormSoft > 0.5 && gStormSoft < 1.5) lightSteps = 4;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "occ1",
+    "patch": {
+     "clouds.marchMat": [
+      {
+       "re": "textureLod\\(uOcc, uvw, 2\\.0\\)",
+       "to": "textureLod(uOcc, uvw, 1.0)"
+      }
+     ]
+    }
+   },
+   {
+    "name": "occ0",
+    "patch": {
+     "clouds.marchMat": [
+      {
+       "re": "textureLod\\(uOcc, uvw, 2\\.0\\)",
+       "to": "textureLod(uOcc, uvw, 0.0)"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "c3-storm-day",
+  "scene": "storm-day",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noAnvil",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float anvil = anvilDensity(xz, alt, c.xy, R, top, lod, aoA, geo);",
+       "  float anvil = anvilDensity(xz, alt, c.xy, R, top, lod, aoA, geo);\n  anvil = 0.0;",
+       true
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noAnvilL",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  return max(max(smoothstep(0.0, 0.25, -sdf), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo)), rainL);",
+       "  return max(smoothstep(0.0, 0.25, -sdf), rainL);",
+       true
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noMam",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float mam = mammatusDensity(xz, alt, geo);",
+       "  float mam = 0.0;",
+       true
+      ]
+     ]
+    }
+   },
+   {
+    "name": "softL4",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;\n      if (gStormSoft > 0.5 && gStormSoft < 1.5) lightSteps = 4;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "occ1",
+    "patch": {
+     "clouds.marchMat": [
+      {
+       "re": "textureLod\\(uOcc, uvw, 2\\.0\\)",
+       "to": "textureLod(uOcc, uvw, 1.0)"
+      }
+     ]
+    }
+   },
+   {
+    "name": "occ0",
+    "patch": {
+     "clouds.marchMat": [
+      {
+       "re": "textureLod\\(uOcc, uvw, 2\\.0\\)",
+       "to": "textureLod(uOcc, uvw, 0.0)"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "c3-typhoon-bands",
+  "scene": "typhoon-bands",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noAnvil",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float anvil = anvilDensity(xz, alt, c.xy, R, top, lod, aoA, geo);",
+       "  float anvil = anvilDensity(xz, alt, c.xy, R, top, lod, aoA, geo);\n  anvil = 0.0;",
+       true
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noAnvilL",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  return max(max(smoothstep(0.0, 0.25, -sdf), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo)), rainL);",
+       "  return max(smoothstep(0.0, 0.25, -sdf), rainL);",
+       true
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noMam",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float mam = mammatusDensity(xz, alt, geo);",
+       "  float mam = 0.0;",
+       true
+      ]
+     ]
+    }
+   },
+   {
+    "name": "softL4",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;\n      if (gStormSoft > 0.5 && gStormSoft < 1.5) lightSteps = 4;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "occ1",
+    "patch": {
+     "clouds.marchMat": [
+      {
+       "re": "textureLod\\(uOcc, uvw, 2\\.0\\)",
+       "to": "textureLod(uOcc, uvw, 1.0)"
+      }
+     ]
+    }
+   },
+   {
+    "name": "occ0",
+    "patch": {
+     "clouds.marchMat": [
+      {
+       "re": "textureLod\\(uOcc, uvw, 2\\.0\\)",
+       "to": "textureLod(uOcc, uvw, 0.0)"
+      }
+     ]
+    }
+   }
+  ]
+ }
+]

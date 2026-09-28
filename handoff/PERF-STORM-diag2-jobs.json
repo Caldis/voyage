@@ -1,0 +1,248 @@
+[
+ {
+  "name": "d2-storm-sc-low",
+  "scene": "storm-sc-low",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 60
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "nsd",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float gStormW = 0.0;",
+       "float gStormW = 0.0;\nfloat gNS = 0.0; float gNSL = 0.0; float gNL8 = 0.0;"
+      ],
+      [
+       "      float sd = stormDensity(c, xz, alt, lod, detail, ao) * uCloudDensity;",
+       "      gNS += 1.0;\n      float sd = stormDensity(c, xz, alt, lod, detail, ao) * uCloudDensity;",
+       true
+      ],
+      [
+       "      float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;",
+       "      gNS += 1.0;\n      float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;",
+       true
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = gNS;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nsl",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float gStormW = 0.0;",
+       "float gStormW = 0.0;\nfloat gNS = 0.0; float gNSL = 0.0; float gNL8 = 0.0;"
+      ],
+      [
+       "      d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);",
+       "      gNSL += 1.0; d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);",
+       true
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = gNSL;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nl8",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float gStormW = 0.0;",
+       "float gStormW = 0.0;\nfloat gNS = 0.0; float gNSL = 0.0; float gNL8 = 0.0;"
+      ],
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;\n      if (lightSteps == 8) gNL8 += 1.0;",
+       true
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = gNL8;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "d2-storm-day",
+  "scene": "storm-day",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 60
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "nsd",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float gStormW = 0.0;",
+       "float gStormW = 0.0;\nfloat gNS = 0.0; float gNSL = 0.0; float gNL8 = 0.0;"
+      ],
+      [
+       "      float sd = stormDensity(c, xz, alt, lod, detail, ao) * uCloudDensity;",
+       "      gNS += 1.0;\n      float sd = stormDensity(c, xz, alt, lod, detail, ao) * uCloudDensity;",
+       true
+      ],
+      [
+       "      float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;",
+       "      gNS += 1.0;\n      float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;",
+       true
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = gNS;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nsl",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float gStormW = 0.0;",
+       "float gStormW = 0.0;\nfloat gNS = 0.0; float gNSL = 0.0; float gNL8 = 0.0;"
+      ],
+      [
+       "      d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);",
+       "      gNSL += 1.0; d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);",
+       true
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = gNSL;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nl8",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float gStormW = 0.0;",
+       "float gStormW = 0.0;\nfloat gNS = 0.0; float gNSL = 0.0; float gNL8 = 0.0;"
+      ],
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;\n      if (lightSteps == 8) gNL8 += 1.0;",
+       true
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = gNL8;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "d2-typhoon-bands",
+  "scene": "typhoon-bands",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 60
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "nsd",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float gStormW = 0.0;",
+       "float gStormW = 0.0;\nfloat gNS = 0.0; float gNSL = 0.0; float gNL8 = 0.0;"
+      ],
+      [
+       "      float sd = stormDensity(c, xz, alt, lod, detail, ao) * uCloudDensity;",
+       "      gNS += 1.0;\n      float sd = stormDensity(c, xz, alt, lod, detail, ao) * uCloudDensity;",
+       true
+      ],
+      [
+       "      float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;",
+       "      gNS += 1.0;\n      float hd = hurricaneDensity(xz, alt, lod, detail, hao) * uCloudDensity;",
+       true
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = gNS;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nsl",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float gStormW = 0.0;",
+       "float gStormW = 0.0;\nfloat gNS = 0.0; float gNSL = 0.0; float gNL8 = 0.0;"
+      ],
+      [
+       "      d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);",
+       "      gNSL += 1.0; d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);",
+       true
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = gNSL;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nl8",
+    "builtin": "cloud-steps",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float gStormW = 0.0;",
+       "float gStormW = 0.0;\nfloat gNS = 0.0; float gNSL = 0.0; float gNL8 = 0.0;"
+      ],
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;\n      if (lightSteps == 8) gNL8 += 1.0;",
+       true
+      ],
+      [
+       "  gl_FragColor = vec4(min(L, vec3(60000.0)), T);",
+       "  iUsed = gNL8;\n  gl_FragColor = vec4(min(L, vec3(60000.0)), T);"
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]
