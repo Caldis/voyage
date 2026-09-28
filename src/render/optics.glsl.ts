@@ -415,8 +415,8 @@ vec4 opticsRain(vec3 rd) {
   vec3 sunT = sunTransmittance(rP, dot(nP, uSunDir)) * opticsRainLit(P);
   // 相机到雨之间的空气（空气透视 LUT）：雨的光要乘这段透射率；雨幕只挡它后面的东西，前面这段空气的内散射不能被雨挡掉——
   // 背景 L 里已经含着它，所以雨幕的合成是 L·Tv + (1 − Tv)·airL（不这样做，雨幕会把前面几公里的蓝色空气光一起吃掉，成一块黑斑）
-  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tLit);
-  vec3 airL = textureLod(uAerialInscatterS, uvw, 0.0).rgb * uSunIlluminance;
+  vec3 uvw = aerialPerspectiveUvw(rd, uApDir, tLit);
+  vec3 airL = textureLod(uAerialInscatterS, uvw, 0.0).rgb * uApIlluminance;
   vec3 viewT = textureLod(uAerialTransmittanceS, uvw, 0.0).rgb;
   float cosA = dot(rd, -uSunDir);
   float theta = acos(clamp(cosA, -1.0, 1.0));
