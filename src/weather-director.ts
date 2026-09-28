@@ -1,7 +1,7 @@
 import { haversineKm } from "./flight";
 import type { CloudParams } from "./clouds/clouds";
 import type { CoverKind, Director, DirectorHost, SwitchRequest } from "./director";
-import { REGIME_FAMILY, REGIME_NAMES, WIND_BL_TOP_KM, WeatherField, WeatherSystem, windSpeed, type CloudRegime, type StormSystemSample, type TyphoonSample, type WeatherSample, type WindProfile } from "./weather";
+import { REGIME_FAMILY, REGIME_NAMES, WeatherField, WeatherSystem, windSpeed, type CloudRegime, type StormSystemSample, type TyphoonSample, type WeatherSample, type WindProfile } from "./weather";
 
 /**
  * 天气驱动（T19b）：连续航程开着时，按天气场（weather.ts 的 WeatherField）让天气随位置与时间演变。导演（director.ts）持有它。
@@ -63,20 +63,12 @@ const GATE_DEMO_EVERY_SIM_S = 2 * 3600;
 const SEA_WIND_RATE = 4 / 3600;
 
 /**
- * 海面 10 m 风速（m/s）：按海面的粗糙度（Charnock）从 850 hPa 推，和 weather.ts 的 wind() 同一套对数律。
- * 飞机在陆地上空时 profile.sfc 按陆地粗糙度算（约为海上的 0.6 倍），窗外看得见的海（海岸外）应当用海上的值
+ * 海面 10 m 风速（m/s）：直接用 weather.ts 按周围海陆比例算好的地面风（z₀ 在海面 Charnock 与陆地 0.2 m 之间按陆地比例插值）。
+ * 审查 D1：第一版在陆地 / 近岸格点上改用开阔海面的 Charnock 推导，骏河湾 1 月中位 13.8 m/s，偏高——
+ * 近岸的海被陆地包着（风区短、背风），海陆比例插值后的值更接近窗外那片海的实际风
  */
 function seaSurfaceWind(p: WindProfile) {
-  if (p.land <= 1e-3) return windSpeed(p.sfc);
-  const g = windSpeed(p.p850);
-  const hm = WIND_BL_TOP_KM * 1000;
-  let z0 = 2e-4;
-  for (let it = 0; it < 3; it++) {
-    const s10 = (g * Math.log(10 / z0)) / Math.log(hm / z0);
-    const ustar = (0.4 * s10) / Math.log(10 / z0);
-    z0 = Math.max(1e-5, (0.011 * ustar * ustar) / 9.81);
-  }
-  return (g * Math.log(10 / z0)) / Math.log(hm / z0);
+  return windSpeed(p.sfc);
 }
 
 interface LocalCell {

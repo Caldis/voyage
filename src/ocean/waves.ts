@@ -26,8 +26,8 @@ import { buildSpectrum, type CascadeBand, coxMunkVariance, normalTailInverse, ty
  * 7 m/s 必须是一档：它是面板默认值，默认场景的频谱与改前逐位相同
  */
 export const WIND_LEVELS = [0, 1.5, 3, 5, 7, 10, 13.5, 17.5, 22];
-/** 缓存里最多留几档的 h0（每档 3 MB）：当前一对 + 两侧各一档预取 */
-const CACHE_LEVELS = 5;
+/** 缓存里最多留几档的 h0（每档 3 MB）：超过它才逐出 [i−2, i+2] 以外的档 */
+const CACHE_LEVELS = 6;
 
 const N = 256;
 /** 波场的时间周期（s）：ω 按 2π/T 量化后波场严格以 T 为周期（相对误差 < 1%，看不出来） */
@@ -123,7 +123,7 @@ export class OceanWaves {
   private readonly finalize: THREE.ShaderMaterial;
   /** 频谱实际显示的风速（−1 = 还没有） */
   private wind = -1;
-  /** 阵风斑的漂移（km）：D0 + 风速 ×（t − t0），风速变了就把已走的距离并进 D0（风速恒定时恰好等于改前着色器里的 uWind·uTime） */
+  /** 阵风斑的漂移（km）：D0 + 风速 ×（t − t0），风速变了就把已走的距离并进 D0（风速恒定时与改前着色器里的 uWind·uTime 至多差 1 ulp） */
   private drift0 = 0;
   private driftT0 = 0;
   private driftWind = Number.NaN;
@@ -263,9 +263,10 @@ export class OceanWaves {
     while (i + 2 < L.length && L[i + 1] <= w) i++;
     const a = Math.min(Math.max((w - L[i]) / (L[i + 1] - L[i]), 0), 1);
     const need = a > 0 ? [i, i + 1] : [i];
+    // 启动第一帧（或 Worker 不可用）先同步算需要的档，再预取：顺序反过来 Worker 会把同一档再算一遍（审查 L1）
+    for (const l of need) if (!this.cache.has(l) && (this.wind < 0 || !this.getWorker())) this.buildSync(l);
     // 预取：当前一对（风速正好落在档上时上档也要备好）+ 两侧各一档
     for (const l of [i, i + 1, i - 1, i + 2]) this.prefetch(l);
-    for (const l of need) if (!this.cache.has(l) && (this.wind < 0 || !this.getWorker())) this.buildSync(l);
     this.stats.pending = this.pendingLevels.size;
     if (need.some((l) => !this.cache.has(l))) {
       this.stats.holds++;
@@ -287,8 +288,8 @@ export class OceanWaves {
     this.evolve.uniforms.uH0.value = texA;
     this.evolve.uniforms.uH0b.value = texA === this.h0A ? this.h0B : this.h0A;
     this.evolve.uniforms.uMix.value = a;
-    // 缓存只留当前一对两侧各一档左右
-    for (const l of [...this.cache.keys()]) if ((l < i - 1 || l > i + 2) && this.cache.size > CACHE_LEVELS - 1) this.cache.delete(l);
+    // 缓存只留 [i−2, i+2]（对称）：风速在档边界来回时 i 在相邻两值间跳，不对称的范围会把刚逐出的档又算一遍（审查 M1）
+    for (const l of [...this.cache.keys()]) if ((l < i - 2 || l > i + 2) && this.cache.size > CACHE_LEVELS) this.cache.delete(l);
 
     // 混合后的方差：两档是同一组随机数、振幅线性混合，所以按「标准差线性混合」估算（两档谱形相近时几乎精确；a = 0 时逐位等于该档）
     const A = this.cache.get(i)!;
@@ -319,7 +320,7 @@ export class OceanWaves {
   /**
    * 阵风斑（ocean.glsl.ts 的 gustFactor）随风漂移的距离（km），放在 uOceanFoam.z。
    * 改前着色器里直接写 uWind·uTime：风速一变，整片阵风斑瞬间挪 Δ风速 × 已运行秒数（运行 10 分钟后差 1 m/s 就跳 0.6 km）。
-   * 现在逐段积分：风速恒定时 = 风速 × t（与改前相同），风速变化时位置连续
+   * 现在逐段积分：风速恒定时 = 风速 × t（与改前至多差 1 ulp），风速变化时位置连续
    */
   private updateDrift(timeSec: number, wind: number) {
     if (Number.isNaN(this.driftWind)) this.driftWind = wind;
