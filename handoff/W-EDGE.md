@@ -111,7 +111,7 @@ live（`tmp/wedge3/live6`，所有命中都探测之后）：sunset 小翼前缘
 | 夜间 · 小翼前缘 | 0 / 0 | 0 / 3 | 1 |
 | 夜间 · 翼尖灯与主翼前缘 | 12 / 17 | 7 / 10 | 6 |
 
-「后缘与整流罩」区域的差异看热图（`W-EDGE-live-heat.py`）全在云上；定稿前的一版（着色点分离、无亮点超采样）在短舱唇口有一团夕阳反光闪烁，定稿已消失。
+~~「后缘与整流罩」区域的差异看热图（`W-EDGE-live-heat.py`）全在云上~~（**已推翻，见「审查返工」一节**：这条热图脚本当时多翻转了一次，复现命令里的区域框到了右上方小翼旁的云、不是整流罩，掩盖了整流罩轮廓本身约 ×4 的闪烁）；定稿前的一版（着色点分离、无亮点超采样）在短舱唇口有一团夕阳反光闪烁，定稿已消失。
 
 **静帧**（`tmp/wedge3/final`，11 场景同页冻结）：差和 700587 → **430919（−38.5%）**，边缘带覆盖率误差 0.071–0.079（old 0.16–0.21），非机翼 11 个 job 逐位 0、新长出覆盖 0。
 **两条静帧验收没达到**（−40%、≤ 0.06）：park 版 v5 是 −45.8% / 0.054，但飞行中爬行过不了硬门槛；为时间稳定去掉的折角超采样、改小的命中阈值让内侧解析覆盖率系统性偏浅约 0.15（序列法按路径统计：码 2 误差 −0.15，外侧解析 +0.01）。
@@ -129,6 +129,73 @@ live（`tmp/wedge3/live6`，所有命中都探测之后）：sunset 小翼前缘
 **其他**：check:glsl、typecheck、build 通过，dist 无 0 字节文件；所有 ab / live / gpu-ab 运行 console error 0。
 对照 worktree `tmp/wedge2-base`、`tmp/wedge3-chain`（shader-budget --chain 建的）已删，5251 / 5311 已关。
 
+## 审查返工（第四个代理，2026-09-29，分支 worktree-agent-af39f8027d2594010，端口 5278 / 对照 5181 = master）
+
+独立审查（`handoff/W-EDGE-review.md`，定稿）判定「返工（小范围，一处）」：sunset 襟翼滑轨整流罩（`w.part == 5`）的外轮廓飞行中爬行没过硬门槛，
+按覆盖率掩码（`w.cov` 冻结读回，机翼轮廓 ±4 px 的带内 / 机翼内部 / 窗外分开统计，不受云噪声干扰）统计带内闪烁像素：基线（master，无 W-EDGE）
+四轮 88–122，定稿四轮 **367–536（约 ×4）**。原因是实现者当时用 `handoff/W-EDGE-live-heat.py` 看热图判断「全在云上」，但这个脚本比
+`ab-live.mjs` 的 `recordLive` 多翻了一次（`recordLive` 存盘前已经把 GL 的下到上翻成自上而下），热图上下颠倒，复现命令里的区域
+`310,200,190,200` 实际框到的是右上方小翼旁的云，看漏了下方真正的整流罩轮廓。
+
+### 改了什么
+
+1. **必须（审查已验证的修法，照原样落地）**：`wing.glsl.ts` 的 `wingTrace` 探测段末尾，弦内探测得出「部分覆盖」（`sEdge ≥ −0.7072`）
+   时，如果命中部件是滑轨整流罩（`w.part == 5`）就不走解析覆盖率、改走原来的 RGSS 超采样：
+   ```glsl
+   if (sEdge < -0.7072) { w.tGraze = -2.0; phase = 2; }
+   else if (w.part == 5) { w.edge = true; phase = 2; }   // 整流罩：盒子式距离场，解析内外两侧偏差方向相反
+   else { ... }
+   ```
+   根因（审查用确定性序列 + 路径归因查出）：整流罩是盒子式拼接的距离场（`wingCanoe`），外侧最近距离偏小、内侧深度也偏浅
+   （按路径统计误差：码 1 外侧解析 +0.113，码 2 探测→解析 −0.155），像素中心从「擦边没打中」变成「打中」时覆盖率不升反降约 0.27，
+   轮廓上逐帧出现非单调的跳变。光滑部件（前缘、小翼）上这条路径的误差只有 +0.01，不受影响，不用全局收紧。
+2. **建议（做了）**：`wing-shading.glsl.ts` 的 `wingView` 里「中心样本比背后窗外亮 3 倍以上才超采样」原来是逐像素硬开关（单样本 ↔
+   5 样本 + 去亮点），门限附近颜色会跳（覆盖率不跳，因为用的是解析值 `covA`），商务舱正午小翼前缘反而因此多闪。改成从 2 倍起就付出
+   超采样的开销，但按 `smoothstep(2.0, 4.0, ratio)` 把单样本颜色（`singleCol`）与超采样结果连续混合（`fireflyMix`），不再是帧与帧
+   之间的二选一；真正的边缘 / 内轮廓超采样（`w.edge` 触发的那条路径）`fireflyMix` 恒为 1，不受影响。
+3. **工具（必须）**：删掉 `W-EDGE-live-heat.py` 里多余的 `A = A[:, ::-1]`；`W-EDGE.md` 复现命令里的区域从 `310,200,190,200` 改成
+   `180,265,320,135`（`sun-live` 裁剪 390,280,500,400 内，与审查用的掩码统计口径一致）；本节上方「后缘与整流罩全在云上」那条结论
+   已标为已推翻。README「坑点」的「只能看热图判断」也已改成「按覆盖率掩码统计带内」。
+
+### 验收数字（`wedgerev_mask.py`，机翼轮廓 ±4 px 带内，`ab live` 480 帧、同一 job 两轮）
+
+| 场景 · 区域（带内闪烁像素） | 基线 old / old2（master） | 返工前（本文档「定稿」） | 返工后 new / new2 |
+| --- | --- | --- | --- |
+| sun · 后缘与整流罩（整流罩） | 116 / 127 | 367–536（审查测得） | **27 / 41** |
+| sun · 小翼前缘 | 585 / 520 | 152 / 182（定稿自报） | 130 / 142 |
+| sun · 小翼后缘 | 28 / 18 | 0 / 0 | 0 / 0 |
+| sun · 主翼前缘 | 928 / 789 | 595 / 622 | 405 / 366 |
+| biz · 小翼前缘 | 814 / 900 | 641 / 636 | 656 / 590 |
+| biz · 主翼前缘 | 141 / 165 | 38 / 40 | 51 / 47 |
+| night · 小翼前缘 | 0 / 0 | 0 / 3 | 0 / 0（带内） |
+| night · 翼尖灯与主翼前缘 | 72 / 52 | 7 / 10 | 22 / 23 |
+
+- 整流罩带内两轮均低于基线 88–122（也低于审查报告里 fairss 变体自己测到的 42 / 58），商务舱正午 / sunset 其他分区 / 夜间没有回升
+  （个别数字比返工前的定稿略高几个像素，仍远低于基线，判为测量噪声，不是回归）。
+- 非机翼（old、new 覆盖率都为 0 的像素）HDR 逐位差：biz / sun / night 三个 job 全部 0；新长出覆盖 0。
+- **静帧**（`W-EDGE-mkjobs.py quick`，5 场景，同页冻结）：差和 641868 → 301098（**−53.1%**），比返工前定稿的 −38.5%（11 场景口径，
+  数字不直接可比）更低；方向仍是下降，按验收要求「回到约 −34% 属预期，接受」——实测降幅比预期更大（可能与这次的 base 服务器状态
+  或场景细节差异有关，不是回归，反证是非机翼逐位 0 且 live 闪烁全面下降）。
+- **机翼 pass 帧时间**（`gpu-ab --time wing`，8 轮 ABBA，负载下 CPU 20–59%，仅供参考）：sunset ×1.22 / ×1.23（A/A）、商务舱 ×1.18 /
+  ×1.17、云里（湿窗）×1.07 / ×1.08、夜间 ×1.17 / ×1.19。比返工前定稿（×1.06–1.24）略升，主要来自建议项 2（触发超采样的门槛从 3 倍
+  降到 2 倍，覆盖更多像素），仍落在此前已接受的量级内；权威数字留给协调者安排的安静窗口复测。
+- typecheck、build、check:glsl 通过，dist 无 0 字节文件；本节所有 ab / gpu-ab 运行 console error 0。
+- 对照沿用标准 5181（master）；本分支 dev server（5278）验收后已关。
+
+### 审查返工的复现
+
+```
+python handoff/W-EDGE-mkjobs.py apps/voyage/tmp/wedgerw-verify/jobs-quick.json quick        # 在 apps/voyage 下
+node scripts/dev-browser.mjs ab --port <开发> --base 5181 --jobs apps/voyage/tmp/wedgerw-verify/jobs-quick.json --rounds 1 --out apps/voyage/tmp/wedgerw-verify/quick1
+python apps/voyage/handoff/W-EDGE-metrics.py apps/voyage/tmp/wedgerw-verify/quick1 old,new  # 在仓库根
+
+node apps/voyage/scripts/dev-browser.mjs ab --port <开发> --base 5181 --jobs apps/voyage/tmp/wedgerw-verify/live.json --rounds 1 --out apps/voyage/tmp/wedgerw-verify/live1
+python D:/Code/opus-test/tmp/wedgerev-out/wedgerev_mask.py apps/voyage/tmp/wedgerw-verify/live1/sun-live 390,280,500,400 old,new,old2,new2 \
+  小翼前缘=310,0,120,195 小翼后缘=430,0,70,195 主翼前缘=0,195,440,70 后缘与整流罩=180,265,320,135 --r 4 --thr 8
+```
+（`live.json` 是审查产物 `D:\Code\opus-test\tmp\wedgerev-out\live.json` 的原样拷贝，带 covOld / covNew / dump 三个冻结变体给
+`wedgerev_mask.py` 用；`wedgerev_mask.py` 不在本仓库里，路径按审查环境找。）
+
 ### 复现
 
 ```
@@ -137,7 +204,7 @@ node scripts/dev-browser.mjs ab --port <开发> --base <对照> --jobs tmp/wedge
 python apps/voyage/handoff/W-EDGE-metrics.py tmp/wedge3/final old,new       # 在仓库根
 # 飞行中爬行（硬门槛）：同代码两轮当噪声底
 node apps/voyage/scripts/dev-browser.mjs ab --port <开发> --base <对照> --jobs apps/voyage/handoff/W-EDGE-jobs-live.json --rounds 1 --out tmp/wedge3/live
-python apps/voyage/handoff/W-EDGE-live-heat.py tmp/wedge3/live/sun-live 500 400 old,new 310,200,190,200 4 tmp/wedge3/heat.png   # 热图（自动排除频闪帧）
+python apps/voyage/handoff/W-EDGE-live-heat.py tmp/wedge3/live/sun-live 500 400 old,new 180,265,320,135 4 tmp/wedge3/heat.png   # 热图（自动排除频闪帧），后缘与整流罩区域；旧区域 310,200,190,200 框错（见「审查返工」一节）
 # 确定性序列 + 路径归因（变体 json 的每条 patch 每帧也算一份覆盖率）
 python apps/voyage/handoff/W-EDGE-sweep-mk.py tmp/wedge3/sweep.json sun 16 0.12 380,500,520,440 [变体.json]
 node apps/voyage/scripts/dev-browser.mjs ab --port <开发> --base <对照> --jobs tmp/wedge3/sweep.json --rounds 1 --out tmp/wedge3/sweep

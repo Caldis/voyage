@@ -16,8 +16,8 @@ for v in vs:
     a = np.memmap(f"{jd}/live_{v}_{w}x{h}.u8", np.uint8, "r")
     n = a.size // (w * h * 4)
     A = a[: n * w * h * 4].reshape(n, h, w, 4)
-    # 录像是 GL 读回（下到上）：按行翻转
-    A = A[:, ::-1]
+    # 审查返工：这里不需要再翻转。ab-live.mjs 的 recordLive 存盘前已经把 GL 的下到上翻成了自上而下，
+    # 这里再翻一次会把热图上下颠倒——旧版复现命令里的区域框错了（框到右上方小翼旁的云），就是这个坑（见 W-EDGE-review.md §1）
     F = A[:, y:y + ch, x:x + cw, :3].astype(np.float32) @ np.array([0.2126, 0.7152, 0.0722], np.float32)
     d2 = np.abs(F[1:-1] - 0.5 * (F[:-2] + F[2:]))
     import json as _j, os as _o
