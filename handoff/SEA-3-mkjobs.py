@@ -269,6 +269,120 @@ def diag_stripes3():
     ]
 
 
+# 空气透视 LUT 沿距离轴按「均匀介质段」插值：透射率在两层之间按距离做对数线性（指数衰减的精确形状），
+# 内散射按透射率的比例插值（均匀段内 L 与 T 线性相关：L = La + S·(Ta − T)/β）。一个均匀段内精确，霾里 12 km 一层也不再是折线
+AP_LOGZ = (
+    "  { float Dz = AERIAL_SIZE.z; float zu = sqrt(clamp(tT / AERIAL_MAX_DISTANCE, 0.0, 1.0)) * (Dz - 1.0);\n"
+    "    float k0 = min(floor(zu), Dz - 2.0);\n"
+    "    float za = k0 / (Dz - 1.0), zb = (k0 + 1.0) / (Dz - 1.0);\n"
+    "    float da = za * za * AERIAL_MAX_DISTANCE, db = zb * zb * AERIAL_MAX_DISTANCE;\n"
+    "    float td = clamp((tT - da) / max(db - da, 1e-6), 0.0, 1.0);\n"
+    "    vec3 a = vec3(uvw.xy, unitToUv(za, Dz)), b = vec3(uvw.xy, unitToUv(zb, Dz));\n"
+    "    vec3 Ta = texture(uAerialTransmittanceS, a).rgb, Tb = texture(uAerialTransmittanceS, b).rgb;\n"
+    "    vec3 La = texture(uAerialInscatterS, a).rgb, Lb = texture(uAerialInscatterS, b).rgb;\n"
+    "    vec3 T = Ta * pow(max(Tb, vec3(1e-6)) / max(Ta, vec3(1e-6)), vec3(td));\n"
+    "    vec3 dT = Ta - Tb;\n"
+    "    vec3 w = mix(vec3(td), (Ta - T) / dT, step(vec3(1e-4), abs(dT)));\n"
+    "    gh.apL = mix(La, Lb, w) * uSunIlluminance;\n"
+    "    gh.apT = T; }\n"
+)
+
+
+# 天顶角方向的插值按「到海平面的同一比例」取：LUT 的每一行在同一距离上，陡的那一行早已打到海面（积分被截在 tBottom），
+# 平的那一行还在半空，两者线性混合就是折线（每行一条马赫带）。改成两行各自取「到它自己的海平面交点的同一比例」处，再按行插值
+AP_ROWFRAC = (
+    "  { float Dy = AERIAL_SIZE.y; float tB = raySphere(ro, rd, BOTTOM);\n"
+    "    float yu = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (Dy - 1.0);\n"
+    "    float k0 = min(floor(yu), Dy - 2.0); float ty = yu - k0;\n"
+    "    vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));\n"
+    "    vec3 Ls = vec3(0.0), Tsum = vec3(0.0);\n"
+    "    for (int j = 0; j < 2 + uLoopGuard; j++) {\n"
+    "      float yk = (k0 + float(j)) / (Dy - 1.0); float c = 1.0 - 2.0 * yk; float vz = sign(c) * c * c;\n"
+    "      vec3 rk = vec3(hz.x * sqrt(max(1.0 - vz * vz, 0.0)), vz, hz.y * sqrt(max(1.0 - vz * vz, 0.0)));\n"
+    "      float tk = raySphere(ro, rk, BOTTOM);\n"
+    "      float dk = (tB > 0.0 && tk > 0.0) ? tT * tk / tB : tT;\n"
+    "      vec3 q = vec3(uvw.x, unitToUv(yk, Dy), unitToUv(sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0)), AERIAL_SIZE.z));\n"
+    "      float wj = j == 0 ? 1.0 - ty : ty;\n"
+    "      Ls += wj * texture(uAerialInscatterS, q).rgb; Tsum += wj * texture(uAerialTransmittanceS, q).rgb;\n"
+    "    }\n"
+    "    gh.apL = Ls * uSunIlluminance; gh.apT = Tsum; }\n"
+)
+
+
+def ap_interp():
+    vs = [
+        {"name": "cur"},
+        {"name": "logZ", **patch([(AP_FETCH, AP_LOGZ)])},
+        {"name": "rowFrac", **patch([(AP_FETCH, AP_ROWFRAC)])},
+        {"name": "exactAP24", **patch([(GF, EXACT_AP.replace("64.0", "24.0") + GF)])},
+    ]
+    return [
+        job("cruise-ground", vs, crop=[700, 60, 550, 260], extra={"pre": PRE_HAZE}),
+        job("hnd-low-day", vs, crop=[400, 400, 800, 600], extra={"pre": PRE_HAZE}),
+    ]
+
+
+SRC_FILES = ["apps/voyage/src/render/outside-pass.ts", "apps/voyage/src/render/terrain-shading.glsl.ts", "apps/voyage/src/render/traffic.glsl.ts"]
+
+
+def old_patches(which=None):
+    """把本分支对 master 的改动按 diff 块反向做成补丁（新 → 旧），old 变体 = 改前着色器。which 过滤文件名片段"""
+    import subprocess
+
+    root = HERE.parents[2]
+    files = [f for f in SRC_FILES if which is None or any(w in f for w in which)]
+    out = subprocess.run(["git", "diff", "master", "-U2", "--", *files], cwd=root, capture_output=True, text=True, encoding="utf-8").stdout
+    pairs, new, old, inh = [], [], [], False
+    for line in out.splitlines():
+        if line.startswith("@@"):
+            if inh:
+                pairs.append(("".join(new), "".join(old)))
+            new, old, inh = [], [], True
+            continue
+        if not inh or line.startswith(("diff ", "index ", "--- ", "+++ ")):
+            if line.startswith("diff ") and inh:
+                pairs.append(("".join(new), "".join(old)))
+                inh = False
+            continue
+        body = line[1:] + "\n"
+        if line.startswith("+"):
+            new.append(body)
+        elif line.startswith("-"):
+            old.append(body)
+        else:
+            new.append(body)
+            old.append(body)
+    if inh:
+        pairs.append(("".join(new), "".join(old)))
+    return pairs
+
+
+MASK_G = [(GF, GF + "      L = vec3(5000.0, 0.0, 5000.0);\n"), (REFL, REFL + "      L = vec3(5000.0, 0.0, 5000.0);\n")]
+MASK_T = [("      T *= exp(-tau);\n", "      T *= exp(-tau);\n      L = vec3(0.0, 5000.0, 0.0);\n")]
+
+
+def accept():
+    vs = [
+        {"name": "old", **patch(old_patches())},
+        {"name": "new"},
+        {"name": "maskG", **patch(MASK_G)},
+        {"name": "maskT", **patch(MASK_T)},
+    ]
+    jobs = [
+        job("hnd-low-day", vs, crop=[400, 400, 800, 300]),
+        job("hnd-low-day-26", vs, crop=[400, 400, 800, 300]),
+        job("sea-mod-low", vs, crop=[400, 150, 800, 600]),
+        job("cruise-ground", vs, crop=[700, 60, 550, 260]),
+        job("wpac-cruise", vs, crop=[400, 100, 800, 800]),
+    ]
+    for sc, dist, dy in (("noon-cu-close", 40, 0.3), ("noon-cumulus", 60, 0.6), ("sunset", 50, 0.3)):
+        j = job(sc, vs, crop=[380, 0, 850, 600])
+        j["name"] = f"{sc}@{dist}{'+' if dy > 0 else ''}{dy}"
+        j["pre"] = traffic_pre(dist, dy, 12)
+        jobs.append(j)
+    return jobs
+
+
 def gpu():
     surf = {"name": "reflSurf", **patch([(SKYCAM, SKYCAM_SURF), (OS_REFL, OS_REFL_SURF)])}
     fix = {"name": "fixAP", **patch([(TR_ADD, TR_FIX)])}
@@ -325,6 +439,8 @@ GROUPS = {
     "proto2": proto2,
     "diag-stripes3": diag_stripes3,
     "gpu": gpu,
+    "ap-interp": ap_interp,
+    "accept": accept,
 }
 
 if __name__ == "__main__":

@@ -133,7 +133,13 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
       // 所以反射的贡献是 F·(L相机 − 内散射)，不能再乘一次透射率，否则地平线处会被衰减两次，出现一条暗线
       skyCam = skyRadiance(reflect(rd, nView), false);
     }
+    // SEA-3（低空海天「暗墙」）：上面的近似默认「水面往反射方向看到的天空」≈「相机往同一方向看到的天空」。
+    // 相机在霾顶之上、水面埋在霾里时不成立：掠射时水面反射的是一整段霾，相机往反射方向看到的却是霾顶以上的亮天空，
+    // 地平线下一两个像素海面就比地平线上方的暗带亮十几级。按水面处往反射方向到大气顶的透射率 tUpR 混合：
+    // tUpR → 1（反射视线很快出霾）沿用原公式；tUpR → 0 时反射的是「视线这段霾」本身，亮度取它的饱和内散射 apT·apL/(1 − apT)
+    vec3 tUpR = transmittanceToTop(BOTTOM, max(dot(reflect(rd, nView), n), 0.0));
     if (onGround) {
+      skyCam = gh.apL + mix(gh.apT * gh.apL / max(vec3(1.0) - gh.apT, vec3(1e-3)), max(skyCam - gh.apL, vec3(0.0)), tUpR);
       // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，
       // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）
       vec4 vf = hazeValleyFog(P, gh.g, gh.fpM, gh.wat.g, eSunW, eSkyW);
@@ -161,7 +167,7 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
       vec3 inscatter = L;
       vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);
       L += sea;
-      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));
+      vec3 refl = fView * mix(tView * inscatter / max(vec3(1.0) - tView, vec3(1e-3)), max(skyCam - inscatter, vec3(0.0)), tUpR); // SEA-3，见上
       L += refl;
       if (uDebug == 5 || uDebug >= 8) L = sea;
       if (uDebug == 6) L = refl;
