@@ -35,8 +35,12 @@
         <div class="loading-hint">首次打开或程序更新后，浏览器需要编译着色器，可能要半分钟左右；命中缓存后会在一秒内完成。</div>
       </div>
     </div>
+    <!-- UX-3（PANEL_UX_GUIDE §2）：面板按用户目的分区，用原生 <details> 实现折叠（键盘 / 读屏器 / 无 JS 都能用）。
+         观景、航程默认展开；天气、声音、画质默认折叠（summary 右侧一行摘要）；开发者区默认隐藏（?dev / Shift+D）；
+         页脚折叠为一行。折叠状态记忆在 voyage.pref.panel（ui.ts setupPanelFoldUi），只记用户亲手展开 / 折叠的。
+         控件 id / 选项 value 全部原样保留（scripts/scenarios.mjs 的 applyScene 按 id 设值，回归场景照常）。 -->
     <aside id="panel" aria-label="控制面板">
-      <h1>航行伴侣 <small>按 H 隐藏</small></h1>
+      <h1>航行伴侣 <small>按 <kbd>H</kbd> 隐藏</small></h1>
       <!-- 交通工具（TR02）：火车沿 JR 大糸线松本—信濃大町行驶；近景 / 中景还没做（TR03–TR05），窗外暂时只有远景 -->
       <label>交通工具 <output id="vehicle-status"></output>
         <select id="vehicle">
@@ -46,174 +50,232 @@
       </label>
       <!-- 火车模式下飞机专用的控件变灰，这里说明原因（UX-1a；每个禁用控件的 title 也写了） -->
       <p id="vehicle-hint" class="hint" hidden>火车模式下，地点、连续航程、航向、高度、机翼与襟翼等飞机专用设置不可用；切回「飞机」即可使用</p>
-      <!-- UX-2：连续航程接力生成航段时，这里显示当前航段（起点 → 终点）而不是停在旧地点；自动标记见 ui.ts setupWeatherAutoSync -->
-      <label>地点 <span id="preset-auto" class="auto-badge" hidden title="连续航程正在按航线网接力，选别的地点会立即跳过去">自动</span><select id="preset"></select></label>
-      <div class="row">
-        <label>日期<input id="date" type="date" /></label>
-        <button id="now" type="button">现在</button>
+
+      <!-- 「此刻」摘要（UX-3，PANEL_UX_GUIDE §2.1）：常驻、不折叠；完整版（太阳 / 月亮高度角、经纬度小数点后
+           三位等）在开发者区的 #info（ui.ts updateInfo 同时写两处）。now-line3：STROBE-CLOUD 夜间云中自动关
+           频闪的状态说明，只在适用时显示（合并 master 时保留这条「不对用户静默」的设计） -->
+      <div class="now-summary">
+        <p id="now-line1"></p>
+        <p id="now-line2"></p>
+        <p id="now-line3" hidden></p>
       </div>
-      <label>当地时刻 <span id="time-label"></span><input id="time" type="range" min="0" max="1439" step="1" /></label>
-      <div class="row rates" role="group" aria-label="时间流速">
-        <span>时间流速</span>
-        <button type="button" data-rate="0" class="on">暂停</button>
-        <button type="button" data-rate="1">1×</button>
-        <button type="button" data-rate="60">60×</button>
-        <button type="button" data-rate="600">600×</button>
-      </div>
-      <!-- 连续航程 / 背景板模式（T19a）：到达终点上空直接接下一段航线，时间与飞行按航程流速一起走 -->
-      <label class="check"><input id="voyage-on" type="checkbox" />连续航程（自动接续东亚航线、时间流逝）</label>
-      <div id="voyage-rates" class="row rates" role="group" aria-label="航程流速" hidden>
-        <span>航程流速</span>
-        <button type="button" data-voyage-rate="1">1×</button>
-        <button type="button" data-voyage-rate="10">10×</button>
-        <button type="button" data-voyage-rate="60">60×</button>
-      </div>
-      <button id="backdrop-on" type="button">背景板模式（隐藏面板，按 Esc 或 B 退出）</button>
-      <!-- 航向控制（T49，flight.ts 的自动驾驶 + director.ts）：默认「自动航线」（沿大圆航线、到达后接下一段）；
-           左右转 / 航向滑块 = 手动航向，直飞机场到达后盘旋，盘旋 = 跑道形等待航线。转弯按真实客机：坡度 ≤ 25°、滚转约 3°/s -->
-      <div class="row rates" id="nav-modes" role="group" aria-label="航向模式">
-        <span>航向</span>
-        <button type="button" data-nav="route">自动航线</button>
-        <button type="button" data-nav="heading">保持航向</button>
-        <button type="button" data-nav="hold">盘旋</button>
-      </div>
-      <div class="row">
-        <button id="turn-left" type="button" title="左转 15°；按住连续转（方向键 ←）">◀ 左转</button>
-        <label>选定航向 <output id="hdg-out"></output><input id="hdg" type="range" min="0" max="359" step="1" value="0" /></label>
-        <button id="turn-right" type="button" title="右转 15°；按住连续转（方向键 →）">右转 ▶</button>
-      </div>
-      <label title="沿大圆航线从当前位置飞过去，到达后在机场上空盘旋">直飞机场<small>（到达后盘旋）</small><select id="nav-dest"></select></label>
-      <p id="nav-status" class="hint"></p>
-      <!-- 奇观模式（W01，research/WONDERS.md）：默认关；开了之后偶尔在远方出现不真实的东西，出现时不弹任何提示 -->
-      <label class="check"><input id="wonders-on" type="checkbox" />奇观模式（偶尔在远方出现不真实的东西）</label>
-      <div id="wonder-controls" hidden>
-        <label>稀有度 <output id="wonder-rarity-out"></output><input id="wonder-rarity" type="range" min="0" max="3" step="1" value="1" /></label>
-        <label>召唤（调试）<select id="wonder-pick"></select></label>
-        <div class="row">
-          <button id="wonder-summon" type="button">立即召唤</button>
-          <button id="wonder-dismiss" type="button">让它退场</button>
+
+      <!-- 观景：调整「我怎么看」，默认展开 -->
+      <details id="section-view" class="panel-section" open>
+        <summary><span class="section-title">观景</span></summary>
+        <div class="section-body">
+          <label>座位
+            <select id="seat">
+              <option value="right">右侧靠窗</option>
+              <option value="left">左侧靠窗</option>
+            </select>
+          </label>
+          <label>视角
+            <select id="view-preset"></select>
+          </label>
+          <!-- 转头的操作说明只写这一处 -->
+          <p class="hint">在画面上按住拖动转头，滚轮前后挪，双击复位</p>
+          <label>座位相对机翼
+            <select id="wing-pos">
+              <option value="8" title="能看到整片机翼">机翼后方</option>
+              <option value="3">机翼上方</option>
+              <option value="-4" title="视野开阔">机翼前方</option>
+            </select>
+          </label>
+          <label>遮光板 <output id="shade-out"></output><input id="shade" type="range" min="0" max="1" step="0.01" value="0" /></label>
+          <label>舱等 <output id="cabin-class-status"></output>
+            <!-- T25：切到另一档时后台编译它的着色器（首次约几秒），编好之前画面保持原来的舱等 -->
+            <select id="cabin-class">
+              <option value="business" selected title="皮革、胡桃木、氛围灯">商务舱</option>
+              <option value="economy" title="织物座椅、塑料侧壁、冷白灯">经济舱</option>
+            </select>
+          </label>
+          <label>舱内灯光
+            <!-- 选项值沿用旧复选框的 true / false，回归脚本里的 "cabin-light": true / false 不用改 -->
+            <select id="cabin-light">
+              <option value="true" selected>开</option>
+              <option value="false">睡眠（主灯关、氛围灯开）</option>
+              <option value="off">全关（只剩阅读灯）</option>
+            </select>
+          </label>
+          <!-- REFLECT-OFF：舷窗玻璃上的舱内倒影，默认关（用户嫌强）；观看偏好，只记用户亲手拖的值；URL ?reflect=0..1 优先 -->
+          <label title="舷窗玻璃映出的舱内倒影（夜里开灯时最明显）。0 为关，100% 为物理强度；双击复位到关">窗上倒影 <output id="cabin-reflect-out"></output><input id="cabin-reflect" type="range" min="0" max="1" step="0.05" value="0" /></label>
+          <button id="backdrop-on" type="button" title="隐藏面板，连续航程播放；按 Esc 或 B 退出">背景板模式 <kbd>B</kbd></button>
+          <!-- 奇观模式（W01，research/WONDERS.md）：默认关；开了之后偶尔在远方出现不真实的东西，出现时不弹任何提示 -->
+          <label class="check" title="偶尔在远方出现不真实的东西，出现时不弹任何提示"><input id="wonders-on" type="checkbox" />奇观模式</label>
+          <div id="wonder-controls" hidden>
+            <label>稀有度 <output id="wonder-rarity-out"></output><input id="wonder-rarity" type="range" min="0" max="3" step="1" value="1" /></label>
+            <p id="wonder-status" class="hint"></p>
+          </div>
         </div>
-        <p id="wonder-status" class="hint"></p>
-      </div>
-      <!-- 声音（T11，src/audio.ts）：默认关；勾选后才创建 AudioContext（浏览器的自动播放限制）。M 键开关，背景板模式下也有效 -->
-      <label class="check"><input id="sound-on" type="checkbox" />声音（飞机舱内 / 火车车内；按 M 开关）</label>
-      <div id="sound-controls" hidden>
-        <label>音量 <output id="sound-volume-out"></output><input id="sound-volume" type="range" min="0" max="100" step="1" value="60" /></label>
-        <label class="check"><input id="sound-aircon" type="checkbox" checked />空调出风（很轻）</label>
-        <label class="check"><input id="sound-chime" type="checkbox" />偶尔的客舱提示音（很少、很轻）</label>
-        <!-- TR07：火车的钢轨接缝。本线是否已长轨化未核实，默认「定尺（示例）」是为了听到「ガタンゴトン」 -->
-        <label>火车 · 钢轨接缝
-          <select id="sound-rail-joints">
-            <option value="jointed">定尺 25 m（示例：本线未核实）</option>
-            <option value="welded">长轨化（几乎没有接缝声）</option>
-          </select>
-        </label>
-      </div>
-      <label>座位
-        <select id="seat">
-          <option value="right">右侧靠窗</option>
-          <option value="left">左侧靠窗</option>
-        </select>
-      </label>
-      <label>视角
-        <select id="view-preset"></select>
-      </label>
-      <!-- 转头的操作说明只写这一处（原来面板底部还有一行过时的「移动鼠标 = 挪动头部」，UX-1a 删掉） -->
-      <p class="hint">在画面上按住拖动转头，滚轮前后挪，双击复位</p>
-      <label>座位相对机翼
-        <select id="wing-pos">
-          <option value="8">机翼后方（能看到整片机翼）</option>
-          <option value="3">机翼上方</option>
-          <option value="-4">机翼前方（视野开阔）</option>
-        </select>
-      </label>
-      <label>襟翼 / 减速板
-        <select id="high-lift">
-          <option value="auto">自动（按高度，进近时放下）</option>
-          <option value="0">收起（0）</option>
-          <option value="1">1（缝翼 18°）</option>
-          <option value="1+F">1+F（襟翼 10°）</option>
-          <option value="2">2（襟翼 15°）</option>
-          <option value="3">3（襟翼 20°）</option>
-          <option value="full">FULL（襟翼 40°）</option>
-          <option value="speedbrake">减速板（扰流板上翻）</option>
-        </select>
-      </label>
-      <label>高度 <output id="altitude-out"></output><input id="altitude" type="range" min="0.5" max="13" step="0.1" value="10.7" /></label>
-      <!-- 高度下限（T18）：陆地上方离地 ≥ 2.5 km、海面上 ≥ 0.5 km；滑块最小值跟着变，这里说明原因 -->
-      <p id="altitude-floor" class="hint"></p>
-      <div class="row rates" role="group" aria-label="飞行阶段">
-        <span>飞行阶段<small>（10× 加速）</small></span>
-        <button type="button" data-alt="10.7">巡航</button>
-        <button type="button" data-alt="6">下降</button>
-        <button type="button" data-alt="1.5">进近</button>
-        <button type="button" data-alt="0.5">低空</button>
-      </div>
-      <label>遮光板 <output id="shade-out"></output><input id="shade" type="range" min="0" max="1" step="0.01" value="0" /></label>
-      <!-- UX-2：连续航程开着时天气系统 / 云型由天气场决定，锁定并显示实际状况（title）；云量 / 云底 / 云厚 / 海面风速
-           每 250 ms 从系统实际值回写，拖动后当前航段内标「已手动调整」。自动标记与锁定逻辑见 ui.ts setupWeatherAutoSync -->
-      <label>天气 <span id="weather-auto" class="auto-badge" hidden>自动</span><select id="weather"></select></label>
-      <label>云 <span id="cloud-preset-auto" class="auto-badge" hidden>自动</span><select id="cloud-preset"></select></label>
-      <label>云量 <span id="coverage-auto" class="auto-badge" hidden>自动</span><output id="coverage-out"></output><input id="coverage" type="range" min="0" max="1" step="0.01" value="0.42" /></label>
-      <label>云底高度 <span id="cloud-base-auto" class="auto-badge" hidden>自动</span><output id="cloud-base-out"></output><input id="cloud-base" type="range" min="0.3" max="12.5" step="0.1" value="1.2" /></label>
-      <label>云层厚度 <span id="cloud-thick-auto" class="auto-badge" hidden>自动</span><output id="cloud-thick-out"></output><input id="cloud-thick" type="range" min="0.2" max="10" step="0.1" value="2.2" /></label>
-      <label>海面风速 <span id="wind-auto" class="auto-badge" hidden>自动</span><output id="wind-out"></output><input id="wind" type="range" min="0" max="20" step="1" value="7" /></label>
-      <label>画质
-        <select id="quality">
-          <option value="auto" selected>自动（推荐）</option>
-          <option value="high">高（云全分辨率）</option>
-          <option value="medium">中</option>
-          <option value="low">低（云半分辨率）</option>
-        </select>
-      </label>
-      <!-- 自动档实际生效的档位（PERF-5）：按最近的 GPU 时间 / 帧间隔自适应，这里显示落在哪一档 -->
-      <p id="quality-status" class="hint"></p>
-      <!-- G07b：地面纹理精度与画质档解耦；只有这一项的手动选择跨载入记忆，改了下次载入生效 -->
-      <label>地面精度
-        <select id="ground-res">
-          <option value="auto" selected>自动（按显卡）</option>
-          <option value="2048">2048²（清晰）</option>
-          <option value="1024">1024²（省显存）</option>
-        </select>
-      </label>
-      <p id="ground-res-status" class="hint"></p>
-      <label class="check"><input id="ground-on" type="checkbox" checked />真实地理数据（卫星影像、地形、水体，联网）</label>
-      <label>舱等 <output id="cabin-class-status"></output>
-        <!-- T25：切到另一档时后台编译它的着色器（首次约几秒），编好之前画面保持原来的舱等 -->
-        <select id="cabin-class">
-          <option value="business" selected>商务舱（皮革、胡桃木、氛围灯）</option>
-          <option value="economy">经济舱（织物座椅、塑料侧壁、冷白灯）</option>
-        </select>
-      </label>
-      <label>舱内灯光
-        <!-- 选项值沿用旧复选框的 true / false，回归脚本里的 "cabin-light": true / false 不用改 -->
-        <select id="cabin-light">
-          <option value="true" selected>开</option>
-          <option value="false">睡眠（主灯关、氛围灯开）</option>
-          <option value="off">全关（只剩阅读灯）</option>
-        </select>
-      </label>
-      <!-- REFLECT-OFF：舷窗玻璃上的舱内倒影，默认关（用户嫌强）；观看偏好，只记用户亲手拖的值；URL ?reflect=0..1 优先 -->
-      <label title="舷窗玻璃映出的舱内倒影（夜里开灯时最明显）。0 为关，100% 为物理强度；双击复位到关">窗上倒影 <output id="cabin-reflect-out"></output><input id="cabin-reflect" type="range" min="0" max="1" step="0.05" value="0" /></label>
-      <label class="check"><input id="auto-exposure" type="checkbox" checked />人眼式自动曝光</label>
-      <label>曝光补偿 <output id="ev-comp-out"></output><input id="ev-comp" type="range" min="-3" max="3" step="0.1" value="0" /></label>
-      <label id="manual-row">手动曝光 <output id="manual-ev-out"></output><input id="manual-ev" type="range" min="-2" max="17" step="0.1" value="14" /></label>
-      <!-- 调试小地图（DX-06）：默认关；纯 2D canvas 叠层，画在左下角，不碰任何 WebGL 程序 -->
-      <label class="check"><input id="minimap-on" type="checkbox" />调试小地图（航向 / 云回波 / 交通 / 奇观，快捷键 N；点击地图切换量程）</label>
-      <!-- 调试（T49）：不等飞到终点，立即走一次「到达」：自动航线接下一段（含大角度掉头的遮挡排队），直飞转入盘旋。同 __voyage.director.forceArrive() -->
-      <button id="debug-arrive" type="button">立即触发到达 / 接下一段（调试）</button>
+      </details>
+
+      <!-- 航程：调整「飞到哪、多快」，默认展开 -->
+      <details id="section-voyage" class="panel-section" open>
+        <summary><span class="section-title">航程</span></summary>
+        <div class="section-body">
+          <!-- UX-2：连续航程接力生成航段时，这里显示当前航段（起点 → 终点）而不是停在旧地点；自动标记见 ui.ts setupWeatherAutoSync -->
+          <label>起点 / 航线 <span id="preset-auto" class="auto-badge" hidden title="连续航程正在按航线网接力，选别的地点会立即跳过去">自动</span><select id="preset"></select></label>
+          <div class="row">
+            <label>日期<input id="date" type="date" /></label>
+            <button id="now" type="button">现在</button>
+          </div>
+          <label>当地时刻 <span id="time-label"></span><input id="time" type="range" min="0" max="1439" step="1" /></label>
+          <div class="row rates" role="group" aria-label="时间流速">
+            <span>时间流速</span>
+            <button type="button" data-rate="0" class="on">暂停</button>
+            <button type="button" data-rate="1">1×</button>
+            <button type="button" data-rate="60">60×</button>
+            <button type="button" data-rate="600">600×</button>
+          </div>
+          <!-- 连续航程 / 背景板模式（T19a）：到达终点上空直接接下一段航线，时间与飞行按航程流速一起走 -->
+          <label class="check" title="自动接续东亚航线、随时间推进"><input id="voyage-on" type="checkbox" />连续航程</label>
+          <div id="voyage-rates" class="row rates" role="group" aria-label="航程流速" hidden>
+            <span>航程流速</span>
+            <button type="button" data-voyage-rate="1">1×</button>
+            <button type="button" data-voyage-rate="10">10×</button>
+            <button type="button" data-voyage-rate="60">60×</button>
+          </div>
+          <!-- 航向控制（T49，flight.ts 的自动驾驶 + director.ts）：默认「自动航线」（沿大圆航线、到达后接下一段）；
+               左右转 / 航向滑块 = 手动航向，直飞机场到达后盘旋，盘旋 = 跑道形等待航线。转弯按真实客机：坡度 ≤ 25°、滚转约 3°/s -->
+          <div class="row rates" id="nav-modes" role="group" aria-label="航向模式">
+            <span>航向</span>
+            <button type="button" data-nav="route">自动航线</button>
+            <button type="button" data-nav="heading">保持航向</button>
+            <button type="button" data-nav="hold">盘旋</button>
+          </div>
+          <div class="row">
+            <button id="turn-left" type="button" title="左转 15°；按住连续转（方向键 ←）">◀ 左转</button>
+            <label>选定航向 <output id="hdg-out"></output><input id="hdg" type="range" min="0" max="359" step="1" value="0" /></label>
+            <button id="turn-right" type="button" title="右转 15°；按住连续转（方向键 →）">右转 ▶</button>
+          </div>
+          <label title="沿大圆航线从当前位置飞过去，到达后在机场上空盘旋">直飞机场<select id="nav-dest"></select></label>
+          <p id="nav-status" class="hint"></p>
+          <label title="按高度自动放下（进近时放下）；也可手动指定">襟翼 / 减速板
+            <select id="high-lift">
+              <option value="auto">自动（按高度，进近时放下）</option>
+              <option value="0">收起（0）</option>
+              <option value="1">1（缝翼 18°）</option>
+              <option value="1+F">1+F（襟翼 10°）</option>
+              <option value="2">2（襟翼 15°）</option>
+              <option value="3">3（襟翼 20°）</option>
+              <option value="full">FULL（襟翼 40°）</option>
+              <option value="speedbrake">减速板（扰流板上翻）</option>
+            </select>
+          </label>
+          <label>高度 <output id="altitude-out"></output><input id="altitude" type="range" min="0.5" max="13" step="0.1" value="10.7" /></label>
+          <!-- 高度下限（T18）：陆地上方离地 ≥ 2.5 km、海面上 ≥ 0.5 km；滑块最小值跟着变，这里说明原因 -->
+          <p id="altitude-floor" class="hint"></p>
+          <div class="row rates" role="group" aria-label="飞行阶段" title="点按后以 10× 速度飞向该阶段对应的高度">
+            <span>飞行阶段</span>
+            <button type="button" data-alt="10.7">巡航</button>
+            <button type="button" data-alt="6">下降</button>
+            <button type="button" data-alt="1.5">进近</button>
+            <button type="button" data-alt="0.5">低空</button>
+          </div>
+        </div>
+      </details>
+
+      <!-- 天气：换一种天，默认折叠；summary 右侧一行摘要由 ui.ts setupWeatherAutoSync 写 #weather-summary -->
+      <details id="section-weather" class="panel-section">
+        <summary><span class="section-title">天气</span><span id="weather-summary" class="section-summary"></span></summary>
+        <div class="section-body">
+          <!-- UX-2：连续航程开着时天气系统 / 云型由天气场决定，锁定并显示实际状况（title）；云量 / 云底 / 云厚 / 海面风速
+               每 250 ms 从系统实际值回写，拖动后当前航段内标「已手动调整」。自动标记与锁定逻辑见 ui.ts setupWeatherAutoSync -->
+          <label>天气系统 <span id="weather-auto" class="auto-badge" hidden>自动</span><select id="weather"></select></label>
+          <label>云型 <span id="cloud-preset-auto" class="auto-badge" hidden>自动</span><select id="cloud-preset"></select></label>
+          <label>云量 <span id="coverage-auto" class="auto-badge" hidden>自动</span><output id="coverage-out"></output><input id="coverage" type="range" min="0" max="1" step="0.01" value="0.42" /></label>
+          <label>云底高度 <span id="cloud-base-auto" class="auto-badge" hidden>自动</span><output id="cloud-base-out"></output><input id="cloud-base" type="range" min="0.3" max="12.5" step="0.1" value="1.2" /></label>
+          <label>云层厚度 <span id="cloud-thick-auto" class="auto-badge" hidden>自动</span><output id="cloud-thick-out"></output><input id="cloud-thick" type="range" min="0.2" max="10" step="0.1" value="2.2" /></label>
+          <label>海面风速 <span id="wind-auto" class="auto-badge" hidden>自动</span><output id="wind-out"></output><input id="wind" type="range" min="0" max="20" step="1" value="7" /></label>
+        </div>
+      </details>
+
+      <!-- 声音：开 / 关、音量，默认折叠；标题行本身带开关（点击开关不折叠本区，见 ui.ts setupSoundUi 的 stopPropagation） -->
+      <details id="section-sound" class="panel-section">
+        <summary>
+          <span class="section-title">声音 <kbd>M</kbd></span>
+          <span class="section-summary">
+            <input id="sound-on" type="checkbox" aria-label="声音开关" title="飞机舱内 / 火车车内；按 M 开关" />
+            <span id="sound-summary-text"></span>
+          </span>
+        </summary>
+        <div class="section-body">
+          <div id="sound-controls" hidden>
+            <label>音量 <output id="sound-volume-out"></output><input id="sound-volume" type="range" min="0" max="100" step="1" value="60" /></label>
+            <label class="check"><input id="sound-aircon" type="checkbox" checked />空调出风（很轻）</label>
+            <label class="check"><input id="sound-chime" type="checkbox" />偶尔的客舱提示音（很少、很轻）</label>
+            <!-- TR07：火车的钢轨接缝。本线是否已长轨化未核实，默认「定尺（示例）」是为了听到「ガタンゴトン」 -->
+            <label>火车 · 钢轨接缝
+              <select id="sound-rail-joints">
+                <option value="jointed">定尺 25 m（示例：本线未核实）</option>
+                <option value="welded">长轨化（几乎没有接缝声）</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <!-- 画质：帧率不够时降一档，默认折叠 -->
+      <details id="section-quality" class="panel-section">
+        <summary><span class="section-title">画质</span><span id="quality-summary" class="section-summary"></span></summary>
+        <div class="section-body">
+          <label>画质
+            <select id="quality">
+              <option value="auto" selected>自动（推荐）</option>
+              <option value="high">高（云全分辨率）</option>
+              <option value="medium">中</option>
+              <option value="low">低（云半分辨率）</option>
+            </select>
+          </label>
+          <!-- 自动档实际生效的档位（PERF-5）：按最近的 GPU 时间 / 帧间隔自适应，这里显示落在哪一档 -->
+          <p id="quality-status" class="hint"></p>
+          <!-- G07b：地面纹理精度与画质档解耦；只有这一项的手动选择跨载入记忆，改了下次载入生效 -->
+          <label>地面精度
+            <select id="ground-res">
+              <option value="auto" selected>自动（按显卡）</option>
+              <option value="2048">2048²（清晰）</option>
+              <option value="1024">1024²（省显存）</option>
+            </select>
+          </label>
+          <p id="ground-res-status" class="hint"></p>
+          <label class="check" title="卫星影像、地形、水体；联网获取"><input id="ground-on" type="checkbox" checked />真实地理数据</label>
+          <label class="check"><input id="auto-exposure" type="checkbox" checked />人眼式自动曝光</label>
+          <label>曝光补偿 <output id="ev-comp-out"></output><input id="ev-comp" type="range" min="-3" max="3" step="0.1" value="0" /></label>
+        </div>
+      </details>
+
       <!-- 开发者区（FOCUS-ZOOM 起建，PANEL_UX_GUIDE §2.1）：普通用户看不到；URL 带 ?dev 或按 Shift + D 显示，显示与否记在 voyage.pref.panel。
-           以后别的调试控件（小地图、立即到达、手动 EV……）按规范逐步挪进来 -->
+           UX-3：把各用户区里带「（调试）」的控件、调试小地图、手动曝光、完整信息栏都挪进来（DOM 原样保留，id / value 不改） -->
       <section id="dev-section" class="dev-section" aria-label="开发者" hidden>
         <h2>开发者 <small>Shift + D</small></h2>
         <!-- 聚焦观察（FOCUS-ZOOM）：画面上按住不动或按住 Z。倍率 / 过渡时长可用 URL ?zoom= / ?zoomms= 指定（优先于这里记住的值） -->
         <label title="双击复位到 2.5×">聚焦倍率 <output id="focus-mag-out"></output><input id="focus-mag" type="range" min="1.5" max="8" step="0.1" value="2.5" /></label>
         <label title="双击复位到 200 ms">聚焦过渡 <output id="focus-ms-out"></output><input id="focus-ms" type="range" min="0" max="600" step="10" value="200" /></label>
-        <label title="双击复位到 40%">聚焦暗角 <output id="focus-vignette-out"></output><input id="focus-vignette" type="range" min="0" max="1" step="0.05" value="0.4" /></label>
+        <!-- UX-3 发现并修复：这里原来的 input id 与顶部聚焦暗角叠层 div 的 id 撞了（都叫 focus-vignette），
+             CSS #focus-vignette{position:fixed;inset:0}（给叠层用的）连带套到了这个滑条上，滑条被拉伸铺满
+             整个面板、原生滑块画在面板纵向正中间；getElementById 也总是先取到叠层 div，拖动滑条从来没真正生效过。
+             滑条改用不冲突的 id，叠层 div 的 id（focus-zoom.ts 用）不动 -->
+        <label title="双击复位到 40%">聚焦暗角 <output id="focus-vig-out"></output><input id="focus-vig" type="range" min="0" max="1" step="0.05" value="0.4" /></label>
         <p id="focus-hint" class="hint">画面上按住不动或按住 Z 聚焦，拖动仍可转头</p>
+        <label id="manual-row">手动曝光 <output id="manual-ev-out"></output><input id="manual-ev" type="range" min="-2" max="17" step="0.1" value="14" /></label>
+        <label class="check" title="航向 / 云回波 / 交通 / 奇观；点击地图可切换量程"><input id="minimap-on" type="checkbox" />小地图 <kbd>N</kbd></label>
+        <!-- 调试（T49）：不等飞到终点，立即走一次「到达」：自动航线接下一段（含大角度掉头的遮挡排队），直飞转入盘旋。同 __voyage.director.forceArrive() -->
+        <button id="debug-arrive" type="button">立即到达</button>
+        <label title="选好类型后点「立即召唤」；留空则按此刻条件自动挑一个">召唤<select id="wonder-pick"></select></label>
+        <div class="row">
+          <button id="wonder-summon" type="button">立即召唤</button>
+          <button id="wonder-dismiss" type="button">让它退场</button>
+        </div>
+        <!-- 完整信息栏：太阳 / 月亮高度角、经纬度小数点后三位等，普通区只显示「此刻」摘要（#now-line1 / #now-line2） -->
+        <pre id="info"></pre>
       </section>
-      <pre id="info"></pre>
-      <p class="credits">影像：<a id="credit-eox" href="https://cloudless.eox.at" target="_blank" rel="noopener">Sentinel-2 cloudless 2025</a> by EOX IT Services GmbH（含修改过的 Copernicus Sentinel 数据，CC BY-NC-SA 4.0）· 日本低空近景细节：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院（地理院タイル・全国最新写真（シームレス））</a>を加工して作成 · 地形：AWS Terrain Tiles · 水体：© OpenStreetMap contributors（OpenFreeMap）<br />关闭真实地理数据时，岛屿为程序生成的示例，不对应真实地理。<br />星表：耶鲁亮星表 BSC5（CDS V/50）· 月面贴图 © Solar System Scope（CC BY 4.0）</p>
+
+      <!-- 页脚：许可合规，折叠为一行 -->
+      <details id="section-footer" class="panel-section footer-section">
+        <summary><span class="section-title">数据来源与许可</span></summary>
+        <p class="credits">影像：<a id="credit-eox" href="https://cloudless.eox.at" target="_blank" rel="noopener">Sentinel-2 cloudless 2025</a> by EOX IT Services GmbH（含修改过的 Copernicus Sentinel 数据，CC BY-NC-SA 4.0）· 日本低空近景细节：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院（地理院タイル・全国最新写真（シームレス））</a>を加工して作成 · 地形：AWS Terrain Tiles · 水体：© OpenStreetMap contributors（OpenFreeMap）<br />关闭真实地理数据时，岛屿为程序生成的示例，不对应真实地理。<br />星表：耶鲁亮星表 BSC5（CDS V/50）· 月面贴图 © Solar System Scope（CC BY 4.0）</p>
+      </details>
     </aside>
     <!-- 背景板模式：只在鼠标移动后的几秒内显示的提示与退出按钮 -->
     <!-- 火车车内广播的字幕（TR07，示意）：广播时出现几秒 -->

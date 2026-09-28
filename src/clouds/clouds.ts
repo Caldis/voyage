@@ -1390,6 +1390,8 @@ export class Clouds {
   private frame = 0;
   /** 云的渲染分辨率相对全屏的比例 */
   resolutionScale = 1;
+  /** 步进之后、resolve 之前往 raw 上叠画的 pass（TW02 远景对流塔层，main.ts 接上）；null = 不画 */
+  afterMarch: ((raw: THREE.WebGLRenderTarget) => void) | null = null;
   private reset = true;
   /** FOCUS-ZOOM：视场变化的帧把 resolve 的「reset 后帧数」压到不超过它（见 render）；设成 Infinity 就是改前的行为（测量对照用） */
   zoomSinceResetCap = 8;
@@ -2079,6 +2081,8 @@ export class Clouds {
     this.marchShown = key;
     if (key.includes("W")) this.pass.render(this.wonderSurfMat, this.wonderSurf);
     this.pass.render(this.marchVariant(key).mat, this.raw);
+    // TW02：远景对流塔层叠进 raw（在所有云后面，见 far-towers.ts）；没有远塔时不画，raw 逐位不变
+    this.afterMarch?.(this.raw);
 
     const [prev, next] = this.history;
     const r = this.resolveMat.uniforms;

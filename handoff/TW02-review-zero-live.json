@@ -1,0 +1,10 @@
+[
+  {"name": "noon-cumulus-live", "scene": "noon-cumulus", "crop": [400, 300, 800, 700],
+   "variants": [
+     {"name": "cur", "js": "v.farTowers.override = null; v.farTowers.enabled = true;"},
+     {"name": "off", "js": "v.farTowers.override = null; v.farTowers.enabled = false;"},
+     {"name": "cur2", "js": "v.farTowers.override = null; v.farTowers.enabled = true; if (v.farTowers.towers.length || v.farTowers.active) throw new Error('voyage=0 下不该有远塔');"}
+   ],
+   "live": {"crop": [400, 300, 800, 700], "frames": 120, "thr": 12, "frac": 0.05, "regions": {"窗中": [200, 200, 400, 300]}}
+  }
+]
