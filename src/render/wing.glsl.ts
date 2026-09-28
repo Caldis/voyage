@@ -716,7 +716,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
           j = 5;
           phase = 0;
           t = w.t + 2.0 * n.x + pa * w.t;
-          limit = i + 33;
+          limit = i + 64;
         }
       }
     } else {
