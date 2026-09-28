@@ -360,6 +360,7 @@ uniform float uCloudTop;        // 云顶高度，km
 uniform float uCoverage;        // 0..1
 uniform float uCloudType;       // 0 = 层积云（扁平），1 = 积云（圆顶高耸）
 uniform float uCloudDensity;    // 消光系数的倍率
+uniform vec3 uCuShape;         // C-TOFU：(nA 竖直倍率, nB 竖直倍率, 积云族权重)，clouds.ts 的 cumulusShape() 每帧按层厚 / 云型算好
 // ---- 天气系统 ----
 uniform float uShellBottom;     // 所有云（层状云、雷暴、台风）合起来的高度范围，km
 uniform float uShellTop;
@@ -515,11 +516,8 @@ float heightProfile(float h, float type) {
 //    积云层只有 2–5 km 厚 → 一层之内噪声只随水平位置变，云就是水平轮廓的竖直挤出；
 //  ②剖面 h 0.12–0.45 是满密度平台，再 ×4.5 饱和 → 侧壁竖直，云顶被剖面的下降段统一截平；
 //  ③远处取到形状噪声 mip 4–5（128³ 的 mip 5 只剩 4³ 纹素），三线性插值的平面小面在竖直方向连成肋纹。
-// 竖直频率按层厚归一：nA 的竖直周期 = CU_VPER_A 个层厚、nB = CU_VPER_B 个层厚（一层之内有一个起伏，侧面成串鼓包）。
-// 晴天积云 1.2–3.4 km：nA 周期 2.9 km、nB 6.6 km（旧版 5.4 / 17.9 km）；浓积云 1.4–6.5 km 层本来就厚，夹在旧值（不再更低）
-// 不取固定 ×2：浓积云层 5 km 厚，×2 后一层里叠两三个 nA 周期，塔身断成一串上下分离的「爆米花」
-const float CU_VPER_A = 1.3;
-const float CU_VPER_B = 3.0;
+// 竖直频率按层厚归一（uCuShape.xy，算法和常数在 clouds.ts 的 cumulusShape()：每帧在 CPU 上算一次，
+// 着色器里写成 clamp(7 / (1.3·层厚)) 这类算术的话，layerDensity 被内联进步进 / 受光 / 云影各处，cloud-march 冷编译 +10%）
 // 形状噪声 mip 封顶（nB 再低一级）：mip 3 一个纹素 0.44 km，远处的形状靠时间累积去噪，不再是 1.75 km 的纹素小面
 const float SHAPE_LOD_MAX = 3.0;
 // 这一列的云顶（h 单位，按局部云顶归一）：归一强度 σ = (d − CU_VIS_D) / max(覆盖率 − CU_VIS_D, CU_RANGE_MIN)，
@@ -628,11 +626,11 @@ float layerDensity(vec3 p, float lod, bool detail) {
   }
 #endif
   // 两个尺度的形状噪声，相互旋转 37°，按区域混合：有的地方是小碎云，有的地方是大云团
-  // 竖直频率按层厚归一、mip 封顶（C-TOFU，见 CU_VPER_A / CU_VPER_B / SHAPE_LOD_MAX 的注释）。
+  // 竖直频率按层厚归一、mip 封顶（C-TOFU，见 uCuShape / SHAPE_LOD_MAX 的注释）。
   // 竖直频率只改积云族（cuW）：层积云 / 高积云 / 卷云本来就该是薄层，照旧
-  float cuW = smoothstep(0.45, 1.0, uCloudType);
-  float va = mix(1.3, clamp(SHAPE_TILE / (CU_VPER_A * thick), 1.3, 3.0), cuW);
-  float vb = mix(0.9, clamp(SHAPE_TILE * 2.3 / (CU_VPER_B * thick), 0.9, 2.5), cuW);
+  float cuW = uCuShape.z;
+  float va = uCuShape.x;
+  float vb = uCuShape.y;
   vec4 nA = textureLod(uShapeNoise, vec3(xzn.x, alt * va, xzn.y) / SHAPE_TILE, min(lod, SHAPE_LOD_MAX));
   vec2 xzB = rot2(xzn, 0.65);
   vec4 nB = textureLod(uShapeNoise, vec3(xzB.x, alt * vb, xzB.y) / (SHAPE_TILE * 2.3) + 0.37, clamp(lod - 1.0, 0.0, SHAPE_LOD_MAX - 1.0));
