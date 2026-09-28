@@ -53,6 +53,51 @@ const stormPassKm = (radius: number) => radius * 5 + 8;
 const TY_PASS_KM = 220;
 /** 构图：机头前方离航线这么近（km）的雷暴系统挪到窗外一侧（composeForWindow） */
 const COMPOSE_CROSS_KM = 200;
+/** 构图：机头前方这么远（km）以外的才挪（再近的已经快到窗前了，挪会被看见） */
+const COMPOSE_AHEAD_KM = 60;
+/** 整组都在机尾方向这么远（km）以外，就算「已经飞过去」：不再摆放，已摆放的看不见了就撤掉让出名额（TW01） */
+const PASSED_KM = 40;
+
+/** 名额挑选的候选：一个雷暴系统，组中心相对飞机的本地坐标（km，x 东 z 南） */
+export interface StormCandidate {
+  id: string;
+  cells: number;
+  x: number;
+  z: number;
+}
+
+/**
+ * 名额内挑哪些雷暴系统（TW01）。着色器只有 WeatherSystem.MAX_STORMS 个单体名额，而盛夏华南 / 南海 280 km 内常有 5–6 个单体，
+ * 改前按离飞机的距离挑，机尾后方刚飞过的、在另一侧窗外看不见的也照样占名额。现在的代价：
+ *   · 已经飞过去（组中心在机尾方向 PASSED_KM 以外）：不挑；
+ *   · 机头前方、离航线 COMPOSE_CROSS_KM 以内的会被 composeForWindow 挪到窗外 40–90 km：按挪过去以后的位置算；
+ *   · 在窗户这一侧（或挪过去以后在这一侧）：代价 = 距离；在另一侧：不挑（整段航程都看不见，还占名额、占 GPU；转弯后到了窗户这一侧，下一次规划再摆）；
+ *   · 正侧方到机尾之间（along < 0）的再加 100 km：马上要离开视野，不如前方的。
+ * 按代价从小到大、放得下（cells ≤ 剩余名额）就挑。fwd：机头方向单位向量（本地 x、z）；side：窗户在机头右侧为 1、左侧为 −1
+ */
+export function pickStormSystems(cands: StormCandidate[], free: number, fwd: [number, number], side: 1 | -1): string[] {
+  const [fx, fz] = fwd;
+  const rx = -fz, rz = fx; // 机头右侧
+  const scored: { id: string; cells: number; cost: number }[] = [];
+  for (const c of cands) {
+    const along = c.x * fx + c.z * fz;
+    let cross = c.x * rx + c.z * rz;
+    if (along < -PASSED_KM) continue;
+    if (along >= COMPOSE_AHEAD_KM && Math.abs(cross) <= COMPOSE_CROSS_KM) cross = side * (40 + (50 * Math.abs(cross)) / COMPOSE_CROSS_KM);
+    const d = Math.hypot(along, cross);
+    if (cross * side <= 0) continue;
+    scored.push({ id: c.id, cells: c.cells, cost: d + (along < 0 ? 100 : 0) });
+  }
+  scored.sort((a, b) => a.cost - b.cost || (a.id < b.id ? -1 : 1));
+  const out: string[] = [];
+  for (const s of scored) {
+    if (s.cells > free) continue;
+    free -= s.cells;
+    out.push(s.id);
+  }
+  return out;
+}
+
 /** 奇观之门演示：间隔（模拟秒） */
 const GATE_DEMO_EVERY_SIM_S = 2 * 3600;
 /**
@@ -333,17 +378,28 @@ export class WeatherDirector {
       placedSystems.add(sys);
       if (!keep.has(sys)) this.requestStormRemoval(sys);
     }
-    // 新进入范围的：整组（系统）摆放，槽位不够就等
+    // TW01：已经飞过去（整组在机尾方向 PASSED_KM 以外）的系统不再占名额，看不见了就撤掉，把槽位让给前方 / 窗外的
+    const [px, pz] = this.host.localPos();
+    const [fx, fz] = this.fwd();
+    for (const sys of placedSystems) {
+      if (sys === "manual" || !keep.has(sys)) continue;
+      const mine = w.storms.filter((s) => s.id?.split("#")[0] === sys);
+      if (mine.length && mine.every((s) => (s.x - px) * fx + (s.z - pz) * fz < -PASSED_KM)) this.requestStormRemoval(sys);
+    }
+    // 新进入范围的：整组（系统）摆放，槽位不够就等。名额只有 WeatherSystem.MAX_STORMS 个单体，按「离视线近、看得见」排优先级（pickStormSystems）
     let free = WeatherSystem.MAX_STORMS - w.storms.length - this.pendingStormCells();
+    // 预告（PERF-10）：雷暴变体还没编好就先不摆（同时触发后台编译），下一次规划再来
+    if (free <= 0 || (this.host.weatherReady && !this.host.weatherReady("storm"))) return;
+    const cands: StormCandidate[] = [];
+    const byId = new Map<string, StormSystemSample>();
     for (const sys of near) {
       if (placedSystems.has(sys.id) || this.d.hasPending(`storm+${sys.id}`)) continue;
       if (haversineKm(lat, lon, sys.lat, sys.lon) > STORM_RANGE_KM) continue;
-      if (sys.cells.length > free) continue;
-      // 预告（PERF-10）：雷暴变体还没编好就先不摆（同时触发后台编译），下一次规划再来
-      if (this.host.weatherReady && !this.host.weatherReady("storm")) continue;
-      free -= sys.cells.length;
-      this.requestStormPlacement(sys, now);
+      const [x, z] = this.host.toLocal(sys.lat, sys.lon);
+      cands.push({ id: sys.id, cells: sys.cells.length, x: x - px, z: z - pz });
+      byId.set(sys.id, sys);
     }
+    for (const id of pickStormSystems(cands, free, [fx, fz], this.host.state.seat === "right" ? 1 : -1)) this.requestStormPlacement(byId.get(id)!, now);
   }
 
   private pendingStormCells() {
@@ -527,7 +583,7 @@ export class WeatherDirector {
     const cz = cells.reduce((a, c) => a + c.z, 0) / cells.length - pz;
     const along = cx * fx + cz * fz;
     const cross = cx * rx + cz * rz;
-    if (along < 60 || Math.abs(cross) > COMPOSE_CROSS_KM) return cells;
+    if (along < COMPOSE_AHEAD_KM || Math.abs(cross) > COMPOSE_CROSS_KM) return cells;
     const side = this.host.state.seat === "right" ? 1 : -1;
     const shift = side * (40 + (50 * Math.abs(cross)) / COMPOSE_CROSS_KM) - cross;
     return cells.map((c) => ({ ...c, x: c.x + rx * shift, z: c.z + rz * shift }));

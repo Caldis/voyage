@@ -4,10 +4,11 @@
 // 锋面带位置与活跃度、台风年频数 / 月份分布，并对照目标区间做断言：任何一条不满足，退出码非 0。
 //
 // 用法（在 apps/voyage 下）：
-//   node --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi        ← 门禁（6 个种子全部通过才算过，约 2.5 分钟）
-//   node --experimental-transform-types --no-warnings scripts/weather-stats.mts                ← 只跑默认种子，打印完整统计表
+//   node --import ./scripts/lib/ts-resolve.mjs --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi        ← 门禁（6 个种子全部通过才算过，约 2.5 分钟）
+//   node --import ./scripts/lib/ts-resolve.mjs --experimental-transform-types --no-warnings scripts/weather-stats.mts                ← 只跑默认种子，打印完整统计表
 //   可选：--seed N | --seeds a,b,c | --multi；--years 2023,2024,2025,2026（区域 / 锋面统计的年份）；
-//         --ty-years 100（台风统计的年数，截止 2026 年）；--only region,front,ty,wind（WX11a 风场：--only wind 单种子约 5 s）；--json 输出.json；--quiet（只打印断言）
+//         --ty-years 100（台风统计的年数，截止 2026 年）；--only region,front,ty,wind,towering（WX11a 风场：--only wind 单种子约 5 s；TW01 高耸对流云：--only towering 单种子约 15 s）；--json 输出.json；--quiet（只打印断言）
+//   node 跑 .mts 要加 --import ./scripts/lib/ts-resolve.mjs（TW01 起脚本导入 src/weather-director.ts，它的 import 不带扩展名）
 //
 // 取样口径（与附录 A 相同）：每个地区 3 个点；每月 1–28 日 × UTC 每 3 小时；当地时 ≈ UTC + 经度 / 15。
 // 雷暴：当地 15 时，150 km 内 stormsNear 非空的比例。锋面：每天 UTC 0 / 12 时、110–145°E 每 5°，扫 10–50°N 找 front().strength 最大处，
@@ -33,20 +34,28 @@
 //   [Mon06] Monahan 2006, J. Climate 19:497：海面风速近似两参数韦布尔分布 https://journals.ametsoc.org/view/journals/clim/19/4/jcli3640.1.xml
 //   [DD99] Dai & Deser 1999, JGR 104(D24)：地面风日变化陆上午后最大、海上很弱（按记忆转述，振幅未核对原文）
 //   [教科书] Stull 1988、Holton、Wallace & Hobbs 的共识内容（按记忆转述，未逐页核对）
+//   [Johnson99] Johnson et al. 1999, J. Climate 12:2397：热带对流三峰（信风积云 / 浓积云 / 积雨云），COARE（西太暖池）里浓积云占降水性对流云一半以上；对流层顶约 16 km
+//   [HKO雷暴] [JMA那霸] 雷暴日平年值，见 THUNDER_STATIONS
 //   [估算] 按气候常识定的量级区间，不是测量
-import * as W from "../src/weather.ts";
-import type { CloudRegime } from "../src/weather.ts";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import type { CloudRegime, WindProfile } from "../src/weather.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string) => {
   const i = args.indexOf(k);
   return i >= 0 ? args[i + 1] : undefined;
 };
+// --src <目录>（TW01，对照改前版本用）：从这个目录导入 weather.ts / weather-director.ts，默认 ../src。
+// 例：git show master:apps/voyage/src/weather.ts > <目录>/weather.ts（weather-director.ts 同样，其中的 "./flight" 等要能解析到——放在 src/ 下的子目录并把 "./" 改成 "../"）
+const srcDir = opt("--src") ? pathToFileURL(resolve(opt("--src")!) + "/").href : new URL("../src/", import.meta.url).href;
+const W: typeof import("../src/weather.ts") = await import(new URL("weather.ts", srcDir).href);
+const WD: typeof import("../src/weather-director.ts") = await import(new URL("weather-director.ts", srcDir).href);
 const MULTI_SEEDS = [20260927, 1, 5, 6, 777, 12345];
 const seeds = args.includes("--multi") ? MULTI_SEEDS : opt("--seeds") ? opt("--seeds")!.split(",").map(Number) : [opt("--seed") ? Number(opt("--seed")) : 20260927];
 const years = (opt("--years") ?? "2023,2024,2025,2026").split(",").map(Number);
 const tyYears = Number(opt("--ty-years") ?? 100);
-const only = new Set((opt("--only") ?? "region,front,ty,wind").split(","));
+const only = new Set((opt("--only") ?? "region,front,ty,wind,towering").split(","));
 const quiet = args.includes("--quiet") || seeds.length > 1;
 const H = 3.6e6;
 
@@ -259,6 +268,48 @@ function runSeed(seed: number) {
         }
     return pct(hit, n);
   }
+  /**
+   * 名额挑选（TW01，weather-director.ts 的 pickStormSystems）：在 (lat, lon) 以航向 heading 飞、右座，7–8 月午后，
+   * 280 km 内的活跃系统里按新 / 旧规则挑 MAX_STORMS 个单体，统计挑中的单体里「看得见」（挪位后在窗户这一侧、且没有飞过去）的比例，
+   * 以及挑中的单体数。旧规则 = 改前的 planStorms：按离飞机的距离从近到远，放得下就挑
+   */
+  function pickerStats(lat: number, lon: number, heading: number) {
+    const fwd: [number, number] = [Math.sin((heading * Math.PI) / 180), -Math.cos((heading * Math.PI) / 180)];
+    const kx = 111.32 * Math.cos((lat * Math.PI) / 180);
+    const visible = (c: { x: number; z: number }) => {
+      const along = c.x * fwd[0] + c.z * fwd[1];
+      let cross = c.x * -fwd[1] + c.z * fwd[0];
+      if (along >= 60 && Math.abs(cross) <= 200) cross = 40 + (50 * Math.abs(cross)) / 200;
+      return along >= -40 && cross > 0;
+    };
+    let nNew = 0, visNew = 0, nOld = 0, visOld = 0;
+    for (const y of years)
+      for (const m of [7, 8])
+        for (let d = 1; d <= 28; d++)
+          for (const h of TW_HOURS) {
+            const t = Date.UTC(y, m - 1, d) + (h - lon / 15) * H;
+            const cands = field
+              .stormsNear(lat, lon, t, 280)
+              .map((s) => ({ id: s.id, cells: s.cells.length, x: (s.lon - lon) * kx, z: -(s.lat - lat) * 110.57, d: gc(lat, lon, s.lat, s.lon) }));
+            const byId = new Map(cands.map((c) => [c.id, c]));
+            // 改前的导演没有 pickStormSystems：新规则按旧规则算（「改前必须失败」用同一个脚本验）
+            const pick = (WD as { pickStormSystems?: typeof WD.pickStormSystems }).pickStormSystems ?? ((cs: typeof cands) => [...cs].sort((a, b) => a.d - b.d).reduce<{ free: number; ids: string[] }>((acc, c) => (c.cells <= acc.free ? { free: acc.free - c.cells, ids: [...acc.ids, c.id] } : acc), { free: W.WeatherSystem.MAX_STORMS, ids: [] }).ids);
+            for (const id of pick(cands, W.WeatherSystem.MAX_STORMS, fwd, 1)) {
+              const c = byId.get(id)!;
+              nNew += c.cells;
+              if (visible(c)) visNew += c.cells;
+            }
+            let free = W.WeatherSystem.MAX_STORMS;
+            for (const c of [...cands].sort((a, b) => a.d - b.d)) {
+              if (c.cells > free) continue;
+              free -= c.cells;
+              nOld += c.cells;
+              if (visible(c)) visOld += c.cells;
+            }
+          }
+    const samples = years.length * 2 * 28 * TW_HOURS.length;
+    return { visNew: pct(visNew, nNew), visOld: pct(visOld, nOld), cellsNew: nNew / samples, visCellsNew: visNew / samples, visCellsOld: visOld / samples };
+  }
   function toweringStats() {
     const summer: Record<string, ReturnType<typeof toweringPoint>> = {};
     const at15: Record<string, ReturnType<typeof toweringPoint>> = {};
@@ -273,7 +324,9 @@ function runSeed(seed: number) {
     const inland5 = toweringPoint(la, lo, [7, 8], [5]);
     const thunder: Record<string, { jan: number; julAug: number }> = {};
     for (const [name, st] of Object.entries(THUNDER_STATIONS)) thunder[name] = { jan: thunderDayPct(st.at[0], st.at[1], [1]), julAug: thunderDayPct(st.at[0], st.at[1], [7, 8]) };
-    return { summer, at15, jan, inland5, thunder };
+    // 名额挑选：南海预设（向西南飞）、华南沿海（向西飞）
+    const picker = { scs: pickerStats(18, 115, 225), coast: pickerStats(22.3, 115, 250) };
+    return { summer, at15, jan, inland5, thunder, picker };
   }
 
   // ---------- 统计 ----------
@@ -322,7 +375,7 @@ function runSeed(seed: number) {
       for (let a = 0; a < 3; a++) for (let o = 0; o < 3; o++) pts.push([la0 + ((la1 - la0) * a) / 2, lo0 + ((lo1 - lo0) * o) / 2]);
       return pts;
     };
-    const collect = (month: number, pts: [number, number][], f: (p: W.WindProfile) => number) => {
+    const collect = (month: number, pts: [number, number][], f: (p: WindProfile) => number) => {
       const out: number[] = [];
       for (const t of times(month)) for (const [la, lo] of pts) out.push(f(field.wind(la, lo, t)));
       return out;
@@ -498,6 +551,7 @@ function runSeed(seed: number) {
         console.log(`| ${name} | ${f0(s.tower)} | ${f0(s.cb150)} | ${f0(s.cb280)} | ${f0(s.cb400)} | ${f0(tw.at15[name].cb400)} | ${s.sys.toFixed(2)} | ${s.cells.toFixed(2)} / ${s.cellsMax} | ${s.top50.toFixed(1)}（${s.top10.toFixed(1)}–${s.top90.toFixed(1)}） |`);
       console.log(`\n1 月（同口径）：${Object.entries(tw.jan).map(([k, s]) => `${k} 浓积云 ${f0(s.tower)}%、400 km 内雷暴 ${f0(s.cb400)}%`).join("；")}`);
       console.log(`雷暴日（模型：单体边缘 ${THUNDER_HEAR_KM} km 内，逐时；% 天）：${Object.entries(tw.thunder).map(([k, v]) => `${k} 1 月 ${v.jan.toFixed(1)}（平年 ${((100 * THUNDER_STATIONS[k].jan) / 31).toFixed(1)}）、7–8 月 ${v.julAug.toFixed(1)}（平年 ${((100 * THUNDER_STATIONS[k].julAug) / 62).toFixed(1)}）`).join("；")}`);
+      console.log(`名额挑选（挑中的单体里看得见的 %，新 / 旧；平均每刻看得见的单体数 新 / 旧）：${Object.entries(tw.picker).map(([k, p]) => `${k} ${f0(p.visNew)} / ${f0(p.visOld)}，${p.visCellsNew.toFixed(2)} / ${p.visCellsOld.toFixed(2)}`).join("；")}`);
       console.log(`华南内陆 7–8 月 5 时浓积云 ${f0(tw.inland5.tower)}%（对照午后 ${f0(tw.summer["华南内陆"].tower)}%）\n`);
     }
     if (wind) {
@@ -569,6 +623,36 @@ function runSeed(seed: number) {
     check("台风 1–4 月合计（年均）", janApr, janApr <= 3, "≤ 3", "[JMA台风] 1.5");
     const julOct = pm.slice(6, 10).reduce((a, b) => a + b, 0);
     check("台风 7–10 月合计（年均）", julOct, julOct >= 14 && julOct <= 21, "14–21", "[JMA台风] 17.8");
+  }
+  if (tw) {
+    // ---- TW01：高耸对流云。口径：7–8 月 1–28 日 × years × 当地 11 / 13 / 15 / 17 时（「15 时」一栏只取 15 时）；改前数值见 handoff/TW01.md ----
+    const S = tw.summer, A = tw.at15;
+    const band = (v: number, a: number, b: number) => v >= a && v <= b;
+    check("TW 华南沿海 7–8 月 15 时 400 km 内有雷暴 %", A["华南沿海"].cb400, A["华南沿海"].cb400 >= 70, "≥ 70", "TOWERING §1.3 / TW01 目标 [估算]：[HKO雷暴] 香港 7–8 月每月 8–9 个雷暴日（单站），巡航可见半径约 300 km、面积约 400 倍，盛夏午后视野里有积雨云应接近常态");
+    check("TW 南海中部 7–8 月 15 时 400 km 内有雷暴 %", A["南海中部"].cb400, A["南海中部"].cb400 >= 50, "≥ 50", "南海是亚洲夏季风的深对流区 [教科书]；TW01 目标 [估算]");
+    check("TW 冲绳 7–8 月 15 时 400 km 内有雷暴 %", A["冲绳"].cb400, A["冲绳"].cb400 >= 35, "≥ 35", "[JMA那霸] 7–8 月每月 2.7–3.5 个雷暴日（香港的约 0.37 倍）；TW01 目标 [估算]");
+    check("TW 冲绳 1 月 400 km 内有雷暴 %", tw.jan["冲绳"].cb400, tw.jan["冲绳"].cb400 <= 10, "≤ 10", "[JMA那霸] 1 月 0.3 个雷暴日；冬季副热带洋面几乎无深对流（与 WX10「冲绳东 1 月 ≤ 3」同源）[门限估算]");
+    check("TW 南海中部 7–8 月午后头顶浓积云 %", S["南海中部"].tower, band(S["南海中部"].tower, 25, 75), "25–75", "[Johnson99] 西太暖池浓积云占降水性对流云一半以上；上限：季风有中断期，不能天天一样（随机性铁律）[门限估算]");
+    check("TW scs 预设 7–8 月午后头顶浓积云 %", S["scs 预设"].tower, band(S["scs 预设"].tower, 25, 75), "25–75", "同上（南海预设 18°N）");
+    check("TW 华南沿海 7–8 月午后头顶浓积云 %", S["华南沿海"].tower, S["华南沿海"].tower >= 15, "≥ 15", "TOWERING TW01「海上夏季午后头顶浓积云 ≥ 15%」；沿海近岸看得见岸上午后对流 [估算]");
+    check("TW 冲绳 7–8 月午后头顶浓积云 %", S["冲绳"].tower, band(S["冲绳"].tower, 5, 40), "5–40", "[JMA那霸] 盛夏有雷暴日，浓积云比积雨云常见 [Johnson99 三峰]；副高控制为主，上限 [估算]");
+    check("TW wpac 预设（副高）7–8 月午后头顶浓积云 %", S["wpac 预设"].tower, S["wpac 预设"].tower <= 15, "≤ 15", "副高下沉、信风逆温压住对流，以晴空 / 淡积云为主 [教科书]；与 WX10「副高 8 月晴空 + 淡积云 70–95」一致 [门限估算]");
+    check("TW 南海中部 1 月午后头顶浓积云 %", tw.jan["南海中部"].tower, tw.jan["南海中部"].tower <= 10, "≤ 10", "冬季南海吹东北季风、干冷，深对流南撤到 10°N 以南 [教科书；门限估算]");
+    check("TW 华南内陆 7–8 月 5 时浓积云 / 午后", tw.inland5.tower / Math.max(S["华南内陆"].tower, 1), tw.inland5.tower <= 0.3 * S["华南内陆"].tower, "≤ 0.3", "陆地对流午后 14–17 时最强、清晨最弱 [气候，METEOROLOGY §1.3]");
+    const hk = tw.thunder["香港"], nh = tw.thunder["那霸"];
+    const hkObs = (100 * THUNDER_STATIONS["香港"].julAug) / 62, nhObs = (100 * THUNDER_STATIONS["那霸"].julAug) / 62;
+    check("TW 雷暴日 香港 7–8 月 模型 / 平年", hk.julAug / hkObs, band(hk.julAug / hkObs, 0.4, 1.6), "0.4–1.6", `[HKO雷暴] 7–8 月 ${hkObs.toFixed(1)}% 天；模型口径：单体边缘 ${THUNDER_HEAR_KM} km 内（雷声传 15–25 km [教科书]），换算有不确定度，门限 [估算]。改前 0.13`);
+    check("TW 雷暴日 那霸 7–8 月 模型 / 平年", nh.julAug / nhObs, band(nh.julAug / nhObs, 0.4, 1.6), "0.4–1.6", `[JMA那霸] 7–8 月 ${nhObs.toFixed(1)}% 天；同上。改前 0.22`);
+    check("TW 雷暴日 那霸 / 香港（7–8 月，模型）", nh.julAug / Math.max(hk.julAug, 0.1), band(nh.julAug / Math.max(hk.julAug, 0.1), 0.15, 0.9), "0.15–0.9", "[JMA那霸] / [HKO雷暴] 平年值之比 0.37；门限 [估算]");
+    check("TW 雷暴日 香港 1 月 %", hk.jan, hk.jan <= 3, "≤ 3", "[HKO雷暴] 1 月 0.23 天（0.7%）[门限估算]");
+    check("TW 华南内陆 400 km 内单体均值（7–8 月午后）", S["华南内陆"].cells, band(S["华南内陆"].cells, 3, 8), "3–8", "TOWERING 表 1.3 改前 4.2；按 [HKO雷暴] 雷暴日 + 单体扫过面积推算午后 400 km 内约 3–10 个 [估算]");
+    check("TW 华南沿海 砧顶中位 km（7–8 月）", S["华南沿海"].top50, band(S["华南沿海"].top50, 13.8, 15.5), "13.8–15.5", "热带对流层顶约 16 km [Johnson99]，砧在其下 1–3 km；TOWERING TW01「华南盛夏 14–16」[估算]");
+    check("TW 南海中部 砧顶中位 km（7–8 月）", S["南海中部"].top50, band(S["南海中部"].top50, 13.8, 15.5), "13.8–15.5", "同上");
+    check("TW 砧顶 华南沿海 − 关东（7–8 月中位，km）", S["华南沿海"].top50 - S["关东"].top50, S["华南沿海"].top50 - S["关东"].top50 >= 0.5, "≥ 0.5", "对流层顶与对流强度随纬度降低 [教科书]；门限 [估算]");
+    for (const [k, p] of Object.entries(tw.picker)) {
+      check(`TW 名额挑选 ${k}：挑中单体里看得见的 %`, p.visNew, p.visNew >= 90, "≥ 90", "TW01：名额只有 4 个单体，优先给挪位后在窗户这一侧、没飞过去的系统（改前按距离挑约 46–49%）");
+      check(`TW 名额挑选 ${k}：每刻看得见的单体数 新 − 旧`, p.visCellsNew - p.visCellsOld, p.visCellsNew >= p.visCellsOld, "≥ 0", "新规则不能让看得见的单体变少");
+    }
   }
   if (only.has("wind") && !hasWind) check("风 WeatherField.wind() 存在（1 = 是）", 0, false, "1", "WX11a 风场接口");
   if (wind) {
