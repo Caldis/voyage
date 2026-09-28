@@ -700,10 +700,9 @@ export class WeatherField {
     // WX10：副热带洋面的深对流季节性很强（冬季几乎没有，1 月冲绳以东原来 15 时有 21% 的雷暴）；只有 12°N 以南的深热带常年都有
     const deepTrop = smooth(20, 12, Math.abs(lat));
     const seaSeason = 0.08 + 0.92 * summer + (0.47 - 0.47 * summer) * deepTrop;
-    const landBase = (0.12 + 0.88 * circ(15, 3.2)) * (0.3 + 0.7 * summer) * (0.35 + 0.65 * trop);
     const sh = this.subtropicalHigh(lat, lon, t);
     let base: number;
-    if (land) base = landBase;
+    if (land) base = (0.12 + 0.88 * circ(15, 3.2)) * (0.3 + 0.7 * summer) * (0.35 + 0.65 * trop);
     else {
       base = (0.3 + 0.25 * circ(5, 4)) * (0.35 + 0.65 * trop) * seaSeason;
       // TW01：夏季暖洋面的深对流。改前海上对流潜势只有陆地午后的一半，7–8 月南海 / 东海 / 冲绳午后「头顶浓积云」全是 0%，
@@ -715,9 +714,8 @@ export class WeatherField {
       const mon = this.monsoonTrough(lat, lon, t);
       const warm = this.warmOcean(lat, lon, t);
       base += (0.42 * mon + 0.3 * warm) * (0.8 + 0.2 * circ(5, 5)) * (1 - 0.6 * sh);
-      // 沿海：陆上午后的对流（海风辐合带在岸上几十公里内）从近海看就在窗外；按周围约 90 km 内的陆地比例混入陆地的日变化 [估算]
-      const coast = this.nearbyLand(lat, lon);
-      base = base * (1 - coast) + Math.max(base, landBase) * coast;
+      // 试过「近岸按周围陆地比例混入陆地午后对流」：华南沿海午后浓积云只从 41% 变到 49%，任何断言都分不出来（改坏实验无失败），删了。
+      // 近岸看得见的午后塔来自岸上：陆地格子里出生的雷暴系统本来就会漂到 / 摆在海上航线的窗外
     }
     const n = fbm(lon / 3.5, lat / 3.5, t / H / 8, this.seed + 11);
     // 副高下沉区压制对流
@@ -742,12 +740,6 @@ export class WeatherField {
    */
   warmOcean(lat: number, lon: number, t: number) {
     return smooth(0.7, 0.95, this.summer(t, lat)) * smooth(33, 26, lat) * (1 - this.monsoonTrough(lat, lon, t));
-  }
-
-  /** 周围约 90 km 内的陆地比例 0..1（中心 + 上下左右各 0.8°，五点平均 landFraction）。海上的点离岸远近 */
-  nearbyLand(lat: number, lon: number) {
-    const d = 0.8;
-    return (this.landFraction(lat, lon) + this.landFraction(lat + d, lon) + this.landFraction(lat - d, lon) + this.landFraction(lat, lon + d) + this.landFraction(lat, lon - d)) / 5;
   }
 
   /** 锋面带此刻在经度 lon 处的中心纬度与季节活跃度（按 FRONT_SCHEDULE，东北—西南走向，沿经度和时间起伏） */

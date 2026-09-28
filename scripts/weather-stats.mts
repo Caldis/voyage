@@ -322,11 +322,12 @@ function runSeed(seed: number) {
     // 日变化：华南内陆 7–8 月，当地 5 时与 15 时的浓积云比例（陆上对流午后强、清晨弱）
     const [la, lo] = TW_POINTS["华南内陆"];
     const inland5 = toweringPoint(la, lo, [7, 8], [5]);
+    const coast5 = toweringPoint(TW_POINTS["华南沿海"][0], TW_POINTS["华南沿海"][1], [7, 8], [5]);
     const thunder: Record<string, { jan: number; julAug: number }> = {};
     for (const [name, st] of Object.entries(THUNDER_STATIONS)) thunder[name] = { jan: thunderDayPct(st.at[0], st.at[1], [1]), julAug: thunderDayPct(st.at[0], st.at[1], [7, 8]) };
     // 名额挑选：南海预设（向西南飞）、华南沿海（向西飞）
     const picker = { scs: pickerStats(18, 115, 225), coast: pickerStats(22.3, 115, 250) };
-    return { summer, at15, jan, inland5, thunder, picker };
+    return { summer, at15, jan, inland5, coast5, thunder, picker };
   }
 
   // ---------- 统计 ----------
@@ -552,7 +553,7 @@ function runSeed(seed: number) {
       console.log(`\n1 月（同口径）：${Object.entries(tw.jan).map(([k, s]) => `${k} 浓积云 ${f0(s.tower)}%、400 km 内雷暴 ${f0(s.cb400)}%`).join("；")}`);
       console.log(`雷暴日（模型：单体边缘 ${THUNDER_HEAR_KM} km 内，逐时；% 天）：${Object.entries(tw.thunder).map(([k, v]) => `${k} 1 月 ${v.jan.toFixed(1)}（平年 ${((100 * THUNDER_STATIONS[k].jan) / 31).toFixed(1)}）、7–8 月 ${v.julAug.toFixed(1)}（平年 ${((100 * THUNDER_STATIONS[k].julAug) / 62).toFixed(1)}）`).join("；")}`);
       console.log(`名额挑选（挑中的单体里看得见的 %，新 / 旧；平均每刻看得见的单体数 新 / 旧）：${Object.entries(tw.picker).map(([k, p]) => `${k} ${f0(p.visNew)} / ${f0(p.visOld)}，${p.visCellsNew.toFixed(2)} / ${p.visCellsOld.toFixed(2)}`).join("；")}`);
-      console.log(`华南内陆 7–8 月 5 时浓积云 ${f0(tw.inland5.tower)}%（对照午后 ${f0(tw.summer["华南内陆"].tower)}%）\n`);
+      console.log(`7–8 月 5 时浓积云：华南内陆 ${f0(tw.inland5.tower)}%（午后 ${f0(tw.summer["华南内陆"].tower)}%）、华南沿海 ${f0(tw.coast5.tower)}%（午后 ${f0(tw.summer["华南沿海"].tower)}%）\n`);
     }
     if (wind) {
       const w = wind;
@@ -634,9 +635,10 @@ function runSeed(seed: number) {
     check("TW 冲绳 1 月 400 km 内有雷暴 %", tw.jan["冲绳"].cb400, tw.jan["冲绳"].cb400 <= 10, "≤ 10", "[JMA那霸] 1 月 0.3 个雷暴日；冬季副热带洋面几乎无深对流（与 WX10「冲绳东 1 月 ≤ 3」同源）[门限估算]");
     check("TW 南海中部 7–8 月午后头顶浓积云 %", S["南海中部"].tower, band(S["南海中部"].tower, 25, 75), "25–75", "[Johnson99] 西太暖池浓积云占降水性对流云一半以上；上限：季风有中断期，不能天天一样（随机性铁律）[门限估算]");
     check("TW scs 预设 7–8 月午后头顶浓积云 %", S["scs 预设"].tower, band(S["scs 预设"].tower, 25, 75), "25–75", "同上（南海预设 18°N）");
-    check("TW 华南沿海 7–8 月午后头顶浓积云 %", S["华南沿海"].tower, S["华南沿海"].tower >= 15, "≥ 15", "TOWERING TW01「海上夏季午后头顶浓积云 ≥ 15%」；沿海近岸看得见岸上午后对流 [估算]");
+    check("TW 华南沿海 7–8 月午后头顶浓积云 %", S["华南沿海"].tower, S["华南沿海"].tower >= 15, "≥ 15", "TOWERING TW01「海上夏季午后头顶浓积云 ≥ 15%」；22°N 在夏季风槽北缘 [估算]");
     check("TW 冲绳 7–8 月午后头顶浓积云 %", S["冲绳"].tower, band(S["冲绳"].tower, 5, 40), "5–40", "[JMA那霸] 盛夏有雷暴日，浓积云比积雨云常见 [Johnson99 三峰]；副高控制为主，上限 [估算]");
     check("TW wpac 预设（副高）7–8 月午后头顶浓积云 %", S["wpac 预设"].tower, S["wpac 预设"].tower <= 15, "≤ 15", "副高下沉、信风逆温压住对流，以晴空 / 淡积云为主 [教科书]；与 WX10「副高 8 月晴空 + 淡积云 70–95」一致 [门限估算]");
+    check("TW 南海中部 1 月 400 km 内有雷暴 %", tw.jan["南海中部"].cb400, tw.jan["南海中部"].cb400 <= 20, "≤ 20", "冬季东北季风下南海北部、中部少深对流，季风槽只在 6–9 月 [教科书；门限估算]（季风槽不随季节时 42%）");
     check("TW 南海中部 1 月午后头顶浓积云 %", tw.jan["南海中部"].tower, tw.jan["南海中部"].tower <= 10, "≤ 10", "冬季南海吹东北季风、干冷，深对流南撤到 10°N 以南 [教科书；门限估算]");
     check("TW 华南内陆 7–8 月 5 时浓积云 / 午后", tw.inland5.tower / Math.max(S["华南内陆"].tower, 1), tw.inland5.tower <= 0.3 * S["华南内陆"].tower, "≤ 0.3", "陆地对流午后 14–17 时最强、清晨最弱 [气候，METEOROLOGY §1.3]");
     const hk = tw.thunder["香港"], nh = tw.thunder["那霸"];
