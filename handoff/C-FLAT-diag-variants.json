@@ -1,0 +1,7 @@
+[
+  { "name": "cur" },
+  { "name": "noAmb", "patch": { "clouds.marchMat": [["vec3 S = sunLight + ambient;", "vec3 S = sunLight;"]] } },
+  { "name": "noMS", "patch": { "clouds.marchMat": [["const float CLOUD_MS_ALBEDO = 6.0;", "const float CLOUD_MS_ALBEDO = 0.0;"]] } },
+  { "name": "noTail", "patch": { "clouds.marchMat": [["sunScatter += (tailK / (4.0 * M_PI))", "sunScatter += (0.0 * tailK / (4.0 * M_PI))"]] } },
+  { "name": "tmOff", "uniforms": { "exposure.finalMat.uniforms.uDayHiLook.value.w": 1, "exposure.finalMat.uniforms.uDayHiLocal.value.w": 0 } }
+]
