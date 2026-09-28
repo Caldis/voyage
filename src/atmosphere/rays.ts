@@ -31,7 +31,7 @@ import type { FullscreenPass } from "../render/pass";
  */
 
 /** 每条视线的步数（1/4 分辨率上；错开 16 个相位后等效 16 倍） */
-export const RAYS_STEPS = 32;
+export const RAYS_STEPS = 48;
 /** 步进目标相对全分辨率的缩小倍数 */
 export const RAYS_DOWNSCALE = 4;
 /** 步进只算到这么远（km）：云影图最外一级半边长 400 km，再远的空气里不算影子 */
@@ -288,9 +288,12 @@ export class CloudRays {
     });
   }
 
+  /** 步进目标的缩小倍数（调试 / 对照：改了之后调一次 setSize 生效，`__voyage.rays.downscale = 4; __voyage.resize()`） */
+  downscale = RAYS_DOWNSCALE;
+
   setSize(w: number, h: number) {
-    const lw = Math.max(1, Math.ceil(w / RAYS_DOWNSCALE));
-    const lh = Math.max(1, Math.ceil(h / RAYS_DOWNSCALE));
+    const lw = Math.max(1, Math.ceil(w / this.downscale));
+    const lh = Math.max(1, Math.ceil(h / this.downscale));
     this.raw.setSize(lw, lh);
     this.blurred.setSize(lw, lh);
     this.target.setSize(w, h);
