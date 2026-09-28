@@ -1,0 +1,15 @@
+[
+  {
+    "name": "noon-cumulus-clouddump",
+    "scene": "noon-cumulus",
+    "cloudDump": { "warm": 96, "frames": 16 },
+    "variants": [
+      { "name": "cur" },
+      { "name": "empty1x", "patch": { "clouds.marchMat": [["float stepLen = (wasEmpty ? 2.0 * dt : dt) * firstK;", "float stepLen = dt * firstK;"]] } },
+      { "name": "ref", "builtin": "cloud-ref" },
+      { "name": "dist", "builtin": "cloud-dist" },
+      { "name": "steps", "builtin": "cloud-steps" },
+      { "name": "steps_empty1x", "builtin": "cloud-steps", "patch": { "clouds.marchMat": [["float stepLen = (wasEmpty ? 2.0 * dt : dt) * firstK;", "float stepLen = dt * firstK;"]] } }
+    ]
+  }
+]

@@ -10,6 +10,11 @@
 // 无需为此改动），它内部的 `readRenderTargetPixels` 会强制一次 GPU 同步，批渲这一批查询在返回时基本都
 // 已经可读（不需要靠真实 rAF 帧数去等）。
 //
+// DX-26：**变体 / 端口快慢比较仅供参考**——这里每个变体各测一段、不逐轮配对，并行开发的负载漂移直接进差值；
+// 要比较两个变体请用 `dev-browser.mjs gpu-ab`（同页计时查询、ABBA 配对、核对程序切换与「计时区间里真的画到了被改的材质」）。
+// 本工具仍适合看「一帧的钱花在哪个 pass」。--variants 模式改为先摆场景再换着色器（不再在换完后重摆场景），
+// clouds.marchMat 解析为当前实际画的步进变体，测量期间没画到被改的材质会警告。
+//
 // 用法：
 //   node scripts/passes.mjs --port 5230 [--only noon-cumulus,typhoon-bands] [--frames 30] [--rounds 3]
 //     [--baseline 5290] [--param w00probe] [--param key=value] [--angle d3d11|vulkan] [--out 路径]
@@ -72,7 +77,10 @@ function usage() {
     "用法：node scripts/passes.mjs --port <端口> [--only a,b] [--frames 30] [--rounds 3] [--baseline 端口]\n" +
       "                              [--param k[=v]] [--angle d3d11|vulkan] [--out 路径] [--wait-quiet]\n" +
       "                              [--variants 文件.mjs [--material 点号路径] [--target 点号路径]]\n" +
-      "  --wait-quiet  测量前先等 CPU 占用降到 50% 以下再开始（DX-10，见 scripts/lib/cpu-load.mjs）",
+      "  --wait-quiet  测量前先等 CPU 占用降到 50% 以下再开始（DX-10，见 scripts/lib/cpu-load.mjs）\n" +
+      "  【仅供参考（DX-26）】按 pass 的分项表适合看「钱花在哪个 pass」；**比较两个变体 / 两个端口谁快**时，本工具不做逐轮配对、\n" +
+      "  负载漂移直接进差值，并行开发时 ±30% 很常见——变体对照请用 node scripts/dev-browser.mjs gpu-ab（同页 GPU 计时查询、\n" +
+      "  ABBA 多轮配对、核对程序真的切换且计时区间里真的画到了被改的材质，否则直接报错）",
   );
 }
 
@@ -169,6 +177,7 @@ function installTimer() {
     if (v.exposure.meterMat && mat === v.exposure.meterMat) return "测光";
     if (v.exposure.adaptMat && mat === v.exposure.adaptMat) return "曝光适应";
     if (v.exposure.finalMat && mat === v.exposure.finalMat) return "曝光合成";
+    if (v.exposure.localMat && mat === v.exposure.localMat) return "局部适应低通";
     if (v.cabinClass && v.cabinClass.variants) {
       for (const k in v.cabinClass.variants) if (v.cabinClass.variants[k] === mat) return "舱内合成";
     }
@@ -184,7 +193,9 @@ function installTimer() {
   let recording = false;
   let pending = [];
   let samples = new Map();
+  let drawCounts = new Map(); // DX-26：测量期间每个材质对象被画了几次（核对 --variants 改的材质真的在画）
   passObj.render = function (material, target, layer) {
+    if (recording) drawCounts.set(material, (drawCounts.get(material) || 0) + 1);
     if (!recording || !ext) return origRender(material, target, layer);
     const q = gl.createQuery();
     gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
@@ -198,7 +209,11 @@ function installTimer() {
     start() {
       samples = new Map();
       pending = [];
+      drawCounts = new Map();
       recording = true;
+    },
+    drawnCount(mat) {
+      return drawCounts.get(mat) || 0;
     },
     stop() {
       recording = false;
@@ -236,9 +251,21 @@ function installTimer() {
 // ---------- 页面内：--variants 用的着色器补丁 + compileAsync 等待 + 程序切换检查 ----------
 function installVariantPatcher() {
   const v = window.__voyage;
-  const resolvePath = (root, p) => p.split(".").reduce((o, k) => (o == null ? o : Array.isArray(o) ? o[Number(k)] : o[k]), root);
+  // DX-26：clouds.marchMat 解析成「这一帧实际画的云步进变体」（同 dev-browser ab / shots --material）；以前按字面取默认变体，
+  // 天气 / 卷云 / 奇观场景下改的根本不是在画的那个程序（C10 的「GPU 持平」误报同一类）
+  const resolvePath = (root, p) => {
+    if (p === "clouds.marchMat" && v.clouds.marchVariants && v.clouds.marchShown !== undefined) {
+      const va = v.clouds.marchVariants.get(v.clouds.marchShown || "");
+      if (va && va.mat) return va.mat;
+    }
+    return p.split(".").reduce((o, k) => (o == null ? o : Array.isArray(o) ? o[Number(k)] : o[k]), root);
+  };
   const origShaders = new Map();
   window.__variant = {
+    drawn(matPath) {
+      const m = resolvePath(v, matPath);
+      return { n: window.__passes.drawnCount(m), key: v.clouds.marchShown };
+    },
     apply(matPath, pairs) {
       const m = resolvePath(v, matPath);
       if (!m) throw new Error(`--material 解析不到 "${matPath}"`);
@@ -250,6 +277,9 @@ function installVariantPatcher() {
       }
       m.fragmentShader = s;
       m.needsUpdate = true;
+      // DX-26：换之前的程序在这里（同一次 evaluate 里）记下。以前在 waitCompile 里才取——两次 evaluate 之间主循环没冻结、
+      // 照常渲染一帧，已经换上了新程序，「前后是同一个程序」→ 误报「没切换」（typhoon-bands 实测复现）
+      window.__variantBefore = v.clouds.pass.renderer.properties.get(m)?.currentProgram ?? null;
     },
     async waitCompile(matPath, targetPath) {
       const m = resolvePath(v, matPath);
@@ -263,7 +293,8 @@ function installVariantPatcher() {
       // getProgram() 真正绑定给这个材质用的 WebGLProgram 对象）其实已经换了。直接比对象身份更准确：
       // three.js 自己在 WebGLRenderer 内部（setProgram）也是用 `materialProperties.currentProgram === program`
       // 这个判断来决定「要不要走新程序这条路」的，语义上就是「这次用的是不是同一个程序对象」。
-      const beforeProgram = renderer.properties.get(m)?.currentProgram ?? null;
+      const beforeProgram = window.__variantBefore !== undefined ? window.__variantBefore : (renderer.properties.get(m)?.currentProgram ?? null);
+      window.__variantBefore = undefined;
       const prevMat = passObj.mesh.material;
       const prevTarget = renderer.getRenderTarget();
       passObj.mesh.material = m;
@@ -296,8 +327,8 @@ function installVariantPatcher() {
   };
 }
 
-async function measurePasses(page, sc, frames, rounds) {
-  await page.evaluate(applyScene, { sc, defaults: DEFAULTS });
+async function measurePasses(page, sc, frames, rounds, { skipScene = false } = {}) {
+  if (!skipScene) await page.evaluate(applyScene, { sc, defaults: DEFAULTS });
   await page.evaluate(() => window.__passes.start());
   for (let r = 0; r < rounds; r++) {
     await page.evaluate((n) => window.__voyage.benchFrame(n), frames);
@@ -370,6 +401,8 @@ async function main() {
     console.warn(`[passes] 测量锁被占用（持有者：${lock ? lock.owner.split("\n")[0] : "未知"}），继续测量但结果可能被对方的负载污染（反之亦然）`);
   }
 
+  if (VARIANTS || baseline)
+    console.warn("[passes] 注意（DX-26）：变体 / 端口之间的快慢比较仅供参考（不配对、负载漂移直接进差值）；要下结论请用 node scripts/dev-browser.mjs gpu-ab");
   const ports = VARIANTS ? [port] : baseline ? [port, baseline] : [port];
   const browser = await launchBrowser(angle);
   const table = [];
@@ -390,6 +423,9 @@ async function main() {
       sampleAndWarn(`passes 测量场景 ${sc.name} 之前`);
       if (VARIANTS) {
         const page = pages[port];
+        // DX-26：先摆场景、再换着色器、测量时不再重摆场景——以前每个变体测量前都 applyScene，换场景可能换掉这一帧
+        // 实际画的云步进变体（天气 / 卷云），补丁打在了没在画的材质上
+        await page.evaluate(applyScene, { sc, defaults: DEFAULTS });
         for (const [name, pairs] of VARIANTS) {
           if (pairs.length > 0) {
             await page.evaluate(({ material, pairs }) => window.__variant.apply(material, pairs), { material, pairs });
@@ -400,7 +436,10 @@ async function main() {
               console.warn(`[passes] ${sc.name}/${name}：材质 "${material}" 换上新变体后 currentProgram 对象身份没变，量到的可能还是旧程序`);
             }
           }
-          const res = await measurePasses(page, sc, frames, rounds);
+          const res = await measurePasses(page, sc, frames, rounds, { skipScene: true });
+          const drawn = await page.evaluate((m) => window.__variant.drawn(m), material);
+          if (drawn.n === 0)
+            console.warn(`[passes] ${sc.name}/${name}：测量期间一次都没画到材质 "${material}"（云步进当前变体键 "${drawn.key}"）——这一行数字不代表该变体；请改用 dev-browser.mjs gpu-ab（会直接报错而不是出数）`);
           hintTyphoonBands(sc.name, res);
           console.log(`  ${sc.name} [${name}]: ${formatRow(res)}`);
           table.push({ scene: sc.name, variant: name, res });

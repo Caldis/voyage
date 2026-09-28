@@ -1,0 +1,4 @@
+[
+  { "name": "night-city-low", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 1.0, "coverage": 0.15, "cabin-light": "off", "quality": "high" }, "offset": [0, -25], "ground": true, "head": -0.25 },
+  { "name": "night-city-off", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 4, "coverage": 0.15, "cabin-light": "off", "quality": "high" }, "offset": [0, -25], "ground": true, "head": -0.25 }
+]
