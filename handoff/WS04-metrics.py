@@ -4,7 +4,9 @@
   M2 = 掩码面积 ÷ 舷窗面积（约 97 万像素）；另报掩码的宽、高（像素）；
   M6 = 大气分层：掩码最上面 20% 行（冠顶）与最下面 20% 行（岩座 / 根）各自和背后天空（b 图同一像素）的对比度
        |L − L_bg| / L_bg 的中位数之比（上段 ÷ 下段，≥ 2 为达标）。
-用法：python apps/voyage/handoff/WS04-metrics.py <a.png> <b.png> <地平线行号> [阈值=6]
+用法：python apps/voyage/handoff/WS04-metrics.py <a.png> <b.png> <地平线行号> [阈值=6] [只统计到第几行=1140]
+  b 图用「整个奇观清掉」（v.wonders.clear()）时，掩码含瀑布 / 根须帘子等介质，但也含云海上的影子：给第 5 个参数
+  （地平线行号 + 几十）只统计地平线附近以上，影子另看（地平线以下的差异图）。
 """
 import sys
 from PIL import Image
@@ -24,7 +26,8 @@ def lum(p):
 rows = {}
 cols = set()
 pix = []
-for y in range(20, 1140):
+ymax = int(sys.argv[5]) if len(sys.argv) > 5 else 1140
+for y in range(20, ymax):
     n = 0
     for x in range(390, 1210):
         la, lb = lum(pa[x, y]), lum(pb[x, y])

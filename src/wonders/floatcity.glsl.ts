@@ -406,7 +406,7 @@ vec3 flcShade(vec3 q, vec3 n, vec3 pW, vec3 nW, vec3 rd) {
   // 巨构版按海拔分层（WONDER_SCALE §1 手法 2）：湿空气在低处，8 km 以上越往上越稀薄——冠顶比底座清楚得多
   float dist = length(q - uWonderCam);
   float haze = 0.5 * (1.0 - exp(-dist / 70.0));
-  if (big) haze *= mix(0.75, 0.12, smoothstep(6.0, 26.0, q.y + FLC_BIG_BASE));
+  if (big) haze *= mix(1.3, 0.05, smoothstep(5.0, 22.0, q.y + FLC_BIG_BASE));
   // 往下看的视线（底座下面）不能直接查天空 LUT 的地平线以下（给出的是一团偏橙的错色）：抬到地平线（巡航高度约 −3.3°）上方一点，取地平线的霾色
   vec3 rdH = normalize(vec3(rd.x, max(rd.y, -0.045), rd.z));
   L = mix(L, skyRadiance(rdH, false), min(haze, 0.75));
