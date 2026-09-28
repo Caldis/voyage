@@ -374,8 +374,9 @@ export class GroundClipmap {
       res: RES,
       warm: this.warm,
       warmup: { ...this.warmMs },
-      worker: { ...workerStats, recent: workerStats.recent.slice() },
-      stitch: { ...stitchStats, recent: stitchStats.recent.slice() },
+      // queued = 发出去还没回来的任务数（G08，看 60× 下有没有积压）
+      worker: { ...workerStats, queued: roadPending.size, recent: workerStats.recent.slice() },
+      stitch: { ...stitchStats, queued: stitchPending.size, recent: stitchStats.recent.slice() },
       draw: { ...drawStats },
       hosts: imageryStats(),
     };
