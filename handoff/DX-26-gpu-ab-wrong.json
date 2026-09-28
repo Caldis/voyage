@@ -1,0 +1,11 @@
+[
+  {
+    "name": "wrong-material",
+    "scene": "noon-cumulus",
+    "time": "wing",
+    "variants": [
+      { "name": "cur" },
+      { "name": "cap384", "patch": { "clouds.marchMat": [{ "re": "i >= 192(\\)+) break;", "to": "i >= 384$1 break;" }] } }
+    ]
+  }
+]
