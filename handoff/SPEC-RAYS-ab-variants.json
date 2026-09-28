@@ -1,0 +1,4 @@
+[
+  { "name": "off", "js": "v.rays.enabled = false;" },
+  { "name": "on", "js": "for (let i = 0; i < 300 && v.rays.state !== 'ready'; i++) await new Promise((r) => setTimeout(r, 100)); v.rays.enabled = true;" }
+]
