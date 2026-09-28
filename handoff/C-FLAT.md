@@ -1,4 +1,4 @@
-# C-FLAT · 云的受光面被压平（WIP）
+# C-FLAT · 云的受光面被压平
 
 - 分支：`worktree-agent-af128d014c3f5df75`；基线：master `1d6aecf`（C-TOFU 形状改动**之前**，C-TOFU 合并后受光面层次要再量一次）。
 - 工具：`dev-browser ab`（`cloudDump` 读回云缓冲 α / Y）+ `handoff/C-FLAT-an.py`（本任务的分析脚本，口径见文件头）。
