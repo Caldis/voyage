@@ -22,7 +22,10 @@
  * 一个循环、重函数（透射率 / 天光 / 空气透视查表 / 封顶）各只有一个调用点（冷编译：FXC 按调用点整份内联）。
  * 循环上界都写成「常数 + uLoopGuard」，FXC 不展开。
  */
+import { wonderPenumbraCommon } from "./penumbra.glsl";
+
 export const WONDER_PILLARS_COMMON = /* glsl */ `
+${wonderPenumbraCommon("pillar")}
 uniform vec4 uPillars[12];   // 每根柱：x 东、y 南偏移（km），z 底部尺度（km：圆柱 = 半径；负数 = 方柱，绝对值是半边长），w 高度（km）
 uniform vec4 uPillarE;       // xyz 锚点处「东」（窗外坐标），w 根数
 uniform vec4 uPillarS;       // xyz 锚点处「南」，w 群的包围半径（km）
@@ -243,11 +246,14 @@ vec3 wonderPillars(vec3 L, vec3 rd, float tLimit) {
     float wP = g.y * pixelAngle;
     // 浮现：可见前沿从地平线的霾里往上长（前沿以上是长渐变）
     float visk = 1.0 - smoothstep(0.35 * front, front, hq);
-    // 光照：太阳 / 月亮直射（真实地影：黄昏柱脚已入夜、柱顶还亮着）、上半球天光、下方地球反上来的光
+    // 光照：太阳 / 月亮直射（真实地影：黄昏柱脚已入夜、柱顶还亮着）、上半球天光、下方地球反上来的光。
+    // WS08-b：地影交界按日面大小、大气折射与低层云给出半影（penumbra.glsl.ts），越靠交界越红越暗；tSRef / visS 只给封顶用
     vec3 Pw = a * (BOTTOM + hq) + (isCloud ? vec3(0.0) : E * P.x + S * P.y);
     float rr = length(Pw);
-    vec3 eSun = uSunIlluminance * wonderLightT(Pw, uSunDir);
-    vec3 eMoon = uMoonIlluminance * wonderLightT(Pw, uMoonDir);
+    vec3 tSRef, tMRef;
+    float visS, visM;
+    vec3 eSun = uSunIlluminance * pillarShadowT(Pw, uSunDir, tSRef, visS);
+    vec3 eMoon = uMoonIlluminance * pillarShadowT(Pw, uMoonDir, tMRef, visM);
     vec3 eSkyUp = skyIrradiance(min(rr, TOP), a) * (1.0 - smoothstep(40.0, 100.0, hq));
     vec3 eUp = 0.21 * (uSunIlluminance * max(dot(a, uSunDir), 0.0) + uMoonIlluminance * max(dot(a, uMoonDir), 0.0));
     // 空气透视：远柱更淡更蓝，柱脚埋在霾里、柱顶在稀薄的高空里清楚（大气分层是物理的，不另加）
@@ -261,13 +267,18 @@ vec3 wonderPillars(vec3 L, vec3 rd, float tLimit) {
     lFront = mix(lFront, min(lFront, Lbg * 0.78), duskW);
     // 亮度封顶（同天梯 / 建木）：暮色里被照亮的柱顶不超过同方向天空的 1.3–2 倍；按部件最亮时定比例，受光 / 背光的明暗保留
     float capLum = mix(4.0, mix(1.3, 2.0, smoothstep(10.0, 150.0, hq)), duskW) * wonderLum(Lbg);
-    vec3 eMax = eSun + eMoon + eSkyUp + eUp;
-    vec3 Ls, Lref;
+    // 封顶比例按半影的参考透射率定（WS08-b）：按实际的 eSun 定时，半影里的衰减被封顶整个抵掉，交界是一像素的硬线（WS07 遗留）。
+    // 另算一份「没有太阳」的（LsR / LrefR = 地影里的样子），最后按 visS 在两者之间混：半影里天光那部分不会被太阳的封顶比例压暗
+    vec3 eRest = eMoon + eSkyUp + eUp;
+    vec3 eMax = uSunIlluminance * tSRef + eRest;
+    vec3 Ls, Lref, LsR, LrefR;
     float covk;
     vec3 lamp = vec3(0.0);
     if (isCloud) {
-      Ls = 0.8 / M_PI * (eSun * 0.8 * fwd + eMoon * 0.8 + eSkyUp + 0.5 * eUp);
-      Lref = Ls;
+      LsR = 0.8 / M_PI * (eMoon * 0.8 + eSkyUp + 0.5 * eUp);
+      LrefR = LsR;
+      Ls = LsR + 0.8 / M_PI * eSun * 0.8 * fwd;
+      Lref = LsR + 0.8 / M_PI * uSunIlluminance * tSRef * 0.8 * fwd;
       covk = 1.0 - exp(-cb.x);
     } else {
       covk = g.w;
@@ -312,7 +323,9 @@ vec3 wonderPillars(vec3 L, vec3 rd, float tLimit) {
       vec3 alb = WONDER_CONCRETE * tint * (0.62 + 0.3 * fract(hs * 11.9)) * mix(0.7, 1.0, smoothstep(0.5, 5.0, hq))
                * (1.0 - 0.12 * joint - 0.35 * shadowBand + 0.12 * fc + 0.3 * streak + 0.3 * blot) * (1.0 - 0.18 * smoothstep(P.w - 1.2, P.w - 0.6, hq));
       Ls = alb / M_PI * wonderIrr(nW, a, eSun, eMoon, eSkyUp, eUp);
+      LsR = Ls - alb / M_PI * eSun * max(dot(nW, uSunDir), 0.0);   // wonderIrr 对各路照度是线性的
       Lref = alb * 1.4 / M_PI * eMax;
+      LrefR = alb * 1.4 / M_PI * eRest;
       // 夜灯（克制）：柱顶两角 + 前棱 / 正中的红色障碍灯（全部同步慢闪）；每道环带上沿朝相机的一圈暖白灯（每 0.7 km 一盏、三分之一空着），
       // 描出柱子的形与分段——灯距就是一把尺子
       float Yi = g.z * sn;
@@ -354,7 +367,9 @@ vec3 wonderPillars(vec3 L, vec3 rd, float tLimit) {
       }
       lamp *= 1.0 - dayF;
     }
-    L = mix(L, wonderCapRef(lFront + apT * Ls, lFront + apT * Lref, Lbg, capLum), covk * visk);
+    vec3 Lc = mix(wonderCapRef(lFront + apT * LsR, lFront + apT * LrefR, Lbg, capLum),
+                  wonderCapRef(lFront + apT * Ls, lFront + apT * Lref, Lbg, capLum), visS);
+    L = mix(L, Lc, covk * visk);
     float tm = tk * 1000.0;
     L += apT * lamp * visk / (tm * tm * pixelAngle * pixelAngle);
   }
