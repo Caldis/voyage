@@ -1,0 +1,20 @@
+[
+  {
+    "name": "low-sea-glint-live",
+    "scene": "low-sea-glint",
+    "crop": [400, 500, 600, 450],
+    "variants": [
+      { "name": "const7", "js": "v.state.wind = 7; window.__wx11gRamp = 0;" },
+      { "name": "ramp", "js": "v.state.wind = 6; for (let i = 0; i < 600 && v.ocean.stats.wind !== 6; i++) await new Promise((r) => requestAnimationFrame(r)); const id = (window.__wx11gRamp = (window.__wx11gRamp || 0) + 1); const t0 = performance.now(); const f = () => { if (window.__wx11gRamp !== id) return; const s = (performance.now() - t0) / 1000; v.state.wind = Math.min(8, 6 + s * 0.8); if (s < 6) requestAnimationFrame(f); }; requestAnimationFrame(f);" },
+      { "name": "step", "js": "v.state.wind = 7; for (let i = 0; i < 600 && v.ocean.stats.wind !== 7; i++) await new Promise((r) => requestAnimationFrame(r)); const id = (window.__wx11gRamp = (window.__wx11gRamp || 0) + 1); const t0 = performance.now(); const f = () => { if (window.__wx11gRamp !== id) return; const s = (performance.now() - t0) / 1000; v.state.wind = s < 1.25 ? 7 : 10; if (s < 6) requestAnimationFrame(f); }; requestAnimationFrame(f);" }
+    ],
+    "live": {
+      "crop": [400, 500, 600, 450],
+      "frames": 300,
+      "settle": 10,
+      "record": { "wind": "ocean.stats.wind", "mix": "ocean.stats.level.2", "drift": "ocean.stats.gustDriftKm" },
+      "thr": 16,
+      "frac": 0.05
+    }
+  }
+]

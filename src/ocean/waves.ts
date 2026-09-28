@@ -263,7 +263,8 @@ export class OceanWaves {
     while (i + 2 < L.length && L[i + 1] <= w) i++;
     const a = Math.min(Math.max((w - L[i]) / (L[i + 1] - L[i]), 0), 1);
     const need = a > 0 ? [i, i + 1] : [i];
-    for (const l of [...need, i - 1, i + 2]) this.prefetch(l);
+    // 预取：当前一对（风速正好落在档上时上档也要备好）+ 两侧各一档
+    for (const l of [i, i + 1, i - 1, i + 2]) this.prefetch(l);
     for (const l of need) if (!this.cache.has(l) && (this.wind < 0 || !this.getWorker())) this.buildSync(l);
     this.stats.pending = this.pendingLevels.size;
     if (need.some((l) => !this.cache.has(l))) {

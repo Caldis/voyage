@@ -1,0 +1,12 @@
+[
+  {
+    "name": "sunset-sea-frame",
+    "scene": "sunset-wing",
+    "variants": [
+      { "name": "master7", "materials": { "outsideMat": "base" }, "js": "v.state.wind = 7; for (let i = 0; i < 600 && v.ocean.stats.wind !== 7; i++) await new Promise((r) => requestAnimationFrame(r));" },
+      { "name": "w7", "js": "v.state.wind = 7; for (let i = 0; i < 600 && v.ocean.stats.wind !== 7; i++) await new Promise((r) => requestAnimationFrame(r));" },
+      { "name": "w7-AA", "js": "v.state.wind = 7; for (let i = 0; i < 600 && v.ocean.stats.wind !== 7; i++) await new Promise((r) => requestAnimationFrame(r));" },
+      { "name": "w8.5-mix", "js": "v.state.wind = 8.5; for (let i = 0; i < 600 && v.ocean.stats.wind !== 8.5; i++) await new Promise((r) => requestAnimationFrame(r));" }
+    ]
+  }
+]

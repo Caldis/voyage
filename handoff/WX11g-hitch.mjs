@@ -4,7 +4,7 @@
 //   ② 连续扫：风速按 1 m/s / 真实秒从 0 扫到 20 再扫回来（跨档靠预取）。
 // 用法：node apps/voyage/handoff/WX11g-hitch.mjs --port 5245 [--port2 5305] [--scene low-sea-glint]
 // 改前（master）的 ocean.update 风速一变就在主线程同步重算频谱，可以拿 --port2 对照。
-import { chromium } from "playwright";
+import { chromium } from "playwright-core";
 import { DEFAULTS, SCENES, applyScene } from "../scripts/scenarios.mjs";
 import { launchBrowser, closeBrowserSafely } from "../scripts/lib/chrome.mjs";
 
