@@ -1,0 +1,8 @@
+[
+  { "name": "night-sea-milkyway", "scene": "night-sea-milkyway" },
+  { "name": "night-sea-fullmoon", "scene": "night-sea-fullmoon" },
+  { "name": "dusk-earthshadow", "scene": "dusk-earthshadow" },
+  { "name": "low-sea-glint", "scene": "low-sea-glint" },
+  { "name": "noon-clear", "scene": { "name": "noon-clear", "p": { "preset": "wpac", "time": 720, "coverage": 0, "wing-pos": "8" } } },
+  { "name": "sunset-wing", "scene": "sunset-wing" }
+]

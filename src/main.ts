@@ -24,6 +24,7 @@ import { BootProgress } from "./boot/progress";
 import { Director } from "./director";
 import { WonderSystem } from "./wonders/system";
 import { Optics } from "./render/optics";
+import { CloudRays } from "./atmosphere/rays";
 import { createQualityController, DEFAULT_DPR_CAP } from "./quality";
 import { CabinAudio, audioInputFrom } from "./audio";
 import { LightPollution } from "./light-pollution";
@@ -100,6 +101,8 @@ Object.assign(sceneMat.uniforms, {
 const outsideMat = createOutsideMaterial(sceneMat.uniforms);
 const hdrOutside = createOutsideTarget(renderer);
 sceneMat.uniforms.uOutside.value = hdrOutside.texture;
+// 云隙光（SPEC-RAYS，atmosphere/rays.ts）：窗外 pass 之后减掉云影里的空气散射，舱内合成改读它给的纹理（不画时就是 hdrOutside）
+const rays = new CloudRays(renderer, pass, sceneMat.uniforms, atmosphere.hazeUniforms, hdrOutside);
 // 低空地面细节（T02）：海拔 4 km 以下后台编译窗外程序的 GROUND_DETAIL 变体，编好才切换。
 // PERF-13 起它管全部窗外变体（罕见光学 / 天幕层奇观 / 低空细节 / 火车，选择在 outside-pass.ts 的 wantedOutsideKey）
 const groundDetail = new GroundDetailVariant(outsideMat, hdrOutside);
@@ -347,6 +350,7 @@ function resize() {
   hdr.setSize(size.x, size.y);
   hdrSeat.setSize(size.x, size.y);
   hdrOutside.setSize(size.x, size.y);
+  rays.setSize(size.x, size.y);
   hdrWing.setSize(size.x, size.y);
   clouds.setSize(size.x, size.y);
   bloom.setSize(size.x, size.y);
@@ -565,6 +569,7 @@ function renderFrame(now: number) {
   // 窗外（或低空地面细节的变体材质，共用 sceneMat.uniforms）先画到 hdrOutside，舱内合成读它画到 hdr，
   // 机翼 pass 再读实际画出来的 hdr 合成
   pass.render(pickOutside(), hdrOutside);
+  u.uOutside.value = rays.render(hdrOutside);
   const cabinMat = cabinClass.pick(renderer, state.cabinClass);
   exposure.finalMat.uniforms.uCabinRefAlbedo.value.copy(CABIN_REF_ALBEDO[cabinClass.shown]);
   exposure.finalMat.uniforms.uClouds.value = clouds.texture; // TM01：高光段只给云（曝光合成读云缓冲的不透明度）
@@ -728,7 +733,10 @@ function benchScene(n = 20, which: "both" | "outside" | "cabin" = "both") {
   const px = new Float32Array(4);
   const sync = () => renderer.readRenderTargetPixels(hdr, 0, 0, 1, 1, px);
   const once = () => {
-    if (which !== "cabin") pass.render(pickOutside(), hdrOutside);
+    if (which !== "cabin") {
+      pass.render(pickOutside(), hdrOutside);
+      sceneMat.uniforms.uOutside.value = rays.render(hdrOutside);
+    }
     if (which !== "outside") {
       const cabinMat = cabinClass.pick(renderer, state.cabinClass);
       pass.render(cabinClass.seat(), hdrSeat);
@@ -771,4 +779,4 @@ function benchFrame(n = 10) {
 // （README「着色器编译」坑点，PERF-1）。以前 dev-browser.mjs 只能退而求其次统一绑到 hdrOutside。
 // PERF-14 合并（座椅拆成单独 pass）带来 seatMat / hdrSeat（座椅材质与目标）、wingVariant（机翼湿窗变体，
 // WingWetVariant 实例，--material 用它的 pick() 结果当「当前实际画的变体」，同 clouds.marchMat 的做法）。
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, softwareRenderer, atmosphere, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, softwareRenderer, atmosphere, rays, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };

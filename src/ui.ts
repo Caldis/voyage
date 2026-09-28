@@ -3,6 +3,7 @@ import type { SunPosition, MoonState } from "./astro";
 import { CLOUD_PRESETS, type Clouds, type CloudUniforms } from "./clouds/clouds";
 import { effectiveTargetKm, resetAltitudeFloor, FLOOR_LAND_AGL_KM, FLOOR_SEA_KM, PRESETS, haversineKm } from "./flight";
 import type { Exposure } from "./render/exposure";
+import { CABIN_REFLECT_STRENGTH } from "./render/cabin-reflect.glsl";
 import { $, type HighLiftSetting, type VoyageState } from "./state";
 import { WEATHER_PRESETS, type WeatherSystem } from "./weather";
 import { VIEW_PRESETS } from "./view-presets";
@@ -325,6 +326,7 @@ export function setupUi(deps: UiDeps) {
     state.cabinLight = v === "true";
     state.moodLight = v !== "off";
   });
+  setupReflectUi();
   // 舱等（T25）：只改状态，main.ts 每帧按它挑舱内合成的着色器变体（没编过的先后台编译，编好才切）
   $<HTMLSelectElement>("cabin-class").addEventListener("change", (e) => {
     state.cabinClass = (e.target as HTMLSelectElement).value === "economy" ? "economy" : "business";
@@ -369,6 +371,63 @@ export function setupUi(deps: UiDeps) {
       viaPointer = false;
     });
   });
+}
+
+// ---------- 窗上倒影强度（REFLECT-OFF） ----------
+
+/** 观看偏好（PANEL_UX_GUIDE §7.1 的 `voyage.pref.view`，结构 { v: 1, ... }）；这里只读写其中的 reflect 字段，其余字段原样保留 */
+const VIEW_PREF_KEY = "voyage.pref.view";
+/** 默认关：用户 2026-09-29「机舱反光过强了，也请弱化甚至默认关闭」 */
+const REFLECT_DEFAULT = 0;
+
+function readViewPref(): Record<string, unknown> {
+  try {
+    const o = JSON.parse(globalThis.localStorage?.getItem(VIEW_PREF_KEY) ?? "null");
+    return o && typeof o === "object" && o.v === 1 ? o : {}; // 不认识的版本当没记过
+  } catch {
+    return {};
+  }
+}
+
+/** 页面载入时的倒影强度：URL `?reflect=0..1`（也认 on / off；多个以最后一个为准）> 用户上次亲手拖的值 > 默认 0（关） */
+function initialReflect(): number {
+  const all = new URLSearchParams(globalThis.location?.search ?? "").getAll("reflect");
+  const q = all.length ? all[all.length - 1].toLowerCase() : "";
+  const n = q === "on" || q === "true" ? 1 : q === "off" || q === "false" ? 0 : q === "" ? NaN : Number(q);
+  if (Number.isFinite(n)) return THREE.MathUtils.clamp(n, 0, 1);
+  const saved = readViewPref().reflect;
+  if (typeof saved === "number" && Number.isFinite(saved)) return THREE.MathUtils.clamp(saved, 0, 1);
+  return REFLECT_DEFAULT;
+}
+
+function setupReflectUi() {
+  const input = $<HTMLInputElement>("cabin-reflect");
+  const out = $("cabin-reflect-out");
+  input.value = String(initialReflect());
+  const update = () => {
+    const v = Number(input.value);
+    CABIN_REFLECT_STRENGTH.value = v;
+    out.textContent = v === 0 ? "关" : `${Math.round(v * 100)}%`;
+    input.setAttribute("aria-valuetext", out.textContent);
+  };
+  const save = (e: Event) => {
+    // 只记用户亲手的操作（isTrusted）：回归 / 测量脚本派发的事件不写；URL 给的初值本身也从不写
+    if (!e.isTrusted) return;
+    try {
+      globalThis.localStorage?.setItem(VIEW_PREF_KEY, JSON.stringify({ ...readViewPref(), v: 1, reflect: Number(input.value) }));
+    } catch {
+      // 隐私模式等拿不到 localStorage：不记
+    }
+  };
+  input.addEventListener("input", update);
+  input.addEventListener("change", save); // 松手时写一次
+  // 双击复位到默认（关），PANEL_UX_GUIDE §4.2
+  input.addEventListener("dblclick", (e) => {
+    input.value = String(REFLECT_DEFAULT);
+    update();
+    save(e);
+  });
+  update();
 }
 
 // ---------- 连续航程 / 背景板模式（T19a） ----------
