@@ -1,5 +1,5 @@
 // FOCUS-ZOOM：头部左右限位表（离线，几秒跑完）。
-// node --experimental-transform-types --no-warnings apps/voyage/handoff/FOCUS-ZOOM-limits.mts [宽高比] [默认半视场°]
+// node --experimental-transform-types --no-warnings apps/voyage/handoff/FOCUS-ZOOM-limits.mts [宽高比] [默认半视场°] [头高 y]
 // 输出：各舱等 / 座位、各前伸量（z）× 各聚焦倍率下头部 x 的左右上限，以及对应的视线偏航角（相机中心视线与舷窗法线的夹角）；
 // 并核对现有视角预设在默认视场下是否都在限位以内（不在的话预设会被拉回，画面就变了）。
 import { headOk as frustumOk, headXLimit, type LimitQuery } from "../src/head-limits.ts";
@@ -7,6 +7,7 @@ import { headOk as frustumOk, headXLimit, type LimitQuery } from "../src/head-li
 const aspect = Number(process.argv[2] || 1600 / 1200);
 const half = Number(process.argv[3] || 25);
 const tan0 = Math.tan((half * Math.PI) / 180);
+const headY = Number(process.argv[4] ?? 0.02);
 const TARGET_Z = 0.075;
 const yawDeg = (x: number, z: number) => (Math.atan2(Math.abs(x), TARGET_Z - z) * 180) / Math.PI;
 
@@ -14,11 +15,11 @@ const zs = [-0.75, -0.6, -0.5, -0.42, -0.35, -0.3, -0.25, -0.2, -0.15, -0.1, -0.
 const mags = [1, 1.5, 2.5, 4, 8];
 for (const economy of [false, true]) {
   for (const seatSign of [1, -1]) {
-    console.log(`\n== ${economy ? "经济舱" : "商务舱"} · ${seatSign > 0 ? "右座" : "左座"}（宽高比 ${aspect.toFixed(3)}，默认垂直半视场 ${half}°，头高 y = 0.02）`);
+    console.log(`\n== ${economy ? "经济舱" : "商务舱"} · ${seatSign > 0 ? "右座" : "左座"}（宽高比 ${aspect.toFixed(3)}，默认垂直半视场 ${half}°，头高 y = ${headY}）`);
     console.log("  z（前伸）  " + mags.map((m) => `${m}×：机尾侧 / 机头侧 x（偏航°）`.padEnd(34)).join(""));
     for (const z of zs) {
       const cells = mags.map((m) => {
-        const q: LimitQuery = { y: 0.02, z, tanHalfFov: tan0 / m, aspect, seatSign, economy };
+        const q: LimitQuery = { y: headY, z, tanHalfFov: tan0 / m, aspect, seatSign, economy };
         // 座舱系 x 的正方向：右座朝机头、左座朝机尾
         const aft = headXLimit(seatSign > 0 ? -1 : 1, q), fwd = headXLimit(seatSign > 0 ? 1 : -1, q);
         return `${aft.toFixed(3)} / ${fwd.toFixed(3)}（${yawDeg(aft, z).toFixed(0)}° / ${yawDeg(fwd, z).toFixed(0)}°）`.padEnd(34);

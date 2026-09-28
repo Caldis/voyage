@@ -255,6 +255,26 @@ try {
     const maxJump = Math.max(...rec.slice(1).map((r, i) => Math.abs(r[2] - rec[i][2])));
     check(`${label} 聚焦中推到限位后松开 → 头被平滑拉回`, maxJump < 0.01, `相邻帧头部 x 最大变化 ${(maxJump * 1000).toFixed(2)} mm（x ${rec[0][2]} → ${rec[rec.length - 1][2]}）`);
   }
+  // 8. 自动画质档：聚焦中不调档。人为把 GPU 耗时估计钉成严重过载（每帧写 costEma），聚焦按住 2.5 s 档位不变；松开后才降档
+  {
+    await page.evaluate(() => {
+      const q = window.__voyage.quality;
+      q.setTier("auto");
+      window.__fzOver = true;
+      const f = () => { if (!window.__fzOver) return; q.costEma = 1000; requestAnimationFrame(f); };
+      requestAnimationFrame(f);
+    });
+    const lv0 = await page.evaluate(() => window.__voyage.quality.level);
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.waitForTimeout(2500);
+    const lv1 = await page.evaluate(() => window.__voyage.quality.level);
+    await page.mouse.up();
+    await page.waitForTimeout(3500);
+    const lv2 = await page.evaluate(() => window.__voyage.quality.level);
+    await page.evaluate(() => { window.__fzOver = false; window.__voyage.quality.setTier("high"); window.__voyage.quality.setTier("auto"); });
+    check("自动画质档：聚焦按住期间不因过载降档，松开 1.5 s 后照常判", lv0 === lv1 && lv2 !== lv0, `按下前 ${lv0}，按住 2.5 s ${lv1}，松开 3.5 s 后 ${lv2}（人为钉成过载）`);
+  }
   fs.writeFileSync(path.join(outDir, "curves.json"), JSON.stringify(curves));
   check("控制台没有 error", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "0 条");
   const bad = results.filter((r) => !r.ok).length;

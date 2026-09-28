@@ -408,6 +408,8 @@ function frame(now: number) {
   lastFrameAt = t;
   quality.beginFrame();
   renderFrame(t);
+  // FOCUS-ZOOM：聚焦中及还原后 1.5 s 内不自动调档（quality.ts pauseDecisions）
+  if (focus.active) quality.pauseDecisions(t + 1500);
   quality.endFrame(t, intervalMs);
   requestAnimationFrame(frame);
 }

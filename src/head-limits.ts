@@ -3,12 +3,12 @@
  * 视锥边上的视线会越过已建模的范围——只建了侧壁（无限长）、本排与前一排座椅，前后更远的座椅、过道、舱顶都没有，
  * 露出来就是「空白的前后机舱」（远处只有光秃秃的侧壁一直延伸到消失点），视线平行或背离侧壁时干脆什么都打不到（纯黑）。
  *
- * 做法：按几何逐条检查视锥里的视线（9×9 网格，含四条边），全部「只经过已建模区域」才算这个头部位置可用；
+ * 做法：按几何逐条检查视锥里的视线（四角 + 四条边 + 中心十字共 46 条），全部「只经过已建模区域」才算这个头部位置可用；
  * 对每个前伸量（z）、高度（y）、视场（聚焦时变窄）二分出头部 x 在每一侧的最大值。纯 CPU、每帧几百条射线，
  * 与着色器无关（不改任何 GLSL），几何常数与着色器一一对应（见各常数的出处）。
  *
  * 「已建模区域」的判据（视线从眼睛出发，到先碰到的已建模座椅或侧壁为止这一段）：
- *  ① 必须打到侧壁，且与侧壁平面的夹角 ≥ MIN_GRAZE_DEG（再斜就是消失点附近无限重复的窗，平行 / 背离侧壁时纯黑）；
+ *  ① 必须打到侧壁，且在水平面里与侧壁的夹角 ≥ MIN_GRAZE_DEG（再斜就是消失点附近无限重复的窗，平行 / 背离侧壁时纯黑）；
  *  ② 不能先穿过「真实客舱里该有、这里没建」的座椅：按同一排距把本排之后、前排之前的座椅外推几排，
  *     视线在碰到真有的两排或侧壁之前进了这些「幽灵座椅」的包围盒，就是看到了本该被座椅挡住的空白侧壁。
  * 座椅包围盒与 seats.glsl.ts 的 seatBox（靠背，后仰 16°）/ seatShellProfile（商务舱壳体的两段）同一套常数，经济舱没有壳体。
@@ -64,7 +64,7 @@ const wallZ = (y: number) => {
 const wallSlope = (y: number) => -Math.max(y - 0.3, 0) + 0.3 * Math.max(-0.3 - y, 0);
 function traceWall(o: V3, d: V3): number {
   let t = -o[2] / d[2];
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 12; i++) {
     const py = o[1] + d[1] * t, pz = o[2] + d[2] * t;
     t -= (pz - wallZ(py)) / Math.max(d[2] - wallSlope(py) * d[1], 1e-3);
   }
@@ -108,9 +108,12 @@ function seatHit(o: V3, d: V3, economy: boolean, row0: number, row1: number): nu
 
 /** 一条视线（u 坐标）是否只经过已建模区域 */
 function rayOk(o: V3, d: V3, economy: boolean): boolean {
-  // ① 与侧壁平面（窗带 z = 0 一段的法线 +z）的夹角
-  if (d[2] < Math.sin((MIN_GRAZE_DEG * Math.PI) / 180)) return false;
+  // ① 打到侧壁的点沿机身方向离眼睛不能太远：不超过「眼睛所在深度处、与侧壁成 MIN_GRAZE_DEG 的水平视线」打到侧壁的距离。
+  //   侧壁沿机身无限长、窗无限重复，消失点只在这个方向上；上下方向侧壁是弯回来的（上接行李架、下面内收），
+  //   陡峭朝下 / 朝上的视线很快就打到弯回来的侧壁，头在最高 / 最低、贴窗时的截图都没有露馅（handoff/FOCUS-ZOOM.md），不因俯仰受限
+  if (d[2] <= 0) return false;
   const tWall = traceWall(o, d);
+  if (!(tWall > 0) || Math.abs(d[0] * tWall) > -o[2] / Math.tan((MIN_GRAZE_DEG * Math.PI) / 180)) return false;
   // ② 在碰到真有的两排座椅或侧壁之前，穿过了「该有却没建」的座椅（前后各外推 PHANTOM_ROWS 排）
   const tEnd = Math.min(tWall, seatHit(o, d, economy, 0, 1));
   // 这一段始终高过所有座椅包围盒的顶（靠背盒顶约 y = −0.015）就不用查
