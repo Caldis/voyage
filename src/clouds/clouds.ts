@@ -52,6 +52,7 @@ uniform float uFrame;
 uniform vec2 uCloudResolution;
 uniform float uWeatherCull;   // 1：够不着雷暴 / 台风的视线走普通云的快路径（T33）；0：对照
 uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；和曝光的 uWhiteout 是同一个 uniform 对象，C01 返工）
+uniform int uLoopGuard;       // 恒为 0：主循环上限写成「常数 + uLoopGuard」，FXC 不会按常量上界展开（C10c，README 着色器编译坑）
 varying vec2 vUv;
 
 // 每个像素的步进随机数（C12）：x 给主步进抖动（采样点在区间里的位置），y 给受光步进挑细节格点（gDetailRnd），两者互不相关；
@@ -369,7 +370,9 @@ void main() {
   // 一路上的塔还要细化，走到约 100 km 就用完 256 步；在哪一步用完随每像素的抖动变，远处的塔成了一格一格的
   // 「纱窗点阵」半透明幽灵，步数用完处的边还连成直边的「透明方盒」（美术总监 wave5 第 2 处；和占据网格无关，
   // 关掉网格照旧）。只有用完预算的那些像素会多走，typhoon-outer 云步进 +0.2 ms（约 5%）
-  for (int i = 0; i < 448; i++) {
+  // 上限写成「448 + uLoopGuard」（恒为 448，C10b 审查 L1）：常量上界的循环 FXC 可能整个展开；这个循环体太重，实测没有展开，
+  // 写法与其他程序统一。scripts/lib/ab.mjs 的内置诊断变体（cloud-ref / cloud-steps）按这一行的文本改上限，改写法时两边一起改
+  for (int i = 0; i < 448 + uLoopGuard; i++) {
     // 没有雷暴时 384 步（原来 192；C10b 近处空白步不加倍，走到同样远要多约一倍的步数；多出的 448 − 384 步只给雷暴的表面细化用）
 #ifdef CLOUD_WEATHER
     if (t >= seg.y || T < 0.005 || (!refineOn && i >= 384)) break;
@@ -394,6 +397,8 @@ void main() {
     // 够得着雷暴 / 台风的视线要走 0–15 km（台风 0.5–20.5 km）的整个外壳，只在层状云自己的高度范围（上下各留 300 m）里走细步：
     // 塔身进云另有表面细化（fine），外壳里其余高度的空白没有层状云可漏。不加这一条时 storm-day / typhoon 云步进 +1.4~2.2 ms（+45~60%），
     // 远处的塔还会用完 448 步（T33 的纱窗点阵）
+    // 高度按区间**起点**判（C10b 审查 L2）：陡视线在 30 km 处 2dt ≈ 480 m、竖直约 340 m，比 300 m 余量大，
+    // 从上 / 下方进层状云的那一步仍可能是 2dt（退化成 C10b 以前的行为，不是回归；要补就按区间终点再判一次）
     if (refineOn) {
       float hT = length(ro + rd * t) - BOTTOM;
       if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;
@@ -451,6 +456,32 @@ void main() {
     }
 #endif
     if (dens > 0.002) {
+      // 进云那一步的受光点（C10c）：从空白进浓云时，命中样本在表面以下的深度 D 在 [0, L] 里均匀（L = 这一步的区间长，
+      // 近处 60–160 m），可浓云像素的亮度几乎只由表面以下十几到几十米决定，而受光随深度是凸的下降（Jensen）——
+      // 按 D 均匀取受光，期望偏暗（C10b 审查 P2：巡航俯看层积云海，近处 0–60 km 对 1/4 步长真值 HDR 只有 0.85，低太阳 0.70）。
+      // C10 的二分顺带把样本收到表面附近，C10b 撤二分后这份好处丢了。
+      // 做法（零额外密度调用）：只把**受光步进的起点**沿视线往回挪 δ，σ、区间、不透明度仍按命中样本——云边 / 薄丝的 α（C10b 的收益）逐位不变。
+      // δ 按「挪了以后的受光期望 ≈ 受光深度 U[0, L/2] 时的期望」定：受光随沿视线的深度约按 e^(−κx) 衰减，
+      // κ ≈ σ · sinθ视 / sinθ光（层状云顶近似水平，法线取 up；俯看、光低时陡）。D ~ U[0, L]、挪 δ 后深度 max(D − δ, 0)：
+      // κL 小（缓）时解出 δ ≈ 0.3L，κL 大（陡）时 δ ≈ 1/κ——陡的时候只能少挪，否则大半样本的起点挪出云顶，贴着云顶平着受光，过亮。
+      // 取 δ = min(0.3L, 4/κ)：0.3 与 4 是对 1/4 步长真值扫出来的（多次散射与扩散尾巴比单次散射衰减慢，实际的衰减长度约为单次的几倍）。
+      // 再乘 smoothstep(1, 3, σL)：薄 / 半透明的进云步（σL 小）本来就是整个区间的无偏估计（受光按区间均匀平均），不挪——
+      // 不乘时 cu-side（近看积云侧壁与薄边）0–20 km 反而过亮、逐像素误差 ×1.5。
+      // 效果见 handoff/C10c.md（同页对真值按距离分带）。
+      // 雷暴 / 台风不挪（有自己的表面细化）；飞机在云里的第一步（i = 0）不挪。
+      // 试过、不行：①固定挪 L/2——正午很准，太阳低时起点常挪到云顶外，亮到真值的 1.5–1.9 倍；②在 tS − L/2 多取一次密度、
+      // 够浓才挪（二分探测）——画质相当，但 GPU +10~14%（放到下一步做）或冷编译 +23~46%（多一个 layerDensity 调用点）
+      vec3 pL = p;
+#ifdef CLOUD_WEATHER
+      if (stormW < 0.5 && fine == 0 && wasEmpty && i > 0) {
+#else
+      if (wasEmpty && i > 0) {
+#endif
+        vec3 upP = p / length(p);
+        float kv = dens * CLOUD_EXTINCTION * max(-dot(rd, upP), 0.05) / max(dot(uKeyDir, upP), 0.05);
+        float sigL = dens * CLOUD_EXTINCTION * stepLen;
+        pL = p - rd * (min(0.3 * stepLen, 4.0 / kv) * smoothstep(1.0, 3.0, sigL));
+      }
       wasEmpty = false;
 #ifdef CLOUD_WEATHER
       wasThin = soft && dens * CLOUD_EXTINCTION * dt < SOFT_THIN_OD;
@@ -483,7 +514,7 @@ void main() {
         float lsL = 0.03;
         for (int j = 0; j < 6; j++) {
           lt += lsL;
-          od += layerDensity(p + uKeyDir * (lt - 0.5 * lsL), lod + 0.5, j < 3) * lsL;
+          od += layerDensity(pL + uKeyDir * (lt - 0.5 * lsL), lod + 0.5, j < 3) * lsL;
           lsL *= 2.2;
         }
       }
@@ -1278,6 +1309,7 @@ export class Clouds {
         uBlueNoise: { value: createBlueNoiseTexture() },
         uCloudResolution: { value: new THREE.Vector2(1, 1) },
         uWeatherCull: { value: 1 },
+        uLoopGuard: { value: 0 },
         uOcc: { value: this.occ[0].texture },
         uOccOrigin: { value: new THREE.Vector2() },
         uOccAlt: { value: new THREE.Vector2(0, 1) },

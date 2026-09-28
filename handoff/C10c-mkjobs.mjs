@@ -2,9 +2,11 @@
 // 用法：node handoff/C10c-mkjobs.mjs <输出 json> <场景[:crop x,y,w,h],...> <变体,...> [--dump] [--ref]
 //   变体名 cur / cur2 = 不打补丁；--ref 追加 builtin cloud-ref / cloud-dist；--dump 给 job 加 cloudDump
 import fs from "node:fs";
-import { VARIANTS } from "./C10c-var.mjs";
 
 const [out, scenesArg, varsArg, ...flags] = process.argv.slice(2);
+// --vfile <文件名>：变体文件（与本脚本同目录），默认 C10c-var.mjs
+const vfi = flags.indexOf("--vfile");
+const { VARIANTS } = await import(new URL("./" + (vfi >= 0 ? flags[vfi + 1] : "C10c-var.mjs"), import.meta.url).href);
 const variants = varsArg.split(",").map((vn) => {
   const p = VARIANTS[vn];
   if (p === undefined) throw new Error("没有变体 " + vn);
