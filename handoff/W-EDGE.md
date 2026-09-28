@@ -58,3 +58,19 @@ node scripts/dev-browser.mjs ab --port 5239 --base 5299 --jobs tmp/wedge/jobs.js
 python handoff/W-EDGE-metrics.py tmp/wedge/itN old,new     # 在 worktree 根执行
 node scripts/shader-budget.mjs --baseline D:/Code/opus-test/tmp/wedge-base --only wing,wing-wet --rounds 5 --wait-quiet
 ```
+
+
+## 接手（第三个代理，2026-09-28，分支 worktree-agent-a628011fd52a5863f，端口 5251 / 对照 5311 = tmp/wedge2-base 62f3cbd）
+
+现场：park/W-EDGE-b2 = v5 补丁已完整落地，只差延续段步数（注释写 64、代码仍 33），已改成 64（fcb0776）。
+
+B′ 当前数字（`tmp/wedge3/it1`，11 场景，同页冻结）：差和 610357 → 331106（**−45.8%**），边缘带覆盖率误差 biz 0.056 / sun 0.054 / night 0.054 / 云里 0.043–0.046（全部 ≤ 0.06），非机翼 11 个 job 全部逐位 0。
+
+**卡点：飞行中爬行（硬门槛）sunset 小翼前缘过不了**（`ab live`，同代码两轮）：小翼前缘 old 360–430 → new 800–1300，小翼后缘 2–5 → 100–150；
+商务舱正午、夜间频闪不升（biz 小翼前缘 786/918 → 837/680，主翼前缘 145/166 → 125/97；night 18/13 → 6/8）。
+参考图（25 子射线）自己在 live 里只有 179（小翼前缘）——说明爬行不是「边变锐了」的必然代价，是估计器的问题。
+
+诊断工具（`tmp/wedge3/mksweep.py` + `sweepana.py`）：冻结后按 0.12 mm 步进 head.x 的确定性序列，每帧读 new / ref / old 覆盖率和逐像素「走了哪条路」的路径码，
+算覆盖率的时间二阶差并按路径切换归因。sunset 小翼：Σ|二阶差| new 4956 / ref 2725 / old 2611；主翼前缘 1657 / 548 / 938。
+归因：①「打中、曲率判远、不探测」（拉普拉斯曲率在折角轮廓上是 0，silPx 无穷大，覆盖率直接给 1，误差 +0.28）和探测路径来回切；
+②探测→解析（码 2）自身的时间噪声（主翼前缘 |误差| 0.18）；③折角→超采样（+0.15 偏高）与解析来回切。
