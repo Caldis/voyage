@@ -11,7 +11,7 @@ if (-not ('PerfCpu.Th' -as [type])) {
 [DllImport("kernel32.dll")] public static extern int GetThreadDescription(System.IntPtr h, out System.IntPtr desc);
 [DllImport("kernel32.dll")] public static extern System.IntPtr LocalFree(System.IntPtr p);
 public static string Name(int tid) {
-  System.IntPtr h = OpenThread(0x1000, false, tid);
+  System.IntPtr h = OpenThread(0x0800, false, tid);
   if (h == System.IntPtr.Zero) return "";
   System.IntPtr p; string s = "";
   if (GetThreadDescription(h, out p) >= 0 && p != System.IntPtr.Zero) { s = System.Runtime.InteropServices.Marshal.PtrToStringUni(p); LocalFree(p); }

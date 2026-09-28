@@ -52,6 +52,22 @@
 2. 硬件模式下的 GPU 进程命令量：空气透视 / 天空视图 LUT 在输入不变时跳过重算（逐位不变的缓存，画面零变化）；看 `depthMask` / `enable` / `disable` 每帧 220 次的来源能否去掉。
 3. README「性能」坑点：记这次的现象 / 根因 / 识别方法（模块表、渲染器字符串、`cpu-prof.mjs --angle d3d11-warp` 复现）。
 
+## 已做的改动与前后数字（检查点 2）
+
+1. `src/boot/software-gl.ts`（新）+ `src/main.ts` 3 行接入 + `src/style.css`：渲染器是 WARP / SwiftShader / llvmpipe 时页面顶部提示（可关闭，压在加载遮罩之上）；`?swgl=1` 强制显示；`__voyage.softwareRenderer`。截图 `tmp/screenshot/perfcpu-banner/noon-cumulus.png`。
+2. `src/atmosphere/luts.ts`：空气透视 LUT 改成两附件 MRT 一遍画出（32 次 draw 代替 64 次，`integrateSegment` 只算一遍）。
+   与旧做法逐位对照（同页还原旧着色器、同样输入，32 位浮点逐 texel 读回）：内散射 262144 个值 0 差、透射率 262144 个值 0 差（`node handoff/PERF-CPU-aerial-check.mjs 5249`）——画面零变化。
+   `src/main.ts` 的 `__voyage` 多挂了 `atmosphere`（给上面的核对脚本用）。
+   有头 Chrome、1600×1200，对照 5309（04dc11f）/ 新 5249：
+   | 场景 | 每帧 GL 调用 | draw | uniform | 主循环 JS 中位（ms） |
+   | --- | --- | --- | --- | --- |
+   | default（稳态） | 1056 → 858 | 111 → 79 | 159 → 125 | 1.0 → 0.8 |
+   | noon-cumulus | 1056 → 861 | 111 → 79 | 159 → 125 | 0.9 → 0.9 |
+   | night-city | 1061 → 864 | 111 → 79 | 163 → 128 | 0.9 → 0.8 |
+   帧率两边都顶在 160 fps；GPU 进程 CPU 同场景两次能差 ±30%（45–90%），这个量级的改动在它的噪声内。
+3. 试过没采用：JS 侧去重冗余的 `depthMask` / `enable` / `disable`（每帧 440 次，占调用 40%），同页 A/B/A/B GPU 进程 CPU 无可见差别（ANGLE 延迟下发状态），不值得绕开 three 的状态管理。
+4. `scripts/cpu-prof.mjs` + `scripts/lib/thread-cpu.ps1`（新，DX 工具）；README「调试与验证」「坑点 · 性能」。
+
 ## 怎么复现
 
 ```bash

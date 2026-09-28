@@ -84,6 +84,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/director.ts` / `src/weather-director.ts` / `src/routes.ts` | 导演（T19a）：航段接力（T49：优先向前、提前转弯、掉头借遮挡）、手动导航（`setHeading` / `turnBy` / `hold` / `directTo` / `resumeRoute`）、爬升—巡航—下降剖面、时间流逝、遮挡排队切换（`request` / `onCover`）、换原点；天气驱动（T19b）：按天气场插值云参数、借遮挡换云族、在视野外生成 / 移除雷暴台风、奇观之门云墙 `openGate`；东亚航线网 |
 | `src/rail/*` | 火车模式（TR02）：`data.ts` 读线路烘焙产物；`corridor.ts` 走廊坐标（里程 s、横向 d、高程）、平滑中心线、按规范公式估算的超高；`train.ts` 速度曲线（巡航 90 km/h、曲线限速、终点停车折返）与车体姿态（台车连线、超高侧倾、悬挂外倾）；`vibration.ts` 车体低频振动；`geodesy.ts` 线路 ENU ↔ 经纬度；`mode.ts` 接到 voyage 的相机 / 状态（`window.__voyage.rail`，`rail.teleport(s, dir)` 调试用）；`far-view.ts` / `far-view.glsl.ts` 窗外程序的火车远景变体（TR03，`#define RAIL`，近处国土地理院平面带、掠射步进、相对高度、轮廓抗锯齿）；单测 `node src/rail/rail.test.mjs`；飞机模式着色器零回归比对 `node src/rail/shader-parity.mjs <对照 voyage 根目录>` |
 | `src/debug/minimap.ts` | 调试小地图（DX-06）：可选的角落 2D canvas 叠层，画本机 / 轨迹 / 航线 / 交通 / 奇观，以及从天气场采样的云回波「多普勒」图；不碰任何 WebGL 程序 |
+| `src/boot/software-gl.ts` | 软件渲染检测（PERF-CPU）：渲染器字符串是 WARP / SwiftShader / llvmpipe 时页面顶部提示原因与办法，见坑点「性能」 |
 | `src/atmosphere/common.glsl.ts` | 大气参数、相函数、LUT 参数化、视线积分（所有着色器共用） |
 | `src/atmosphere/luts.ts` | 透射率 / 多次散射 / 辐照度 / 天空视图 / 空气透视 LUT；`setHaze` 设边界层霾 |
 | `src/atmosphere/haze.ts` / `src/render/haze.glsl.ts` | 低空障眼法（T18）：边界层霾参数（按时段、地区、日期）、清晨谷地辐射雾 |
@@ -146,6 +147,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
 - **航向 / 接力调试**（T49）：面板底部「立即触发到达 / 接下一段（调试）」按钮 = `__voyage.director.forceArrive()`：不等飞到终点，立即走一次「到达」（自动航线接下一段，要掉头 > 90° 时照常排进遮挡队列；直飞模式转入盘旋）。其他句柄：`__voyage.director.ap`（自动驾驶：`mode` / `selHeading` / `turnDir` / `timeScale` / `hold` / `nextCourse` / `holdCourse`）、`director.setHeading(deg, dir?)`、`director.turnBy(±deg)`、`director.hold()`、`director.directTo("ITM")`、`director.resumeRoute()`、`director.nextLeg`（离终点 400 km 内预挑的下一段）、`director.describeNav()`。离线复现 / 单测（不开浏览器，几秒跑完）：`node --import ./handoff/T49-resolve.mjs --experimental-transform-types --no-warnings handoff/T49-test.mts`；按真实时间打印航向 / 坡度曲线与 > 60° 转向事件：同样的前缀跑 `handoff/T49-sim.mts [流速] [真实分钟] [预设]`。
 - `window.__voyageStartup`：启动各阶段耗时。
+- **CPU / GPU 进程剖析（PERF-CPU，`scripts/cpu-prof.mjs`，默认有头 Chrome）**：`node scripts/cpu-prof.mjs --port <端口> [--scenes default,noon-cumulus,night-city,storm-day,in-cloud,route-1x,route-60x] [--seconds 6] [--viewport 2560x1300 --dpr 1.5] [--angle d3d11|d3d11-warp] [--trace] [--no-gl] [--out tmp/perfcpu/x.json]`。每个场景输出：rAF 间隔中位 / p95 / 最大、每个 rAF 回调里主循环 JS 的耗时；主线程忙碌比例（`Performance.getMetrics`）；各进程 CPU（`SystemInfo.getProcessInfo`，100% = 一核）与最忙的线程（带 Chrome 线程名：`CrRendererMain` / `CrGpuMain` / `DedicatedWorker thread` / `VizCompositorThread` / `ThreadPoolForegroundWorker`…，`scripts/lib/thread-cpu.ps1`，仅 Windows）；Worker 消息频率；主线程 JS 自耗时 Top N（CDP Profiler，ms/帧）；WebGL 调用统计（每帧次数 / 耗时，另列 getError / readPixels / getParameter / clientWaitSync 这类同步调用）；`--trace` 再录一段 Performance trace，按线程列事件自耗时（样式 / 布局 / 绘制 / GPU 命令解码）。场景除 `scenarios.mjs` 的名字外还有 `default`（打开页面什么都不设）、`route-1x` / `route-60x`（hnd-cts 连续航程）、`same`（不重设再量一次）、`wait<N>`（等 N 秒）、`A` / `B`（执行 `--jsA` / `--jsB` 后再量，同页交替对照；代码可写 `file:<路径>`）。持测量锁。
 - URL 参数 `?lut16`：大气 LUT 强制用半精度（T36 改前的行为、没有 32 位浮点线性过滤的设备），用来对照深暮光的阶梯。
 - 截图前：把 `head` 固定在 `{tx:0, ty:0.02, x:0, y:0.02, tz:-0.3, z:-0.3}`、`uCloudOffset` 归零或设成固定值、隐藏面板（加 `hidden` 类），前后对比才有意义；截图放 `tmp/screenshot/voyage-*.png`。
 - 测帧率前先 `page.bringToFront()`（窗口被挡住时 Chrome 会节流到 1 fps）。
@@ -730,6 +732,18 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **火车：斜看的影像要沿足迹长轴取样**（TR03）：1 km 外像素在地面上沿视线方向的足迹是横向的几百倍，取一个点就是严重欠采样，列车一动整片平原闪。火车变体沿长轴取最多 4 点（`railGroundSample`），级别选到每点约一个纹素；地形法线在求交时就算好（`gh.nT`），掠射角按法线算（按天顶算会把正对我们的山坡也模糊掉）。
 - **火车：远处山脊几乎和地平线平行，轮廓是 1 像素的水平台阶，列车一动就沿轮廓爬**（TR03）：两类边都要抗锯齿。①地形对天空（没打到）：步进途中记下离地形最近处（以像素竖直足迹计），在它附近两轮细找，覆盖率 = 1 − 距离，和天空按覆盖率混；②近处山脊挡远处山脊（都打到）：只记「局部最近、之后又离远」的一处，把远山的颜色按那道山脊的距离重新加一遍空气透视当作它的颜色混进来。**云的切割（`cloudBeforeGround`）也要按同一覆盖率混**，不然山脊边的云还是一刀切（第一版只改地面颜色，截图看不出变化，查了半天才发现台阶是云被切出来的）。识别：`uDebug = 26`（火车变体专用：红 = 覆盖率，绿 = 距离 / 50 km，蓝 = 近处山脊覆盖率）。仍未解决：平原上相隔几公里的低矮起伏之间的遮挡边（对比很低，放大 5 倍才看得出）。
 - **火车远景变体第一次进入火车模式时后台编译约 18–19 s（d3d11 真冷），期间沿用飞机的窗外程序，窗外会先画成海**（TR03，已知）：飞机模式不受影响（变体只在火车模式下编译）。以后若要消掉，可在面板选「火车」的同时开始编译、编好之前在状态文字里提示。
+
+<a id="pit-perf"></a>
+### 性能
+
+- **「帧率很低、CPU 打满、GPU 利用很低」先查浏览器是不是退到了软件渲染，别先当代码回归查**（PERF-CPU，2026-09-28）：
+  - 现象：用户的 Chrome 里整页 2–3 fps，任务管理器 CPU 满、显卡几乎闲着。
+  - 根因：前一晚 23:59:37 NVIDIA 驱动重装（系统日志 UserPnp 20003「为设备添加服务 nvlddmkm」），Chrome 的 GPU 进程 4 秒后重启时拿不到硬件 D3D 设备，退到 **WARP**（`Microsoft Basic Render Driver`，D3D11 的 CPU 软件光栅），之后一直不会自己切回（浏览器进程从 9/13 起没重启过）。本页在 WARP 上约 2.4 fps，WARP 的光栅线程占约 26 个核。硬件模式（RTX 5090、有头、1600×1200 或 2560×1300@1.5）各场景稳态都顶在 160 fps vsync，主线程 JS 约 1 ms/帧，**不是回归**。
+  - 修法：用户侧完全重启 Chrome（`chrome://restart`），再到 `chrome://gpu` 确认「WebGL: Hardware accelerated」。代码侧：`src/boot/software-gl.ts` 启动时读渲染器字符串，命中 Basic Render / SwiftShader / llvmpipe 就在页面顶部提示原因与办法（`?swgl=1` 强制显示，`__voyage.softwareRenderer` 看判定）。
+  - 识别：①页面顶部出现上述提示；②PowerShell `(Get-Process -Id <Chrome GPU 进程>).Modules | ? ModuleName -match 'nvwgf|Warp'`：有 `D3D10Warp.dll`、没有 `nvwgf2umx.dll` 就是 WARP（Chrome GPU 进程 pid 用命令行里的 `--type=gpu-process` 找）；③复现：`node scripts/cpu-prof.mjs --port <端口> --angle d3d11-warp --no-gl`（注意 `--use-angle=warp` 不是合法值，会退到 SwiftShader）。
+- **每帧 WebGL 调用的大头是空气透视 3D LUT**（PERF-CPU）：原来内散射 / 透射率分两遍各画 32 层，占全帧 111 次 draw 中的 64 次（每层一次 `framebufferTextureLayer` + three 的整套 `render()`），同一段 `integrateSegment` 算两遍。改成两附件 MRT 一遍画出（`luts.ts` 的 `aerialTarget`：three 的 `WebGL3DRenderTarget` 给 `count: 2` 时多出来的 `textures[1]` 仍是 2D `Texture`，要手动换成同设置的 `Data3DTexture`），draw 111 → 79，与旧做法逐 texel 逐位相同（`node handoff/PERF-CPU-aerial-check.mjs <端口>`）。
+- **冗余的 GL 状态调用不是瓶颈**（PERF-CPU 实测）：three 每次 `render()` 末尾把深度测试 / 深度写入复位，全屏 pass 的材质又关掉，每帧约 220 次 `depthMask`、各 110 次 `enable` / `disable`（占调用数 40%）。在 JS 侧去重后同页交替对照，GPU 进程 CPU 在噪声内没有变化——ANGLE 把状态推迟到 draw 时才下发，这类调用很便宜。不值得绕开 three 的状态管理。
+- **测 CPU / GPU 进程开销用 `scripts/cpu-prof.mjs`**（PERF-CPU，见「调试与验证」）：GPU 进程 CPU 同场景两次能差 ±30%（45–90%），前后对照要同页交替（`--scenes 场景,A,B,A,B --jsA … --jsB …`）或多轮交替跑两个端口，不要单次比。启动后头 10 s 与换场景后的几秒里，GPU 进程的 `ThreadPoolForegroundWorker`（后台变体着色器编译）会占 4–7 个核，是一次性的，量稳态要等过去。
 
 <a id="pit-tools"></a>
 ### 工具与环境
