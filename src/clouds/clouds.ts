@@ -1065,6 +1065,27 @@ export const CLOUD_PRESETS: CloudPreset[] = [
   { id: "clear", name: "无云", bottom: 1.2, top: 3.4, coverage: 0, type: 1, density: 1 },
 ];
 
+/**
+ * C-TOFU：积云族的形状参数 uCuShape = (nA 竖直倍率, nB 竖直倍率, 积云族权重)，每帧按当前层厚 / 云型算（几次算术，
+ * 放在 CPU 上是因为 layerDensity 被内联进步进 / 受光 / 云影各处，着色器里算一次就是十几份，cloud-march 冷编译 +10%）。
+ * 竖直频率按层厚归一：nA 的竖直周期 = 1.3 个层厚、nB = 3 个层厚（一层之内有一个起伏，侧面成串鼓包，不是水平轮廓的竖直挤出）。
+ * 晴天积云 1.2–3.4 km：nA 周期 2.9 km、nB 6.6 km（旧版固定 alt × 1.3 / × 0.9，即 5.4 / 17.9 km，远大于层厚 → 豆腐块）；
+ * 浓积云 1.4–6.5 km 层本来就厚，夹在旧值（不再更低）。不取固定 ×2：浓积云层 5 km 厚，×2 后一层里叠两三个 nA 周期，
+ * 塔身断成一串上下分离的「爆米花」。层积云 / 高积云 / 卷云（云型 ≤ 0.45）权重为 0，照旧（1.3 / 0.9）。
+ */
+export function cumulusShape(u: { uCloudTop: { value: number }; uCloudBottom: { value: number }; uCloudType: { value: number }; uCuShape: { value: THREE.Vector3 } }) {
+  const thick = Math.max(u.uCloudTop.value - u.uCloudBottom.value, 0.1);
+  const t = Math.min(Math.max((u.uCloudType.value - 0.45) / 0.55, 0), 1);
+  const w = t * t * (3 - 2 * t); // smoothstep(0.45, 1, 云型)
+  const clamp = (x: number, a: number, b: number) => Math.min(Math.max(x, a), b);
+  const SHAPE_TILE = 7; // 与 clouds.glsl.ts 的 SHAPE_TILE 一致
+  u.uCuShape.value.set(
+    1.3 + (clamp(SHAPE_TILE / (1.3 * thick), 1.3, 3.0) - 1.3) * w,
+    0.9 + (clamp((SHAPE_TILE * 2.3) / (3.0 * thick), 0.9, 2.5) - 0.9) * w,
+    w,
+  );
+}
+
 /** 云场参数。场景着色器（海面云影）和云着色器共用同一组 uniform 对象 */
 export function createCloudUniforms(noise: CloudNoise) {
   return {
@@ -1076,6 +1097,7 @@ export function createCloudUniforms(noise: CloudNoise) {
     uCloudTop: { value: 3.4 },
     uCoverage: { value: 0.42 },
     uCloudType: { value: 1 },
+    uCuShape: { value: new THREE.Vector3(2.45, 2.44, 1) },   // C-TOFU，见 cumulusShape()
     uCloudDensity: { value: 1 },
     uShellBottom: { value: 1.2 },
     uShellTop: { value: 3.4 },
@@ -1895,6 +1917,7 @@ export class Clouds {
    * 所以同一朵云上一帧在「现在的位置 + 飞机位移」。
    */
   render(motion: THREE.Vector3, camBasis: THREE.Matrix3, cabinToWorld: THREE.Matrix3) {
+    cumulusShape(this.uniforms);
     this.updateOccupancy();
     this.updateShadow();
     this.marchMat.uniforms.uFrame.value = this.frame++ % 64;
