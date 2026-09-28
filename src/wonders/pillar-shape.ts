@@ -80,8 +80,8 @@ export function pillarShape(seed: number, awayDeg: number): PillarShape {
   const ca = Math.atan2(away[1], away[0]) + (r() < 0.5 ? -1 : 1) * THREE.MathUtils.degToRad(lerp(55, 90, r()));
   const contrail: PillarShape["contrail"] = [ca, lerp(-35, 10, r()), lerp(10.3, 11.8, r()), r()];
   const windAz = r() * Math.PI * 2;
-  // 方尖碑阵变体：六成的群是同一朝向的方柱（半边长取半径的 0.85，窗里的体量和圆柱相当）；着色器按负的尺度认方柱
-  if (r() < 0.6) for (const p of pillars) p[2] = -0.85 * p[2];
+  // 方尖碑阵变体：八成半的群是同一朝向的方柱（WS07 审查：圆柱群读成塑料管）（半边长取半径的 0.85，窗里的体量和圆柱相当）；着色器按负的尺度认方柱
+  if (r() < 0.85) for (const p of pillars) p[2] = -0.85 * p[2];
   return { pillars, center: [cx, cz], bound, windAz, contrail };
 }
 

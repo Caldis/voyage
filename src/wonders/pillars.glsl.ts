@@ -212,7 +212,10 @@ vec3 wonderPillars(vec3 L, vec3 rd, float tLimit) {
   }
   if (iB < 0.0 && c0.x + c1.x + c2.x < 1e-3) return L;
   // 给 outside-pass 排远云：只按柱子的实体（半透明的解析云不去裁真实的云——裁出来是一圈圈按云深度走的等高线）
-  gWonderCov = max(gA.w, gB.w);
+  // 乘可见前沿：浮现 / 退场时没显形的部分不挡星、不裁云（WS07 审查：否则夜空出现无星竖带）
+  float visA = 1.0 - smoothstep(0.35 * front, front, clamp(gA.z, 0.0, pA.w));
+  float visB = 1.0 - smoothstep(0.35 * front, front, clamp(gB.z, 0.0, pB.w));
+  gWonderCov = max(gA.w * visA, gB.w * visB);
   gWonderT = gB.w > 0.0 ? tB : tA;
 
   // ---- 着色（从远到近五步）：比 A 远的云 → A → A、B 之间的云 → B → 最近的云。

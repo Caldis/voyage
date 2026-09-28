@@ -316,7 +316,7 @@ export type OutsideKey = "" | "OW" | "DOW" | "DROW" | "OWP";
 export const OUTSIDE_KEYS: readonly OutsideKey[] = ["", "OW", "DOW", "DROW", "OWP"];
 const OUTSIDE_FEATURE_DEFINES: Record<string, string> = { D: "GROUND_DETAIL", R: "RAIL", O: "OUTSIDE_OPTICS", W: "OUTSIDE_WONDER", P: "WONDER_PILLARS" };
 /** 天幕层奇观的皮肤编号（uWonderShape.z）：2 = 巨柱群（WS07），要 OWP 变体画 */
-const PILLARS_SKIN = 2;
+export const PILLARS_SKIN = 2;
 
 /** 变体键 → three 的 defines（lint-shaders.mjs / shader-budget.mjs 离线枚举也用这一份，不要另写） */
 export function outsideVariantDefines(key: OutsideKey): Record<string, number> {
