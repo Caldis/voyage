@@ -461,10 +461,11 @@ void main() {
       // 按 D 均匀取受光，期望偏暗（C10b 审查 P2：巡航俯看层积云海，近处 0–60 km 对 1/4 步长真值 HDR 只有 0.85，低太阳 0.70）。
       // C10 的二分顺带把样本收到表面附近，C10b 撤二分后这份好处丢了。
       // 做法（零额外密度调用）：受光步进照常从命中点走，只从**离本点最近的一段**（受光步进前 3 步、约 240 m，基本是本云自己的路径）的
-      // 光学厚度里减去「深度多出来的那份」odCut（上限就是这一段的 od）；σ、区间、不透明度仍按命中样本——云边 / 薄丝的 α（C10b 的收益）逐位不变。
+      // 光学厚度里减去「深度多出来的那份」odCut（上限是这一段 od 的一半）；σ、区间、不透明度仍按命中样本——云边 / 薄丝的 α（C10b 的收益）逐位不变。
       // 多出来的那份：受光随沿视线的深度约按 e^(−κx) 衰减，κ ≈ σ · sinθ视 / sinθ光（层状云顶近似水平，法线取 up；俯看、光低时陡），
       // 目标是让受光深度的期望接近 U[0, L/2]（C10 二分的效果）；一阶推导 κL 小时减 ≈ 0.3κL，κL 大时减 ≈ 1（一个 e 折）。
-      // 取 odCut = min(0.4·κL, 2)：0.4 与 2 是对 1/4 步长真值扫出来的（多次散射比单次衰减慢，实际减得比单次散射推导的多）。
+      // 取 odCut = min(0.4·κL, 3)、最多减掉近处一段 od 的一半：0.4、3、一半是对 1/4 步长真值扫出来的（多次散射比单次衰减慢，实际减得比单次散射推导的多；
+      // 不设「一半」时太阳很低、逆光看积云的 sunset-wing 0–20 km 亮到真值 1.11（C10b 0.90），设了是 1.03，sea-sc-low 仍从 0.71 提到 0.89）。
       // 再乘 smoothstep(1, 3, σL)：薄 / 半透明的进云步（σL 小）本来就是整个区间的无偏估计（受光按区间均匀平均），不减——
       // 不乘时 cu-side（近看积云侧壁与薄边）0–20 km 过亮、逐像素误差 ×1.5。效果见 handoff/C10c.md（同页对真值按距离分带）。
       // 雷暴 / 台风不减（有自己的表面细化，受光也走另一支）；第一步（i = 0）不减。
@@ -481,7 +482,7 @@ void main() {
         vec3 upP = p / length(p);
         float kv = dens * CLOUD_EXTINCTION * max(-dot(rd, upP), 0.05) / max(dot(uKeyDir, upP), 0.05);
         float sigL = dens * CLOUD_EXTINCTION * stepLen;
-        odCut = min(0.4 * stepLen * kv, 2.0) * smoothstep(1.0, 3.0, sigL);
+        odCut = min(0.4 * stepLen * kv, 3.0) * smoothstep(1.0, 3.0, sigL);
       }
       wasEmpty = false;
 #ifdef CLOUD_WEATHER
@@ -520,7 +521,7 @@ void main() {
           if (j == 2) odNear = od; // 前 3 步（约 240 m）：进云那一步的 odCut 只从这一段里减（C10c，见上）
           lsL *= 2.2;
         }
-        od -= min(odNear, odCut / CLOUD_EXTINCTION);
+        od -= min(0.5 * odNear, odCut / CLOUD_EXTINCTION);
       }
 #ifdef CLOUD_WEATHER
       else {

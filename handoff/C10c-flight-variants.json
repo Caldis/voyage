@@ -4,7 +4,7 @@
   "patch": {
    "clouds.marchMat": [
     [
-     "        odCut = min(0.4 * stepLen * kv, 2.0) * smoothstep(1.0, 3.0, sigL);\n",
+     "        odCut = min(0.4 * stepLen * kv, 3.0) * smoothstep(1.0, 3.0, sigL);\n",
      ""
     ]
    ]
