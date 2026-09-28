@@ -11,7 +11,7 @@
 | PERF-CPU | **最高优先（用户 09-28 报告）** | 5249 | worktree | Opus 性能工程师（「帧率非常低、CPU 打满、GPU <40%」：CDP profile 主线程 Top 函数、每帧 WebGL 同步调用计数、GPU 进程 CPU、按今日合并二分、修前几名） | — | 进行中 |
 | WX11a-b | 第 7 波（天气，WX11g 审查 D2） | — | worktree | Opus（风场扰动加乘性 + 加性，西太 7 月镜面海；各预设季节海面风表 + 断言 + 改坏实验） | — | 进行中 |
 | PERF-WING | 第 7 波（W-EDGE 前置） | 5246 | worktree | Opus 性能工程师（cold --repeat 定关键路径；wingTrace 等价重构压冷编译 ≥10%；在新基线试打 B′ 报余量） | — | 进行中 |
-| C10c | 第 7 波（云，C10b 审查 P2） | 5242 | worktree | Opus（俯视浓云海近处变暗：进云首样本受光偏暗 → 区间平均 / 插值估表面，零取样；正式加 sea-sc / sea-sc-low；主循环上限改 uLoopGuard） | — | 进行中 |
+| C10c | 第 7 波（云，C10b 审查 P2） | 5242 | `worktree-agent-adf86f983a310129d`（532489b） | Opus | 待复测后审查 | 已交付画质部分：进浓云首段受光 od 减去「样本比表面深」那份（零额外密度调用）；sea-sc / sea-sc-low 近处三带均比 C10 更接近真值（0–20 km 0.842→0.960 / 0.704→0.890）；C10b 云边 / α 逐项不变；sunset-wing 近处变亮 1.05（误差 0.161→0.192）；主循环 448 + uLoopGuard；越界改 ab.mjs 两正则。**GPU / 冷编译 / flight / 云里因 PERF-CPU 暂停未复测**，对照 worktree tmp/c10c-base 保留 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
