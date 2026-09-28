@@ -665,7 +665,6 @@ void main() {
       bool wxLight = nearW.x && (stormW > 0.5 || cloudPointNearWeather(p.xz + uCloudOffset));
       int lightSteps = wxLight ? 8 : 6;
       if (stormW > 0.5 && soft) { ls = 0.24; lightSteps = 6; }
-      gLiteNoShield = stormW < 0.5;
 #else
       bool wxLight = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset);
       int lightSteps = wxLight ? 8 : 6;
@@ -773,7 +772,7 @@ void main() {
       sunScatter += (tailK / (4.0 * M_PI)) * (1.0 / (1.0 + 0.1125 * od) - exp(-od));
       vec3 sunLight = keyLight(r, up) * sunScatter;
 #ifdef CLOUD_STORM
-      // 砧盾投在层状云上的影子（TW04，见 clouds.glsl.ts 的 anvilShadowOD；层状云的受光步进里不算砧盾，gLiteNoShield）
+      // 砧盾投在层状云上的影子（TW04，见 clouds.glsl.ts 的 anvilShadowOD；云步进程序的受光步进里不算砧盾）
       // 不看 gWeatherOn：够不着雷暴的视线也可能看到落在砧影里的云，按视线分路径的话影子在包围圆柱的边上断开（storm-graze 的一道直边）。
       // 透过厚冰云的是漫射光，按二流近似的总透射 1 / (1 + 0.75(1 − g)·od)（g = 0.85，同扩散尾巴）而不是 e^−od：
       // e^−od 把砧下的积云压成没有明暗的灰饼（飑线截图），漫射透射留住了一半上下的光和它的形状
