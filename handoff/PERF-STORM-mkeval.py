@@ -35,8 +35,12 @@ def eval_variants():
     ]
 
 
+NOSKIP = ["    if (refineOn && wasEmpty && fine == 0 &&", "    if (false && refineOn && wasEmpty && fine == 0 &&"]
+
+
 def gpu_variants():
-    return [{"name": "old", "materials": OLD}, {"name": "cur"}, {"name": "old2", "materials": OLD}]
+    return [{"name": "old", "materials": OLD}, {"name": "cur"}, {"name": "old2", "materials": OLD},
+            {"name": "noskip", "patch": {M: [[*NOSKIP, True]]}}]
 
 
 ev = [{"name": f"eval-{nm(s)}", "scene": s, "cloudDump": {"warm": 96, "frames": 16, "heatTop": 200}, "variants": eval_variants()} for s in WX]

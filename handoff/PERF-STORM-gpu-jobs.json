@@ -17,6 +17,18 @@
     "materials": {
      "clouds.marchMat": "base"
     }
+   },
+   {
+    "name": "noskip",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    if (refineOn && wasEmpty && fine == 0 &&",
+       "    if (false && refineOn && wasEmpty && fine == 0 &&",
+       true
+      ]
+     ]
+    }
    }
   ]
  },
@@ -37,6 +49,18 @@
     "name": "old2",
     "materials": {
      "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "noskip",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    if (refineOn && wasEmpty && fine == 0 &&",
+       "    if (false && refineOn && wasEmpty && fine == 0 &&",
+       true
+      ]
+     ]
     }
    }
   ]
@@ -59,6 +83,18 @@
     "materials": {
      "clouds.marchMat": "base"
     }
+   },
+   {
+    "name": "noskip",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    if (refineOn && wasEmpty && fine == 0 &&",
+       "    if (false && refineOn && wasEmpty && fine == 0 &&",
+       true
+      ]
+     ]
+    }
    }
   ]
  },
@@ -79,6 +115,18 @@
     "name": "old2",
     "materials": {
      "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "noskip",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    if (refineOn && wasEmpty && fine == 0 &&",
+       "    if (false && refineOn && wasEmpty && fine == 0 &&",
+       true
+      ]
+     ]
     }
    }
   ]
@@ -119,6 +167,18 @@
     "materials": {
      "clouds.marchMat": "base"
     }
+   },
+   {
+    "name": "noskip",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    if (refineOn && wasEmpty && fine == 0 &&",
+       "    if (false && refineOn && wasEmpty && fine == 0 &&",
+       true
+      ]
+     ]
+    }
    }
   ]
  },
@@ -140,6 +200,18 @@
     "materials": {
      "clouds.marchMat": "base"
     }
+   },
+   {
+    "name": "noskip",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    if (refineOn && wasEmpty && fine == 0 &&",
+       "    if (false && refineOn && wasEmpty && fine == 0 &&",
+       true
+      ]
+     ]
+    }
    }
   ]
  },
@@ -160,6 +232,18 @@
     "name": "old2",
     "materials": {
      "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "noskip",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "    if (refineOn && wasEmpty && fine == 0 &&",
+       "    if (false && refineOn && wasEmpty && fine == 0 &&",
+       true
+      ]
+     ]
     }
    }
   ]

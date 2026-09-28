@@ -40,6 +40,11 @@ ${VIEW_COMMON}
 #ifdef CLOUD_WEATHER
 #define CLOUD_OCC 1
 #endif
+// PERF-STORM 空域跳跃只编进纯雷暴变体（见 main 里 laySeg / wxSeg）：台风变体里台风的包围柱（18 倍眼半径）几乎罩住整窗，跳不掉什么，
+// 多出的几个跨循环变量却让台风云步进 ×1.36（gpu-ab 16 轮，handoff/PERF-STORM.md）
+#if defined(CLOUD_STORM) && !defined(CLOUD_TYPHOON)
+#define CLOUD_STORM_SKIP 1
+#endif
 ${CLOUD_COMMON}
 ${LIGHTS_COMMON}
 #ifdef WONDER_LAYER
@@ -207,13 +212,13 @@ bool cloudPointNearWeather(vec2 xz) {
 #endif
   return nearAny;
 }
-// PERF-STORM：视线上「可能有雷暴 / 台风密度」的区间的包络 [t0, t1]（没有时 t1 < t0）。
-// 半径与密度函数的提前退出一致（雷暴 √56 ≈ 7.48 倍塔身半径、台风 18 倍眼半径），各留 0.5 km；
-// 高度按 weather.ts 的外壳：雷暴到 c.w + 1.8 km，台风到外壳顶。包络外只剩层状云，主循环可以整段跳过空白（见 main）
+#ifdef CLOUD_STORM_SKIP
+// PERF-STORM：视线上「可能有雷暴密度」的区间的包络 [t0, t1]（没有时 t1 < t0）。
+// 半径与密度函数的提前退出一致（√56 ≈ 7.48 倍塔身半径），留 0.5 km；高度按 weather.ts 的外壳：到 c.w + 1.8 km。
+// 包络外只剩层状云，主循环可以整段跳过空白（见 main）
 vec2 cloudRayWeatherSpan(vec3 ro, vec3 rd) {
   vec2 span = vec2(1e9, -1e9);
   float a = max(dot(rd.xz, rd.xz), 1e-8);
-#ifdef CLOUD_STORM
   for (int i = 0; i < uStormCount; i++) {
     vec4 c = uStorms[i];
     vec2 rel = c.xy - uCloudOffset;
@@ -226,23 +231,9 @@ vec2 cloudRayWeatherSpan(vec3 ro, vec3 rd) {
     vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
     if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
   }
-#endif
-#ifdef CLOUD_TYPHOON
-  if (cloudHurOn()) {
-    vec2 rel = uHurricane.xy - uCloudOffset;
-    float R = uHurricane.z * 18.0 + 0.5;
-    float tc = dot(rel, rd.xz) / a;
-    float h2 = R * R - (dot(rel, rel) - tc * tc * a);
-    if (h2 >= 0.0) {
-      float hw = sqrt(h2 / a);
-      vec2 hs = cloudShellInterval(ro, rd);
-      vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
-      if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
-    }
-  }
-#endif
   return span;
 }
+#endif
 #endif
 
 float hg(float c, float g) {
@@ -384,11 +375,12 @@ void main() {
   float fineDt = 0.03;
   bool wasThin = false;       // 上一个采样点是稀薄的软边冰晶云（下一步走 2 倍步长，见 SOFT_SKIP）
   float lastEmpty = seg.x;   // 最近一个空白采样点的位置：表面一定在它和第一个有云的采样点之间
-  // PERF-STORM 空域跳跃：够得着雷暴 / 台风的视线（refineOn）要走 0–15 km（台风 0.5–20.5 km）的整个外壳，
+  // PERF-STORM 空域跳跃（只在纯雷暴变体，CLOUD_STORM_SKIP）：够得着雷暴的视线（refineOn）要走 0–15 km 的整个外壳，
   // 实测 storm-sc-low 每像素 168 步里 161 步是层状云高度以外的空白 2dt 步（有云样本只有约 2 个）：巡航高度本身就在外壳里，
   // 往下看要从机身空走到云顶、往上看要空走到 15 km，一路逐步求密度。其实外壳里只有两处可能有云：
-  // 层状云自己的高度范围（laySeg）和各雷暴 / 台风的包围柱（wxSeg，见 cloudRayWeatherSpan）。两者之外一步跳到下一段的起点。
+  // 层状云自己的高度范围（laySeg）和各雷暴的包围柱（wxSeg，见 cloudRayWeatherSpan）。两者之外一步跳到下一段的起点。
   // laySeg 取「首次进层 → 最后出层」的包络：不碰地面的掠射视线出层底后还会再进层，包络里夹着的空白照旧走 2dt（下面的高度门控）
+#ifdef CLOUD_STORM_SKIP
   vec2 laySeg = vec2(1e9, -1e9);
   vec2 wxSeg = vec2(1e9, -1e9);
   if (refineOn) {
@@ -399,6 +391,7 @@ void main() {
     }
     wxSeg = cloudRayWeatherSpan(ro, rd);
   }
+#endif
   // 闪电放电通道（线段）：两端换到相机坐标
   vec3 fA = vec3(uFlash.x - uCloudOffset.x, BOTTOM + uFlash.y, uFlash.z - uCloudOffset.y);
   vec3 fAB = vec3(uFlashB.x - uCloudOffset.x, BOTTOM + uFlashB.y, uFlashB.z - uCloudOffset.y) - fA;
@@ -442,6 +435,7 @@ void main() {
     // 跳到的点上 lastEmpty 同步（塔身表面细化按它回退，不能退回跳过的那段）；跳后第一步走半步，
     // 与默认程序从层顶起步（i == 0 半步）一致——远离雷暴的层状云在两个程序里是同一套采样，换程序不跳变
     bool jumped = false;
+#ifdef CLOUD_STORM_SKIP
     if (refineOn && wasEmpty && fine == 0 && !(t >= laySeg.x && t < laySeg.y) && !(t >= wxSeg.x && t < wxSeg.y)) {
       float tn = min(t < laySeg.x ? laySeg.x : 1e9, t < wxSeg.x ? wxSeg.x : 1e9);
       if (tn >= seg.y) break;
@@ -449,6 +443,7 @@ void main() {
       lastEmpty = tn;
       jumped = true;
     }
+#endif
 #else
     if (t >= seg.y || T < 0.005 || i >= 384) break;
 #endif
