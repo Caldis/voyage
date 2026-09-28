@@ -1,0 +1,20 @@
+[
+  {
+    "name": "noon-cumulus-march",
+    "scene": "noon-cumulus",
+    "variants": [
+      { "name": "cur" },
+      { "name": "master", "materials": { "clouds.marchMat": "base" } },
+      { "name": "cap384", "patch": { "clouds.marchMat": [{ "re": "i >= 192(\\)+) break;", "to": "i >= 384$1 break;" }] } },
+      { "name": "ref", "builtin": "cloud-ref" }
+    ]
+  },
+  {
+    "name": "typhoon-march",
+    "scene": "typhoon-bands",
+    "variants": [
+      { "name": "cur" },
+      { "name": "cap384", "patch": { "clouds.marchMat": [{ "re": "i >= 192(\\)+) break;", "to": "i >= 384$1 break;" }] } }
+    ]
+  }
+]

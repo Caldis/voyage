@@ -78,7 +78,9 @@ function installGpuTimer() {
         const m = window.__dx.mat(p);
         drawn[p] = { n: counts.get(m) || 0, prog: r.properties.get(m)?.currentProgram?.id ?? null };
       }
-      const seen = [...counts.entries()].map(([m, c]) => `${m.name || m.type}${m === v.clouds.marchMat ? "(默认步进)" : ""}×${c}`);
+      const known = [["sceneMat", v.sceneMat], ["outsideMat", v.outsideMat], ["wingMat", v.wingMat], ["wingMat.wet", v.wingVariant && v.wingVariant.wet], ["seatMat", v.seatMat], ["clouds.resolveMat", v.clouds.resolveMat], ["clouds.marchMat(默认变体)", v.clouds.marchMat], ["exposure.finalMat", v.exposure && v.exposure.finalMat], ["exposure.meterMat", v.exposure && v.exposure.meterMat], ["exposure.adaptMat", v.exposure && v.exposure.adaptMat]];
+      const nameOf = (m) => (known.find(([, x]) => x === m) || [m.name || m.type])[0];
+      const seen = [...counts.entries()].map(([m, c]) => `${nameOf(m)}×${c}`);
       return { ms: disjoint ? null : ns / 1e6 / n, disjoint: Boolean(disjoint), drawn, seen, marchKey: v.clouds.marchShown };
     },
   };

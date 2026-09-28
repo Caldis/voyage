@@ -99,6 +99,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchBrowser, closeBrowserSafely, resolveRepoPath } from "./lib/chrome.mjs";
+import { cloudMetrics, printCloudMetrics, loadCloudDump, stepsStats } from "./lib/cloud-metrics.mjs";
 
 const VOYAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.join(VOYAGE_ROOT, "..", "..");
@@ -187,10 +188,33 @@ function usage() {
   console.error("      node scripts/compare.mjs --diff <图2> [--threshold 8] [--heatmap 差异.png] [--mask x,y,w,h ...] [--json] <图1>");
   console.error("      node scripts/compare.mjs --row y [--row ...] [--col x ...] [--json] <图1> [<图2> ...]");
   console.error("      node scripts/compare.mjs --thumb 64 [--thumb-out 目录] [--json] <图1> [<图2> ...]");
+  console.error("      node scripts/compare.mjs --cloud-dir <ab 的 job 目录> --ref <真值变体> [--dist <深度变体>] [--variants a,b] [--json]（DX-26：按距离分带的边宽、对真值 α 分档）");
+}
+
+/** DX-26：--cloud-dir <目录> --ref <真值变体> [--dist <深度变体>] [--variants a,b] [--json]：云缓冲读回（ab 的 job.cloudDump）的固定指标——
+ * 按距离分带的云边宽度、对真值 α 分档比值、云区 |Δα|、Y 比（收编 handoff/C10b-an.py，见 lib/cloud-metrics.mjs）。纯 Node，不开浏览器。
+ * 不给 --variants 就取目录里全部 kind = history 的读回；steps 读回另列步数统计。 */
+function cloudDirMode(args) {
+  const dir = resolveRepoPath(REPO_ROOT, String(args["cloud-dir"]));
+  if (!fs.existsSync(dir)) throw new Error(`--cloud-dir 找不到目录：${args["cloud-dir"]}`);
+  const all = fs.readdirSync(dir).filter((f) => f.endsWith(".cloud.json")).map((f) => f.slice(0, -".cloud.json".length));
+  if (!args.ref) throw new Error(`--cloud-dir 需要 --ref <真值变体名>（目录里有：${all.join(", ")}）`);
+  const kinds = Object.fromEntries(all.map((n) => [n, loadCloudDump(dir, n).kind]));
+  const variants = args.variants ? String(args.variants).split(",") : all.filter((n) => kinds[n] === "history" && n !== args.dist);
+  const res = cloudMetrics(dir, { ref: String(args.ref), dist: args.dist ? String(args.dist) : null, variants });
+  const steps = {};
+  for (const n of all) if (kinds[n] === "steps") steps[n] = stepsStats(loadCloudDump(dir, n));
+  if (args.json) {
+    console.log(JSON.stringify({ ...res, steps }, null, 2));
+    return;
+  }
+  printCloudMetrics(res, path.relative(REPO_ROOT, dir).replace(/\\/g, "/"));
+  for (const [n, s] of Object.entries(steps)) console.log(`  步数 ${n}：均值 ${s.mean}、p50/p90/p99 ${s.p50}/${s.p90}/${s.p99}、最大 ${s.max}${s.cap ? `、用满上限 ${s.cap} 的 ${s.atCapPct}%` : ""}`);
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args["cloud-dir"]) return cloudDirMode(args);
   const images = args._;
   const regions = parseRegions(args, "measure");
   const masks = parseRegions(args, "mask");

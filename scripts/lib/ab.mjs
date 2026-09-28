@@ -425,7 +425,7 @@ export async function cmdAb(args, h) {
           let cloud = null;
           if (cloudDumpOpt) {
             const d = await dumpClouds(page, { steps: va.builtin.includes("cloud-steps"), ...cloudDumpOpt });
-            const saved = await saveCloudDump(jdir, label.replace("#", "_r"), d, anaPage);
+            const saved = await saveCloudDump(jdir, label.replace("#", "_r"), d, anaPage, cloudDumpOpt.heatTop || null);
             cloud = { kind: d.kind, W: d.W, H: d.H, marchKey: d.marchKey, steps: saved.steps || null };
             if (saved.steps) log(`  ${job.name}/${label} 步数用量：均值 ${saved.steps.mean}、p50/p90/p99 ${saved.steps.p50}/${saved.steps.p90}/${saved.steps.p99}、最大 ${saved.steps.max}${saved.steps.cap ? `、用满上限 ${saved.steps.cap} 的 ${saved.steps.atCapPct}%` : ""}（热图 ${label.replace("#", "_r")}.steps.png）`);
           }

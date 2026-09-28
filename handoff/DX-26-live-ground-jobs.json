@@ -1,0 +1,27 @@
+[
+  {
+    "name": "night-city-low-live",
+    "scene": { "name": "night-city-low", "p": { "preset": "fuji", "date": "2026-01-16", "time": 1260, "altitude": 1, "coverage": 0.15, "cabin-light": "off", "quality": "high" }, "offset": [0, -25], "ground": true, "head": -0.25 },
+    "variants": [
+      { "name": "cur" },
+      { "name": "cur2" }
+    ],
+    "live": {
+      "crop": [680, 400, 200, 90],
+      "frames": 480,
+      "record": { "uStrobe": "sceneMat.uniforms.uStrobe.value" },
+      "skip": "uStrobe >= 0.5",
+      "regions": { "小翼前缘斜线": [0, 0, 75, 50], "后缘弯折线": [60, 40, 120, 35], "灯芯附近": [0, 45, 50, 30] },
+      "thr": 16,
+      "frac": 0.05
+    }
+  },
+  {
+    "name": "fuji-west-seam-ground",
+    "scene": "fuji-west-seam-low",
+    "variants": [
+      { "name": "old-rect", "ground": { "demNightEdgeShared": false } },
+      { "name": "g08c" }
+    ]
+  }
+]

@@ -116,7 +116,7 @@ export async function dumpClouds(page, { steps, warm = 96, frames = 16 }) {
 }
 
 /** 写 <name>.cloud.f32 / .cloud.json；steps 另出热图 PNG（借 anaPage 的 Canvas2D）与统计 */
-export async function saveCloudDump(dir, name, d, anaPage) {
+export async function saveCloudDump(dir, name, d, anaPage, heatTop = null) {
   const data = Buffer.from(d.data, "base64");
   const meta = { ...d };
   delete meta.data;
@@ -126,7 +126,7 @@ export async function saveCloudDump(dir, name, d, anaPage) {
   const f32 = new Float32Array(data.buffer, data.byteOffset, data.byteLength / 4);
   const st = stepsStats({ ...meta, data: f32 });
   if (anaPage) {
-    const png = await anaPage.evaluate(({ b64, W, H, cap }) => {
+    const png = await anaPage.evaluate(({ b64, W, H, cap, top }) => {
       const bin = atob(b64);
       const u8 = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
@@ -136,7 +136,7 @@ export async function saveCloudDump(dir, name, d, anaPage) {
       c.height = H;
       const ctx = c.getContext("2d");
       const im = ctx.createImageData(W, H);
-      const top = cap || Math.max(...s, 1);
+      // 色标上端 = 各变体共用的固定值（job.cloudDump.heatTop，默认步数上限的 1/3，便于同一 job 里几张热图直接对比），用满上限单独标品红
       // 0 步黑，往上 蓝 → 青 → 绿 → 黄 → 红，用满上限品红
       const ramp = [[0, 0, 0], [30, 60, 200], [0, 190, 220], [40, 200, 60], [240, 220, 30], [230, 40, 30]];
       for (let y = 0; y < H; y++)
@@ -158,7 +158,7 @@ export async function saveCloudDump(dir, name, d, anaPage) {
         }
       ctx.putImageData(im, 0, 0);
       return c.toDataURL("image/png").split(",")[1];
-    }, { b64: d.data, W: d.W, H: d.H, cap: d.cap });
+    }, { b64: d.data, W: d.W, H: d.H, cap: d.cap, top: heatTop || (d.cap ? d.cap / 3 : Math.max(st.max, 1)) });
     fs.writeFileSync(path.join(dir, `${name}.steps.png`), Buffer.from(png, "base64"));
   }
   return { meta, steps: st };
