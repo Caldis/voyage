@@ -80,6 +80,8 @@ async (page) => {
     { name: "route-hnd-cts", p: { preset: "hnd-cts", time: 990, coverage: 0.25, "wing-pos": "8" }, ground: true },
     // DX-07：hnd-cts 21:30 本地，同一个 2026-01-16 月亮高度 −80.4°，同样是无月夜
     { name: "route-hnd-cts-night", p: { preset: "hnd-cts", date: "2026-01-16", time: 1290, coverage: 0.1, seat: "left", "cabin-light": false, "wing-pos": "8" }, ground: true },
+    { name: "fuji-west-seam-low", p: { preset: "fuji", date: "2026-01-16", time: 720, altitude: 1.2, coverage: 0, "wing-pos": "-4" }, offset: [-111.74, 0], ground: true },
+    { name: "night-city-low-west", p: { preset: "hnd-cts", date: "2026-01-16", time: 1290, altitude: 1, coverage: 0.1, seat: "left", "cabin-light": false, "wing-pos": "8" }, offset: [-97, 0], ground: true },
     { name: "economy-ahead", p: { preset: "wpac", time: 720, "wing-pos": "8", "cabin-class": "economy" }, head: [-0.42, 0.1, -0.5] },
     // T09：夜间无月（2026-05-15 22:30，残月在地平线下 53°）、关舱灯（全关）、南海上空、左座朝东南：人马座大星云低低地在窗正中
     { name: "night-sea-milkyway", p: { preset: "scs", seat: "left", date: "2026-05-15", time: 1350, coverage: 0.15, "cabin-light": "off", "wing-pos": "-4" } },
