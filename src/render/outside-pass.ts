@@ -216,10 +216,13 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
 #ifdef OUTSIDE_WONDER
 #ifdef WONDER_PILLARS
   L = wonderPillars(L, rd, hitGround ? tGround : 1e9);
-  gStarVis *= 1.0 - gWonderCov; // 柱子挡住它身后的点星（点星在舱内程序画，只认这个标记）
 #else
   L = wonderSky(L, rd, hitGround ? tGround : 1e9);
 #endif
+  // WS-STAR：天梯 / 建木（wonderSky）此前漏了这一行，实体挡住的天空仍标成「看得到点星」，夜里点星整根穿柱而出
+  // （多角度 / 多种子 on-off 对照 + 回退代码复测核实，见 handoff/WS-STAR.md）。巨柱群 / 天梯 / 建木共用同一个
+  // gWonderCov，挪到分支外统一乘一次即可，OWP 预处理后逐字不变
+  gStarVis *= 1.0 - gWonderCov; // 奇观实体挡住它身后的点星（点星在舱内程序画，只认这个标记）
 #endif
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
   L += opticsSunDisk(rd, hitGround);
