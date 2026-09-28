@@ -25,7 +25,7 @@
  *  - flcSdf / flcShade：岩石底座 + 缠根的棱、台地与残塔、巨树树冠、垂下的粗根（表面）；
  *  - flcMedium：雾罩（含浮现时的「云」）、细根须的帘子、瀑布化雾、根尖的云涡。受光全部自己算（反照率返回 0，放进 emit）：
  *    要让雾里的光被**树冠的缝隙**切成光束，而标准受光只有一个平滑的投影椭球；
- *  - flcMediumSeg：介质只在雾罩椭球里步进（巨构版：整个包围盒）；
+ *  - flcMediumSeg：介质只在雾罩椭球里步进（巨构版：浮现 / 退场时整个包围盒，显形后只走台地底面以下的圆柱）；
  *  - flcRay：夜里底部岩锥里一点极淡的青色微光（致敬「飞行石」，白天完全看不见）；巨构版的航迹云（线积分闭式解）。
  *
  * 亮度：全是受光的物体（反照率 5–25%，雾 / 瀑布 0.9 和云一样），和旁边的云同一套光照与相函数，不会比同条件下的云更亮；
@@ -243,7 +243,7 @@ float flcHangRoots(vec3 c, vec4 K) {
     float top = R.z, tip = R.w;
     vec2 ctr = R.xy + (flcBig() ? 0.1 : 0.06) * vec2(sin(c.y * 1.7 + fi * 2.0), cos(c.y * 1.3 + fi)) * (top - c.y);
     float u = clamp((top - c.y) / (top - tip), 0.0, 1.0);
-    float th = mix(0.075 + 0.04 * flcHash(fi + 3.0), 0.02, u);
+    float th = mix(0.075 + 0.04 * flcHash(fi + 3.0), 0.02, u) * (flcBig() ? 0.75 : 1.0);
     float dx = length(c.xz - ctr) - th;
     float dr = c.y < tip ? length(vec2(max(dx + th, 0.0), tip - c.y)) - 0.02 : dx;
     d = min(d, max(dr, c.y - top));
@@ -364,14 +364,17 @@ vec3 flcShade(vec3 q, vec3 n, vec3 pW, vec3 nW, vec3 rd) {
       alb *= 0.78 + 0.4 * st;
     }
     float moss = smoothstep(0.45, 0.75, nc.y) + 0.35 * wall * smoothstep(0.55, 0.8, textureLod(uShapeNoise, c * 1.3, 1.0).b);
+    // 巨构版：墙面上垂下来的藤蔓 / 植被带（竖向拉长的斑），打破一圈圈整齐的浅色台阶（v2 黄昏里读成邮轮的甲板）
+    if (big) moss += 0.55 * wall * smoothstep(0.5, 0.78, textureLod(uShapeNoise, c * vec3(3.1, 0.9, 3.1) + 0.2, clamp(log2(max(fp, 1e-4) / 0.01), 0.0, 5.0)).g);
     alb = mix(alb, vec3(0.07, 0.1, 0.05), clamp(moss, 0.0, 1.0));
   } else if (mat < 2.5) {
     // 树冠：墨绿（植被反照率约 0.1，比云暗得多，远看也能和云分开）；团块之间的凹处更暗
     alb = vec3(0.05, 0.085, 0.045);
     // 巨构版第三级：一棵棵树冠的林冠纹理（模型约 0.05，真实约 250 m）按足迹选 mip，远处平均成均匀的墨绿
     if (big) {
-      float tr = textureLod(uShapeNoise, c * 4.0 + vec3(0.13, 0.5, 0.29), clamp(log2(max(fp, 1e-4) / 0.006), 0.0, 5.0)).g;
-      alb *= 0.6 + 0.8 * tr;
+      // （v2：c·4、±40% 时是一块块发白的斑，像地衣；改细改淡）
+      float tr = textureLod(uShapeNoise, c * 9.0 + vec3(0.13, 0.5, 0.29), clamp(log2(max(fp, 1e-4) / 0.003), 0.0, 5.0)).g;
+      alb *= 0.78 + 0.4 * tr;
     }
   } else {
     alb = vec3(0.09, 0.075, 0.06);
@@ -413,7 +416,25 @@ vec3 flcShade(vec3 q, vec3 n, vec3 pW, vec3 nW, vec3 rd) {
 // ---------------- 介质：雾罩、根须帘子、瀑布、根尖云涡 ----------------
 // 视线穿过雾罩椭球的区间（局部坐标里算：椭球绕 y 轴对称，不用转）。巨构版的介质散在整个包围盒里（瀑布、根尖的云涡、叶层），不收窄
 vec2 flcMediumSeg(vec3 o, vec3 d, vec2 seg) {
-  if (flcBig()) return seg;
+  if (flcBig()) {
+    // 显形以后介质（底座下的云团、根须帘子、瀑布、根尖云涡）都在台地底面以下、离城轴 3.05·Kh + 5.5 km 以内：
+    // 视线对「竖直圆柱 ∩ 水平板」求交，只走这一段（整盒步进 96 步时奇观 pass 多 1 ms，gpu-ab 实测）。
+    // 浮现 / 退场时那团「云」包着整座城（模型坐标里半径约 4 的球）：圆柱放到 4·Kh + 1、板放到盒顶
+    vec4 K = flcK();
+    bool rising = uWonderParams.x < 0.7;
+    float yhi = rising ? 22.0 : K.w + 0.4;
+    float Rm = rising ? max(4.0 * K.x + 1.0, 3.05 * K.x + 5.5) : 3.05 * K.x + 5.5;
+    vec2 s = seg;
+    if (abs(d.y) > 1e-6) {
+      float ta = (-14.5 - o.y) / d.y, tb = (yhi - o.y) / d.y;
+      s = vec2(max(s.x, min(ta, tb)), min(s.y, max(ta, tb)));
+    } else if (o.y > yhi) return vec2(1e9, -1e9);
+    float a = dot(d.xz, d.xz), b = dot(o.xz, d.xz), cc = dot(o.xz, o.xz) - Rm * Rm;
+    float disc = b * b - a * cc;
+    if (disc <= 0.0 || a < 1e-9) return vec2(1e9, -1e9);
+    float sq = sqrt(disc);
+    return vec2(max(s.x, (-b - sq) / a), min(s.y, (-b + sq) / a));
+  }
   vec3 oo = (o - FLC_MIST_C) / FLC_MIST_R;
   vec3 dd = d / FLC_MIST_R;
   float a = dot(dd, dd), b = dot(oo, dd), cc = dot(oo, oo) - 1.0;
@@ -511,7 +532,7 @@ float flcMedium(vec3 q, out vec3 albedo, out vec3 emit) {
   float fp = fpR / K.z;
   // 根尖的云涡在雾罩以外（云海顶上），先算
   float sWisp = 0.0;
-  if (big && c.y + FLC_BIG_BASE < 5.2 && rev > 0.2) sWisp = flcRootWisp(c, K, t) * smoothstep(0.2, 0.5, rev);
+  if (big && c.y + FLC_BIG_BASE < 5.2 && rev > 0.2 && length(c.xz) < 1.95 * K.x + 3.5) sWisp = flcRootWisp(c, K, t) * smoothstep(0.2, 0.5, rev);
   // 巨构版不按雾罩早退：瀑布雾顺风吹出去可能出了雾罩球，按球截会切出硬边；各部件自己都有解析的范围判断
   if (pr <= 0.0 && !big) return 0.0;
   pr = max(pr, 0.0);
@@ -571,7 +592,9 @@ float flcMedium(vec3 q, out vec3 albedo, out vec3 emit) {
   }
   // 瀑布
   float sFall = 0.0;
-  if (rev > 0.2) {
+  // 巨构版先按半径 / 高度粗筛（瀑布只在岩石上沿外侧、台地底面以下），免得每一步都走 5 道瀑布的循环
+  float rc = length(c.xz);
+  if (rev > 0.2 && (!big || (c.y < K.w + 0.3 && rc > 2.6 * K.x - 1.5 && rc < 3.05 * K.x + 5.5))) {
     for (int i = 0; i < 5 + min(uStormCount, 0); i++) sFall += flcFall(c, i, fpR, t, K);
     sFall *= smoothstep(0.2, 0.45, rev);
   }
@@ -610,7 +633,7 @@ float flcMedium(vec3 q, out vec3 albedo, out vec3 emit) {
 // 巨构版的尺度参照：一架和我们同高度（10.9–11.7 km）的航班从城下飞过，拖着一道航迹云。
 // 航迹云 = 沿直线的高斯管，视线与它的最近点处按闭式线积分给光学厚度（τ ≈ τ⊥ · e^(−r²/w²) / sinθ），
 // 宽度随「离飞机的时间」变宽（0.04 km + 3.5 m/s），足迹比管细时按能量守恒展宽（远处不闪）。
-// 450 s 一趟（周期整除 3600 s），在包围盒边缘 17–23 km 淡出，一趟快结束时整道淡掉（下一趟从另一头重新出现）
+// 450 s 一趟（周期整除 3600 s），离城轴 34–44 km 淡出（包围盒水平 ±45 km 就是为它放宽的），一趟快结束时整道淡掉（下一趟从另一头重新出现）
 vec4 flcContrail(vec3 o, vec3 d, vec2 seg, float pixAng) {
   float S = flcSeed();
   float t = uWonderParams.y;
@@ -618,7 +641,8 @@ vec4 flcContrail(vec3 o, vec3 d, vec2 seg, float pixAng) {
   vec3 A = vec3(cos(ca), 0.0, sin(ca));
   vec3 N = vec3(-A.z, 0.0, A.x);
   vec4 K = flcK();
-  float off = (0.25 + 0.45 * flcHash(S * 53.0 + 1.1)) * 3.0 * K.x * (flcHash(S * 29.0 + 4.4) > 0.5 ? 1.0 : -1.0);
+  // 从城边外侧擦过（离城轴 1.05–1.4 倍城半径）：岩座在 8–16 km 高，同高度的航线从城下穿过会钻进岩石里
+  float off = (1.05 + 0.35 * flcHash(S * 53.0 + 1.1)) * 3.0 * K.x * (flcHash(S * 29.0 + 4.4) > 0.5 ? 1.0 : -1.0);
   vec3 P0 = N * off + vec3(0.0, 10.9 + 0.8 * flcHash(S * 67.0 + 2.2) - FLC_BIG_BASE, 0.0);
   float ph = fract(t / 450.0 + flcHash(S * 11.0 + 0.3));
   float sPlane = -60.0 + 120.0 * ph;
@@ -640,8 +664,8 @@ vec4 flcContrail(vec3 o, vec3 d, vec2 seg, float pixAng) {
   float sinT = max(sqrt(den), 0.2);
   // 断续：真实的航迹云在干湿不均的空气里一段浓一段淡
   float patchy = 0.55 + 0.45 * sin(sl * 0.37 + S * 40.0) * sin(sl * 0.11 + 1.3);
-  float tau = 0.35 * patchy * exp(-age / 420.0) * smoothstep(2.0, 12.0, age) * (wd / sqrt(we2)) * exp(-dot(dv, dv) / we2) / sinT;
-  tau *= smoothstep(23.0, 17.0, length(Y.xz)) * smoothstep(60.0, 45.0, sPlane) * smoothstep(0.5, 0.8, uWonderParams.x);
+  float tau = 0.5 * patchy * exp(-age / 600.0) * smoothstep(2.0, 12.0, age) * (wd / sqrt(we2)) * exp(-dot(dv, dv) / we2) / sinT;
+  tau *= smoothstep(44.0, 34.0, length(Y.xz)) * smoothstep(60.0, 45.0, sPlane) * smoothstep(0.5, 0.8, uWonderParams.x);
   if (tau < 1e-4) return vec4(0.0, 0.0, 0.0, 1e9);
   vec3 pW = transpose(uWonderToLocal) * (X - uWonderCam) + vec3(0.0, uCamR, 0.0);
   float r = length(pW);
