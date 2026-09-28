@@ -1,6 +1,6 @@
 /**
  * 天环（WS08，轨道环）：横贯天空的巨弧（GLSL）。设定、尺寸与随机见 wonders/ring-shape.ts。
- * 只拼进窗外程序的 OUTSIDE_WONDER 变体（outside-pass.ts 里包在 #ifdef 中，默认程序预处理后不含它），
+ * 只拼进窗外程序的 OWT 变体（OUTSIDE_WONDER + ORBIT_RING，outside-pass.ts；天环在场时才后台编译，默认程序与 OW / DOW / DROW 预处理后都不含它），
  * 一个调用点（outsideRadiance 里天幕层奇观之后）；uRingOn = 0 时第一行就返回。
  * 依赖 ATMOSPHERE_COMMON、VIEW_COMMON、LIGHTS_COMMON、NOISE_COMMON（空气透视的两个 3D 纹理在 TRAFFIC_COMMON 里声明）。
  *

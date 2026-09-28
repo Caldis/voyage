@@ -76,8 +76,9 @@ ${WONDER_SKY_COMMON}
 // 巨柱群（WS07，wonders/pillars.glsl.ts）只在 OWP 变体里；OW 变体预处理后与改动前逐字相同
 #ifdef WONDER_PILLARS
 ${WONDER_PILLARS_COMMON}
-#else
-// 天环（WS08，wonders/ring.glsl.ts）：在 OW / DOW / DROW 里（它自己的开关 uRingOn），OWP 里不编
+#endif
+// 天环（WS08，wonders/ring.glsl.ts）只在 OWT 变体里（按需后台编译）；OW / DOW / DROW 预处理后与改动前逐字相同
+#ifdef ORBIT_RING
 ${ORBIT_RING_COMMON}
 #endif
 #endif
@@ -221,11 +222,12 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
 #ifdef WONDER_PILLARS
   L = wonderPillars(L, rd, hitGround ? tGround : 1e9);
   gStarVis *= 1.0 - gWonderCov; // 柱子挡住它身后的点星（点星在舱内程序画，只认这个标记）
-#else
-  L = wonderSky(L, rd, hitGround ? tGround : 1e9);
-  // 天环（WS08，wonders/ring.glsl.ts）：在大气层外，比所有云都远；盖住的地方不画点星
+#elif defined(ORBIT_RING)
+  // 天环（WS08，wonders/ring.glsl.ts）：在大气层外，比所有云都远；盖住的地方不画点星（天环在场时 uWonderOn = 0，不调天梯 / 建木）
   L = orbitRing(L, rd, hitGround);
   gStarVis *= 1.0 - gRingCov;
+#else
+  L = wonderSky(L, rd, hitGround ? tGround : 1e9);
 #endif
 #endif
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
@@ -317,11 +319,13 @@ export function outsideRailFragment() {
  * - "DOW"  低空（4 km 以下）：和改动前的低空细节变体是同一个程序（O / W 总是带着，低空细节本来就是按需后台编的，不在关键路径上）
  * - "DROW" 火车：同上，和改动前的火车变体是同一个程序
  * - "OWP"  巨柱群在场（WS07）：巡航和低空都用它（巨柱群在 4.5 km 以下本来就退场），只在巨柱群在场时才后台编译，不预编
+ * - "OWT"  天环在场（WS08，T = ORBIT_RING；字母 R 已给火车）：同 OWP，只在天环在场时才后台编译（离线 FXC 约 18 s，天环浮现本身 60 s），
+ *          编好之前退到默认（不画天环）。不放进 OW：OW 同时承载罕见光学和天梯 / 建木，多编一段天环会让它们都晚可用
  * 选哪个只由 wantedOutsideKey 决定；没编好时按 OUTSIDE_FALLBACK 退到已编好的（O / W 的效果暂时不画，不会画错）。
  */
-export type OutsideKey = "" | "OW" | "DOW" | "DROW" | "OWP";
-export const OUTSIDE_KEYS: readonly OutsideKey[] = ["", "OW", "DOW", "DROW", "OWP"];
-const OUTSIDE_FEATURE_DEFINES: Record<string, string> = { D: "GROUND_DETAIL", R: "RAIL", O: "OUTSIDE_OPTICS", W: "OUTSIDE_WONDER", P: "WONDER_PILLARS" };
+export type OutsideKey = "" | "OW" | "DOW" | "DROW" | "OWP" | "OWT";
+export const OUTSIDE_KEYS: readonly OutsideKey[] = ["", "OW", "DOW", "DROW", "OWP", "OWT"];
+const OUTSIDE_FEATURE_DEFINES: Record<string, string> = { D: "GROUND_DETAIL", R: "RAIL", O: "OUTSIDE_OPTICS", W: "OUTSIDE_WONDER", P: "WONDER_PILLARS", T: "ORBIT_RING" };
 /** 天幕层奇观的皮肤编号（uWonderShape.z）：2 = 巨柱群（WS07），要 OWP 变体画 */
 export const PILLARS_SKIN = 2;
 
@@ -354,13 +358,13 @@ export interface OutsideWant {
  * 退路：火车 → 低空细节（沿用 TR03 的过渡）→ 带 O / W 的（只在确实要它们时）→ 默认。退到默认时 O / W 的效果暂时不画。
  */
 export function wantedOutsideKey(w: OutsideWant): { key: OutsideKey; fallback: OutsideKey[] } {
-  const skyWonder = ((w.uniforms.uWonderOn?.value as number | undefined) ?? 0) > 0.5;
+  const wonder = ((w.uniforms.uWonderOn?.value as number | undefined) ?? 0) > 0.5;
   // 巨柱群（WS07）：OW / DOW 里的天幕层调用点是天梯 / 建木（皮肤 2 会被当成建木画），所以只用 OWP、编好之前退到默认（不画奇观）。
   // 火车模式照旧（奇观在低空本来就退场）。只看 uWonderOn：天环（WS08）不写 uWonderShape，那里可能还留着上一个奇观的皮肤号
   const skin = (w.uniforms.uWonderShape?.value as THREE.Vector4 | undefined)?.z ?? 0;
-  if (skyWonder && !w.rail && Math.round(skin) === PILLARS_SKIN) return { key: "OWP", fallback: [""] };
-  // 天环（WS08）有自己的开关 uRingOn，画在 OW / DOW / DROW 里
-  const wonder = skyWonder || ((w.uniforms.uRingOn?.value as number | undefined) ?? 0) > 0.5;
+  if (wonder && !w.rail && Math.round(skin) === PILLARS_SKIN) return { key: "OWP", fallback: [""] };
+  // 天环（WS08）：自己的开关 uRingOn，只在 OWT 里画，编好之前退到默认（不画天环）；火车模式不画（天环在低空本来就退场）
+  if (((w.uniforms.uRingOn?.value as number | undefined) ?? 0) > 0.5 && !w.rail) return { key: "OWT", fallback: [""] };
   const extras = wonder || opticsWanted(w.uniforms);
   const tail: OutsideKey[] = extras ? ["OW", ""] : [""];
   if (w.rail) return { key: "DROW", fallback: ["DOW", ...tail] };

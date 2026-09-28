@@ -162,7 +162,7 @@ export class WonderSystem {
     ...createTetherUniforms(),
     // 巨柱群（WS07，只有窗外程序的 OWP 变体读）
     ...createPillarUniforms(),
-    // 天环（WS08，只有窗外程序的 OUTSIDE_WONDER 变体读）：开关另立 uRingOn，不经 uWonderOn（那会让天梯 / 建木那段也跑）
+    // 天环（WS08，只有窗外程序的 OWT 变体读）：开关另立 uRingOn，不经 uWonderOn（那会让天梯 / 建木那段也跑）
     ...createRingUniforms(),
     // 云间层（W00）：云步进程序读这一组（经 main.ts 合进场景 uniforms，Clouds 构造时共用同一批对象）
     ...createWonderCloudUniforms(),

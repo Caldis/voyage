@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
 /**
- * 天环（WS08，轨道环）的设定与每次出现的几何：着色见 wonders/ring.glsl.ts（窗外程序 OUTSIDE_WONDER 变体里）。
+ * 天环（WS08，轨道环）的设定与每次出现的几何：着色见 wonders/ring.glsl.ts（窗外程序的 OWT 变体里：OUTSIDE_WONDER + ORBIT_RING，天环在场时才后台编译）。
  *
  * 设定（依据：Paul Birch, "Orbital Ring Systems and Jacob's Ladders", JBIS 1982；research/WONDER_SCALE.md §3.6 候选 2）：
  * - 轨道环 = 绕地球一整圈的环：里面是以超过轨道速度旋转的转子，外面套着相对地面静止的护套 / 结构，

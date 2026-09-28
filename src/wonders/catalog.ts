@@ -4,6 +4,18 @@
  * 设计依据：research/WONDERS.md §5（系统设计）、§6.1（天梯 / 建木）。
  *
  * 命名约定（研究文档 §2.1）：面板名写成「名字（致敬《作品》）」或注明典籍出处；id 用描述性英文。
+ *
+ * 天幕层奇观的「皮肤号 / 开关 uniform / 窗外变体」分配表（WS08 起登记；新奇观先在这里占号，别复用已有的号或开关——
+ * wonderSky 对不是天梯的皮肤一律按建木画，wantedOutsideKey 按皮肤号 / 开关选变体，撞号会画成别的奇观或选错变体）：
+ *
+ * | look.skin | 奇观 | 开关 uniform | 窗外变体（outside-pass.ts 的 OutsideKey） | 着色 |
+ * | --- | --- | --- | --- | --- |
+ * | 0 | 天梯（tether） | uWonderOn + uWonderShape.z | OW（低空 DOW、火车 DROW） | render/wonder-sky.glsl.ts |
+ * | 1 | 建木（jianmu） | uWonderOn + uWonderShape.z | OW（DOW / DROW） | render/wonder-sky.glsl.ts |
+ * | 2 | 巨柱群（pillars，PILLARS_SKIN） | uWonderOn + uWonderShape.z = 2 | OWP（按需编译） | wonders/pillars.glsl.ts |
+ * | 3 | 天环（orbital-ring，RING_SKIN） | uRingOn（不写 uWonderOn / uWonderShape） | OWT（按需编译） | wonders/ring.glsl.ts |
+ *
+ * 云间层奇观（layer = "cloud"）不用皮肤号，按 volume.kind（wonder-cloud.glsl.ts 的 WONDER_CLOUD_KINDS）登记，开关是 uWonderVol。
  */
 
 import { FLOATCITY_KIND, FOGCITY_KIND, W00_PROBE_KIND, WONDER_CLOUD_KINDS } from "./wonder-cloud.glsl";
