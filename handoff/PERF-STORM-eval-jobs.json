@@ -1,0 +1,250 @@
+[
+ {
+  "name": "eval-storm-sc-low",
+  "scene": "storm-sc-low",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "oldref",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "oldsteps",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-steps"
+   }
+  ]
+ },
+ {
+  "name": "eval-storm-day",
+  "scene": "storm-day",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "oldref",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "oldsteps",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-steps"
+   }
+  ]
+ },
+ {
+  "name": "eval-storm-sc",
+  "scene": "storm-sc",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "oldref",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "oldsteps",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-steps"
+   }
+  ]
+ },
+ {
+  "name": "eval-typhoon-bands",
+  "scene": "typhoon-bands",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "oldref",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "oldsteps",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-steps"
+   }
+  ]
+ },
+ {
+  "name": "eval-storm-graze",
+  "scene": {
+   "name": "storm-graze",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 900,
+    "coverage": 0.6,
+    "altitude": 3.0,
+    "weather": "storm",
+    "wing-pos": "-4",
+    "quality": "high",
+    "ground-on": false
+   },
+   "offset": [
+    0,
+    0
+   ],
+   "wait": 3000
+  },
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16,
+   "heatTop": 200
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "oldref",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "oldsteps",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-steps"
+   }
+  ]
+ }
+]

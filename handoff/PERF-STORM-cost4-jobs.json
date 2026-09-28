@@ -1,0 +1,114 @@
+[
+ {
+  "name": "c4-storm-sc-low",
+  "scene": "storm-sc-low",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noMam",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float mam = mammatusDensity(xz, alt, geo);",
+       "  float mam = 0.0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "loopU",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  for (int x = -1; x <= 1; x++)\n  for (int y = -1; y <= 1; y++) {",
+       "  for (int x = -1; x <= 1 + min(uStormCount, 0); x++)\n  for (int y = -1; y <= 1 + min(uStormCount, 0); y++) {"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "one",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float pd = max(pouchField(xz / 1.4) * 1.4, pouchField(xz / 0.6 + 7.3) * 0.6 * 0.8);",
+       "  float pd = pouchField(xz / 1.4) * 1.4;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noPouch",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (cl <= 0.0) return 0.0;",
+       "  if (cl <= 0.0 || true) return 0.0;"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "c4-storm-day",
+  "scene": "storm-day",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noMam",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float mam = mammatusDensity(xz, alt, geo);",
+       "  float mam = 0.0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "loopU",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  for (int x = -1; x <= 1; x++)\n  for (int y = -1; y <= 1; y++) {",
+       "  for (int x = -1; x <= 1 + min(uStormCount, 0); x++)\n  for (int y = -1; y <= 1 + min(uStormCount, 0); y++) {"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "one",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  float pd = max(pouchField(xz / 1.4) * 1.4, pouchField(xz / 0.6 + 7.3) * 0.6 * 0.8);",
+       "  float pd = pouchField(xz / 1.4) * 1.4;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noPouch",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (cl <= 0.0) return 0.0;",
+       "  if (cl <= 0.0 || true) return 0.0;"
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]

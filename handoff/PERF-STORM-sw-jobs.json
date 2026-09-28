@@ -1,0 +1,166 @@
+[
+ {
+  "name": "sw-storm-sc-low",
+  "scene": "storm-sc-low",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "sw-sea-sc-low",
+  "scene": "sea-sc-low",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "sw-storm-sc",
+  "scene": "storm-sc",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "sw-sea-sc",
+  "scene": "sea-sc",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "sw-storm-graze",
+  "scene": {
+   "name": "storm-graze",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 900,
+    "coverage": 0.6,
+    "altitude": 3.0,
+    "weather": "storm",
+    "wing-pos": "-4",
+    "quality": "high",
+    "ground-on": false
+   },
+   "offset": [
+    0,
+    0
+   ],
+   "wait": 3000
+  },
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "ref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "steps",
+    "builtin": "cloud-steps"
+   },
+   {
+    "name": "oldsteps",
+    "materials": {
+     "clouds.marchMat": "base"
+    },
+    "builtin": "cloud-steps"
+   }
+  ]
+ }
+]

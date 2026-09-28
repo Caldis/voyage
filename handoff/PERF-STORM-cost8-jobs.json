@@ -1,0 +1,91 @@
+[
+ {
+  "name": "c8-typhoon-bands",
+  "scene": "typhoon-bands",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "bandsOff",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (r > Re * 2.8 && alt < 15.0) {\n    vec4 nB",
+       "  if (false && r > Re * 2.8 && alt < 15.0) {\n    vec4 nB"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "bandsLOff",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (r > Re * 2.8 && alt < 15.0) {\n    // 带子的断续",
+       "  if (false && r > Re * 2.8 && alt < 15.0) {\n    // 带子的断续"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "canopyOff",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (r > Re * 2.5 && alt > 11.0) {",
+       "  if (false && r > Re * 2.5 && alt > 11.0) {"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "eyeOff",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (r < Re * 4.2) {",
+       "  if (false && r < Re * 4.2) {"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "lightAna",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3, true)",
+       "cloudDensityLite(p + uKeyDir * (lt - 0.5 * ls), lod + 0.5, j < 3, false)"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      emptyK = 2.0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "l6",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 6;"
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]
