@@ -148,6 +148,8 @@ export async function collectPrograms(server, opts = {}) {
       vertexShader: m2.vertexShader,
     });
     addDerived("outside-extras", keyed ? outside : null, (m2) => outsideKey("OW", m2));
+    // WS07：巨柱群在场时的变体（OW + WONDER_PILLARS）。旧树没有这个键时按缺失处理
+    addDerived("outside-pillars", keyed && (o.OUTSIDE_KEYS ?? []).includes("OWP") ? outside : null, (m2) => outsideKey("OWP", m2));
     addDerived("outside-ground-detail", outside, (m2) => (keyed ? outsideKey("DOW", m2) : { fragmentShader: "#define GROUND_DETAIL 1\n" + m2.fragmentShader, vertexShader: m2.vertexShader }));
     // TR03：窗外的火车远景变体（GroundDetailVariant 火车模式下编译：源码多拼了 rail/far-view.glsl.ts 的两段，再加 #define）。
     // 旧树没有 outsideRailFragment 时按缺失处理（lenient 下跳过）
@@ -884,7 +886,7 @@ async function main() {
       const res = spawnSync(bin, ["-E", "-S", "frag", file], { encoding: "utf8", maxBuffer: 64 << 20 });
       return res.error || !res.stdout ? null : res.stdout;
     };
-    for (const [id, expectAll] of [["outside-default", false], ["outside-extras", true], ["outside-ground-detail", true], ["outside-rail", true]]) {
+    for (const [id, expectAll] of [["outside-default", false], ["outside-extras", true], ["outside-ground-detail", true], ["outside-rail", true], ["outside-pillars", true]]) {
       const prog = programs.find((p) => p.id === id);
       if (!prog) continue;
       const out = preprocess(prog);
