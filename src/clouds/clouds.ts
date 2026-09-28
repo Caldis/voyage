@@ -330,25 +330,6 @@ void main() {
   // 被阳光照亮的那层表面被跳过，受光面发灰、菜花状的隆起也看不出来
   // 台风的眼壁同理（远处的眼壁表面同样会被大步长跳过）
   bool wasEmpty = true;
-#ifndef CLOUD_WEATHER
-  // 进云二分定位（C10，只在非天气程序里；雷暴 / 台风另有下面的表面细化）：空白 → 有云时，先在「上一个空白采样点」和
-  // 「这个有云的采样点」之间二分 4 次（只求密度、不受光、不累积），再从定位到的表面起按半步走第一个有云的样本，之后照常。
-  // 原来进云那一步是 2dt 长的空白区间：命中后按整个 2dt 算消光，受光样本的深度在表皮下 [0, 2dt] 里随抖动乱跳
-  // （表皮 σ 60 /km 时 100 m 深处的受光 od 已有 5 左右），受光面满是颗粒。（那种估计的光学厚度期望是无偏的，
-  // 只是 1 − e^−x 的 Jensen 效应让薄处 α 偏低。）
-  // 已知偏差（C10 审查）：二分只在粗样本碰巧命中时触发、命中后丢掉那个样本的 2dt 权重，比半步还薄的结构
-  // （α 0.01–0.3 的薄丝、小碎云）被系统性低估：只二分时薄处 α 降到原来的 0.36–0.72（交付版有倍率 4.5 抵消一部分，0.45–0.72），
-  // 本来就偏淡的薄处更淡了；降噪里有一部分就是薄丝被吃掉。下一步 C10b（近处只对有云的步减半步长）做了以后这里基本多余，可撤。
-  // 现在进云样本的深度收到 [0, dt/2]，而且之后的步进网格锚在表面上（只差二分残差 ≤ 2dt/16，几乎与抖动无关；C03 否掉的「按离表面多近改步长」是步长由上一个随抖动乱跳的样本决定，
-  // 帧间采样位置不均匀、收敛出条纹，这里没有这个问题，同页 A/B 的噪声分量斜纹指数不变，见 handoff/C10.md）。
-  // 二分只用同一个 cloudDensity 调用点（循环多走 4 次，不新增重函数调用点、不新增循环）；只在 60 km 以内（再远一步几百米，
-  // 一个像素就有几十米，收益小，且省下步数给远处）。实测（handoff/C10.md、C10-review.md）：云边 10→90% 宽度 −6~−16%，时间波动 −20%（含薄丝被吃掉的那一份）。
-  int bis = 0;              // 还要二分几次（> 0 时这一步只是二分探测）
-  float bLo = seg.x;        // 二分区间：bLo 处无云、bHi 处有云
-  float bHi = seg.x;
-  float tPrevS = seg.x;     // 上一个空白采样点的位置
-  float firstK = 1.0;       // 这一步的步长倍率（二分后第一步 0.5）
-#endif
 #ifdef CLOUD_WEATHER
   bool refineOn = nearW.x;
   int fine = 0;
@@ -383,31 +364,44 @@ void main() {
     albedoBelow = 0.35 * mix(0.25, 1.0, fv / 3.0);
   }
 #endif
-  // 次数上限：从相机空步走到 60 km 外本身就要约 190 步，细化还要额外的步数（每进一次云 9 步）。
+  // 次数上限：从相机空步走到 60 km 外本身就要约 190 步（C10b 近处空白步不加倍以后约 384 步，见下），细化还要额外的步数（每进一次云 9 步）。
   // 雷暴 / 台风时 448（原来 256）：台风外围在卷云盖下面近水平地看出去，稀薄的卷云盖采样点不走 2 倍步长、
   // 一路上的塔还要细化，走到约 100 km 就用完 256 步；在哪一步用完随每像素的抖动变，远处的塔成了一格一格的
   // 「纱窗点阵」半透明幽灵，步数用完处的边还连成直边的「透明方盒」（美术总监 wave5 第 2 处；和占据网格无关，
   // 关掉网格照旧）。只有用完预算的那些像素会多走，typhoon-outer 云步进 +0.2 ms（约 5%）
   for (int i = 0; i < 448; i++) {
-    // 没有雷暴时仍是原来的 192 步（多出的步数只给雷暴的表面细化用，普通云不必多走）
+    // 没有雷暴时 384 步（原来 192；C10b 近处空白步不加倍，走到同样远要多约一倍的步数；多出的 448 − 384 步只给雷暴的表面细化用）
 #ifdef CLOUD_WEATHER
-    if (t >= seg.y || T < 0.005 || (!refineOn && i >= 192)) break;
+    if (t >= seg.y || T < 0.005 || (!refineOn && i >= 384)) break;
 #else
-    if (t >= seg.y || T < 0.005 || i >= 192) break;
+    if (t >= seg.y || T < 0.005 || i >= 384) break;
 #endif
     // 步长随距离变长：近处 60 m，远处 2 km
     float dtBase = clamp(t * 0.008, 0.06, 2.0);
     // 这一步代表的区间长度：空白处走 2 倍步长。抖动必须覆盖整个区间——旧版只抖动 dt、却走 2dt，
     // 每个区间的后一半永远采不到，远处的薄云被「同心球壳」切成一条条水平细纹（T13）
+    // 近处空白步不加倍（C10b）：60 km 内空白处也只走 dt，60–90 km 平滑回到 2dt。
+    // 云边、薄丝几乎全由「进云那一步」决定：从空白进云时整个空白区间按命中样本的 σ 算消光，区间 2dt（近处 120 m、30 km 处 480 m）
+    // 一步的光学厚度就有好几，薄于区间的薄丝要么全中、要么全空，受光深度也在区间里乱跳 → 云边被抹宽、薄处又淡又颗粒。
+    // 实测（handoff/C10b.md，对 1/4 步长真值）：只把有云的步减半几乎没用（边宽、α、噪声都不变）；把空白步减到 dt 才是那根杠杆。
+    // 取代 C10 的进云二分：二分只在粗样本碰巧命中时才细化、丢掉粗样本的权重，对薄丝有偏（C10 审查），而且二分那段分支让云步进 GPU +45~70%。
+    // 系数按 t 连续变化（步长本来就随 t 连续变），没有 C10 的 60 km 硬开关；雷暴 / 台风程序的普通层状云走同一套（不再换程序就换估计）
+    float emptyK = 1.0 + smoothstep(60.0, 90.0, t);
 #ifdef CLOUD_WEATHER
+    // 够得着雷暴 / 台风的视线要走 0–15 km（台风 0.5–20.5 km）的整个外壳，只在层状云自己的高度范围（上下各留 300 m）里走细步：
+    // 塔身进云另有表面细化（fine），外壳里其余高度的空白没有层状云可漏。不加这一条时 storm-day / typhoon 云步进 +1.4~2.2 ms（+45~60%），
+    // 远处的塔还会用完 448 步（T33 的纱窗点阵）
+    if (refineOn) {
+      float hT = length(ro + rd * t) - BOTTOM;
+      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;
+    }
     float dt = fine > 0 ? fineDt : dtBase;
-    float stepLen = (fine > 0 || (!wasEmpty && !wasThin)) ? dt : 2.0 * dt;
-    float tS = t + stepLen * jitter;
+    float stepLen = (fine > 0 || (!wasEmpty && !wasThin)) ? dt : emptyK * dt;
 #else
     float dt = dtBase;
-    float stepLen = (wasEmpty ? 2.0 * dt : dt) * firstK;
-    float tS = bis > 0 ? 0.5 * (bLo + bHi) : t + stepLen * jitter;
+    float stepLen = wasEmpty ? emptyK * dt : dt;
 #endif
+    float tS = t + stepLen * jitter;
     vec3 p = ro + rd * tS;
     float lod = clamp(log2(dtBase / 0.055), 0.0, 5.0);
     // 细节噪声随机平铺给受光步进挑格点用（T32），每步、每帧都换。
@@ -422,21 +416,6 @@ void main() {
     //    64 帧只走 0.09 圈），单独当一维序列时分层也与 φ 相当（0.7549 在 TAA 的约 8 帧窗口里只落在约 4 个值上，闪烁偏低频）
     gDetailRnd = fract(bn.y + uFrame * 0.41421356 + float(i) * 0.6180339);
     float dens = cloudDensity(p, lod, t < 150.0);
-#ifndef CLOUD_WEATHER
-    // 进云二分定位（C10，见循环前）
-    // 二分完的下一步走半步（firstK 在本步的 stepLen 算完之后才改，作用于下一步）
-    firstK = bis == 1 ? 0.5 : 1.0;
-    // 两段写成一个分支（分开写成「在二分」「刚进云」两个 continue 分支时离线 FXC 多 +3%）
-    if (bis > 0 || (dens > 0.002 && wasEmpty && t < 60.0)) {
-      if (bis == 0) { bLo = tPrevS; bis = 5; }   // 刚进云：这一次探测就是区间上端
-      if (dens > 0.002) bHi = tS; else bLo = tS;
-      bis--;
-      // 表面落在 (bLo, bHi]：从 bHi 起走。bHi 可能在本步区间起点 t 之前（最多退回 2dt），但一定在上一个空白样本之后，
-      // 而上一个空白样本又在上一次二分的结果之后，所以不会反复退回同一处（T04 的「撞上 → 退回」等高线）
-      if (bis == 0) { t = bHi; wasEmpty = false; }
-      continue;
-    }
-#endif
 #ifdef CLOUD_WEATHER
     float stormW = gStormW;
     float stormAO = gStormAO;
@@ -673,9 +652,6 @@ void main() {
     } else {
       // 空白区域大步走（细化时仍用小步）
       wasEmpty = true;
-#ifndef CLOUD_WEATHER
-      tPrevS = tS;
-#endif
 #ifdef CLOUD_WEATHER
       wasThin = false;
       lastEmpty = t + stepLen * jitter;
