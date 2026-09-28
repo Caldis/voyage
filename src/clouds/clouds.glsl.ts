@@ -518,8 +518,8 @@ float heightProfile(float h, float type) {
 //  ③远处取到形状噪声 mip 4–5（128³ 的 mip 5 只剩 4³ 纹素），三线性插值的平面小面在竖直方向连成肋纹。
 // 竖直频率按层厚归一（uCuShape.xy，算法和常数在 clouds.ts 的 cumulusShape()：每帧在 CPU 上算一次，
 // 着色器里写成 clamp(7 / (1.3·层厚)) 这类算术的话，layerDensity 被内联进步进 / 受光 / 云影各处，cloud-march 冷编译 +10%）
-// 形状噪声 mip 封顶（nB 再低一级）：mip 3 一个纹素 0.44 km，远处的形状靠时间累积去噪，不再是 1.75 km 的纹素小面
-const float SHAPE_LOD_MAX = 3.0;
+// ③远处竖肋：试过形状噪声 mip 封顶 3（C-TOFU 初版），竖直频率与云顶改好以后远排几乎看不出差别，
+// 却让云 pass 贵 5–10%、远处时间噪声更高（C-TOFU 审查复测），已撤回，mip 仍按步长取
 // 这一列的云顶（h 单位，按局部云顶归一）：归一强度 σ = (d − CU_VIS_D) / max(覆盖率 − CU_VIS_D, CU_RANGE_MIN)，
 // 云顶 = 基 + (1 − 基)·σ^(1/CU_TOP_POW)：弱的芯（σ → 0，云的水平边缘）只到 CU_DOME_BASE，高度连续收到云底（圆顶），
 // 最强的才顶到局部云顶；同一片云场里云顶高低错落，「多数矮、少数高」来自 σ 本身的分布（强芯少）。
@@ -626,14 +626,14 @@ float layerDensity(vec3 p, float lod, bool detail) {
   }
 #endif
   // 两个尺度的形状噪声，相互旋转 37°，按区域混合：有的地方是小碎云，有的地方是大云团
-  // 竖直频率按层厚归一、mip 封顶（C-TOFU，见 uCuShape / SHAPE_LOD_MAX 的注释）。
+  // 竖直频率按层厚归一（C-TOFU，见 uCuShape 的注释）。
   // 竖直频率只改积云族（cuW）：层积云 / 高积云 / 卷云本来就该是薄层，照旧
   float cuW = uCuShape.z;
   float va = uCuShape.x;
   float vb = uCuShape.y;
-  vec4 nA = textureLod(uShapeNoise, vec3(xzn.x, alt * va, xzn.y) / SHAPE_TILE, min(lod, SHAPE_LOD_MAX));
+  vec4 nA = textureLod(uShapeNoise, vec3(xzn.x, alt * va, xzn.y) / SHAPE_TILE, lod);
   vec2 xzB = rot2(xzn, 0.65);
-  vec4 nB = textureLod(uShapeNoise, vec3(xzB.x, alt * vb, xzB.y) / (SHAPE_TILE * 2.3) + 0.37, clamp(lod - 1.0, 0.0, SHAPE_LOD_MAX - 1.0));
+  vec4 nB = textureLod(uShapeNoise, vec3(xzB.x, alt * vb, xzB.y) / (SHAPE_TILE * 2.3) + 0.37, max(lod - 1.0, 0.0));
   float fbmA = nA.g * 0.625 + nA.b * 0.25 + nA.a * 0.125;
   float fbmB = nB.g * 0.625 + nB.b * 0.25 + nB.a * 0.125;
   float baseA = remapc(nA.r, fbmA - 1.0, 1.0, 0.0, 1.0);
@@ -645,7 +645,7 @@ float layerDensity(vec3 p, float lod, bool detail) {
   float hB = h + (1.0 - cir) * (0.09 * (nA.a - 0.45) + 0.05 * (fbmB - 0.5)) * (1.0 - smoothstep(0.1, 0.3, h));
   // 积云族（云型 > 0.45）不再用「满密度平台 + 统一下降段」的剖面（C-TOFU），改成「云顶随这一列的强度变」：
   // 剖面只管云底，云顶由这一列的强度决定（cumulusTop）——强的芯长得高、弱的矮，边缘处高度连续收到云底（圆顶），
-  // 层积云 / 高积云 / 卷云（云型 ≤ 0.45）照旧（只有形状噪声 mip 封顶对它们也生效）
+  // 层积云 / 高积云 / 卷云（云型 ≤ 0.45）照旧
   base *= mix(heightProfile(hB, uCloudType), smoothstep(0.0, 0.12, hB) * (1.0 - smoothstep(CU_CEIL, 1.0, h)), cuW);
   float coverage = wx.coverage;
   float d = remapc(base, 1.0 - coverage, 1.0, 0.0, 1.0) * coverage;
