@@ -1,6 +1,7 @@
 import { LocalFrame, tileXToLon, tileYToLat } from "./geo";
 import { blendDetail } from "./imagery-blend";
 import { buildMipChain, mipScratch } from "./mips";
+import { composeTiles, make2d, readBitmap, type ComposeSpec, type DecodedCache } from "./tile-compose";
 
 /**
  * 道路灯带的栅格（T08）：把一级 clipmap 覆盖范围里的道路折线栅格成「到最近道路中心线的有向距离」。
@@ -368,7 +369,7 @@ export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo"> & {
   waterMips: Uint8Array | null;
   /** G07b：各阶段耗时（毫秒），归因帧尖峰用：read = 位图读回像素（影像 + 细节），mips = 两张 mip 链；
    * marks = 各阶段结束时刻（离开始多少毫秒）：read / water（水体栅格化）/ waterRead（水体 getImageData）/ detail / night / roads / mips */
-  phases?: { readMs: number; mipMs: number; marks: [string, number][] };
+  phases?: { readMs: number; mipMs: number; marks: [string, number][]; decoded?: number; hits?: number; aa?: boolean };
 };
 
 /**
@@ -380,25 +381,69 @@ export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo"> & {
  * （`albedo`、`nightRaw`，两个都走 Transferable）和瓦片的几何数据（水体/河道顶点，仍然是复制——它们缓存在
  * `tiles.ts` 的 LRU 里给下次重建复用，不能转移/detach，见类头 `RoadJob.water` 注释）。
  */
+/**
+ * 影像 / 高清细节的来源（G08）：拼接 Worker 拼好的 RES² RGBA 像素（默认）；拼接 Worker 停用时是瓦片拼接任务（Blob，在这里解码拼接）；
+ * `ground.imageryInWorker = false` 时是主线程拼好的位图（G07b 的做法，对照用）
+ */
+export type ImagerySrc = Uint8ClampedArray | ComposeSpec | ImageBitmap;
+
+/**
+ * 一级的完整合成（Worker 与主线程兜底共用）：影像 / 高清细节还不是像素时先拼成像素（tile-compose.ts），再走 buildGroundLevel。
+ * 阶段时刻（phases.marks，离开始多少毫秒）：[eoxDecode / eoxStitch / gsiDecode / gsiStitch（自己拼时）] / read / water / waterRead / detail / night / roads / mips。
+ * bad = 解码失败的瓦片地址（主线程从 Blob 缓存里删掉）
+ */
+export async function buildGroundLevelFrom(
+  job: RoadJob,
+  albedoSrc: ImagerySrc,
+  nightRaw: Uint8ClampedArray,
+  detailSrc: ImagerySrc | null,
+  cache: DecodedCache | null,
+): Promise<GroundLevelResult & { bad: string[] }> {
+  const t0 = performance.now();
+  const RES = job.res;
+  const bad: string[] = [];
+  const marks: [string, number][] = [];
+  let decoded = 0, hits = 0, aa = false;
+  const read = async (src: ImagerySrc, tag: string) => {
+    if (src instanceof Uint8ClampedArray) return src;
+    if (!("kind" in src)) return readBitmap(src, RES);
+    const ts = performance.now() - t0;
+    const r = await composeTiles(src, cache);
+    // 解码完成、拼接 + 读回完成两个时刻（影像：decode / stitch；高清细节：gsiDecode / gsiStitch）
+    marks.push([`${tag}Decode`, ts + r.decodeMs], [`${tag}Stitch`, ts + r.readMs]);
+    bad.push(...r.bad);
+    decoded += r.decoded;
+    hits += r.hits;
+    aa ||= r.aa;
+    return r.px;
+  };
+  const albedo = await read(albedoSrc, "eox");
+  const detail = detailSrc ? await read(detailSrc, "gsi") : null;
+  const readMs = performance.now() - t0;
+  const r = buildGroundLevel(job, albedo, nightRaw, detail, t0, marks);
+  r.phases!.readMs = readMs;
+  r.phases!.decoded = decoded;
+  r.phases!.hits = hits;
+  r.phases!.aa = aa;
+  return { ...r, bad };
+}
+
 export function buildGroundLevel(
   job: RoadJob,
-  albedoBmp: ImageBitmap,
+  albedo: Uint8ClampedArray,
   nightRaw: Uint8ClampedArray,
-  detailBmp: ImageBitmap | null = null,
+  detail: Uint8ClampedArray | null = null,
+  t0 = performance.now(),
+  marks: [string, number][] = [],
 ): GroundLevelResult {
   const RES = job.res;
-  const tRead = performance.now();
-  // 影像 / 高清细节（G06）：主线程把瓦片画好后交来 ImageBitmap，这里读回像素（2048² 一张 16 MB，放在主线程是长任务）
-  const albedo = readBitmap(albedoBmp, RES);
-  const detail = detailBmp ? readBitmap(detailBmp, RES) : null;
-  const readMs = performance.now() - tRead;
-  const marks: [string, number][] = [["read", readMs]];
-  const mark = (name: string) => marks.push([name, performance.now() - tRead]);
+  const mark = (name: string) => marks.push([name, performance.now() - t0]);
+  mark("read");
+  const readMs = performance.now() - t0;
   // G07b：水体画布走 CPU 栅格。默认的 GPU 加速画布在 getImageData 时要经 GPU 进程同步读回 16 MB，
   // 期间页面的合成 / WebGL 命令排在后面，主线程帧间隔跳到 23–31 ms（1× 巡航约 1.4 次 / 分钟，G07b-spikes.mjs 归因到 waterRead 阶段）；
   // CPU 栅格多花约 5 ms（在 Worker 里），读回只是内存拷贝。海岸线抗锯齿与 GPU 版有个别像素不同（同页 A/B 平均差 0、p99 ≤ 0.33）
-  const canvas = new OffscreenCanvas(RES, RES);
-  const ctx = canvas.getContext("2d", job.waterCpu !== false ? { willReadFrequently: true } : undefined) as OffscreenCanvasRenderingContext2D;
+  const ctx = make2d(RES, job.waterCpu !== false);
   ctx.fillStyle = "black";
   ctx.fillRect(0, 0, RES, RES);
   const frame = new LocalFrame(job.lat0, job.lon0);
@@ -465,15 +510,6 @@ export function buildGroundLevel(
   const mipMs = performance.now() - tMip;
   mark("mips");
   return { water: px.water, albedo: px.albedo, detailCoverage, albedoMips, waterMips, phases: { readMs, mipMs, marks } };
-}
-
-/** ImageBitmap → RES² RGBA 像素（非预乘：getImageData 的约定，和原来主线程 canvas 读回的一样），读完关掉位图 */
-function readBitmap(bmp: ImageBitmap, res: number): Uint8ClampedArray {
-  const c = new OffscreenCanvas(res, res);
-  const ctx = c.getContext("2d", { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
-  ctx.drawImage(bmp, 0, 0);
-  bmp.close();
-  return ctx.getImageData(0, 0, res, res).data;
 }
 
 /** Black Marble 的底图把陆地画成暗蓝色：取「亮度减去蓝色底」，只留下灯光（原来在主线程的 clipmap.ts
