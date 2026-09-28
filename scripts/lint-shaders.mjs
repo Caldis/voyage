@@ -262,6 +262,15 @@ export async function collectPrograms(server, opts = {}) {
     add("atmosphere-aerial", atmosphere.aerialMaterial);
   });
 
+  // 云隙光（SPEC-RAYS，atmosphere/rays.ts）：步进 / 模糊 / 合成三个小程序，按需后台编译，不在冷启动关键路径上。旧树没有这个模块，lenient 下跳过
+  await section("rays", async () => {
+    const m = await server.ssrLoadModule("/src/atmosphere/rays.ts");
+    const r = m.createRaysMaterials({}, {});
+    add("rays-march", r.march);
+    add("rays-blur", r.blur);
+    add("rays-composite", r.composite);
+  });
+
   return programs;
 }
 
