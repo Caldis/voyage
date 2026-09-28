@@ -93,7 +93,8 @@ export const WONDERS: WonderDef[] = [
     id: "tether",
     name: "天梯（致敬《流浪地球 2》太空电梯）",
     layer: "sky",
-    distanceKm: [330, 410],
+    // WS01：从 330–410 km 拉近到 200–260 km（基座在地平线以内、落在海上，锚塔整块体量留在窗里）
+    distanceKm: [200, 260],
     forwardOffsetDeg: [8, 30],
     minAltitudeKm: 6,
     // 黄昏与夜里最美（上段还在阳光里、或只剩航标灯）；白天是一条很淡的线，也可以出现，权重低
@@ -111,7 +112,9 @@ export const WONDERS: WonderDef[] = [
     // 再低（< 2%）正午就完全看不见了。取值见 handoff/W01.md 的对照（待用户确认，W01b 保留）。
     // W01b：缆上挂着中继站、上下行的舱体、斜拉的稳定缆、海上系留平台、节律航标灯与面板闪光——白天被注意到的是这些
     // 比天空亮的东西（线本身在正午几乎看不见），见 render/wonder-sky.glsl.ts
-    look: { radiusKm: 0.28, albedo: [0.034, 0.035, 0.037], skin: 0, beacons: true },
+    // WS01 巨构化：缆束半径 1 km（直径 2 km，220 km 外约 12 像素宽），底下是 30–40 km 高的锚塔、天上是 3–5 个环形站
+    // （尺寸按每次出现的种子随机，见 wonders/tether-shape.ts）
+    look: { radiusKm: 1.0, albedo: [0.034, 0.035, 0.037], skin: 0, beacons: true },
   },
   {
     id: "jianmu",

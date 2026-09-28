@@ -2010,7 +2010,10 @@ export class Clouds {
     const v = this.view;
     // 相机离地很低（火车 TR03、低空）时常开：平原上几十米的小丘也挡得住贴地平线的远云（审查建议）
     const camAlt = (v.uCamR?.value ?? 1e9) - 6360;
-    const depthOn = (v.uGroundOn?.value ?? 0) > 0.5 && ((v.uTerrainMax?.value ?? 0) > DEPTH_TERRAIN_MIN_KM || camAlt < DEPTH_LOW_CAMERA_KM);
+    // WS01：天幕层奇观（天梯锚塔）在场时也要云的深度——比塔远的云要排到塔后面（outside-pass.ts 的 OUTSIDE_WONDER 段）
+    const depthOn =
+      ((v.uGroundOn?.value ?? 0) > 0.5 && ((v.uTerrainMax?.value ?? 0) > DEPTH_TERRAIN_MIN_KM || camAlt < DEPTH_LOW_CAMERA_KM)) ||
+      (v.uWonderOn?.value ?? 0) > 0.5;
     r.uResetDepth.value = depthOn && !this.depthOn;
     this.depthOn = depthOn;
     if (this.uniforms.uCloudDepthOn) this.uniforms.uCloudDepthOn.value = depthOn ? 1 : 0;

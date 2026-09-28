@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { WONDERS, wonderById, wonderVolumeCompiled, type WonderContext, type WonderDef } from "./catalog";
 import { createWonderCloudUniforms } from "./wonder-cloud.glsl";
+import { applyTetherUniforms, createTetherUniforms, tetherShape, type TetherShape } from "./tether-shape";
 
 /**
  * 奇观系统（W01）：触发、放置、编排，驱动着色器的 uniform。设计见 research/WONDERS.md §5。
@@ -52,8 +53,10 @@ export interface ActiveWonder {
   baseKm: number;
   /** 是怎么来的：auto 随机触发、summon 面板 / 调试召唤、cover 借遮挡（奇观之门） */
   via: "auto" | "summon" | "cover";
-  /** 本次出现的随机种子（0..1）：云间层奇观拿它换布局 / 朝向 / 纹理（uWonderParams.z，W02） */
+  /** 本次出现的随机种子（0..1）：云间层奇观拿它换布局 / 朝向 / 纹理（uWonderParams.z，W02）；天梯拿它换塔高 / 退台 / 环站（WS01） */
   seed: number;
+  /** 天梯（skin 0）按种子生成的巨构尺寸（WS01，tether-shape.ts） */
+  tether?: TetherShape;
 }
 
 export interface TriggerOptions {
@@ -137,6 +140,8 @@ const _v4 = new THREE.Vector3();
 export class WonderSystem {
   /** 面板「奇观模式」开关 */
   enabled = false;
+  /** 开发者开关（WS01，默认关）：天梯锚塔的塔身灯格（夜里按楼层积分成暗暖色横纹）。调试台 `__voyage.wonders.tetherWindows = true` */
+  tetherWindows = false;
   /** 每小时（模拟时间）期望出现的次数 */
   rarityPerHour: number = RARITY_LEVELS[1].perHour;
   active: ActiveWonder | null = null;
@@ -147,6 +152,8 @@ export class WonderSystem {
     uWonderAxis: { value: new THREE.Vector3(0, 1, 0) },
     uWonderShape: { value: new THREE.Vector4(0.35, FRONT_MIN_KM, 0, 0) },
     uWonderAlbedo: { value: new THREE.Vector3(0.3, 0.3, 0.3) },
+    // 天梯的锚塔 / 环站尺寸（WS01，只有窗外程序的 OUTSIDE_WONDER 变体读）
+    ...createTetherUniforms(),
     // 云间层（W00）：云步进程序读这一组（经 main.ts 合进场景 uniforms，Clouds 构造时共用同一批对象）
     ...createWonderCloudUniforms(),
   };
@@ -278,6 +285,7 @@ export class WonderSystem {
       via: opts.via ?? "summon",
       seed: opts.seed ?? rand01(seed + 5 + this.summonCount * 7),
     };
+    if (def.look?.skin === 0) this.active.tether = tetherShape(this.active.seed);
     this.markSeen(ctx.flightKey, def.id);
     this.log.push({ id: def.id, event: "出现", via: this.active.via });
     return true;
@@ -427,6 +435,7 @@ export class WonderSystem {
     const look = a.def.look;
     u.uWonderShape.value.set(look.radiusKm, front, look.skin, look.beacons ? 1 : 0);
     u.uWonderAlbedo.value.set(...look.albedo);
+    if (a.tether) applyTetherUniforms(u, a.tether, this.tetherWindows);
     u.uWonderOn.value = 1;
   }
 
@@ -472,7 +481,8 @@ export class WonderSystem {
     const name = a.def.name.split("（")[0];
     if (!this.ctx) return `${name} · ${phase}`;
     const { bearingDeg, distKm } = geoBearingDistance(this.ctx.lat, this.ctx.lon, a.lat, a.lon);
-    return `${name} · ${phase} · 方位 ${bearingDeg.toFixed(0)}° · ${distKm.toFixed(0)} km`;
+    const size = a.tether ? ` · 塔高 ${a.tether.towerH.toFixed(1)} km · 环站 ${a.tether.rings.length} 只` : "";
+    return `${name} · ${phase} · 方位 ${bearingDeg.toFixed(0)}° · ${distKm.toFixed(0)} km${size}`;
   }
 
   /** 调试：当前状态快照 */
