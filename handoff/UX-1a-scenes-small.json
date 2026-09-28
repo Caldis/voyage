@@ -1,0 +1,14 @@
+[
+  {
+    "name": "ux1a-small-default",
+    "p": { "preset": "wpac", "time": 720 },
+    "wait": 3000,
+    "js": "const p=document.getElementById('panel');p.classList.remove('hidden');p.scrollTop=0;await new Promise(r=>setTimeout(r,300));const r=p.getBoundingClientRect();return JSON.stringify({vw:innerWidth,vh:innerHeight,panel:[Math.round(r.left),Math.round(r.top),Math.round(r.width),Math.round(r.height)],scrollH:p.scrollHeight,clientH:p.clientHeight,areaPct:+(r.width*r.height/(innerWidth*innerHeight)*100).toFixed(1)})"
+  },
+  {
+    "name": "ux1a-small-bottom",
+    "p": { "preset": "wpac", "time": 720 },
+    "wait": 1500,
+    "js": "const p=document.getElementById('panel');p.classList.remove('hidden');p.scrollTop=p.scrollHeight;await new Promise(r=>setTimeout(r,300));return 'bottom '+p.scrollTop"
+  }
+]
