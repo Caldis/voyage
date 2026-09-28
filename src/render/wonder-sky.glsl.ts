@@ -459,7 +459,7 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
       vec3 hp = cross(a, h);
       bool back = dot(h, rd) > 0.0;
       float R0 = 8.0 + 7.0 * hash12(vec2(jSeed * 91.7 + fi, 41.9));
-      for (int m = 0; m < 3; m++) {
+      for (int m = 0; m < 3 + uLoopGuard; m++) {
         float fm = float(m);
         float hb = hash12(vec2(jSeed * 91.7 + fi * 7.0 + fm, 31.3));
         float side = fm < 0.5 ? 0.0 : (fm < 1.5 ? 1.0 : -1.0);
@@ -473,10 +473,11 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
         vec2 el = vec2(dx / Rp, dy / Bv);
         float q = length(el);
         vec2 pn = vec2(dx, dy * Rp / Bv);
-        float qn = 0.8 + 0.35 * vnoise(pn / (0.28 * Rp) + vec2(fi * 3.1, fm * 5.7));
+        float nq = vnoise(pn / (0.28 * Rp) + vec2(fi * 3.1, fm * 5.7));
+        float qn = 0.8 + 0.35 * nq;
         float gq = length(vec2(el.x / Rp, el.y / Bv)) / max(q, 1e-3);
         // 透天的空当只在外圈（中间是实的一团）：否则满盘圆洞，像一块奶酪
-        float cf = wonderTentCdf((qn - q) / max(gq * wPix, 1e-4)) * smoothstep(0.1, 0.4, vnoise(pn / 3.2 + vec2(fi * 7.3 + fm, 1.7)) + 0.8 * (0.75 - q));
+        float cf = wonderTentCdf((qn - q) / max(gq * wPix, 1e-4)) * smoothstep(0.1, 0.4, nq + 0.8 * (0.75 - q));
         if (cf > folN.w) {
           float ez = sqrt(max(1.0 - dot(el, el), 0.0));
           vec3 nb = el.x * nh + el.y * uph - ez * rd;
@@ -699,12 +700,11 @@ ${TOWER_WINDOWS_GLSL}
       float tF = t + (sig - s) * b + rho * hrd;
       if (tF > tLimit) continue;                 // 海面挡在前面
       float hr = 7.0 + 8.0 * g3;
-      float p = 1.8 + 0.8 * g1;
       float q = clamp((Lr - rho) / (Lr - rJ), 0.0, 1.0);
       // 上沿的起伏（慢波，几 km 一个）：板根不是一刀切的直线
       float bump = 1.0 + 0.12 * sin(rho * 0.9 + g2 * 20.0);
-      float z = hr * pow(q, p) * bump;
-      float dz = -hr * p * pow(q, p - 1.0) / (Lr - rJ) * bump;
+      float z = hr * q * q * bump;
+      float dz = -2.0 * hr * q / (Lr - rJ) * bump;
       float slope = (sn * dz - b * hrd / sn) / hx;
       float wF = tF * pixelAngle;
       float cf = wonderTentCdf((z - sig) * sn / wF * inversesqrt(1.0 + slope * slope)) * smoothstep(-1.0, 0.0, sig);
@@ -720,7 +720,7 @@ ${TOWER_WINDOWS_GLSL}
   if (cov > 0.5) tObj = min(tObj, t - sqrt(max(radius * radius - X * X, 0.0)) / sn);
 
   // 树皮（紫茎）：三级细节——轮廓（几十到几百像素）→ 竖向深棱（板根往上延伸成的棱，一圈 14–22 道，绕着树干慢慢拧，
-  // 220 km 外约 5 像素一道）→ 树皮板块与细裂纹（< 2 像素，按像素足迹淡出 / 积分成均匀的一层）。
+  // 220 km 外约 5 像素一道）→ 树皮板块（2–3 像素，按像素足迹淡出成均匀的一层）。
   // 下段偏灰绿（苔、地衣），上段偏紫褐；受光面 / 背光面按太阳方向大块分明
   vec3 bark = uWonderAlbedo * mix(vec3(0.9, 1.06, 0.95), vec3(1.04, 0.96, 1.06), smoothstep(4.0, 22.0, s));
   vec3 LT = vec3(0.0);
@@ -728,11 +728,13 @@ ${TOWER_WINDOWS_GLSL}
     float cphi = clamp(X / radius, -1.0, 1.0);
     float sphi = -sqrt(1.0 - cphi * cphi);
     vec3 radial = cphi * nh + sphi * mh;
-    float psi = atan(dot(radial, e2), dot(radial, e1));
+    // 沿方位的弧长按「离正对相机那条母线多远」量（同天梯锚塔的竖肋）：视线绕树转得极慢（250 km 外每秒 0.07°，
+    // 树皮纹理每秒挪 0.02 像素），看不出纹理跟着人转；比按世界方位 atan 省一截冷编译
+    float uA = radius * acos(cphi);
     float nFl = floor(14.0 + 9.0 * hash12(vec2(jSeed * 91.7, 7.7)));
     float fu = wPix / max(-sphi, 0.05);          // 一个像素沿方位在树皮上跨多少 km（轮廓附近被透视压缩）
     float flP = 6.2832 * radius / nFl;           // 棱距（km）
-    float ph = psi * nFl / 6.2832 + 0.006 * nFl * s;
+    float ph = uA / flP + 0.006 * nFl * s;
     float amp = 1.0 - smoothstep(0.2, 0.45, fu / flP);
     float tri = abs(fract(ph) - 0.5) * 4.0 - 1.0;
     float dAz = 0.5 * tri * amp;
@@ -740,36 +742,37 @@ ${TOWER_WINDOWS_GLSL}
     vec3 nT = normalize(radial * cos(dAz) + tang * sin(dAz) - a * jDr);
     // 棱与棱之间的沟更暗（遮蔽）；淡出时换成它的平均值，远处亮度不变
     float ao = 1.0 - 0.3 * mix(0.5, 0.5 - 0.5 * tri, amp);
-    float uA = radius * acos(cphi);
     float fs = wPix / sn;
     float plate = (vnoise(vec2(uA / 0.45 + 17.0 * jSeed, s / 1.7)) - 0.5) * (1.0 - smoothstep(0.35, 0.8, max(fu / 0.45, fs / 1.7)));
-    float fiss = wonderBands(uA, fu, 0.22, 0.06);
-    LT = bark * (1.0 + 0.4 * plate) * ao * (1.0 - 0.35 * fiss) / M_PI * wonderIrr(nT, a, eSun, eMoon, eSkyUp, eUp);
+    // （0.2 km 一道的细裂纹在 200 km 外按足迹积分只剩一层均匀的暗，直接折进反照率 ×0.9，不再单算）
+    LT = bark * 0.9 * (1.0 + 0.4 * plate) * ao / M_PI * wonderIrr(nT, a, eSun, eMoon, eSkyUp, eUp);
   }
-  // 板根：同一种树皮，法线朝相机那一面（略往上仰），整片受光或整片在阴影里——大块的明暗面
-  vec3 LF = bark * vec3(0.9, 1.0, 0.9) * (0.85 + 0.3 * vnoise(vec2(X * 0.4, s * 0.5))) / M_PI * wonderIrr(nFin, a, eSun, eMoon, eSkyUp, eUp);
-  // 叶簇（青叶，深的蓝绿）：按球面法线受光（受光面 / 背光面），叶子透光，朝太阳看时背光面也透出一点（前向散射）；
-  // 叶簇里再有一层 1–2 km 的明暗斑驳（6–10 像素，不闪）
+  // 板根（16 km 以下）和叶盘（树冠里）不会出现在同一个像素上，合成一种「另一种材质」只着色一次（冷编译：少一个
+  // wonderIrr / 封顶的调用点，FXC 按调用点整份内联）。
+  // 板根：同一种树皮，法线朝相机那一面（略往上仰），整片受光或整片在阴影里——大块的明暗面。
+  // 叶盘（青叶，深的蓝绿）：按椭球法线受光（顶面亮、底面暗），叶子透光，朝太阳看时背光面也透出一点（前向散射）；
+  // 叶盘里再有一层 1–2 km 的明暗斑驳（6–10 像素，不闪）
   float fwd = 1.0 + 1.5 * pow(max(dot(rd, uSunDir), 0.0), 4.0);
-  vec3 nL = folN.w > 0.0 ? folN.xyz : a;
-  float mott = 0.75 + 0.5 * vnoise(vec2(X / 1.3, s * sn / 1.3) + 5.0 * jSeed);
+  bool low = s < 16.0;
   vec3 leafA = vec3(0.035, 0.06, 0.055);
-  vec3 LL = leafA * mott / M_PI * (wonderIrr(nL, a, eSun, eMoon, eSkyUp, eUp) + (eSun + eMoon) * 0.12 * fwd);
+  float mott = 0.75 + 0.5 * vnoise(vec2(X / 1.3, s * sn / 1.3) + 5.0 * jSeed);
+  vec3 albO = low ? bark * vec3(0.9, 1.0, 0.9) : leafA * mott;
+  vec3 nO = low ? nFin : (folN.w > 0.0 ? folN.xyz : a);
+  vec3 LO = albO / M_PI * (wonderIrr(nO, a, eSun, eMoon, eSkyUp, eUp) + (low ? 0.0 : 0.12 * fwd) * (eSun + eMoon));
+  float oB = min(low ? finB : folB, 1.0) * vis;
+  float oF = min(low ? finF : folF, 1.0) * vis;
   // 各部件「最亮时」的样子（正对光源），封顶比例按它定（wonderCapRef）
   vec3 eMax = eSun * (1.0 + 0.12 * fwd) + eMoon + eSkyUp + eUp;
 
-  // 合成（从后往前）：树干后面的叶簇、枝、板根 → 树干 → 前面的板根、枝、叶簇
+  // 合成（从后往前）：树干后面的叶盘 / 板根、枝 → 树干 → 前面的枝、叶盘 / 板根
   float capO;
   vec3 Cw = wonderCap(lFront + apT * Lt, Lbg, capLum, capScale);
-  vec3 Cl = wonderCapRef(lFront + apT * LL, lFront + apT * leafA * 1.25 / M_PI * eMax, Lbg, capLum);
-  vec3 Cf = wonderCapRef(lFront + apT * LF, lFront + apT * bark / M_PI * eMax, Lbg, capLum);
-  L = mix(L, Cl, min(folB, 1.0) * vis);
+  vec3 Co = wonderCapRef(lFront + apT * LO, lFront + apT * (low ? bark : leafA * 1.25) / M_PI * eMax, Lbg, capLum);
+  L = mix(L, Co, oB);
   L = mix(L, Cw, min(woodB, 1.0) * vis);
-  L = mix(L, Cf, min(finB, 1.0) * vis);
   L = mix(L, wonderCapRef(lFront + apT * LT, lFront + apT * bark * 1.4 / M_PI * eMax, Lbg, capLum), cov * vis);
-  L = mix(L, Cf, min(finF, 1.0) * vis);
   L = mix(L, Cw, min(woodF, 1.0) * vis);
-  L = mix(L, Cl, min(folF, 1.0) * vis);
+  L = mix(L, Co, oF);
   float covAll = min(max(max(cov, min(finF + finB, 1.0)), max(min(woodF + woodB, 1.0), min(folF + folB, 1.0))), 1.0);
 
   // 云：云反照率约 0.8；朝太阳看时前向散射更亮
@@ -813,7 +816,7 @@ ${TOWER_WINDOWS_GLSL}
     // 最后一项：离轴线 32–43 km 渐隐到 0（上面 reach 在 45 km 处截断，不能留下硬边）
     float tau = (2.6 - 0.6 * kc) * exp(-ds * ds / (th * th) - xo * xo / (wid * wid)) * smoothstep(0.15, 0.75, nz) * (1.0 - smoothstep(32.0, 43.0, dist));
     // 薄雾：贴着树干、很淡，把几圈云连成「缭绕」
-    tau += 0.22 * exp(-X * X / (4.0 * radius * radius + 20.0)) * smoothstep(7.0, 10.0, s) * (1.0 - smoothstep(20.0, 26.0, s)) * vnoise(vec2(X * 0.2, s * 0.3 - T * 0.002));
+    tau += 0.22 * exp(-X * X / (4.0 * radius * radius + 20.0)) * smoothstep(7.0, 10.0, s) * (1.0 - smoothstep(20.0, 26.0, s)) * nz;
     float c2 = (1.0 - exp(-tau)) * visF;
     L = mix(L, wonderCap(lFront + apT * Lc, Lbg, capLum, capO), c2);
     cc = max(cc, c2);
