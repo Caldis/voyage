@@ -207,6 +207,42 @@ bool cloudPointNearWeather(vec2 xz) {
 #endif
   return nearAny;
 }
+// PERF-STORM：视线上「可能有雷暴 / 台风密度」的区间的包络 [t0, t1]（没有时 t1 < t0）。
+// 半径与密度函数的提前退出一致（雷暴 √56 ≈ 7.48 倍塔身半径、台风 18 倍眼半径），各留 0.5 km；
+// 高度按 weather.ts 的外壳：雷暴到 c.w + 1.8 km，台风到外壳顶。包络外只剩层状云，主循环可以整段跳过空白（见 main）
+vec2 cloudRayWeatherSpan(vec3 ro, vec3 rd) {
+  vec2 span = vec2(1e9, -1e9);
+  float a = max(dot(rd.xz, rd.xz), 1e-8);
+#ifdef CLOUD_STORM
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 c = uStorms[i];
+    vec2 rel = c.xy - uCloudOffset;
+    float R = c.z * 7.5 + 0.5;
+    float tc = dot(rel, rd.xz) / a;
+    float h2 = R * R - (dot(rel, rel) - tc * tc * a);
+    if (h2 < 0.0) continue;
+    float hw = sqrt(h2 / a);
+    vec2 hs = cloudShellIntervalH(ro, rd, uShellBottom, c.w + 1.8);
+    vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
+    if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
+  }
+#endif
+#ifdef CLOUD_TYPHOON
+  if (cloudHurOn()) {
+    vec2 rel = uHurricane.xy - uCloudOffset;
+    float R = uHurricane.z * 18.0 + 0.5;
+    float tc = dot(rel, rd.xz) / a;
+    float h2 = R * R - (dot(rel, rel) - tc * tc * a);
+    if (h2 >= 0.0) {
+      float hw = sqrt(h2 / a);
+      vec2 hs = cloudShellInterval(ro, rd);
+      vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
+      if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
+    }
+  }
+#endif
+  return span;
+}
 #endif
 
 float hg(float c, float g) {
@@ -348,6 +384,21 @@ void main() {
   float fineDt = 0.03;
   bool wasThin = false;       // 上一个采样点是稀薄的软边冰晶云（下一步走 2 倍步长，见 SOFT_SKIP）
   float lastEmpty = seg.x;   // 最近一个空白采样点的位置：表面一定在它和第一个有云的采样点之间
+  // PERF-STORM 空域跳跃：够得着雷暴 / 台风的视线（refineOn）要走 0–15 km（台风 0.5–20.5 km）的整个外壳，
+  // 实测 storm-sc-low 每像素 168 步里 161 步是层状云高度以外的空白 2dt 步（有云样本只有约 2 个）：巡航高度本身就在外壳里，
+  // 往下看要从机身空走到云顶、往上看要空走到 15 km，一路逐步求密度。其实外壳里只有两处可能有云：
+  // 层状云自己的高度范围（laySeg）和各雷暴 / 台风的包围柱（wxSeg，见 cloudRayWeatherSpan）。两者之外一步跳到下一段的起点。
+  // laySeg 取「首次进层 → 最后出层」的包络：不碰地面的掠射视线出层底后还会再进层，包络里夹着的空白照旧走 2dt（下面的高度门控）
+  vec2 laySeg = vec2(1e9, -1e9);
+  vec2 wxSeg = vec2(1e9, -1e9);
+  if (refineOn) {
+    if (uCoverage > 0.0) {
+      laySeg = cloudShellIntervalH(ro, rd, uCloudBottom, uCloudTop);
+      if (raySphere2(ro, rd, BOTTOM).x <= 0.0) laySeg.y = max(laySeg.y, raySphere2(ro, rd, BOTTOM + uCloudTop).y);
+      if (laySeg.y <= laySeg.x) laySeg = vec2(1e9, -1e9);
+    }
+    wxSeg = cloudRayWeatherSpan(ro, rd);
+  }
   // 闪电放电通道（线段）：两端换到相机坐标
   vec3 fA = vec3(uFlash.x - uCloudOffset.x, BOTTOM + uFlash.y, uFlash.z - uCloudOffset.y);
   vec3 fAB = vec3(uFlashB.x - uCloudOffset.x, BOTTOM + uFlashB.y, uFlashB.z - uCloudOffset.y) - fA;
@@ -387,6 +438,17 @@ void main() {
     // 没有雷暴时 384 步（原来 192；C10b 近处空白步不加倍，走到同样远要多约一倍的步数；多出的 448 − 384 步只给雷暴的表面细化用）
 #ifdef CLOUD_WEATHER
     if (t >= seg.y || T < 0.005 || (!refineOn && i >= 384)) break;
+    // PERF-STORM 空域跳跃（见循环前 laySeg / wxSeg）：空白处、不在任何一段里 → 跳到下一段的起点；后面没有段了就结束。
+    // 跳到的点上 lastEmpty 同步（塔身表面细化按它回退，不能退回跳过的那段）；跳后第一步走半步，
+    // 与默认程序从层顶起步（i == 0 半步）一致——远离雷暴的层状云在两个程序里是同一套采样，换程序不跳变
+    bool jumped = false;
+    if (refineOn && wasEmpty && fine == 0 && !(t >= laySeg.x && t < laySeg.y) && !(t >= wxSeg.x && t < wxSeg.y)) {
+      float tn = min(t < laySeg.x ? laySeg.x : 1e9, t < wxSeg.x ? wxSeg.x : 1e9);
+      if (tn >= seg.y) break;
+      t = tn;
+      lastEmpty = tn;
+      jumped = true;
+    }
 #else
     if (t >= seg.y || T < 0.005 || i >= 384) break;
 #endif
@@ -403,7 +465,11 @@ void main() {
     // 系数按 t 连续变化（步长本来就随 t 连续变），没有 C10 的 60 km 硬开关；雷暴 / 台风程序的普通层状云走同一套（不再换程序就换估计）。
     // 第一步只走一半（i == 0 时 wasEmpty 恒为真）：飞机在云里时第一个样本离相机更近（深度 [0, dt/2]），云里 8 姿态的时间噪声
     // 回到 C10 二分时的水平（不缩短时 relStd ×1.29、噪声分量 ×1.15，缩短后 ×0.87 / ×0.94，见 handoff/C10b.md）；从外面看的云只影响进壳的第一个样本
+#ifdef CLOUD_WEATHER
+    float emptyK = (1.0 + smoothstep(60.0, 90.0, t)) * (i == 0 || jumped ? 0.5 : 1.0);
+#else
     float emptyK = (1.0 + smoothstep(60.0, 90.0, t)) * (i == 0 ? 0.5 : 1.0);
+#endif
 #ifdef CLOUD_WEATHER
     // 够得着雷暴 / 台风的视线要走 0–15 km（台风 0.5–20.5 km）的整个外壳，只在层状云自己的高度范围（上下各留 300 m）里走细步：
     // 塔身进云另有表面细化（fine），外壳里其余高度的空白没有层状云可漏。不加这一条时 storm-day / typhoon 云步进 +1.4~2.2 ms（+45~60%），

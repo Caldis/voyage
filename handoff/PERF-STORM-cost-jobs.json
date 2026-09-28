@@ -1,0 +1,300 @@
+[
+ {
+  "name": "cost-storm-sc-low",
+  "scene": "storm-sc-low",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      emptyK = 2.0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "l6",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 6;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nol",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "layonly",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (!nearW.x) {\n    if (uCoverage <= 0.0) return;",
+       "  if (true) {\n    if (uCoverage <= 0.0) return;"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "cost-storm-day",
+  "scene": "storm-day",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      emptyK = 2.0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "l6",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 6;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nol",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "layonly",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (!nearW.x) {\n    if (uCoverage <= 0.0) return;",
+       "  if (true) {\n    if (uCoverage <= 0.0) return;"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "cost-typhoon-bands",
+  "scene": "typhoon-bands",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      emptyK = 2.0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "l6",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 6;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nol",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "layonly",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (!nearW.x) {\n    if (uCoverage <= 0.0) return;",
+       "  if (true) {\n    if (uCoverage <= 0.0) return;"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "cost-storm-sc",
+  "scene": "storm-sc",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      emptyK = 2.0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "l6",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 6;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nol",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "layonly",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (!nearW.x) {\n    if (uCoverage <= 0.0) return;",
+       "  if (true) {\n    if (uCoverage <= 0.0) return;"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "cost-storm-graze",
+  "scene": {
+   "name": "storm-graze",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 900,
+    "coverage": 0.6,
+    "altitude": 3.0,
+    "weather": "storm",
+    "wing-pos": "-4",
+    "quality": "high",
+    "ground-on": false
+   },
+   "offset": [
+    0,
+    0
+   ],
+   "wait": 3000
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "noref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;",
+       "      emptyK = 2.0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "l6",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 6;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "nol",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;",
+       "      int lightSteps = 0;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "layonly",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  if (!nearW.x) {\n    if (uCoverage <= 0.0) return;",
+       "  if (true) {\n    if (uCoverage <= 0.0) return;"
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]

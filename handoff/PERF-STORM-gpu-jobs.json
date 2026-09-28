@@ -1,0 +1,167 @@
+[
+ {
+  "name": "gpu-storm-sc-low",
+  "scene": "storm-sc-low",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "old2",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   }
+  ]
+ },
+ {
+  "name": "gpu-storm-day",
+  "scene": "storm-day",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "old2",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   }
+  ]
+ },
+ {
+  "name": "gpu-storm-sc",
+  "scene": "storm-sc",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "old2",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   }
+  ]
+ },
+ {
+  "name": "gpu-typhoon-bands",
+  "scene": "typhoon-bands",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "old2",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   }
+  ]
+ },
+ {
+  "name": "gpu-storm-graze",
+  "scene": {
+   "name": "storm-graze",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 900,
+    "coverage": 0.6,
+    "altitude": 3.0,
+    "weather": "storm",
+    "wing-pos": "-4",
+    "quality": "high",
+    "ground-on": false
+   },
+   "offset": [
+    0,
+    0
+   ],
+   "wait": 3000
+  },
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "old2",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   }
+  ]
+ },
+ {
+  "name": "gpu-sea-sc-low",
+  "scene": "sea-sc-low",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "old2",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   }
+  ]
+ },
+ {
+  "name": "gpu-noon-cumulus",
+  "scene": "noon-cumulus",
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "cur"
+   },
+   {
+    "name": "old2",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   }
+  ]
+ }
+]
