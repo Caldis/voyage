@@ -1346,9 +1346,9 @@ async function main() {
     console.error("                  --jobs / --variants / file: 都是这个基准。shots 不传是 tmp/screenshot/dev-<端口>）");
     console.error("  --quality auto|high|medium|low  shots / ab / flight（DX-23）：画质档，默认固定 high；auto 保留自动档（可能中途降档，会打印警告）");
     console.error("  ab --jobs 路径.json [--variants 路径.json] [--base 对照端口] [--rounds 2] [--cloud-live] [--warm-max 8]（DX-23）");
-    console.error("                  同页多变体 A/B：每个 job 摆好场景、冻结、等 ground.pending===0，按 old,new,old#2,new#2 交替套用变体");
+    console.error("                  同页多变体 A/B：每个 job 摆好场景、冻结、等地面完全稳定（groundSettle），按 old,new,old#2,new#2 交替套用变体");
     console.error("                  （着色器来源 current|base|base:<材质>|file:<路径>、文本补丁、#define、uniform 覆盖、js，可一次换多个材质），");
-    console.error("                  每张预热到连续两张逐字节相同、记 pending / 瓦片跨域数（有则标作废），最后打印指标表与噪声底；");
+    console.error("                  每张预热到连续两张逐字节相同、记 pending / 瓦片跨域数 / 地面换版计数（有则标作废），最后打印指标表与噪声底；");
     console.error("                  job 可带 crop（测量区）、zoom、hdr（读回渲染目标逐位对照，如 hdrWing）+ hdrMask、bench（benchWing 等）、pre（js）");
     console.error("                  DX-26：job / 变体可带 ground {开关: 值}（自动 rebuildAll + 等瓦片）；变体可带 builtin: cloud-ref|cloud-dist|cloud-steps（云诊断出口）；");
     console.error("                  job.cloudDump（读回云缓冲，有 cloud-ref 变体时自动出「按距离分带的边宽 / 对真值 α 分档」）；");
