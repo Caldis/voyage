@@ -581,7 +581,8 @@ void main() {
     float stormW = gStormW;
     float stormAO = gStormAO;
 #ifdef CLOUD_STORM
-    bool pileusHit = gStormPileus > 0.5;   // 幞状云（TW04，受光加虹彩，见下）
+    bool pileusHit = gStormPileus > 0.5 && gStormPileus < 1.5;   // 幞状云（TW04，受光加虹彩，见下）
+    bool rainHit = gStormPileus > 1.5;                           // 雨幡（TW04，见下）
 #endif
     bool soft = SOFT_SKIP && gStormSoft > 0.5;
     // 只在进入雷暴 / 台风时细化（层状云不必，保持原样）；这段会被小步重新采样，进云那一步的密度并没有丢
@@ -656,12 +657,24 @@ void main() {
       gDetailLight = true;
 #ifdef CLOUD_WEATHER
       float ls = 0.06;
-      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;
+#ifdef CLOUD_STORM
+      // TW04：雷暴的样本（stormW）一律走天气受光——砧盾铺到上百公里外，离塔心 7.5R + 15 km 以外的砧盾样本
+      // 原来会落进下面「只有层状云」的 6 步受光，砧底被照得和砧顶一样白，还在那个半径上亮度一跳。
+      // 软边的雷暴样本（砧、砧盾、雨幡、幞状云）首步 240 m、6 步（同样走到 15 km）：它们不需要贴着表面的那几十米受光，
+      // 砧盾占了大片天空，每个有云样本省下 2 次精简密度
+      bool wxLight = nearW.x && (stormW > 0.5 || cloudPointNearWeather(p.xz + uCloudOffset));
+      int lightSteps = wxLight ? 8 : 6;
+      if (stormW > 0.5 && soft) { ls = 0.24; lightSteps = 6; }
+      gLiteNoShield = stormW < 0.5;
+#else
+      bool wxLight = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset);
+      int lightSteps = wxLight ? 8 : 6;
+#endif
       if (gStormSoft > 1.5) {
         // 台风卷云盖（T44）：外围变薄以后视线要在它里面走很长一段，每个采样点都走 8 步受光步进太贵（typhoon-bands 云步进 +2 ms）。
         // 它上面只有天，朝太阳的光学厚度 ≈ 本点消光 × 到卷云盖顶（约 15 km）的斜程的一半（密度往上变淡）
         od = dens * 0.5 * clamp(15.0 - (r - BOTTOM), 0.2, 3.0) / max(uKeyDir.y, 0.1);
-      } else if (lightSteps == 6)
+      } else if (!wxLight)
 #endif
       {
         // 普通云（没有雷暴、台风）：只有层状云，常量上界，编译器展开后最快（和改动前一致）。
@@ -760,6 +773,15 @@ void main() {
       sunScatter += (tailK / (4.0 * M_PI)) * (1.0 / (1.0 + 0.1125 * od) - exp(-od));
       vec3 sunLight = keyLight(r, up) * sunScatter;
 #ifdef CLOUD_STORM
+      // 砧盾投在层状云上的影子（TW04，见 clouds.glsl.ts 的 anvilShadowOD；层状云的受光步进里不算砧盾，gLiteNoShield）
+      // 不看 gWeatherOn：够不着雷暴的视线也可能看到落在砧影里的云，按视线分路径的话影子在包围圆柱的边上断开（storm-graze 的一道直边）。
+      // 透过厚冰云的是漫射光，按二流近似的总透射 1 / (1 + 0.75(1 − g)·od)（g = 0.85，同扩散尾巴）而不是 e^−od：
+      // e^−od 把砧下的积云压成没有明暗的灰饼（飑线截图），漫射透射留住了一半上下的光和它的形状
+      if (stormW < 0.5 && uStormCount > 0) sunLight *= 1.0 / (1.0 + 0.1125 * anvilShadowOD(p.xz + uCloudOffset, r - BOTTOM, uKeyDir));
+      // 雨幡只吸收、几乎不散射直射光（TW04 / 飞碟，research/PERF_PREVIEW_wave8.md 的推荐做法）：雨滴大，单次散射几乎全在
+      // 几度以内的前向衍射峰里，而雨幡头顶是几公里厚的云——黄昏太阳贴着云底平射、逆光看时，这个前向峰把雨幡照成一块
+      // 边缘清楚的发光椭圆挂在云底下（T45 修过受光的自遮挡，逆光的「飞碟」仍在）。留两成，给雨幡边缘一点被照亮的灰
+      if (rainHit) sunLight *= 0.2;
       // 幞状云的虹彩（TW04 / SPEC-PILEUS）：新生云滴小而均匀，太阳附近 10–30° 的衍射在薄云上分成淡淡的粉 / 绿色带（虹彩云）。
       // 色带按离太阳的角度排，角度周期随这片云的云滴大小变（沿云面缓慢变化，带子不是同心圆的整齐一圈）；
       // 只调制直射那一份的颜色（能量近似不变），离太阳远（> 35°）或正对太阳（< 6°，被日晕 / 眩光盖住）淡出

@@ -418,6 +418,7 @@ bool cloudWeatherMaybe(vec2 xz, float alt) {
 #endif
 }
 float gLightLen = 0.0;   // 受光步进这一步代表的长度（km），只在雷暴 / 台风的受光步进里非 0（T38，见 HUR_BANDS_LIGHT）
+bool gLiteNoShield = false;   // TW04：这一段受光步进不算砧盾（层状云样本，见 anvilShadowOD）
 #endif
 
 const float SHAPE_TILE = 7.0;     // 形状噪声一个周期覆盖的水平距离，km
@@ -928,8 +929,9 @@ vec3 shieldCircle(vec4 c) {
   vec2 L = shieldAxes(c);
   return vec3(c.xy + uUpperWind * (c.z * 0.7 + (L.x - L.y) * 0.5), (L.x + L.y) * 0.5 + c.z * 2.5 + 8.0);
 }
-const float SHIELD_BELOW = 5.0;   // 砧盾在砧顶以下最多伸到多深（厚 3 km + 底面起伏 + 蘑菇伞）
-const float SHIELD_ABOVE = 1.3;   // 砧顶以上（顶面鼓包）
+const float SHIELD_BELOW = 6.5;   // 砧盾在砧顶以下最多伸到多深（厚 3 km、多单体叠加处 ×1.55，+ 顶面下沉与底面起伏）
+const float SHIELD_ABOVE = 1.3;
+const float SHIELD_LIGHT_K = 0.36;   // 受光（精简密度 / 云影 / 阴影估计）里砧盾消光的 δ 缩放，见 cloudDensityLite   // 砧顶以上（顶面鼓包）
 
 // 砧盾的密度（0..1）。detail：主步进（取纤维与细节噪声）；受光 / 云影 / 探针 / 占据网格不取
 float anvilShield(vec2 xz, float alt, float lod, bool detail) {
@@ -963,7 +965,9 @@ float anvilShield(vec2 xz, float alt, float lod, bool detail) {
   if (aSum <= 0.0) return 0.0;
   float F = min(aSum, 1.0);
   float topA = topW / aSum;
-  float thA = thW / aSum;
+  // 几个单体的足迹叠在一起（飑线 / 团簇）的地方砧更厚、底面垂得更低：旧版相连的砧是一张等厚平板，塔与塔之间露出规整的「门洞」
+  // （TW02 审查遗留 ①）。足迹和超过 1 的部分最多再厚 1.6 km
+  float thA = thW / aSum * (1.0 + 0.55 * clamp(aSum - 1.0, 0.0, 1.0));
   float fa = faW / aSum;
   // 取噪声之前先按起伏的上限判高度（下面 aTop / aBot 的噪声项取到极值时的范围）：砧盾那一段高度层里大半是空的
   // （下风薄段只有几百米厚），视线在层里空走的每一步都不必取纹理
@@ -1007,6 +1011,38 @@ float anvilShield(vec2 xz, float alt, float lod, bool detail) {
   return vert * edge * ero * mix(0.5, 0.045, smoothstep(0.0, 0.9, fa)) * mix(0.7 + 0.6 * fib, 0.25 + 1.5 * fib, smoothstep(0.2, 0.8, fa));
 }
 
+// 砧盾投在下面云层上的影子（TW04）：光学厚度的解析估计（只有足迹循环的算术，不取纹理）。
+// 层状云离塔心 7.5R + 15 km 以外的样本走 6 步只有层状云的受光（2.8 km），够不着 10 km 以上的砧；
+// 而一片上百公里的砧盾把下面整片云海罩进阴影，是积雨云「大」的主要线索之一（海面的影子由云影图负责，已经有）。
+// p：采样点的世界坐标（xz）与高度；sunDir：主光源方向。沿光线走到砧盾的中间高度，在那里按足迹估计竖直柱的光学厚度，再按斜程放大
+float anvilShadowOD(vec2 xz, float alt, vec3 sunDir) {
+  if (sunDir.y < 0.03) return 0.0;
+  float od = 0.0;
+  vec2 W = uUpperWind;
+  vec2 Pp = vec2(-W.y, W.x);
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 c = uStorms[i];
+    float hm = c.w - 1.2;                        // 砧盾的中间高度（大致）
+    if (alt > hm - 0.5) continue;
+    vec2 q = xz + sunDir.xz * ((hm - alt) / sunDir.y);
+    vec2 h = stormSeed2(c);
+    vec2 L = shieldAxes(c);
+    vec2 d = q - c.xy - W * (c.z * 0.7);
+    float a = dot(d, W);
+    float fa = clamp(a / L.x, 0.0, 1.0);
+    float b = dot(d, Pp) - (h.y - 0.5) * 0.5 * a * fa;
+    float wh = c.z * 1.9 + 0.36 * max(a, 0.0);
+    float u = a > 0.0 ? a / L.x : -a / L.y;
+    float e = u * u + (b * b) / (wh * wh);
+    if (e >= 1.0) continue;
+    float F = 1.0 - e;
+    float th = (a > 0.0 ? mix(3.0, 0.3, pow(fa, 0.6)) : 3.0) * (0.35 + 0.65 * sqrt(F));
+    // 与 anvilShield 的密度一致（纤维取均值），边缘按 F 的门槛淡出；× 0.6：竖直柱里上下渐变各 30%
+    od += smoothstep(0.1, 0.35, F) * mix(0.5, 0.045, smoothstep(0.0, 0.9, fa)) * th * 0.6 * CLOUD_EXTINCTION;
+  }
+  return od / sunDir.y;
+}
+
 // stormDensity 的副产物：这一点取的是「软边」的部分（砧、雨幡），见 gStormSoft
 bool gStormSoftHit = false;
 
@@ -1015,31 +1051,23 @@ bool gStormSoftHit = false;
 // 凝结成一片薄薄的、边缘光滑的帽子，披在塔顶上，塔继续长就会把它顶穿。靠近太阳时常带虹彩（小而均匀的新生云滴衍射）。
 // 挂在按种子挑中的那座伴生塔（k = 0，约六成的雷暴有）上：它最像「正在长的塔」，也低于主塔的上冲云顶，不碰外壳上限。
 // 形状：一片弯的透镜，中心在塔顶正上方 0.35–0.7 km，半径 1.1–1.5 倍塔身，向四周下垂（披下来），厚 0.12–0.3 km，不侵蚀（光滑）
-float gStormPileus = 0.0;   // cloudDensity 的副产物：这一点属于幞状云（受光加虹彩，见 clouds.ts）
-float pileusDensity(vec4 c, vec2 xz, float alt) {
-  vec2 sd = stormSeed2(c);
-  if (fract(sd.x * 7.31 + sd.y * 3.17) > 0.6) return 0.0;
-  float top = c.w;
-  float R = c.z;
-  int nSat = 2 + int(sd.x * 2.99);
-  float flank = sd.y * 6.2831853;
-  vec2 hk = stormHash22(sd * 37.1);
-  float ang = flank - 0.5 * float(nSat - 1) * 1.1 + (hk.x - 0.5) * 0.9;
-  vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.25 + 1.1 * hk.y);
-  float tk = STORM_BASE + (top - STORM_BASE) * (0.28 + 0.42 * hk.y * hk.y);
-  float Rk = R * (0.3 + 0.28 * hk.x);
-  float gap = 0.35 + 0.35 * hk.y;
+float gStormPileus = 0.0;   // cloudDensity 的副产物：1 = 这一点属于幞状云（受光加虹彩），2 = 雨幡（只吸收，见 clouds.ts）
+// 幞状云的密度：stormTowersSdf 顺手算出（伴生塔 k = 0 的轴线、塔顶、半径都已在手，不再重复求哈希 / 三角函数；
+// 单独写成一个函数、在完整密度与精简密度里各求一次时，雷暴云步进 gpu-ab ×1.2——FXC 的寄存器 / 分档翻到慢的一档）
+float gPileusD = 0.0;
+float pileusShape(vec2 xz, float alt, vec2 ax, float tk, float Rk, vec2 hk, float sdy) {
+  float gap = 0.2 + 0.25 * hk.y;
   if (alt < tk - 0.8 || alt > tk + gap + 0.4) return 0.0;
   // 与 towerSdf 同一条轴线（摆动 + 被高空风吹歪），取塔顶处
   float ph = hk.x * 6.2831853;
-  vec2 axT = ax + vec2(sin(tk * 0.45 + ph), sin(tk * 0.33 + ph * 1.7 + 1.3)) * Rk * 0.12 + uUpperWind * Rk * (0.4 + 0.7 * hk.y);
-  float Rh = Rk * (1.1 + 0.4 * sd.y);
-  float rr = length(xz - axT - uUpperWind * 0.3) / Rh;
+  vec2 axT = ax + vec2(sin(tk * 0.45 + ph), sin(tk * 0.33 + ph * 1.7 + 1.3)) * Rk * 0.12 + uUpperWind * (Rk * (0.4 + 0.7 * hk.y) + 0.3);
+  float Rh = Rk * (0.95 + 0.3 * sdy);
+  float rr = length(xz - axT) / Rh;
   if (rr > 1.0) return 0.0;
   float mid = tk + gap - 0.7 * rr * rr;          // 往外下垂
-  float th = mix(0.3, 0.12, rr) * (0.6 + 0.4 * sd.x);
+  float th = mix(0.28, 0.1, rr);
   float v = 1.0 - smoothstep(0.0, 1.0, abs(alt - mid) / th);
-  return v * smoothstep(1.0, 0.75, rr) * 0.3;
+  return v * smoothstep(1.0, 0.7, rr) * 0.1;
 }
 
 // 主塔 + 伴生塔（TW04）：完整版与精简版共用（形状必须一致，T12 教训），各内联一处。ao：取胜那座塔的凹处遮蔽。
@@ -1049,6 +1077,7 @@ float stormTowersSdf(vec4 c, vec2 xz, float alt, float lod, out float ao) {
   float top = c.w;
   float R = c.z;
   vec2 sd = stormSeed2(c);
+  gPileusD = 0.0;
   // 上冲云顶：高出砧顶 0.7–1.3 km、比塔身窄（neck 0.35）；外壳只留到砧顶 + 1.8 km（weather.ts updateShell），隆起再高会被截平
   float sdf = towerSdf(xz, alt, c.xy, R, top + 0.7 + 0.6 * sd.y, 0.72, lod, sd, 0.35, ao);
   // 伴生塔数量写成「4 + 一个恒为 0 的 uniform 表达式」，FXC 就不会把塔身 SDF 展开 4 份
@@ -1060,9 +1089,12 @@ float stormTowersSdf(vec4 c, vec2 xz, float alt, float lod, out float ao) {
     float ang = flank + (float(k) - 0.5 * float(nSat - 1)) * 1.1 + (hk.x - 0.5) * 0.9;
     vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.25 + 1.1 * hk.y);
     float tk = STORM_BASE + (top - STORM_BASE) * (0.28 + 0.42 * hk.y * hk.y);
+    float Rk = R * (0.3 + 0.28 * hk.x);
+    // 幞状云（约六成的雷暴有）挂在 k = 0 这座塔上
+    if (k == 0 && fract(sd.x * 7.31 + sd.y * 3.17) < 0.6) gPileusD = pileusShape(xz, alt, ax, tk, Rk, hk, sd.y);
     if (alt > tk + 0.8) continue;
     float a2;
-    float s2 = towerSdf(xz, alt, ax, R * (0.3 + 0.28 * hk.x), tk, 0.45 + 0.2 * hk.x, lod, hk, 0.0, a2);
+    float s2 = towerSdf(xz, alt, ax, Rk, tk, 0.45 + 0.2 * hk.x, lod, hk, 0.0, a2);
     if (s2 < sdf) ao = a2;
     // 低处融合得更宽：小塔和主塔从同一片云底长出来（飑线侧翼那样连成一体），高处才各自分开
     sdf = sminStorm(sdf, s2, mix(2.2, 0.6, smoothstep(STORM_BASE + 0.5, STORM_BASE + 3.5, alt)));
@@ -1080,7 +1112,7 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
   if (alt < STORM_BASE + 0.1) {
     rain = rainDensity(xz, alt, c.xy, R, lod);
     ao = 0.3; // 头顶是几公里厚的云
-    if (alt < STORM_BASE - 0.1) return rain;
+    if (alt < STORM_BASE - 0.1) { gStormPileus = 2.0; return rain; }
   }
   // 主塔（穹顶就是上冲云顶）+ 伴生的浓积云小塔 + 塔脚的低云裙边（TW04）
   float aoT;
@@ -1095,9 +1127,9 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
   bool isMam = mam > anvil;
   if (isMam) { anvil = mam; aoA = 0.5; }
   // 幞状云：比砧优先（两者不会重叠），光滑、不侵蚀
-  float pil = pileusDensity(c, xz, alt);
+  float pil = gPileusD;
   if (pil > anvil) { anvil = pil; aoA = 1.0; isMam = false; gStormPileus = 1.0; }
-  if (tower <= 0.0 && anvil <= 0.0) return rain;
+  if (tower <= 0.0 && anvil <= 0.0) { gStormPileus = rain > 0.0 ? 2.0 : gStormPileus; return rain; }
   if (detail) {
     vec3 dn = textureLod(uDetailNoise, vec3(xz.x, alt, xz.y) / DETAIL_TILE, lod).rgb;
     float dfbm = dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125;
@@ -1108,10 +1140,12 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
   if (tower >= anvil) {
     ao = aoT;
     gStormSoftHit = rain > tower;
+    if (rain > tower) gStormPileus = 2.0;
     return max(tower, rain);
   }
   ao = aoA;
   gStormSoftHit = !isMam || rain > anvil;
+  if (rain > anvil) gStormPileus = 2.0;
   return max(anvil, rain);
 }
 
@@ -1127,7 +1161,7 @@ float stormDensityLite(vec4 c, vec2 xz, float alt, float lod) {
   if (alt < STORM_BASE - 0.1) return rainL;
   float ao;
   float sdf = stormTowersSdf(c, xz, alt, lod, ao);
-  float pilL = pileusDensity(c, xz, alt);
+  float pilL = gPileusD;
   vec3 geo;
   return max(max(max(smoothstep(0.0, 0.25, -sdf), pilL), anvilDensity(xz, alt, c.xy, R, top, lod, ao, geo)), rainL);
 }
@@ -1287,7 +1321,10 @@ float cloudDensityLite(vec3 p, float lod, bool detail, bool fullHurricane) {
       d = max(d, stormDensityLite(c, xz, alt, lod) * uCloudDensity);
     }
     // 砧盾（TW04）：所有单体共用一片，不取纤维噪声
-    if (uStormCount > 0) d = max(d, anvilShield(xz, alt, lod, false) * uCloudDensity);
+    // 层状云样本的受光步进不算砧盾（gLiteNoShield）：它们的砧盾阴影由 anvilShadowOD 解析给出，两者都算就重复了。
+    // × SHIELD_LIGHT_K：冰晶的散射几乎全在前向峰里（g ≈ 0.8），穿过砧盾的阳光大半仍朝前走，对受光而言有效消光按 δ 缩放只剩约 1/3
+    // （Joseph 1976 的 δ-Eddington，f ≈ g²）。不缩放时塔身被自己的砧罩成一整片灰（TW01 南海连续航程截图），比照片暗得多
+    if (uStormCount > 0 && !gLiteNoShield) d = max(d, anvilShield(xz, alt, lod, false) * uCloudDensity * SHIELD_LIGHT_K);
 #endif
 #ifdef CLOUD_TYPHOON
     if (uHurricane.w > 0.5) {
