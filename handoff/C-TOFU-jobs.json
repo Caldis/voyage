@@ -1,0 +1,444 @@
+[
+ {
+  "name": "cu-6000",
+  "scene": {
+   "name": "v-cu-6000",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 900,
+    "altitude": 6,
+    "coverage": 0.35,
+    "wing-pos": "-4"
+   }
+  },
+  "crop": [
+   390,
+   520,
+   820,
+   180
+  ],
+  "cloudDump": true,
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "old-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    },
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "old-dist",
+    "builtin": "cloud-dist",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "old-ref",
+    "builtin": "cloud-ref",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-ref",
+    "builtin": "cloud-ref"
+   }
+  ]
+ },
+ {
+  "name": "tow-a8",
+  "scene": {
+   "name": "vs-tow-a8",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 900,
+    "cloud-preset": "towering",
+    "altitude": 8,
+    "wing-pos": "-4"
+   }
+  },
+  "crop": [
+   390,
+   530,
+   820,
+   200
+  ],
+  "cloudDump": true,
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "old-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    },
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "old-dist",
+    "builtin": "cloud-dist",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "old-ref",
+    "builtin": "cloud-ref",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-ref",
+    "builtin": "cloud-ref"
+   }
+  ]
+ },
+ {
+  "name": "noon-cumulus",
+  "scene": "noon-cumulus",
+  "crop": [
+   400,
+   500,
+   800,
+   500
+  ],
+  "cloudDump": true,
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "old-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    },
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "old-dist",
+    "builtin": "cloud-dist",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "old-ref",
+    "builtin": "cloud-ref",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-ref",
+    "builtin": "cloud-ref"
+   }
+  ]
+ },
+ {
+  "name": "clouds-variety",
+  "scene": "clouds-variety",
+  "crop": [
+   400,
+   450,
+   800,
+   500
+  ],
+  "cloudDump": true,
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "old-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    },
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "old-dist",
+    "builtin": "cloud-dist",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "old-ref",
+    "builtin": "cloud-ref",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-ref",
+    "builtin": "cloud-ref"
+   }
+  ]
+ },
+ {
+  "name": "cu-side",
+  "scene": {
+   "name": "cu-side",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 840,
+    "altitude": 4.5,
+    "coverage": 0.5,
+    "cloud-preset": "towering",
+    "wing-pos": "-4"
+   }
+  },
+  "crop": [
+   400,
+   450,
+   800,
+   500
+  ],
+  "cloudDump": true,
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "old-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    },
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-alt",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "  L = L * apT + apL * (1.0 - T);",
+       "  L = vec3(length(ro + rd * depth) - BOTTOM) * (1.0 - T);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "old-dist",
+    "builtin": "cloud-dist",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-dist",
+    "builtin": "cloud-dist"
+   },
+   {
+    "name": "old-ref",
+    "builtin": "cloud-ref",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-ref",
+    "builtin": "cloud-ref"
+   }
+  ]
+ },
+ {
+  "name": "sea-sc",
+  "scene": "sea-sc",
+  "crop": [
+   400,
+   450,
+   800,
+   500
+  ],
+  "cloudDump": true,
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "old-ref",
+    "builtin": "cloud-ref",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-ref",
+    "builtin": "cloud-ref"
+   }
+  ]
+ },
+ {
+  "name": "storm-sc",
+  "scene": "storm-sc",
+  "crop": [
+   400,
+   450,
+   800,
+   500
+  ],
+  "cloudDump": true,
+  "variants": [
+   {
+    "name": "old",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "old-ref",
+    "builtin": "cloud-ref",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new-ref",
+    "builtin": "cloud-ref"
+   }
+  ]
+ }
+]
