@@ -94,21 +94,23 @@ for w in winds:
             "meanGlint": round(float(L[G].mean()) if G.sum() else 0.0, 2),
             "meanCrop": round(float(L.mean()), 3),
         }
-    same = np.all(o == g, axis=-1)
+    # 非海面：seamark 变体（海面着色改成品红）与 old 逐位相同的像素；没有 seamark 时退回「与 noglint 相同」（会把 old 的全黑闪点算进来）
+    sm = load("seamark")
+    same = np.all(sm == o, axis=-1) if sm is not None else np.all(o == g, axis=-1)
     dnew = np.any(n != o, axis=-1)
-    res["nonGlintChanged"] = int((dnew & same).sum())
-    res["nonGlintMaxDiff"] = float(np.abs(n - o)[same].max()) if same.any() else 0.0
+    res["nonSeaChanged"] = int((dnew & same).sum())
+    res["nonSeaMaxDiff"] = float(np.abs(n - o)[same].max()) if same.any() else 0.0
     res["noiseOld"] = float(np.abs(o2 - o).max()) if o2 is not None else None
     res["noiseNew"] = float(np.abs(n2 - n).max()) if n2 is not None else None
     rows.append(res)
 
 print(f"{os.path.basename(d)}  crop={crop}")
-print("风速 | 耀斑区像素 | 孤立亮点 old→new | 孤立暗点 old→new | 死白块(单像素) old→new | 死白最大面积 | 耀斑区相邻差 old→new | 耀斑区均亮 old→new | 非耀斑像素变化 | 噪声底 old/new")
+print("风速 | 耀斑区像素 | 孤立亮点 old→new | 孤立暗点 old→new | 死白块(单像素) old→new | 死白最大面积 | 耀斑区相邻差 old→new | 耀斑区均亮 old→new | 非海面像素变化 | 噪声底 old/new")
 for r in rows:
     o, n = r["old"], r["new"]
     print(
         f"{r['wind']:>4} | {r['glintPx']:>7} | {o['isoBright']:>6} → {n['isoBright']:<6} | {o['isoDark']:>6} → {n['isoDark']:<6} | "
         f"{o['blownBlobs']}({o['blown1px']}) → {n['blownBlobs']}({n['blown1px']}) | {o['blownMaxArea']} → {n['blownMaxArea']} | "
-        f"{o['adjDiffGlint']} → {n['adjDiffGlint']} | {o['meanGlint']} → {n['meanGlint']} | {r['nonGlintChanged']} (max {r['nonGlintMaxDiff']}) | {r['noiseOld']}/{r['noiseNew']}"
+        f"{o['adjDiffGlint']} → {n['adjDiffGlint']} | {o['meanGlint']} → {n['meanGlint']} | {r['nonSeaChanged']} (max {r['nonSeaMaxDiff']}) | {r['noiseOld']}/{r['noiseNew']}"
     )
 json.dump(rows, open(os.path.join(d, "wx11gb-metrics.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)

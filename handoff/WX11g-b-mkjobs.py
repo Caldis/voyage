@@ -58,7 +58,11 @@ scenes = [
     {"name": "low-sea-glint", "scene": "low-sea-glint"},
     {"name": "sea-calm-low", "scene": {"name": "sea-calm-low", "p": {"preset": "wpac", "date": "2026-09-28", "time": 870, "coverage": 0.1, "altitude": 0.8, "wind": 1.5, "wing-pos": "-4"}}},
 ]
-jobs = [dict(s, pre=PRE, variants=static_variants(WINDS)) for s in scenes]
+# 海面遮罩：海面着色一律改成亮品红，与 old 不同的像素就是海面（判「非海面像素逐位 0」用）
+DBG13 = "if (uDebug == 13) L = oceanHexDbg;"
+assert DBG13 in cur
+SEAMARK = {"name": "seamark", "patch": {"__outCur": [[DBG13, DBG13 + " L = vec3(1e3, 0.0, 1e3);"]]}, "js": wind_js(7)}
+jobs = [dict(s, pre=PRE, variants=static_variants(WINDS) + [SEAMARK]) for s in scenes]
 json.dump(jobs, open(os.path.join(HERE, "WX11g-b-ab-jobs.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
 # 飞行中逐帧（ab live）：每个风速 old / new / new 第二次（同代码噪声底）
@@ -93,4 +97,13 @@ for s in scenes:
         ],
     })
 json.dump(gpu_jobs, open(os.path.join(HERE, "WX11g-b-gpu-jobs.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+# 调参探索：相对起伏的系数 k（当前代码 k = 0.5）
+SP = "float sparkle = max(1.0 + 0.5 * z * sqrt(lambda) / (1.0 + lambda), 0.0);"
+assert SP in cur
+exp_vars = []
+for w in [1.5, 14]:
+    exp_vars.append({"name": f"old{w}", "patch": {"__outCur": [[NEW_B, OLD_B]]}, "js": wind_js(w)})
+    for k in [1.0, 0.6, 0.35]:
+        exp_vars.append({"name": f"k{k}-{w}", "patch": {"__outCur": [[SP, SP.replace("0.5 * z * sqrt", f"{k} * z * sqrt")]]}, "js": wind_js(w)})
+json.dump([dict(scenes[0], pre=PRE, variants=exp_vars)], open(os.path.join(HERE, "WX11g-b-explore-jobs.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 print("写好 WX11g-b-ab-jobs.json / WX11g-b-live-jobs.json / WX11g-b-gpu-jobs.json")

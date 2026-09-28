@@ -1,11 +1,11 @@
 [
  {
-  "name": "low-sea-glint-frame",
+  "name": "low-sea-glint",
   "scene": "low-sea-glint",
   "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
   "variants": [
    {
-    "name": "old",
+    "name": "old1.5",
     "patch": {
      "__outCur": [
       [
@@ -17,33 +17,43 @@
     "js": "v.state.wind = 1.5; for (let i = 0; i < 600 && v.ocean.stats.wind !== 1.5; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
    },
    {
-    "name": "new",
+    "name": "k1.0-1.5",
+    "patch": {
+     "__outCur": [
+      [
+       "float sparkle = max(1.0 + 0.5 * z * sqrt(lambda) / (1.0 + lambda), 0.0);",
+       "float sparkle = max(1.0 + 1.0 * z * sqrt(lambda) / (1.0 + lambda), 0.0);"
+      ]
+     ]
+    },
     "js": "v.state.wind = 1.5; for (let i = 0; i < 600 && v.ocean.stats.wind !== 1.5; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
    },
    {
-    "name": "new-AA",
+    "name": "k0.6-1.5",
+    "patch": {
+     "__outCur": [
+      [
+       "float sparkle = max(1.0 + 0.5 * z * sqrt(lambda) / (1.0 + lambda), 0.0);",
+       "float sparkle = max(1.0 + 0.6 * z * sqrt(lambda) / (1.0 + lambda), 0.0);"
+      ]
+     ]
+    },
     "js": "v.state.wind = 1.5; for (let i = 0; i < 600 && v.ocean.stats.wind !== 1.5; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
-   }
-  ]
- },
- {
-  "name": "sea-calm-low-frame",
-  "scene": {
-   "name": "sea-calm-low",
-   "p": {
-    "preset": "wpac",
-    "date": "2026-09-28",
-    "time": 870,
-    "coverage": 0.1,
-    "altitude": 0.8,
-    "wind": 1.5,
-    "wing-pos": "-4"
-   }
-  },
-  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
-  "variants": [
+   },
    {
-    "name": "old",
+    "name": "k0.35-1.5",
+    "patch": {
+     "__outCur": [
+      [
+       "float sparkle = max(1.0 + 0.5 * z * sqrt(lambda) / (1.0 + lambda), 0.0);",
+       "float sparkle = max(1.0 + 0.35 * z * sqrt(lambda) / (1.0 + lambda), 0.0);"
+      ]
+     ]
+    },
+    "js": "v.state.wind = 1.5; for (let i = 0; i < 600 && v.ocean.stats.wind !== 1.5; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
+   },
+   {
+    "name": "old14",
     "patch": {
      "__outCur": [
       [
@@ -52,15 +62,43 @@
       ]
      ]
     },
-    "js": "v.state.wind = 1.5; for (let i = 0; i < 600 && v.ocean.stats.wind !== 1.5; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
+    "js": "v.state.wind = 14; for (let i = 0; i < 600 && v.ocean.stats.wind !== 14; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
    },
    {
-    "name": "new",
-    "js": "v.state.wind = 1.5; for (let i = 0; i < 600 && v.ocean.stats.wind !== 1.5; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
+    "name": "k1.0-14",
+    "patch": {
+     "__outCur": [
+      [
+       "float sparkle = max(1.0 + 0.5 * z * sqrt(lambda) / (1.0 + lambda), 0.0);",
+       "float sparkle = max(1.0 + 1.0 * z * sqrt(lambda) / (1.0 + lambda), 0.0);"
+      ]
+     ]
+    },
+    "js": "v.state.wind = 14; for (let i = 0; i < 600 && v.ocean.stats.wind !== 14; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
    },
    {
-    "name": "new-AA",
-    "js": "v.state.wind = 1.5; for (let i = 0; i < 600 && v.ocean.stats.wind !== 1.5; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
+    "name": "k0.6-14",
+    "patch": {
+     "__outCur": [
+      [
+       "float sparkle = max(1.0 + 0.5 * z * sqrt(lambda) / (1.0 + lambda), 0.0);",
+       "float sparkle = max(1.0 + 0.6 * z * sqrt(lambda) / (1.0 + lambda), 0.0);"
+      ]
+     ]
+    },
+    "js": "v.state.wind = 14; for (let i = 0; i < 600 && v.ocean.stats.wind !== 14; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
+   },
+   {
+    "name": "k0.35-14",
+    "patch": {
+     "__outCur": [
+      [
+       "float sparkle = max(1.0 + 0.5 * z * sqrt(lambda) / (1.0 + lambda), 0.0);",
+       "float sparkle = max(1.0 + 0.35 * z * sqrt(lambda) / (1.0 + lambda), 0.0);"
+      ]
+     ]
+    },
+    "js": "v.state.wind = 14; for (let i = 0; i < 600 && v.ocean.stats.wind !== 14; i++) await new Promise((r) => requestAnimationFrame(r)); return v.ocean.stats.wind;"
    }
   ]
  }
