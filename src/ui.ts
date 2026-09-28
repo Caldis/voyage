@@ -5,7 +5,7 @@ import { effectiveTargetKm, resetAltitudeFloor, FLOOR_LAND_AGL_KM, FLOOR_SEA_KM,
 import type { Exposure } from "./render/exposure";
 import { CABIN_REFLECT_STRENGTH } from "./render/cabin-reflect.glsl";
 import { $, type HighLiftSetting, type VoyageState } from "./state";
-import { WEATHER_PRESETS, type WeatherSystem } from "./weather";
+import { REGIME_NAMES, WEATHER_PRESETS, type WeatherSystem } from "./weather";
 import { VIEW_PRESETS } from "./view-presets";
 import type { Director } from "./director";
 import { AIRPORTS } from "./routes";
@@ -113,8 +113,8 @@ function syncFloorUi(state: VoyageState) {
 }
 
 let lastInfo = 0;
-/** 信息栏文字：太阳 / 月亮方位、航向、位置，每 250 ms 刷新一次 */
-export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number, legLine = "") {
+/** 信息栏文字：太阳 / 月亮方位、航向、位置，每 250 ms 刷新一次。strobeCloudOff：STROBE-CLOUD 按夜间云中迟滞判定关闭频闪时追加一行状态（不对用户静默，见 handoff/STROBE-CLOUD.md） */
+export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number, legLine = "", strobeCloudOff = false) {
   if (now - lastInfo <= 250) return;
   lastInfo = now;
   syncFloorUi(state);
@@ -131,7 +131,9 @@ export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state
     (state.spoilerDeg > 0.5 ? `，减速板 ${state.spoilerDeg.toFixed(0)}°` : "") + "\n" +
     `位置 ${curLat.toFixed(3)}°N ${curLon.toFixed(3)}°E` + (state.groundOn && groundPending > 0 ? `，地面瓦片加载中（${groundPending}）` : "") +
     (legLine ? `
-${legLine}` : "");
+${legLine}` : "") +
+    (strobeCloudOff ? `
+频闪：夜间云中自动关闭（按惯例避免反光晃眼，出云后恢复）` : "");
 }
 
 export interface UiDeps {
@@ -338,6 +340,7 @@ export function setupUi(deps: UiDeps) {
     if (isLetterShortcut(e, "h")) $("panel").classList.toggle("hidden");
   });
   setupVoyageUi(director);
+  setupWeatherAutoSync(deps);
   setupNavUi(director, deps.vehicle, state);
   setupWonderUi(deps.wonders);
   setupSoundUi(deps.audio);
@@ -498,6 +501,9 @@ function setupVoyageUi(director: Director) {
     if (isLetterShortcut(e, "b")) setBackdrop(!director.backdrop);
   });
   hint.hidden = false;
+  // 250 ms 兜底同步（UX-2，修复审计 P9）：脚本直接改 director.active / director.rate（不经过面板）时，
+  // 面板此前只在用户点击等事件里才刷新，会停在旧值；轮询只读系统状态写回显示，不派发事件
+  window.setInterval(sync, 250);
   sync();
   voyageSync = sync;
   // 调试 / 测试脚本用
@@ -660,6 +666,134 @@ function setupNavUi(director: Director, vehicle: VehicleControl, s0: VoyageState
   sync();
 }
 
+// ---------- 天气 / 云 / 海面风的接管显示（UX-2，PANEL_UX_GUIDE §5.3） ----------
+
+/** 天气 / 云型被锁定（override: "lock"）时统一的原因文案：接管期间禁用，hint / title 写原因与解除办法 */
+const WEATHER_LOCK_REASON = "连续航程开着时由天气场决定；关掉连续航程可手动选";
+
+/** 控件旁的「自动」标记：`owned` 时显示；`adjusted` = 用户在本航段内拖动过（nudge 语义升级为「自动（已手动调整）」） */
+function setAutoBadge(id: string, owned: boolean, adjusted = false) {
+  const el = $(id);
+  el.hidden = !owned;
+  if (owned) el.textContent = adjusted ? "自动（已手动调整）" : "自动";
+}
+
+/**
+ * 连续航程接管时，面板显示的值要跟实际一致（UX-2，修复 PANEL_UX_AUDIT_1 的 P1 / P9：云量显示 42% 实际 34%、
+ * 海面风速显示 7 m/s 实际 1.0、地点停在旧位置）。三类控件三种语义（PANEL_UX_GUIDE §5.3 规则三，理由见 handoff/UX-2.md）：
+ *
+ * - 云量 / 云底 / 云厚 / 海面风速：`nudge`。每 250 ms 从 `cloudUniforms` / `state.wind` 回写 value 与 output 文字，
+ *   只写显示、不派发事件；拖动中（`input` 到 `change` 之间）的控件不抢。用户亲手拖过（`isTrusted`）后，在当前航段内
+ *   标「自动（已手动调整）」——系统本就从新值接着走、慢慢拉回天气场（weather-director.ts 的 stepParams / stepSeaWind，
+ *   已有行为，这里只是如实显示，没有新增控制逻辑）；到下一个航段（`director.leg` 换成新对象）自动清空标记，回到「自动」。
+ * - 天气系统 / 云型：`lock`。连续航程 + 天气场驱动开着时禁用下拉、`title` 写原因。云型的选项 id 与 `CloudRegime` 同名，
+ *   额外把 value 同步成 `director.weather.regime`，不展开下拉也能看出当前云型；天气系统下拉不改 value——天气场此刻
+ *   可能同时摆着好几个雷暴 / 台风，没有单一预设能代表，`title` 改用 `director.weather.describe()` 的实时摘要。
+ * - 地点：连续航程接力生成的航段（`state.preset.id` 以 `leg-` 开头，不在 `PRESETS` 选项里）时，插入 / 更新一个选项
+ *   显示当前航段名（沿用 `director.beginLeg` 已经写好的 `state.preset.name`，不是新造的文案）并选中；不禁用——手动
+ *   选别的地点本来就是导演一直支持的显式跳转（`onPresetChanged`），不算「接管冲突」。「自动」标记只在连续航程开着时
+ *   显示：关掉后航段名还留着（避免下拉显示一个不存在的地点），但已经没有系统在继续推进它，标记随之消失。
+ */
+function setupWeatherAutoSync(deps: UiDeps) {
+  const { state, director, cloudUniforms } = deps;
+  const coverage = $<HTMLInputElement>("coverage");
+  const coverageOut = $("coverage-out");
+  const cloudBase = $<HTMLInputElement>("cloud-base");
+  const cloudBaseOut = $("cloud-base-out");
+  const cloudThick = $<HTMLInputElement>("cloud-thick");
+  const cloudThickOut = $("cloud-thick-out");
+  const wind = $<HTMLInputElement>("wind");
+  const windOut = $("wind-out");
+  const weatherSel = $<HTMLSelectElement>("weather");
+  const cloudSel = $<HTMLSelectElement>("cloud-preset");
+  const presetSel = $<HTMLSelectElement>("preset");
+
+  const isOwned = () => director.active && director.weather.enabled;
+  let manual = { coverage: false, base: false, thick: false, wind: false };
+  const dragging = { coverage: false, base: false, thick: false, wind: false };
+  let lastLeg: unknown = director.leg;
+  let legOption: HTMLOptionElement | null = null;
+
+  // 用户亲手拖过（isTrusted）才标「已手动调整」；拖动期间（input → change 之间）250 ms 同步不去抢，松手（change）后恢复跟随
+  const track = (key: keyof typeof manual, input: HTMLInputElement) => {
+    input.addEventListener("input", (e) => {
+      dragging[key] = true;
+      if (e.isTrusted && isOwned()) manual[key] = true;
+    });
+    input.addEventListener("change", () => (dragging[key] = false));
+  };
+  track("coverage", coverage);
+  track("base", cloudBase);
+  track("thick", cloudThick);
+  track("wind", wind);
+
+  function syncPresetOption() {
+    const isLeg = state.preset.id.startsWith("leg-");
+    if (isLeg) {
+      if (!legOption) {
+        legOption = document.createElement("option");
+        presetSel.insertBefore(legOption, presetSel.firstChild);
+      }
+      if (legOption.value !== state.preset.id) legOption.value = state.preset.id;
+      if (legOption.textContent !== state.preset.name) legOption.textContent = state.preset.name;
+      if (document.activeElement !== presetSel) presetSel.value = state.preset.id;
+    } else if (legOption) {
+      legOption.remove();
+      legOption = null;
+    }
+    // 地点跳变仍是用户随时可做的操作（不算「接管」），「自动」只表示连续航程还在继续推进这个航段
+    setAutoBadge("preset-auto", isLeg && director.active);
+  }
+
+  function sync() {
+    const owned = isOwned();
+    // 换了航段：本航段内的「已手动调整」标记作废，回到「自动」
+    if (director.leg !== lastLeg) {
+      lastLeg = director.leg;
+      manual = { coverage: false, base: false, thick: false, wind: false };
+    }
+    if (!owned) manual = { coverage: false, base: false, thick: false, wind: false };
+
+    if (owned && !dragging.coverage) {
+      const v = cloudUniforms.uCoverage.value;
+      coverage.value = String(v);
+      coverageOut.textContent = `${Math.round(v * 100)}%`;
+    }
+    if (owned && !dragging.base) {
+      const v = cloudUniforms.uCloudBottom.value;
+      cloudBase.value = v.toFixed(1);
+      cloudBaseOut.textContent = `${v.toFixed(1)} km`;
+    }
+    if (owned && !dragging.thick) {
+      const v = cloudUniforms.uCloudTop.value - cloudUniforms.uCloudBottom.value;
+      cloudThick.value = v.toFixed(1);
+      cloudThickOut.textContent = `${v.toFixed(1)} km`;
+    }
+    if (owned && !dragging.wind) {
+      const v = Math.round(state.wind);
+      wind.value = String(v);
+      windOut.textContent = `${v} m/s`;
+    }
+    setAutoBadge("coverage-auto", owned, manual.coverage);
+    setAutoBadge("cloud-base-auto", owned, manual.base);
+    setAutoBadge("cloud-thick-auto", owned, manual.thick);
+    setAutoBadge("wind-auto", owned, manual.wind);
+
+    weatherSel.disabled = owned;
+    weatherSel.title = owned ? `${director.weather.describe()}；${WEATHER_LOCK_REASON}` : "";
+    cloudSel.disabled = owned;
+    cloudSel.title = owned ? `当前云型：${REGIME_NAMES[director.weather.regime]}；${WEATHER_LOCK_REASON}` : "";
+    setAutoBadge("weather-auto", owned);
+    setAutoBadge("cloud-preset-auto", owned);
+    if (owned) cloudSel.value = director.weather.regime;
+
+    syncPresetOption();
+  }
+
+  window.setInterval(sync, 250);
+  sync();
+}
+
 // ---------- 奇观模式（W01） ----------
 
 function setupWonderUi(wonders: WonderSystem) {
@@ -699,6 +833,8 @@ function setupWonderUi(wonders: WonderSystem) {
     const t = wonders.describe();
     if (t !== last) status.textContent = last = t;
   }, 500);
+  // 250 ms 兜底同步（UX-2，修复审计 P9）：脚本直接改 wonders.enabled（不经过面板）时面板会停在旧值
+  window.setInterval(sync, 250);
   sync();
 }
 

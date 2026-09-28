@@ -78,7 +78,9 @@ vec4 trafficRadiance(vec3 rd) {
       // 空气透视
       vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);
       vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;
-      L += T * Lc * apT;
+      // SEA-3：outside-pass 按「背景 × T + 这里的 L」合成，背景里「相机→尾迹」这段内散射也被 e^−τ 挡掉了，要补回来，
+      // 否则侧光下尾迹比天空暗（暗色尾迹）：背景·e^−τ + apL·(1 − e^−τ) + apT·Lc
+      L += T * (Lc * apT + texture(uAerialInscatterS, uvw).rgb * uSunIlluminance * (1.0 - exp(-tau)));
       T *= exp(-tau);
     }
     // 飞机本身：远处只有几个像素，白色机身被阳光照亮，偶尔把太阳反射过来一闪

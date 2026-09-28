@@ -1,0 +1,15 @@
+[
+  {
+    "name": "night-city",
+    "scene": "night-city",
+    "variants": [
+      { "name": "cur" },
+      { "name": "cur2" },
+      { "name": "noGlare", "js": "keep(v.exposure.finalMat.uniforms.uGlare, 'value'); v.exposure.finalMat.uniforms.uGlare.value = 0;" },
+      { "name": "noFrac", "js": "keep(v.exposure.finalMat.uniforms.uLocalFrac, 'value'); v.exposure.finalMat.uniforms.uLocalFrac.value = 0;" },
+      { "name": "t48b", "js": "keep(v.exposure, 'localDt'); v.exposure.localDt = 1e9;" },
+      { "name": "adaptFrozen", "js": "const u = v.exposure.adaptMat.uniforms.uDt; Object.defineProperty(u, 'value', { get() { return 0; }, set() {}, configurable: true });" },
+      { "name": "noStrobe", "js": "keep(v.wingDebug, 'strobe'); v.wingDebug.strobe = 0;" }
+    ]
+  }
+]

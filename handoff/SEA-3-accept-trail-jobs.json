@@ -1,0 +1,283 @@
+[
+ {
+  "name": "noon-cu-close@40+0.3",
+  "scene": {
+   "name": "noon-cu-close",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 750,
+    "altitude": 3,
+    "coverage": 0.45,
+    "wing-pos": "-4"
+   }
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; const e = v.sceneMat.uniforms.uCabinToWorld.value.elements; let ox = e[6], oz = e[8]; const ol = Math.hypot(ox, oz); ox /= ol; oz /= ol; const ax = -oz, az = ox; const P = v.traffic.planes; P[0].pos.set(ox * 40 + ax * 12, 0.3, oz * 40 + az * 12); P[0].dir.set(ax, 0, az); P[0].speed = 0.23; P[0].active = true; P[0].respawnIn = 1e9; P[1].active = false; P[1].respawnIn = 1e9; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "old",
+    "patch": {
+     "__outCur": [
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    // SEA-3（低空海天「暗墙」）：上面的近似默认「水面往反射方向看到的天空」≈「相机往同一方向看到的天空」。\n    // 相机在霾顶之上、水面埋在霾里时不成立：掠射时水面反射的是一整段霾，相机往反射方向看到的却是霾顶以上的亮天空，\n    // 地平线下一两个像素海面就比地平线上方的暗带亮十几级。按水面处往反射方向到大气顶的透射率 tUpR 混合：\n    // tUpR → 1（反射视线很快出霾）沿用原公式；tUpR → 0 时反射的是「视线这段霾」本身，亮度取它的饱和内散射 apT·apL/(1 − apT)\n    vec3 tUpR = transmittanceToTop(BOTTOM, max(dot(reflect(rd, nView), n), 0.0));\n    if (onGround) {\n      skyCam = gh.apL + mix(gh.apT * gh.apL / max(vec3(1.0) - gh.apT, vec3(1e-3)), max(skyCam - gh.apL, vec3(0.0)), tUpR);\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n",
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    if (onGround) {\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n"
+      ],
+      [
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * mix(tView * inscatter / max(vec3(1.0) - tView, vec3(1e-3)), max(skyCam - inscatter, vec3(0.0)), tUpR); // SEA-3，见上\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n",
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n"
+      ],
+      [
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  // SEA-3（远海横纹）：天顶角方向不交给硬件线性插值。LUT 每一行在同一距离上取值，陡的那一行早已打到海面（积分截在海面），\n  // 平的那一行还在半空、少穿一截霾，两行线性混合是折线——平滑的海面上每行一条马赫带（巡航约 40 px 一条）。\n  // 改成上下两行各取「到它自己那条视线的海平面交点的同一比例」处的值，再按行插值（地形高出海面时比例 < 1，照样成立）；\n  // 视线或某一行打不到海平面（地平线以上的山）时那一行退回同距离取值。多 2 次取样、3 次球面求交，LUT 本身不变\n  float tB = raySphere(ro, rd, BOTTOM);\n  float yRow = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (AERIAL_SIZE.y - 1.0);\n  float kRow = min(floor(yRow), AERIAL_SIZE.y - 2.0);\n  vec2 yk = vec2(kRow, kRow + 1.0) / (AERIAL_SIZE.y - 1.0);\n  vec2 ck = 1.0 - 2.0 * yk;\n  vec2 vz = sign(ck) * ck * ck;                              // 两行的视线天顶余弦\n  vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));\n  vec2 vs = sqrt(max(1.0 - vz * vz, 0.0));\n  float tk0 = raySphere(ro, vec3(hz.x * vs.x, vz.x, hz.y * vs.x), BOTTOM);\n  float tk1 = raySphere(ro, vec3(hz.x * vs.y, vz.y, hz.y * vs.y), BOTTOM);\n  vec2 dk = vec2(tB > 0.0 && tk0 > 0.0 ? tT * tk0 / tB : tT, tB > 0.0 && tk1 > 0.0 ? tT * tk1 / tB : tT);\n  vec2 zk = sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0));\n  vec3 q0 = vec3(uvw.x, unitToUv(yk.x, AERIAL_SIZE.y), unitToUv(zk.x, AERIAL_SIZE.z));\n  vec3 q1 = vec3(uvw.x, unitToUv(yk.y, AERIAL_SIZE.y), unitToUv(zk.y, AERIAL_SIZE.z));\n  float wRow = clamp(yRow - kRow, 0.0, 1.0);\n  gh.P = P;\n  gh.up = up;\n",
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  gh.P = P;\n  gh.up = up;\n"
+      ],
+      [
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = mix(texture(uAerialInscatterS, q0).rgb, texture(uAerialInscatterS, q1).rgb, wRow) * uSunIlluminance;\n  gh.apT = mix(texture(uAerialTransmittanceS, q0).rgb, texture(uAerialTransmittanceS, q1).rgb, wRow);\n  return true;\n#endif\n",
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n  return true;\n#endif\n"
+      ],
+      [
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      // SEA-3：outside-pass 按「背景 × T + 这里的 L」合成，背景里「相机→尾迹」这段内散射也被 e^−τ 挡掉了，要补回来，\n      // 否则侧光下尾迹比天空暗（暗色尾迹）：背景·e^−τ + apL·(1 − e^−τ) + apT·Lc\n      L += T * (Lc * apT + texture(uAerialInscatterS, uvw).rgb * uSunIlluminance * (1.0 - exp(-tau)));\n      T *= exp(-tau);\n    }\n",
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      L += T * Lc * apT;\n      T *= exp(-tau);\n    }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "noTraffic",
+    "patch": {
+     "__outCur": [
+      [
+       "    if (tau > 1e-4) {\n",
+       "    tau = 0.0;\n    if (tau > 1e-4) {\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldNoTraffic",
+    "patch": {
+     "__outCur": [
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    // SEA-3（低空海天「暗墙」）：上面的近似默认「水面往反射方向看到的天空」≈「相机往同一方向看到的天空」。\n    // 相机在霾顶之上、水面埋在霾里时不成立：掠射时水面反射的是一整段霾，相机往反射方向看到的却是霾顶以上的亮天空，\n    // 地平线下一两个像素海面就比地平线上方的暗带亮十几级。按水面处往反射方向到大气顶的透射率 tUpR 混合：\n    // tUpR → 1（反射视线很快出霾）沿用原公式；tUpR → 0 时反射的是「视线这段霾」本身，亮度取它的饱和内散射 apT·apL/(1 − apT)\n    vec3 tUpR = transmittanceToTop(BOTTOM, max(dot(reflect(rd, nView), n), 0.0));\n    if (onGround) {\n      skyCam = gh.apL + mix(gh.apT * gh.apL / max(vec3(1.0) - gh.apT, vec3(1e-3)), max(skyCam - gh.apL, vec3(0.0)), tUpR);\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n",
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    if (onGround) {\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n"
+      ],
+      [
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * mix(tView * inscatter / max(vec3(1.0) - tView, vec3(1e-3)), max(skyCam - inscatter, vec3(0.0)), tUpR); // SEA-3，见上\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n",
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n"
+      ],
+      [
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  // SEA-3（远海横纹）：天顶角方向不交给硬件线性插值。LUT 每一行在同一距离上取值，陡的那一行早已打到海面（积分截在海面），\n  // 平的那一行还在半空、少穿一截霾，两行线性混合是折线——平滑的海面上每行一条马赫带（巡航约 40 px 一条）。\n  // 改成上下两行各取「到它自己那条视线的海平面交点的同一比例」处的值，再按行插值（地形高出海面时比例 < 1，照样成立）；\n  // 视线或某一行打不到海平面（地平线以上的山）时那一行退回同距离取值。多 2 次取样、3 次球面求交，LUT 本身不变\n  float tB = raySphere(ro, rd, BOTTOM);\n  float yRow = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (AERIAL_SIZE.y - 1.0);\n  float kRow = min(floor(yRow), AERIAL_SIZE.y - 2.0);\n  vec2 yk = vec2(kRow, kRow + 1.0) / (AERIAL_SIZE.y - 1.0);\n  vec2 ck = 1.0 - 2.0 * yk;\n  vec2 vz = sign(ck) * ck * ck;                              // 两行的视线天顶余弦\n  vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));\n  vec2 vs = sqrt(max(1.0 - vz * vz, 0.0));\n  float tk0 = raySphere(ro, vec3(hz.x * vs.x, vz.x, hz.y * vs.x), BOTTOM);\n  float tk1 = raySphere(ro, vec3(hz.x * vs.y, vz.y, hz.y * vs.y), BOTTOM);\n  vec2 dk = vec2(tB > 0.0 && tk0 > 0.0 ? tT * tk0 / tB : tT, tB > 0.0 && tk1 > 0.0 ? tT * tk1 / tB : tT);\n  vec2 zk = sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0));\n  vec3 q0 = vec3(uvw.x, unitToUv(yk.x, AERIAL_SIZE.y), unitToUv(zk.x, AERIAL_SIZE.z));\n  vec3 q1 = vec3(uvw.x, unitToUv(yk.y, AERIAL_SIZE.y), unitToUv(zk.y, AERIAL_SIZE.z));\n  float wRow = clamp(yRow - kRow, 0.0, 1.0);\n  gh.P = P;\n  gh.up = up;\n",
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  gh.P = P;\n  gh.up = up;\n"
+      ],
+      [
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = mix(texture(uAerialInscatterS, q0).rgb, texture(uAerialInscatterS, q1).rgb, wRow) * uSunIlluminance;\n  gh.apT = mix(texture(uAerialTransmittanceS, q0).rgb, texture(uAerialTransmittanceS, q1).rgb, wRow);\n  return true;\n#endif\n",
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n  return true;\n#endif\n"
+      ],
+      [
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      // SEA-3：outside-pass 按「背景 × T + 这里的 L」合成，背景里「相机→尾迹」这段内散射也被 e^−τ 挡掉了，要补回来，\n      // 否则侧光下尾迹比天空暗（暗色尾迹）：背景·e^−τ + apL·(1 − e^−τ) + apT·Lc\n      L += T * (Lc * apT + texture(uAerialInscatterS, uvw).rgb * uSunIlluminance * (1.0 - exp(-tau)));\n      T *= exp(-tau);\n    }\n",
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      L += T * Lc * apT;\n      T *= exp(-tau);\n    }\n"
+      ],
+      [
+       "    if (tau > 1e-4) {\n",
+       "    tau = 0.0;\n    if (tau > 1e-4) {\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   380,
+   0,
+   850,
+   600
+  ]
+ },
+ {
+  "name": "noon-cumulus@60+0.6",
+  "scene": {
+   "name": "noon-cumulus",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 720,
+    "wing-pos": "8"
+   }
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; const e = v.sceneMat.uniforms.uCabinToWorld.value.elements; let ox = e[6], oz = e[8]; const ol = Math.hypot(ox, oz); ox /= ol; oz /= ol; const ax = -oz, az = ox; const P = v.traffic.planes; P[0].pos.set(ox * 60 + ax * 12, 0.6, oz * 60 + az * 12); P[0].dir.set(ax, 0, az); P[0].speed = 0.23; P[0].active = true; P[0].respawnIn = 1e9; P[1].active = false; P[1].respawnIn = 1e9; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "old",
+    "patch": {
+     "__outCur": [
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    // SEA-3（低空海天「暗墙」）：上面的近似默认「水面往反射方向看到的天空」≈「相机往同一方向看到的天空」。\n    // 相机在霾顶之上、水面埋在霾里时不成立：掠射时水面反射的是一整段霾，相机往反射方向看到的却是霾顶以上的亮天空，\n    // 地平线下一两个像素海面就比地平线上方的暗带亮十几级。按水面处往反射方向到大气顶的透射率 tUpR 混合：\n    // tUpR → 1（反射视线很快出霾）沿用原公式；tUpR → 0 时反射的是「视线这段霾」本身，亮度取它的饱和内散射 apT·apL/(1 − apT)\n    vec3 tUpR = transmittanceToTop(BOTTOM, max(dot(reflect(rd, nView), n), 0.0));\n    if (onGround) {\n      skyCam = gh.apL + mix(gh.apT * gh.apL / max(vec3(1.0) - gh.apT, vec3(1e-3)), max(skyCam - gh.apL, vec3(0.0)), tUpR);\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n",
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    if (onGround) {\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n"
+      ],
+      [
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * mix(tView * inscatter / max(vec3(1.0) - tView, vec3(1e-3)), max(skyCam - inscatter, vec3(0.0)), tUpR); // SEA-3，见上\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n",
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n"
+      ],
+      [
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  // SEA-3（远海横纹）：天顶角方向不交给硬件线性插值。LUT 每一行在同一距离上取值，陡的那一行早已打到海面（积分截在海面），\n  // 平的那一行还在半空、少穿一截霾，两行线性混合是折线——平滑的海面上每行一条马赫带（巡航约 40 px 一条）。\n  // 改成上下两行各取「到它自己那条视线的海平面交点的同一比例」处的值，再按行插值（地形高出海面时比例 < 1，照样成立）；\n  // 视线或某一行打不到海平面（地平线以上的山）时那一行退回同距离取值。多 2 次取样、3 次球面求交，LUT 本身不变\n  float tB = raySphere(ro, rd, BOTTOM);\n  float yRow = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (AERIAL_SIZE.y - 1.0);\n  float kRow = min(floor(yRow), AERIAL_SIZE.y - 2.0);\n  vec2 yk = vec2(kRow, kRow + 1.0) / (AERIAL_SIZE.y - 1.0);\n  vec2 ck = 1.0 - 2.0 * yk;\n  vec2 vz = sign(ck) * ck * ck;                              // 两行的视线天顶余弦\n  vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));\n  vec2 vs = sqrt(max(1.0 - vz * vz, 0.0));\n  float tk0 = raySphere(ro, vec3(hz.x * vs.x, vz.x, hz.y * vs.x), BOTTOM);\n  float tk1 = raySphere(ro, vec3(hz.x * vs.y, vz.y, hz.y * vs.y), BOTTOM);\n  vec2 dk = vec2(tB > 0.0 && tk0 > 0.0 ? tT * tk0 / tB : tT, tB > 0.0 && tk1 > 0.0 ? tT * tk1 / tB : tT);\n  vec2 zk = sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0));\n  vec3 q0 = vec3(uvw.x, unitToUv(yk.x, AERIAL_SIZE.y), unitToUv(zk.x, AERIAL_SIZE.z));\n  vec3 q1 = vec3(uvw.x, unitToUv(yk.y, AERIAL_SIZE.y), unitToUv(zk.y, AERIAL_SIZE.z));\n  float wRow = clamp(yRow - kRow, 0.0, 1.0);\n  gh.P = P;\n  gh.up = up;\n",
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  gh.P = P;\n  gh.up = up;\n"
+      ],
+      [
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = mix(texture(uAerialInscatterS, q0).rgb, texture(uAerialInscatterS, q1).rgb, wRow) * uSunIlluminance;\n  gh.apT = mix(texture(uAerialTransmittanceS, q0).rgb, texture(uAerialTransmittanceS, q1).rgb, wRow);\n  return true;\n#endif\n",
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n  return true;\n#endif\n"
+      ],
+      [
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      // SEA-3：outside-pass 按「背景 × T + 这里的 L」合成，背景里「相机→尾迹」这段内散射也被 e^−τ 挡掉了，要补回来，\n      // 否则侧光下尾迹比天空暗（暗色尾迹）：背景·e^−τ + apL·(1 − e^−τ) + apT·Lc\n      L += T * (Lc * apT + texture(uAerialInscatterS, uvw).rgb * uSunIlluminance * (1.0 - exp(-tau)));\n      T *= exp(-tau);\n    }\n",
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      L += T * Lc * apT;\n      T *= exp(-tau);\n    }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "noTraffic",
+    "patch": {
+     "__outCur": [
+      [
+       "    if (tau > 1e-4) {\n",
+       "    tau = 0.0;\n    if (tau > 1e-4) {\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldNoTraffic",
+    "patch": {
+     "__outCur": [
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    // SEA-3（低空海天「暗墙」）：上面的近似默认「水面往反射方向看到的天空」≈「相机往同一方向看到的天空」。\n    // 相机在霾顶之上、水面埋在霾里时不成立：掠射时水面反射的是一整段霾，相机往反射方向看到的却是霾顶以上的亮天空，\n    // 地平线下一两个像素海面就比地平线上方的暗带亮十几级。按水面处往反射方向到大气顶的透射率 tUpR 混合：\n    // tUpR → 1（反射视线很快出霾）沿用原公式；tUpR → 0 时反射的是「视线这段霾」本身，亮度取它的饱和内散射 apT·apL/(1 − apT)\n    vec3 tUpR = transmittanceToTop(BOTTOM, max(dot(reflect(rd, nView), n), 0.0));\n    if (onGround) {\n      skyCam = gh.apL + mix(gh.apT * gh.apL / max(vec3(1.0) - gh.apT, vec3(1e-3)), max(skyCam - gh.apL, vec3(0.0)), tUpR);\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n",
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    if (onGround) {\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n"
+      ],
+      [
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * mix(tView * inscatter / max(vec3(1.0) - tView, vec3(1e-3)), max(skyCam - inscatter, vec3(0.0)), tUpR); // SEA-3，见上\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n",
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n"
+      ],
+      [
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  // SEA-3（远海横纹）：天顶角方向不交给硬件线性插值。LUT 每一行在同一距离上取值，陡的那一行早已打到海面（积分截在海面），\n  // 平的那一行还在半空、少穿一截霾，两行线性混合是折线——平滑的海面上每行一条马赫带（巡航约 40 px 一条）。\n  // 改成上下两行各取「到它自己那条视线的海平面交点的同一比例」处的值，再按行插值（地形高出海面时比例 < 1，照样成立）；\n  // 视线或某一行打不到海平面（地平线以上的山）时那一行退回同距离取值。多 2 次取样、3 次球面求交，LUT 本身不变\n  float tB = raySphere(ro, rd, BOTTOM);\n  float yRow = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (AERIAL_SIZE.y - 1.0);\n  float kRow = min(floor(yRow), AERIAL_SIZE.y - 2.0);\n  vec2 yk = vec2(kRow, kRow + 1.0) / (AERIAL_SIZE.y - 1.0);\n  vec2 ck = 1.0 - 2.0 * yk;\n  vec2 vz = sign(ck) * ck * ck;                              // 两行的视线天顶余弦\n  vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));\n  vec2 vs = sqrt(max(1.0 - vz * vz, 0.0));\n  float tk0 = raySphere(ro, vec3(hz.x * vs.x, vz.x, hz.y * vs.x), BOTTOM);\n  float tk1 = raySphere(ro, vec3(hz.x * vs.y, vz.y, hz.y * vs.y), BOTTOM);\n  vec2 dk = vec2(tB > 0.0 && tk0 > 0.0 ? tT * tk0 / tB : tT, tB > 0.0 && tk1 > 0.0 ? tT * tk1 / tB : tT);\n  vec2 zk = sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0));\n  vec3 q0 = vec3(uvw.x, unitToUv(yk.x, AERIAL_SIZE.y), unitToUv(zk.x, AERIAL_SIZE.z));\n  vec3 q1 = vec3(uvw.x, unitToUv(yk.y, AERIAL_SIZE.y), unitToUv(zk.y, AERIAL_SIZE.z));\n  float wRow = clamp(yRow - kRow, 0.0, 1.0);\n  gh.P = P;\n  gh.up = up;\n",
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  gh.P = P;\n  gh.up = up;\n"
+      ],
+      [
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = mix(texture(uAerialInscatterS, q0).rgb, texture(uAerialInscatterS, q1).rgb, wRow) * uSunIlluminance;\n  gh.apT = mix(texture(uAerialTransmittanceS, q0).rgb, texture(uAerialTransmittanceS, q1).rgb, wRow);\n  return true;\n#endif\n",
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n  return true;\n#endif\n"
+      ],
+      [
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      // SEA-3：outside-pass 按「背景 × T + 这里的 L」合成，背景里「相机→尾迹」这段内散射也被 e^−τ 挡掉了，要补回来，\n      // 否则侧光下尾迹比天空暗（暗色尾迹）：背景·e^−τ + apL·(1 − e^−τ) + apT·Lc\n      L += T * (Lc * apT + texture(uAerialInscatterS, uvw).rgb * uSunIlluminance * (1.0 - exp(-tau)));\n      T *= exp(-tau);\n    }\n",
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      L += T * Lc * apT;\n      T *= exp(-tau);\n    }\n"
+      ],
+      [
+       "    if (tau > 1e-4) {\n",
+       "    tau = 0.0;\n    if (tau > 1e-4) {\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   380,
+   0,
+   850,
+   600
+  ]
+ },
+ {
+  "name": "sunset@50+0.3",
+  "scene": {
+   "name": "sunset",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 1040,
+    "wing-pos": "8"
+   }
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; const e = v.sceneMat.uniforms.uCabinToWorld.value.elements; let ox = e[6], oz = e[8]; const ol = Math.hypot(ox, oz); ox /= ol; oz /= ol; const ax = -oz, az = ox; const P = v.traffic.planes; P[0].pos.set(ox * 50 + ax * 12, 0.3, oz * 50 + az * 12); P[0].dir.set(ax, 0, az); P[0].speed = 0.23; P[0].active = true; P[0].respawnIn = 1e9; P[1].active = false; P[1].respawnIn = 1e9; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "old",
+    "patch": {
+     "__outCur": [
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    // SEA-3（低空海天「暗墙」）：上面的近似默认「水面往反射方向看到的天空」≈「相机往同一方向看到的天空」。\n    // 相机在霾顶之上、水面埋在霾里时不成立：掠射时水面反射的是一整段霾，相机往反射方向看到的却是霾顶以上的亮天空，\n    // 地平线下一两个像素海面就比地平线上方的暗带亮十几级。按水面处往反射方向到大气顶的透射率 tUpR 混合：\n    // tUpR → 1（反射视线很快出霾）沿用原公式；tUpR → 0 时反射的是「视线这段霾」本身，亮度取它的饱和内散射 apT·apL/(1 − apT)\n    vec3 tUpR = transmittanceToTop(BOTTOM, max(dot(reflect(rd, nView), n), 0.0));\n    if (onGround) {\n      skyCam = gh.apL + mix(gh.apT * gh.apL / max(vec3(1.0) - gh.apT, vec3(1e-3)), max(skyCam - gh.apL, vec3(0.0)), tUpR);\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n",
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    if (onGround) {\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n"
+      ],
+      [
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * mix(tView * inscatter / max(vec3(1.0) - tView, vec3(1e-3)), max(skyCam - inscatter, vec3(0.0)), tUpR); // SEA-3，见上\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n",
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n"
+      ],
+      [
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  // SEA-3（远海横纹）：天顶角方向不交给硬件线性插值。LUT 每一行在同一距离上取值，陡的那一行早已打到海面（积分截在海面），\n  // 平的那一行还在半空、少穿一截霾，两行线性混合是折线——平滑的海面上每行一条马赫带（巡航约 40 px 一条）。\n  // 改成上下两行各取「到它自己那条视线的海平面交点的同一比例」处的值，再按行插值（地形高出海面时比例 < 1，照样成立）；\n  // 视线或某一行打不到海平面（地平线以上的山）时那一行退回同距离取值。多 2 次取样、3 次球面求交，LUT 本身不变\n  float tB = raySphere(ro, rd, BOTTOM);\n  float yRow = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (AERIAL_SIZE.y - 1.0);\n  float kRow = min(floor(yRow), AERIAL_SIZE.y - 2.0);\n  vec2 yk = vec2(kRow, kRow + 1.0) / (AERIAL_SIZE.y - 1.0);\n  vec2 ck = 1.0 - 2.0 * yk;\n  vec2 vz = sign(ck) * ck * ck;                              // 两行的视线天顶余弦\n  vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));\n  vec2 vs = sqrt(max(1.0 - vz * vz, 0.0));\n  float tk0 = raySphere(ro, vec3(hz.x * vs.x, vz.x, hz.y * vs.x), BOTTOM);\n  float tk1 = raySphere(ro, vec3(hz.x * vs.y, vz.y, hz.y * vs.y), BOTTOM);\n  vec2 dk = vec2(tB > 0.0 && tk0 > 0.0 ? tT * tk0 / tB : tT, tB > 0.0 && tk1 > 0.0 ? tT * tk1 / tB : tT);\n  vec2 zk = sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0));\n  vec3 q0 = vec3(uvw.x, unitToUv(yk.x, AERIAL_SIZE.y), unitToUv(zk.x, AERIAL_SIZE.z));\n  vec3 q1 = vec3(uvw.x, unitToUv(yk.y, AERIAL_SIZE.y), unitToUv(zk.y, AERIAL_SIZE.z));\n  float wRow = clamp(yRow - kRow, 0.0, 1.0);\n  gh.P = P;\n  gh.up = up;\n",
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  gh.P = P;\n  gh.up = up;\n"
+      ],
+      [
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = mix(texture(uAerialInscatterS, q0).rgb, texture(uAerialInscatterS, q1).rgb, wRow) * uSunIlluminance;\n  gh.apT = mix(texture(uAerialTransmittanceS, q0).rgb, texture(uAerialTransmittanceS, q1).rgb, wRow);\n  return true;\n#endif\n",
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n  return true;\n#endif\n"
+      ],
+      [
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      // SEA-3：outside-pass 按「背景 × T + 这里的 L」合成，背景里「相机→尾迹」这段内散射也被 e^−τ 挡掉了，要补回来，\n      // 否则侧光下尾迹比天空暗（暗色尾迹）：背景·e^−τ + apL·(1 − e^−τ) + apT·Lc\n      L += T * (Lc * apT + texture(uAerialInscatterS, uvw).rgb * uSunIlluminance * (1.0 - exp(-tau)));\n      T *= exp(-tau);\n    }\n",
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      L += T * Lc * apT;\n      T *= exp(-tau);\n    }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "noTraffic",
+    "patch": {
+     "__outCur": [
+      [
+       "    if (tau > 1e-4) {\n",
+       "    tau = 0.0;\n    if (tau > 1e-4) {\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldNoTraffic",
+    "patch": {
+     "__outCur": [
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    // SEA-3（低空海天「暗墙」）：上面的近似默认「水面往反射方向看到的天空」≈「相机往同一方向看到的天空」。\n    // 相机在霾顶之上、水面埋在霾里时不成立：掠射时水面反射的是一整段霾，相机往反射方向看到的却是霾顶以上的亮天空，\n    // 地平线下一两个像素海面就比地平线上方的暗带亮十几级。按水面处往反射方向到大气顶的透射率 tUpR 混合：\n    // tUpR → 1（反射视线很快出霾）沿用原公式；tUpR → 0 时反射的是「视线这段霾」本身，亮度取它的饱和内散射 apT·apL/(1 − apT)\n    vec3 tUpR = transmittanceToTop(BOTTOM, max(dot(reflect(rd, nView), n), 0.0));\n    if (onGround) {\n      skyCam = gh.apL + mix(gh.apT * gh.apL / max(vec3(1.0) - gh.apT, vec3(1e-3)), max(skyCam - gh.apL, vec3(0.0)), tUpR);\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n",
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n    }\n    if (onGround) {\n      // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，\n      // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）\n"
+      ],
+      [
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * mix(tView * inscatter / max(vec3(1.0) - tView, vec3(1e-3)), max(skyCam - inscatter, vec3(0.0)), tUpR); // SEA-3，见上\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n",
+       "      vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);\n      L += sea;\n      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));\n      L += refl;\n      if (uDebug == 5 || uDebug >= 8) L = sea;\n"
+      ],
+      [
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  // SEA-3（远海横纹）：天顶角方向不交给硬件线性插值。LUT 每一行在同一距离上取值，陡的那一行早已打到海面（积分截在海面），\n  // 平的那一行还在半空、少穿一截霾，两行线性混合是折线——平滑的海面上每行一条马赫带（巡航约 40 px 一条）。\n  // 改成上下两行各取「到它自己那条视线的海平面交点的同一比例」处的值，再按行插值（地形高出海面时比例 < 1，照样成立）；\n  // 视线或某一行打不到海平面（地平线以上的山）时那一行退回同距离取值。多 2 次取样、3 次球面求交，LUT 本身不变\n  float tB = raySphere(ro, rd, BOTTOM);\n  float yRow = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (AERIAL_SIZE.y - 1.0);\n  float kRow = min(floor(yRow), AERIAL_SIZE.y - 2.0);\n  vec2 yk = vec2(kRow, kRow + 1.0) / (AERIAL_SIZE.y - 1.0);\n  vec2 ck = 1.0 - 2.0 * yk;\n  vec2 vz = sign(ck) * ck * ck;                              // 两行的视线天顶余弦\n  vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));\n  vec2 vs = sqrt(max(1.0 - vz * vz, 0.0));\n  float tk0 = raySphere(ro, vec3(hz.x * vs.x, vz.x, hz.y * vs.x), BOTTOM);\n  float tk1 = raySphere(ro, vec3(hz.x * vs.y, vz.y, hz.y * vs.y), BOTTOM);\n  vec2 dk = vec2(tB > 0.0 && tk0 > 0.0 ? tT * tk0 / tB : tT, tB > 0.0 && tk1 > 0.0 ? tT * tk1 / tB : tT);\n  vec2 zk = sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0));\n  vec3 q0 = vec3(uvw.x, unitToUv(yk.x, AERIAL_SIZE.y), unitToUv(zk.x, AERIAL_SIZE.z));\n  vec3 q1 = vec3(uvw.x, unitToUv(yk.y, AERIAL_SIZE.y), unitToUv(zk.y, AERIAL_SIZE.z));\n  float wRow = clamp(yRow - kRow, 0.0, 1.0);\n  gh.P = P;\n  gh.up = up;\n",
+       "  // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）\n  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);\n  gh.P = P;\n  gh.up = up;\n"
+      ],
+      [
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = mix(texture(uAerialInscatterS, q0).rgb, texture(uAerialInscatterS, q1).rgb, wRow) * uSunIlluminance;\n  gh.apT = mix(texture(uAerialTransmittanceS, q0).rgb, texture(uAerialTransmittanceS, q1).rgb, wRow);\n  return true;\n#endif\n",
+       "  gh.wat = wat;\n  gh.nT = nT;\n  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n  return true;\n#endif\n"
+      ],
+      [
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      // SEA-3：outside-pass 按「背景 × T + 这里的 L」合成，背景里「相机→尾迹」这段内散射也被 e^−τ 挡掉了，要补回来，\n      // 否则侧光下尾迹比天空暗（暗色尾迹）：背景·e^−τ + apL·(1 − e^−τ) + apT·Lc\n      L += T * (Lc * apT + texture(uAerialInscatterS, uvw).rgb * uSunIlluminance * (1.0 - exp(-tau)));\n      T *= exp(-tau);\n    }\n",
+       "      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);\n      vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;\n      L += T * Lc * apT;\n      T *= exp(-tau);\n    }\n"
+      ],
+      [
+       "    if (tau > 1e-4) {\n",
+       "    tau = 0.0;\n    if (tau > 1e-4) {\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   380,
+   0,
+   850,
+   600
+  ]
+ }
+]

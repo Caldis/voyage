@@ -1,0 +1,96 @@
+[
+ {
+  "name": "cruise-ground",
+  "scene": {
+   "name": "cruise-ground",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 780,
+    "altitude": 10.7,
+    "coverage": 0.05,
+    "wing-pos": "8"
+   },
+   "ground": true,
+   "head": [
+    0,
+    0.14,
+    -0.2
+   ]
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "noSlick",
+    "patch": {
+     "__outCur": [
+      [
+       "  float rel = gustFactor(xzKm) * slickFactor(xzKm) * mix(1.0, 0.45, shallow);\n",
+       "  float rel = gustFactor(xzKm) * mix(1.0, 0.45, shallow);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "noGust",
+    "patch": {
+     "__outCur": [
+      [
+       "  float rel = gustFactor(xzKm) * slickFactor(xzKm) * mix(1.0, 0.45, shallow);\n",
+       "  float rel = slickFactor(xzKm) * mix(1.0, 0.45, shallow);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "bodyDefault",
+    "patch": {
+     "__outCur": [
+      [
+       "      body = gh.alb.rgb * 0.7;\n",
+       "      body = vec3(-1.0);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "sigmaCM",
+    "patch": {
+     "__outCur": [
+      [
+       "  float sigma2 = sl.var;\n",
+       "  float sigma2 = cmLocal; sl.mean = vec2(0.0); nView = n;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dbg8",
+    "uniforms": {
+     "__outCur.uniforms.uDebug.value": 8
+    }
+   },
+   {
+    "name": "dbg11",
+    "uniforms": {
+     "__outCur.uniforms.uDebug.value": 11
+    }
+   },
+   {
+    "name": "dbg12",
+    "uniforms": {
+     "__outCur.uniforms.uDebug.value": 12
+    }
+   }
+  ],
+  "crop": [
+   700,
+   60,
+   550,
+   260
+  ]
+ }
+]

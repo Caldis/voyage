@@ -1,7 +1,7 @@
 import { haversineKm } from "./flight";
 import type { CloudParams } from "./clouds/clouds";
 import type { CoverKind, Director, DirectorHost, SwitchRequest } from "./director";
-import { REGIME_FAMILY, REGIME_NAMES, WeatherField, WeatherSystem, windSpeed, type CloudRegime, type StormSystemSample, type TyphoonSample, type WeatherSample, type WindProfile } from "./weather";
+import { FUJI_SUMMIT, REGIME_FAMILY, REGIME_NAMES, WeatherField, WeatherSystem, lenticularFrom, mountainWavelengthKm, windSpeed, type CloudRegime, type StormSystemSample, type TyphoonSample, type WeatherSample, type WindProfile } from "./weather";
 
 /**
  * 天气驱动（T19b）：连续航程开着时，按天气场（weather.ts 的 WeatherField）让天气随位置与时间演变。导演（director.ts）持有它。
@@ -108,6 +108,18 @@ const GATE_DEMO_EVERY_SIM_S = 2 * 3600;
 const SEA_WIND_RATE = 4 / 3600;
 
 /**
+ * 富士山笠云 / 吊し雲（SPEC-FUJI）：飞机离山顶这么远（km）以内才摆。巡航 10 km 高时 300 km 外的笠云已在地平线附近的霾里，
+ * 摆它还要多编一个云步进变体（CLOUD_LENTICULAR），不值
+ */
+const LENS_RANGE_KM = 300;
+/**
+ * 生消时间（模拟秒）：盘从山顶上空长出来 / 缩回去。荚状云随湿层与风的变化在几分钟到几十分钟里形成、消散 [估算]；
+ * 用生消代替「借遮挡硬切」：它本来就是在人眼前慢慢长出来的，也不需要等变体（编好之前盘还很小）
+ */
+const LENS_GROW_SIM_S = 15 * 60;
+const LENS_DECAY_SIM_S = 20 * 60;
+
+/**
  * 海面 10 m 风速（m/s）：直接用 weather.ts 按周围海陆比例算好的地面风（z₀ 在海面 Charnock 与陆地 0.2 m 之间按陆地比例插值）。
  * 审查 D1：第一版在陆地 / 近岸格点上改用开阔海面的 Charnock 推导，骏河湾 1 月中位 13.8 m/s，偏高——
  * 近岸的海被陆地包着（风区短、背风），海陆比例插值后的值更接近窗外那片海的实际风
@@ -190,10 +202,37 @@ export class WeatherDirector {
   private lat = 0;
   private lon = 0;
 
+  /** 笠云 / 吊し雲的目标强度（最近一次取样；0 / 1），每帧按生消时间逼近（stepLens） */
+  private lensGoal = { cap: 0, chain: 0 };
+  /**
+   * 演示（URL ?fujiCap=1）：不看天气条件，只要在富士山附近就有笠云 + 吊し雲；页面打开后自动切到「骏河湾上空」预设
+   * 与面板天气「富士山笠云（演示）」
+   */
+  readonly fujiDemo = typeof location !== "undefined" && /^(1|on|true)$/.test(new URLSearchParams(location.search).get("fujiCap") ?? "");
+
   constructor(
     private readonly d: Director,
     private readonly host: DirectorHost,
-  ) {}
+  ) {
+    // 面板预设「富士山笠云（演示）」要把山顶换成本地坐标（WeatherSystem 自己没有坐标系）
+    host.weather.toLocal = (lat, lon) => host.toLocal(lat, lon);
+    if (this.fujiDemo && typeof document !== "undefined") {
+      // 面板在导演之后才建（main.ts 的 setupUi）：等下拉框就位再切
+      const go = (tries: number) => {
+        const pre = document.getElementById("preset") as HTMLSelectElement | null;
+        const wx = document.getElementById("weather") as HTMLSelectElement | null;
+        if (!pre || !wx || !Array.from(wx.options).some((o) => o.value === "fuji-cap")) {
+          if (tries < 100) setTimeout(() => go(tries + 1), 100);
+          return;
+        }
+        pre.value = "fuji";
+        pre.dispatchEvent(new Event("change"));
+        wx.value = "fuji-cap";
+        wx.dispatchEvent(new Event("change"));
+      };
+      setTimeout(() => go(0), 0);
+    }
+  }
 
   // ---------- 生命周期 ----------
 
@@ -203,6 +242,8 @@ export class WeatherDirector {
     const w = this.host.weather;
     w.removeStorms((s) => !!s.id && s.id !== "gate");
     if (w.hurricane?.id) w.setHurricane(null);
+    // 笠云 / 吊し雲按新的时间 / 位置重新判（演示时保留面板摆好的那一组）
+    if (w.lenticular && !this.fujiDemo) w.setLenticular(null);
     this.cur = null;
     this.lastSampleT = -Infinity;
     this.snapNext = true;
@@ -243,6 +284,7 @@ export class WeatherDirector {
     }
     this.stepParams(simDt);
     this.stepSeaWind(simDt);
+    this.stepLens(simDt);
     if (this.gateDemo && t - this.lastGateT > GATE_DEMO_EVERY_SIM_S * 1000 && !this.d.hasPending("wonder-gate")) {
       this.lastGateT = t;
       this.openGate({ onCover: (how) => this.note(`奇观之门（演示）：穿过云墙`, how) });
@@ -268,6 +310,48 @@ export class WeatherDirector {
     } else this.planRegime(s, t);
     this.planStorms(lat, lon, t, jump);
     this.planTyphoon(lat, lon, t, jump);
+    this.planLenticular(lat, lon, t, jump);
+  }
+
+  // ---------- 富士山笠云 / 吊し雲（SPEC-FUJI）----------
+
+  /**
+   * 按天气场的条件（WeatherField.orographic：山顶风速 / 风向 / 湿 / 稳定，出处见那里）定目标：有 → 盘长出来，没有 → 缩回去。
+   * 一次过程（从长出到消失）里风向、形态固定（云「静止于山」）；消失后下一次过程重新取风向与随机形态。
+   * jump（用户换预设 / 跳时间）时直接按目标强度摆好，不从 0 长
+   */
+  private planLenticular(lat: number, lon: number, t: number, jump: boolean) {
+    const w = this.host.weather;
+    const far = haversineKm(lat, lon, FUJI_SUMMIT.lat, FUJI_SUMMIT.lon) > LENS_RANGE_KM;
+    if (far && !this.fujiDemo) {
+      this.lensGoal = { cap: 0, chain: 0 };
+      if (w.lenticular && jump) w.setLenticular(null);
+      return;
+    }
+    const o = this.field.orographic(t);
+    this.lensGoal = this.fujiDemo ? { cap: 1, chain: 1 } : { cap: o.cap > 0.5 ? 1 : 0, chain: o.chain > 0.5 ? 1 : 0 };
+    if (w.lenticular || (!this.lensGoal.cap && !this.lensGoal.chain)) return;
+    // 新的一次过程：风向取此刻山顶的风（演示时风太弱就按典型的西南西 20 m/s），形态随机数由时间哈希
+    const cond = this.fujiDemo && o.speed < 15 ? { speed: 20, fromDeg: 247.5, wavelengthKm: mountainWavelengthKm(20) } : o;
+    const seed = (Math.sin(t * 1e-5 + 0.123) * 43758.5453) % 1;
+    const start = jump ? this.lensGoal : { cap: 0, chain: 0 };
+    w.setLenticular(lenticularFrom(cond, this.host.toLocal(FUJI_SUMMIT.lat, FUJI_SUMMIT.lon), Math.abs(seed), start));
+    const dir = Math.round(cond.fromDeg);
+    this.note(`富士山${this.lensGoal.cap ? "笠云" : ""}${this.lensGoal.cap && this.lensGoal.chain ? " + " : ""}${this.lensGoal.chain ? "吊し雲" : ""}开始形成（山顶风 ${dir}° ${cond.speed.toFixed(0)} m/s）`, jump ? "jump" : undefined);
+  }
+
+  /** 笠云 / 吊し雲的生消：按模拟时间向目标逼近，两者都缩回 0 且目标为 0 时撤掉（下一次过程重新取风向） */
+  private stepLens(simDt: number) {
+    const w = this.host.weather;
+    const l = w.lenticular;
+    if (!l || simDt <= 0) return;
+    const step = (cur: number, goal: number) => (goal > cur ? Math.min(goal, cur + simDt / LENS_GROW_SIM_S) : Math.max(goal, cur - simDt / LENS_DECAY_SIM_S));
+    l.cap = step(l.cap, this.lensGoal.cap);
+    l.chain = step(l.chain, this.lensGoal.chain);
+    if (l.cap <= 0 && l.chain <= 0 && !this.lensGoal.cap && !this.lensGoal.chain) {
+      w.setLenticular(null);
+      this.note("富士山笠云 / 吊し雲消散");
+    } else w.syncLens();
   }
 
   // ---------- 云型 ----------

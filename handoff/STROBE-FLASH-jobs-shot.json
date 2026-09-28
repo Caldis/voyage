@@ -1,0 +1,11 @@
+[
+  {
+    "name": "night-city",
+    "scene": "night-city",
+    "variants": [
+      { "name": "cur", "shot": true },
+      { "name": "coreDir", "shot": true, "js": "patch(v.wingMat, [['if (i == 1) return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe;', 'if (i == 1) { float hh = length(dir.xz); float s2 = dir.y * dir.y; float fv = 0.2 + 0.8 * (0.7 * exp(-s2 / 0.0149) + 0.3 * exp(-s2 / 0.147)); float fh = mix(0.15, 1.0, smoothstep(-0.25, 0.25, dir.z / max(hh, 1e-6))); return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * fv * mix(0.575, fh, smoothstep(0.05, 0.3, hh)); }']]);" },
+      { "name": "noGlare", "shot": true, "js": "keep(v.exposure.finalMat.uniforms.uGlare, 'value'); v.exposure.finalMat.uniforms.uGlare.value = 0;" }
+    ]
+  }
+]

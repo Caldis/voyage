@@ -1,0 +1,7 @@
+[
+  { "name": "noon-cumulus", "scene": "noon-cumulus", "crop": [0, 0, 1600, 1200], "variants": [{ "name": "cur" }, { "name": "master", "materials": { "wingMat": "base", "exposure.finalMat": "base", "exposure.localMat": "base" } }] },
+  { "name": "sunset-wing", "scene": "sunset-wing", "crop": [0, 0, 1600, 1200], "variants": [{ "name": "cur" }, { "name": "master", "materials": { "wingMat": "base", "exposure.finalMat": "base", "exposure.localMat": "base" } }] },
+  { "name": "dusk-earthshadow", "scene": "dusk-earthshadow", "crop": [0, 0, 1600, 1200], "variants": [{ "name": "cur" }, { "name": "master", "materials": { "wingMat": "base", "exposure.finalMat": "base", "exposure.localMat": "base" } }] },
+  { "name": "in-cloud", "scene": "in-cloud", "crop": [0, 0, 1600, 1200], "variants": [{ "name": "cur" }, { "name": "master", "materials": { "wingMat": "base", "exposure.finalMat": "base", "exposure.localMat": "base" } }] },
+  { "name": "night-city", "scene": "night-city", "crop": [0, 0, 1600, 1200], "variants": [{ "name": "cur" }, { "name": "master", "materials": { "wingMat": "base", "exposure.finalMat": "base", "exposure.localMat": "base" } }] }
+]

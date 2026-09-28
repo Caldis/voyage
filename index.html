@@ -46,7 +46,8 @@
       </label>
       <!-- 火车模式下飞机专用的控件变灰，这里说明原因（UX-1a；每个禁用控件的 title 也写了） -->
       <p id="vehicle-hint" class="hint" hidden>火车模式下，地点、连续航程、航向、高度、机翼与襟翼等飞机专用设置不可用；切回「飞机」即可使用</p>
-      <label>地点<select id="preset"></select></label>
+      <!-- UX-2：连续航程接力生成航段时，这里显示当前航段（起点 → 终点）而不是停在旧地点；自动标记见 ui.ts setupWeatherAutoSync -->
+      <label>地点 <span id="preset-auto" class="auto-badge" hidden title="连续航程正在按航线网接力，选别的地点会立即跳过去">自动</span><select id="preset"></select></label>
       <div class="row">
         <label>日期<input id="date" type="date" /></label>
         <button id="now" type="button">现在</button>
@@ -149,12 +150,14 @@
         <button type="button" data-alt="0.5">低空</button>
       </div>
       <label>遮光板 <output id="shade-out"></output><input id="shade" type="range" min="0" max="1" step="0.01" value="0" /></label>
-      <label>天气<select id="weather"></select></label>
-      <label>云<select id="cloud-preset"></select></label>
-      <label>云量 <output id="coverage-out"></output><input id="coverage" type="range" min="0" max="1" step="0.01" value="0.42" /></label>
-      <label>云底高度 <output id="cloud-base-out"></output><input id="cloud-base" type="range" min="0.3" max="12.5" step="0.1" value="1.2" /></label>
-      <label>云层厚度 <output id="cloud-thick-out"></output><input id="cloud-thick" type="range" min="0.2" max="10" step="0.1" value="2.2" /></label>
-      <label>海面风速 <output id="wind-out"></output><input id="wind" type="range" min="0" max="20" step="1" value="7" /></label>
+      <!-- UX-2：连续航程开着时天气系统 / 云型由天气场决定，锁定并显示实际状况（title）；云量 / 云底 / 云厚 / 海面风速
+           每 250 ms 从系统实际值回写，拖动后当前航段内标「已手动调整」。自动标记与锁定逻辑见 ui.ts setupWeatherAutoSync -->
+      <label>天气 <span id="weather-auto" class="auto-badge" hidden>自动</span><select id="weather"></select></label>
+      <label>云 <span id="cloud-preset-auto" class="auto-badge" hidden>自动</span><select id="cloud-preset"></select></label>
+      <label>云量 <span id="coverage-auto" class="auto-badge" hidden>自动</span><output id="coverage-out"></output><input id="coverage" type="range" min="0" max="1" step="0.01" value="0.42" /></label>
+      <label>云底高度 <span id="cloud-base-auto" class="auto-badge" hidden>自动</span><output id="cloud-base-out"></output><input id="cloud-base" type="range" min="0.3" max="12.5" step="0.1" value="1.2" /></label>
+      <label>云层厚度 <span id="cloud-thick-auto" class="auto-badge" hidden>自动</span><output id="cloud-thick-out"></output><input id="cloud-thick" type="range" min="0.2" max="10" step="0.1" value="2.2" /></label>
+      <label>海面风速 <span id="wind-auto" class="auto-badge" hidden>自动</span><output id="wind-out"></output><input id="wind" type="range" min="0" max="20" step="1" value="7" /></label>
       <label>画质
         <select id="quality">
           <option value="auto" selected>自动（推荐）</option>

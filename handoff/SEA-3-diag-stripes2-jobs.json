@@ -1,0 +1,115 @@
+[
+ {
+  "name": "cruise-ground",
+  "scene": {
+   "name": "cruise-ground",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 780,
+    "altitude": 10.7,
+    "coverage": 0.05,
+    "wing-pos": "8"
+   },
+   "ground": true,
+   "head": [
+    0,
+    0.14,
+    -0.2
+   ]
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "exactAP",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactSkyCam",
+    "patch": {
+     "__outCur": [
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n",
+       "      { vec3 Tx; skyCam = integrateSegment(ro, reflect(rd, nView), uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactBoth",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ],
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n",
+       "      { vec3 Tx; skyCam = integrateSegment(ro, reflect(rd, nView), uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-apL",
+    "patch": {
+     "__outCur": [
+      [
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return L + gh.apL;\n",
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return gh.apL;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-apT",
+    "patch": {
+     "__outCur": [
+      [
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return L + gh.apL;\n",
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return gh.apT * 20000.0;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-refl",
+    "patch": {
+     "__outCur": [
+      [
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return L + gh.apL;\n",
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return gh.wat.r * fView * max(skyCam - gh.apL, vec3(0.0));\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-skyCam",
+    "patch": {
+     "__outCur": [
+      [
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return L + gh.apL;\n",
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return skyCam;\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   700,
+   60,
+   550,
+   260
+  ]
+ }
+]

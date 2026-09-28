@@ -204,10 +204,12 @@ export async function collectPrograms(server, opts = {}) {
     addDef("cloud-march-wonder", clouds.marchWonderMat);
     // 卷云变体（T12）
     addDef("cloud-march-cirrus", clouds.marchCirrusMat);
+    // 笠云 / 吊し雲变体（SPEC-FUJI）
+    addDef("cloud-march-lenticular", march("L"));
     // 其余按需组合（卷云 / 奇观 × 天气）：只在真的出现时才编，离线只做语法检查（opts.allCloudCombos，check:glsl 用；
     // shader-budget 不传，免得一轮离线 FXC 多出十来个十几秒的程序）
     if (opts.allCloudCombos) {
-      for (const key of ["CS", "CT", "CST", "WCS", "WCT", "WCST"]) addDef(`cloud-march-${key}`, march(key));
+      for (const key of ["CS", "CT", "CST", "WCS", "WCT", "WCST", "CL", "LS", "LT", "CLS", "CLT", "LST"]) addDef(`cloud-march-${key}`, march(key));
     }
     add("wonder-layer", clouds.wonderSurfMat);
     add("cloud-resolve", clouds.resolveMat);
@@ -845,6 +847,29 @@ async function main() {
         exitCode = 1;
         console.log(`  [FAIL] ${id}：预处理后仍含 ${hits.join(", ")}——天气代码要写在 #ifdef CLOUD_STORM / CLOUD_TYPHOON / CLOUD_WEATHER 里（见 README 坑点「着色器编译」PERF-10）`);
       } else console.log(`  [OK]   ${id}：${out.split("\n").filter((l) => l.trim()).length} 行，无雷暴 / 台风代码`);
+    }
+
+    // -- 1b'. SPEC-FUJI：笠云 / 吊し雲只在 CLOUD_LENTICULAR 变体里；默认云程序（及其他不带 L 的程序）预处理后不含，变体里必须有（断言有区分力） --
+    console.log("\n-- 默认云程序不含笠云 / 吊し雲代码（SPEC-FUJI，glslangValidator -E） --");
+    const LENS_IDS = ["lensDensity", "lensCapDepth", "lensChainDepth", "lensRayInterval", "uLens", "cloudDensityLens"];
+    for (const [id, expectAll] of [["cloud-march", false], ["cloud-march-cirrus", false], ["cloud-march-wonder", false], ["cloud-march-storm", false], ["cloud-shadow-map", false], ["cloud-probe", false], ["outside-default", false], ["wing", false], ["cloud-march-lenticular", true]]) {
+      const prog = programs.find((p) => p.id === id);
+      if (!prog) continue;
+      const file = path.join(tmpDir, `${id}.ppL.frag`);
+      writeFileSync(file, FRAG_PREFIX + resolveIncludes(prog.fragmentShader, new Set()));
+      const res = spawnSync(bin, ["-E", "-S", "frag", file], { encoding: "utf8", maxBuffer: 64 << 20 });
+      const out = res.stdout || "";
+      const hits = LENS_IDS.filter((w) => new RegExp(`\\b${w}\\b`).test(out));
+      if (res.error || !out) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：预处理失败 ${res.error ? res.error.message : ""}`);
+      } else if (!expectAll && hits.length) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：预处理后仍含 ${hits.join(", ")}——笠云 / 吊し雲代码要写在 #ifdef CLOUD_LENTICULAR 里（lenticular.glsl.ts）`);
+      } else if (expectAll && hits.length !== LENS_IDS.length) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：变体里缺 ${LENS_IDS.filter((w) => !hits.includes(w)).join(", ")}（断言失去区分力）`);
+      } else console.log(`  [OK]   ${id}：${expectAll ? "含全部笠云 / 吊し雲代码" : "无笠云 / 吊し雲代码"}`);
     }
 
     // -- 1c. PERF-13：窗外默认程序预处理后不含罕见光学（宝光 / 影子 / 幻日 / 晕）与天幕层奇观代码；变体里必须有（断言有区分力） --
