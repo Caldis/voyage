@@ -12,7 +12,7 @@ import { Bloom } from "./render/bloom";
 import { EXPOSURE_WHITEOUT, Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
 import { CabinClassVariant, createSceneMaterial } from "./render/scene";
-import { GroundDetailVariant, createOutsideMaterial, createOutsideTarget } from "./render/outside-pass";
+import { GroundDetailVariant, PILLARS_SKIN, createOutsideMaterial, createOutsideTarget } from "./render/outside-pass";
 import { WingWetVariant, createWingMaterial } from "./render/wing-pass";
 import { createSeatMaterial, createSeatTarget } from "./render/seat-pass";
 import { GroundClipmap } from "./ground/clipmap";
@@ -494,6 +494,8 @@ function renderFrame(now: number) {
     coverage: cloudUniforms.uCoverage.value,
     flightKey: `${state.preset.id}|${localParts(state.simTime, state.preset.tz).date}`,
   });
+  // 火车远景变体（DROW / DOW）里天幕层调用点是天梯 / 建木，巨柱群会被画成建木（WS07 审查）→ 火车模式下直接清掉巨柱群
+  if (rail.active && Math.round(wonders.uniforms.uWonderShape.value.z) === PILLARS_SKIN) wonders.clear();
   // 奇观模式打开时提前在后台编云间层变体（W00）
   clouds.wonderPrewarm = wonders.enabled;
   updateHighLift(state, simDt);
