@@ -15,6 +15,33 @@
 
 第一轮只报告；**协调者随后决定三项都在本分支落地**（见下「第二轮：落地」）。下面的诊断表是第一轮的定位过程。
 
+## 第三轮：审查返工（①的「饱和源」夜里归零）
+
+审查（`D:\Code\opus-test\apps\voyage\handoff\SEA-3-review.md`）P0：night-sea-milkyway 远海整片纯黑，地平线下一行 Y 65 → 0。
+
+**根因更正**：审查把它归到开阔海面分支，但诊断（`diag-night` 组：在开阔海面分支里把 L 改写成各分量，8 个变体与 new 逐位相同）表明 **scs 夜景的海走的是真实地面路径（onGround）**，出事的是 onGround 那行：`apT·apL/(1−apT)`。开阔海面那行的 `tView·内散射/(1−tView)` 有同样的缺陷，只是这个场景没走到。共同原因：**空气透视 LUT 与天空视图 LUT 地面侧都只有太阳一路**，不含月光与气辉，夜里 ≈ 0；而原公式里的 `skyCam`（天空视图 LUT 天空侧，太阳 + 月亮两路 + 气辉）是对的。
+
+**新的饱和源**（两个分支共用一次计算）：`skyHz` = 相机看「反射方位上的几何地平线」处的天空——天空视图 LUT 天空侧最后一行、与 `skyCam` 同一列（太阳、月亮两路）+ 气辉。几何上地平线处反射方向正好退化到这里，所以与原公式连续；这条视线同样贴着霾层走，白天就是地平线上方那条暗带的亮度（暗墙修复保留），夜里带月光与气辉，不会归零。
+- onGround：`skyCam' = apL + mix(max(skyHz − apL, 0), max(skyCam − apL, 0), tUpR)`
+- 开阔海面：`refl = F·mix(max(skyHz − 内散射, 0), max(skyCam − 内散射, 0), tUpR)`
+- `skyHz` 直接按列坐标取 LUT 那一行（两次 `textureLod` + `nightglow`），**不调第二次 `skyRadiance`**：写成第二个 `skyRadiance` 调用点时离线 FXC outside-default +10–12%（两次实测）；放进 `+ uLoopGuard` 循环共用一个调用点则 FXC 直接编不过（分支里的循环内隐式导数取样）。
+
+**复测**（`SEA-3-rework-jobs.json`，同页 2 轮，噪声底全 0；master = outside-pass 按 diff 反向补丁，prev8cc = 8cc6132 的公式；`SEA-3-horizon.py` 列剖面 x = 800、y 200–1000 最大相邻行跳变 + 窗内纯黑像素数）：
+
+| 场景 | master | 8cc6132 | 返工后 |
+| --- | --- | --- | --- |
+| night-sea-milkyway | 纯黑 660（窗框暗角），剖面 y560–588：53 → 39 平滑 | **纯黑 30468，地平线下一行 52.7 → 0.2** | **与 master 逐行相同**（纯黑 660，剖面同上），对 master 平均差 0.29、最大 3.3、over8 = 0 |
+| night-sea-fullmoon | 纯黑 717 | **纯黑 39521，70 → 0.5** | 纯黑 697；最大跳变 38.6 在月光耀斑边缘（master 48.5，同位置） |
+| dusk-earthshadow | 最大跳变 2.6 | 7.4（新增的台阶） | 3.1，对 master 平均差 0.18、over8 = 0 |
+| hnd-low-day（白天，暗墙） | x = 1000：143.0 → 157.7（**硬边**） | 连续 | **连续**：142.8 → 142.6 → 142.5 → …（暗墙修复保留） |
+| sea-mod-low / low-sea-glint（白天低空） | — | 远海偏霾灰 | 同方向（饱和度 25.8 → 19.9%；均亮 +4 / +8 级，比 8cc 略亮、略蓝，因为饱和源是地平线天空而不是 AP 饱和内散射） |
+
+- gpu-ab（`SEA-3-gpu-rework-jobs.json`，new 对 8cc6132，8 轮 ABBA 带 A/A）：hnd-low-day ×0.985、sea-mod-low ×0.986、night-sea-milkyway ×1.015（A/A ×1.008），全部在离散度内。
+- 离线 FXC outside-default 对当前 master `83d083c`（基线树 `tmp/SEA-3-base`，期间别的代理持测量锁）：三次 +5.7% / +1.0% / +0.3%（MAD 500–900 ms），中位约 +1%，在 +2% 上限内但噪声大，**请波次收尾在安静窗口复测**；outside-ground-detail +2.1%。
+- check:glsl、typecheck、build（无 0 字节文件）、`dev-browser check` console error 0。
+- 对照图（左 master / 中 8cc6132 / 右返工后）：`tmp/screenshot/SEA-3/cmp-rework-milkyway.png`、`cmp-rework-fullmoon.png`、`cmp-rework-hnd.png`；`cmp-rework-seamod.png`（左 master / 右返工后）。
+- ②横纹、③尾迹的代码没动。
+
 ## 第二轮：落地（协调者决定，merge master `e272ad8` 之后）
 
 ### 改了什么（3 个文件，都不碰奇观段 / 云 / LUT）

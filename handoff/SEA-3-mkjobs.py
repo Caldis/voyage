@@ -325,13 +325,13 @@ def ap_interp():
 SRC_FILES = ["apps/voyage/src/render/outside-pass.ts", "apps/voyage/src/render/terrain-shading.glsl.ts", "apps/voyage/src/render/traffic.glsl.ts"]
 
 
-def old_patches(which=None):
+def old_patches(which=None, ref="master"):
     """把本分支对 master 的改动按 diff 块反向做成补丁（新 → 旧），old 变体 = 改前着色器。which 过滤文件名片段"""
     import subprocess
 
     root = HERE.parents[2]
     files = [f for f in SRC_FILES if which is None or any(w in f for w in which)]
-    out = subprocess.run(["git", "diff", "master", "-U2", "--", *files], cwd=root, capture_output=True, text=True, encoding="utf-8").stdout
+    out = subprocess.run(["git", "diff", ref, "-U2", "--", *files], cwd=root, capture_output=True, text=True, encoding="utf-8").stdout
     pairs, new, old, inh = [], [], [], False
     for line in out.splitlines():
         if line.startswith("@@"):
@@ -411,6 +411,50 @@ def gpu_final():
     return jobs
 
 
+PREV_OS = "      vec3 refl = fView * mix(tView * inscatter / max(vec3(1.0) - tView, vec3(1e-3)), max(skyCam - inscatter, vec3(0.0)), tUpR); // SEA-3，见上\n"
+NEW_OS_TAIL = "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n"
+
+
+def rework():
+    """返工复测：master（outside-pass 反向补丁）/ 8cc6132 的开阔海面公式 / 新公式；夜、月夜、黄昏地影、低空白天"""
+    prev = {"name": "prev8cc", **patch(old_patches(["outside-pass"], "8cc6132"))}
+    vs = [{"name": "master", **patch(old_patches(["outside-pass"]))}, prev, {"name": "new"}]
+    jobs = []
+    for name in ("night-sea-milkyway", "night-sea-fullmoon", "dusk-earthshadow", "low-sea-glint"):
+        jobs.append({"name": name, "scene": name, "pre": PRE, "variants": vs, "crop": [380, 300, 850, 800]})
+    jobs.append(job("sea-mod-low", vs, crop=[380, 300, 850, 800]))
+    jobs.append(job("hnd-low-day", vs, crop=[400, 400, 800, 300]))
+    return jobs
+
+
+def diag_night():
+    def c(expr):
+        return patch([(NEW_OS_TAIL, NEW_OS_TAIL + f"      L = {expr};\n")])
+
+    vs = [
+        {"name": "new"},
+        {"name": "c-skyHz", **c("skyHz")},
+        {"name": "c-skyCam", **c("skyCam")},
+        {"name": "c-insc", **c("inscatter")},
+        {"name": "c-sea", **c("sea")},
+        {"name": "c-refl", **c("refl")},
+        {"name": "c-tUp", **c("tUpR * skyHz.g * 3.0")},
+        {"name": "c-nan", **c("vec3(any(isnan(L)) ? 1.0 : 0.0, any(isnan(refl)) ? 1.0 : 0.0, any(isnan(tUpR)) ? 1.0 : 0.0) * 1e3")},
+    ]
+    return [{"name": "night-sea-milkyway", "scene": "night-sea-milkyway", "pre": PRE, "variants": vs, "crop": [380, 300, 850, 800]}]
+
+
+def gpu_rework():
+    vs = [
+        {"name": "prev8cc", **patch(old_patches(["outside-pass"], "8cc6132"))},
+        {"name": "prev8cc2", **patch(old_patches(["outside-pass"], "8cc6132"))},
+        {"name": "new"},
+    ]
+    jobs = [job("hnd-low-day", vs), job("sea-mod-low", vs)]
+    jobs.append({"name": "night-sea-milkyway", "scene": "night-sea-milkyway", "pre": PRE, "variants": vs})
+    return jobs
+
+
 def gpu():
     surf = {"name": "reflSurf", **patch([(SKYCAM, SKYCAM_SURF), (OS_REFL, OS_REFL_SURF)])}
     fix = {"name": "fixAP", **patch([(TR_ADD, TR_FIX)])}
@@ -467,6 +511,9 @@ GROUPS = {
     "proto2": proto2,
     "diag-stripes3": diag_stripes3,
     "gpu": gpu,
+    "rework": rework,
+    "gpu-rework": gpu_rework,
+    "diag-night": diag_night,
     "gpu-final": gpu_final,
     "ap-interp": ap_interp,
     "accept": accept,
