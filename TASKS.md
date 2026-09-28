@@ -25,6 +25,9 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| DX-30 | 【降级：细微 / 性能，晚做】dev-browser ab / gpu-ab：变体 js 副作用不复原（ABBA 下「关」一直生效，TW02 首测得出假结论）→ 支持复原 js 或自动快照；shots 场景加「航向对准方位」字段；ab 输出同裁剪区多变体拼图（参考 handoff/TW02-montage.py）；冻结时「本帧画了没有」类调试量不更新要标注 | 中 | scripts | — | TW02 反馈 |
+| VOY-HKG | 南海预设首段航线 HKG→HKG 是个圈，自动驾驶一直压 25° 坡度、窗外只有海 → 首段改成真实外飞航线 | 中高（用户第一眼） | voyage 航线数据 | — | TW02 反馈 |
+| TW-LTG | 远景塔夜间地平线闪电（只改 uniform，无编译成本） | 中高（壮观） | clouds/far-towers | clouds | TW02 合并后 |
 | WS-SCN | 奇观回归场景更新：wonder-floatcity-day/-dusk 80→110 km；wonder-jianmu-day distKm 380→230 + seed 0.37，加 ws-jianmu-dusk / -dusk-up（handoff/WS05-scenes.json）；wonder-fogcity-night 基准更新；scenarios.mjs + regression.playwright.js 两表同改（WS05 合并后派，Haiku） | 中 | scripts | — | check:glsl 两表一致 |
 | SPEC-FUJI-b | 【降级：细微 / 性能，晚做】笠云后续：收回归场景 fuji-cap-low / cruise / dusk（scenarios + regression 两表）、地面笠云影子、穿吊し雲判进云、近看顶面静帧细颗粒 | 低 | clouds / scripts | — | — |
 | PERF-ZOOM | 【降级：细微 / 性能，晚做】聚焦时省 GPU：聚焦时降云缓冲分辨率、机翼按像素足迹减步数（FOCUS-ZOOM 实测 4× 整帧 ×1.16–1.56，主因窗外占满全屏） | 低 | clouds / wing | — | — |
