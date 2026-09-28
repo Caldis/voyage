@@ -257,7 +257,10 @@ void main() {
     float m = 1e30;
     for (int i = -1; i <= 1; i++)
       for (int j = -1; j <= 1; j++) m = min(m, texelFetch(uPrevLocal, clamp(p + ivec2(i, j), ivec2(0), sz), 0).g);
-    gl_FragColor = vec4(m, 0.0, 0.0, 1.0);
+    // 例外：本格亮了 6–12 倍以上（翼尖频闪的近场，一小团极亮的光）照样整份扣——最小值会把这团光的峰削掉，频闪结束时机翼、灯旁
+    // 反而被压暗（只取最小值时 50 ms 频闪变暗像素 110 → 1100）；闪的几十毫秒里灯点跨格的运动差实测最多约 5 倍，到不了这里
+    vec3 c = texelFetch(uPrevLocal, p, 0).gba;
+    gl_FragColor = vec4(max(m, c.x * smoothstep(6.0, 12.0, c.y)), 0.0, 0.0, 1.0);
     return;
   }
   // 一格 = 眩光纹理 LOCAL_CELL × LOCAL_CELL 纹素：每次双线性取样正好是 2×2 纹素的平均（偏移 ±1、±3…个纹素）
@@ -275,7 +278,7 @@ void main() {
   float k = conv ? 1.0 : mix(1.0, 1.0 - exp(-uDt * uLocalRate), uFlash);
   // 扣除量用更新前的状态：闪光第一帧整份扣掉，与帧率无关
   float tr = conv ? 0.0 : max(Lc - Sp, 0.0) * uFlash;
-  gl_FragColor = vec4(conv ? Lc : mix(Sp, Lc, k), tr, 0.0, 1.0);
+  gl_FragColor = vec4(conv ? Lc : mix(Sp, Lc, k), tr, tr / max(Sp, 1e-30), 1.0); // B：相对跳变（最小值的例外判据用）
 }
 `;
 const FINAL_FRAG = /* glsl */ `
@@ -754,8 +757,8 @@ export class Exposure {
     if (!this.local.length || this.local[0].width !== w || this.local[0].height !== h || this.local[0].texture.type !== bloom.type) {
       for (const t of this.local) t.dispose();
       this.localEroded?.dispose();
-      const opts = { type: bloom.type, format: THREE.RGFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
-      this.local = [new THREE.WebGLRenderTarget(w, h, opts), new THREE.WebGLRenderTarget(w, h, opts)];
+      const opts = { type: bloom.type, format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
+      this.local = [new THREE.WebGLRenderTarget(w, h, opts), new THREE.WebGLRenderTarget(w, h, opts)]; // R 状态、G 扣除量、B 相对跳变
       this.localEroded = new THREE.WebGLRenderTarget(w, h, { ...opts, format: THREE.RedFormat });
       this.localReset = true;
     }
