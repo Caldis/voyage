@@ -58,3 +58,50 @@ VARIANTS.pr1 = probe(1, "1.0");
 VARIANTS.pr2 = probe(2, "1.0");
 VARIANTS.pr3 = probe(3, "1.0");
 VARIANTS.pr2t0 = probe(2, "0.0");
+// p2 结论（sea-sc-low）：「有云」按 dens > 0.002 判，二分找到的常是表皮最外面那层极稀的絮（σ 不到 1 /km），
+// 在那里算受光等于没进云，太阳低时又亮一倍。改成按命中样本密度的一个比例判「够浓」：dens > F·hitDens
+const probeF = (n, f) => VARIANTS[`pr${n}`].map(([a, b, o]) => [a, b.replace("if (dens > 0.002) bHi = tS; else bLo = tS;", `if (dens > ${f} * hitDens) bHi = tS; else bLo = tS;`), o]);
+for (const n of [1, 2]) for (const f of ["0.3", "0.6", "0.9"]) VARIANTS[`pr${n}f${f.slice(2)}`] = probeF(n, f);
+VARIANTS.prnever = probe(1, "1e9"); // 探测代码在、但永不触发：量结构本身的开销
+// gpu1 结论：pr1f3 画质好（低太阳也不过亮）但 GPU +10–13%（多出的那一步让同一 warp 里受光块分散到更多迭代）。
+// lfK_F（零额外密度调用）：受光起点先挪 K·L（同 sK），但用受光步进自己的第一个样本（起点朝太阳 15 m，带细节）验一下：
+// 那里的密度 < F·命中密度 → 起点落在表皮外 / 最外层稀絮 → 退回命中点（这一段的 od 用命中点密度补上，等于原做法）
+const LF_OLD = `        float lsL = 0.03;
+        for (int j = 0; j < 6; j++) {
+          lt += lsL;
+          od += layerDensity(p + uKeyDir * (lt - 0.5 * lsL), lod + 0.5, j < 3) * lsL;
+          lsL *= 2.2;
+        }
+`;
+const lf = (k, f) => [
+  [HIT, `    if (dens > 0.002) {\n      bool shifted = wasEmpty && i > 0;\n      vec3 pL = shifted ? p - rd * (${k} * stepLen) : p;\n      wasEmpty = false;\n`],
+  [LF_OLD, `        float lsL = 0.03;
+        for (int j = 0; j < 6; j++) {
+          lt += lsL;
+          float dl = layerDensity(pL + uKeyDir * (lt - 0.5 * lsL), lod + 0.5, j < 3);
+          if (j == 0 && shifted && dl < ${f} * dens) { pL = p; dl = dens; }
+          od += dl * lsL;
+          lsL *= 2.2;
+        }
+`],
+];
+for (const k of ["0.5", "0.65"]) for (const f of ["0.3", "0.6"]) VARIANTS[`lf${k.slice(2)}_${f.slice(2)}`] = lf(k, f);
+// p4 结论：lf 的「朝太阳 15 m 处」验得太严（浅处本来就在密度爬升段），正午也大半退回，收益只剩一小半。
+// pvF：同 pr1fF 的探测位置与判据（tS − L/2 处密度 > F·命中密度 → 受光点挪到那里），但探测放在受光那一步里做
+// （受光步进之前多一次 layerDensity，同一次迭代，不多走一步、不打乱 warp 里受光块的迭代分布）。代价：多一个 layerDensity 调用点
+const pv = (f, k = "0.5") => [
+  [HIT, `    if (dens > 0.002) {\n      vec3 pL = p;\n      if (wasEmpty && i > 0 && dens * CLOUD_EXTINCTION * stepLen > 1.0) {\n        vec3 q = p - rd * (${k} * stepLen);\n        if (layerDensity(q, lod, t < 150.0) > ${f} * dens) pL = q;\n      }\n      wasEmpty = false;\n`],
+  ...LIGHT,
+];
+VARIANTS.pv3 = pv("0.3");
+VARIANTS.pv2 = pv("0.2");
+VARIANTS.pv4 = pv("0.4");
+// gpu2 结论：pv3 +2.6~10%（sea-sc 每个像素都进一次浓云，最贵），pr1f3 +10~14%，prnever（pr 的代码在但不触发）就 +4~9%。
+// 压探测本身的价钱：n = 探测不取细节（均值侵蚀）；l = 探测的 mip 按受光步进（lod + 0.5）；g = 60–90 km 渐隐、90 km 外不探
+const pvx = (f, { detail = "t < 150.0", lodE = "lod", gate = false } = {}) => [
+  [HIT, `    if (dens > 0.002) {\n      vec3 pL = p;\n      if (wasEmpty && i > 0 && dens * CLOUD_EXTINCTION * stepLen > 1.0${gate ? " && t < 90.0" : ""}) {\n        vec3 q = p - rd * (0.5 * stepLen${gate ? " * (1.0 - smoothstep(60.0, 90.0, t))" : ""});\n        if (layerDensity(q, ${lodE}, ${detail}) > ${f} * dens) pL = q;\n      }\n      wasEmpty = false;\n`],
+  ...LIGHT,
+];
+VARIANTS.pv3n = pvx("0.3", { detail: "false" });
+VARIANTS.pv3l = pvx("0.3", { lodE: "lod + 0.5" });
+VARIANTS.pv3g = pvx("0.3", { gate: true });
