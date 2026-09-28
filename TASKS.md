@@ -10,7 +10,6 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | WX11g | 第 7 波（天气，主干） | 5245 | worktree | Opus（海面风速取 WX11a 地面风：量化档位、限频、借遮挡 / 平滑换档；白浪 / 耀斑随风速；频谱重算开销实测；海浪方向常量本任务不改） | — | 进行中 |
 | C10c | 第 7 波（云，C10b 审查 P2） | 5242 | worktree | Opus（俯视浓云海近处变暗：进云首样本受光偏暗 → 区间平均 / 插值估表面，零取样；正式加 sea-sc / sea-sc-low；主循环上限改 uLoopGuard） | — | 进行中 |
-| W-EDGE | 第 7 波（锯齿，W-STAIR 遗留） | 5239 | worktree | Opus（外轮廓 SDF 解析覆盖率替代 / 补充子射线；冷编译 ≤ +2%，机翼余量已吃一半） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -23,6 +22,8 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| PERF-WING | 压缩机翼 wingTrace 求交循环的冷编译（循环内整体内联 sdWing，FXC 对循环内任何新增敏感：每项 +1.5–4.5%），腾出余量给 W-EDGE 方案 B′；先用 `dev-browser cold --repeat` 实测机翼程序与窗外程序编好时刻差（W-STAIR / W-LAMP 已累计 +0.3 s）判断机翼是否在关键路径 | 高（W-EDGE 前置） | render/wing*.ts | wing | 冷编译 wing / wet 下降 ≥10%、画面逐位不变 |
+| W-EDGE | 机翼外轮廓解析覆盖率（**暂停，分支 `park/W-EDGE`，aac90f8**）：方案 A（只改外侧盒滤波覆盖率，冷编译 +1.5%）静态差和 −17% 但 sunset 小翼前缘飞行中爬行约翻倍 → 按铁律不合；方案 B′（精简弦内探测，handoff/W-EDGE-v5-probe.diff）差和 −43%、覆盖率误差 0.18→0.05、帧时间 −3%，但冷编译 +10%；方案 B 完整 −48% / +14–17%。决定：先做 PERF-WING 腾余量，再按 B′ 做并补测飞行中爬行 | 高（锯齿类） | render/wing*.ts | wing | 见 park 分支 handoff/W-EDGE.md |
 | DX-27 | weather-stats 加 `--field <weather.ts 路径>` 以对比新旧版本；「改坏矩阵」工具（读替换规则 → 逐条改坏 → 跑断言 → 自动恢复 → 汇总表，一条命令证明「改前必须失败」；WX11a 用 git checkout 恢复时冲掉过未提交修改） | 低 | scripts/* | — | 对 WX11a 断言跑一遍 |
 | WX11b | 风向接入（research/WX11-DESIGN.md）：砧 / 塔 / 卷云 / 云街方向随天气场；HIGH_WIND / LOW_WIND 常量改 uniform，方向只在借遮挡硬切时换（坑 A：绕原点旋转，1°≈1000 km 外平移 17 km）；uUpperWind 在云影图 / 占据网格缓存键里不可每帧写（坑 B） | 高 | weather-director / clouds.glsl / clouds.ts | clouds | PERF-15 安静窗口后；台风部分等 C-TYPH |
 | WX11c | 平流 + 重投影补偿（CPU 端 uMotion 减本帧平流位移，着色器不改）+ 云影中心跟随 + 雷暴按引导气流漂移（占据网格平移、闪电坐标同步）；冻结 / 场景偏移时平流归零；须与 DX-WX 同波 | 高 | clouds.* / weather.ts / main.ts 一两行 | clouds | 早于 WX12 |
