@@ -16,6 +16,8 @@
  * PERF-13：宝光 / 本机影子 / 幻日 / 晕只编进 `#ifdef OUTSIDE_OPTICS` 变体（窗外程序的按需变体，启动后后台预编），
  * 默认程序只有太阳圆盘 + 绿闪。新加的「平时不出现」的光学现象一律写进这个宏里，并让 render/optics.ts 的 opticsWanted 认得它。
  */
+import { CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES } from "../clouds/clouds.glsl";
+
 export const OPTICS_COMMON = /* glsl */ `
 #ifdef OUTSIDE_OPTICS
 // ---- 各 #ifdef OUTSIDE_OPTICS 段：宝光 / 本机影子 / 幻日 / 22° 晕，只编进 OUTSIDE_OPTICS 变体（PERF-13；选变体见 outside-pass.ts 的 wantedOutsideKey，
@@ -345,6 +347,19 @@ float opticsErf(float x) {
   return sign(x) * sqrt(1.0 - exp(-x2 * (1.2732395 + 0.147 * x2) / (1.0 + 0.147 * x2)));
 }
 
+// 雨里的阳光被云挡掉多少：查云影图（clouds.glsl.ts 的 cloudShadow 同一张图、同一套坐标），但只取中间一级（±${CLOUD_SHADOW_EXT[1]} km）
+// 的一次双线性——完整的 cloudShadow 是三级 × B 样条 4 次取样，在窗外程序里多一个调用点就整份再内联一次（离线 FXC 约 +6%）；
+// 雨的受光本来只取一个代表点，要的是「雨在不在云影里」的大概
+float opticsRainLit(vec3 P) {
+  if (uCloudShadowCenter.z < 0.5) return 1.0;
+  float h = max(length(P) - BOTTOM, 0.0);
+  vec3 s = uCloudShadowSun;
+  vec2 rel = P.xz + uCloudOffset - s.xz * (h / max(s.y, 0.05)) - uCloudShadowCenter.xy;
+  vec2 st = clamp(rel / ${CLOUD_SHADOW_EXT[1].toFixed(1)} * 0.5 + 0.5, vec2(${(2 / CLOUD_SHADOW_RES).toFixed(6)}), vec2(${(1 - 2 / CLOUD_SHADOW_RES).toFixed(6)}));
+  vec4 T = textureLod(uCloudShadowMap, vec2((st.x + 1.0) / 3.0, st.y), 0.0);
+  return dot(T, max(1.0 - abs(vec4(0.0, 1.0, 2.0, 3.0) - min(h, 3.0)), 0.0));
+}
+
 // 雨区：一组高斯雨柱（CPU 给 uBowRain*）。雷暴雨幡与 clouds.glsl.ts 的 rainDensity 同形（中心、半径、消光按那边的式子折算），
 // 云步进已经画了它的雨幕，这里只加虹；阵雨雨区（浓积云下的一片阵雨）云步进不画，这里连雨幕（消光 + 漫散射）一起画。
 // 每个雨柱沿视线的光学厚度解析地积：视线在 [地面, 雨顶] 这一段里，水平投影上的高斯积分 = σ0·e^(−q²/R²)·R/h·(√π/2)·[erf]。
@@ -390,7 +405,7 @@ vec4 opticsRain(vec3 rd) {
   vec3 P = ro + rd * tLit;
   float rP = length(P);
   vec3 nP = P / rP;
-  vec3 sunT = sunTransmittance(rP, dot(nP, uSunDir)) * cloudShadow(P, uSunDir);
+  vec3 sunT = sunTransmittance(rP, dot(nP, uSunDir)) * opticsRainLit(P);
   // 相机到雨之间的空气（空气透视 LUT）：雨的光要乘这段透射率；雨幕只挡它后面的东西，前面这段空气的内散射不能被雨挡掉——
   // 背景 L 里已经含着它，所以雨幕的合成是 L·Tv + (1 − Tv)·airL（不这样做，雨幕会把前面几公里的蓝色空气光一起吃掉，成一块黑斑）
   vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tLit);
