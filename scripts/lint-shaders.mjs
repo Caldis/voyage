@@ -972,6 +972,25 @@ async function main() {
   }
   if (!anyDup) console.log("  [OK]   没有发现重名");
 
+  // -- 2a'. 空气透视 LUT 的查法（NIGHT-AP-1）：表按主导光源参数化、以主导光源照度为单位，
+  // 查表一律 aerialPerspectiveUvw(…, uApDir, …)、内散射 × uApIlluminance。用 uSunDir / uSunIlluminance 查，白天看不出错，
+  // 满月夜远处的东西会少掉月光这一路（变暗、发红褐，README 坑点「大气与曝光」NIGHT-AP-1）
+  console.log("\n-- 空气透视 LUT 的查法（uApDir / uApIlluminance） --");
+  let apBad = false;
+  const AP_BAD = [/aerialPerspectiveUvw\s*\([^;]*?\buSunDir\b/, /uAerialInscatterS?\b[^;]*?\buSunIlluminance\b/];
+  for (const prog of programs) {
+    const lines = prog.fragmentShader.split("\n");
+    lines.forEach((l, i) => {
+      const code = l.replace(/\/\/.*$/, "");
+      if (AP_BAD.some((re) => re.test(code))) {
+        apBad = true;
+        exitCode = 1;
+        console.log(`  [FAIL] ${prog.id} 第 ${i + 1} 行用太阳查空气透视 LUT：${l.trim()}（改成 uApDir / uApIlluminance）`);
+      }
+    });
+  }
+  if (!apBad) console.log("  [OK]   所有程序都按 uApDir / uApIlluminance 查空气透视 LUT");
+
   // -- 2b. 场景程序 sampler 数 --
   // 2026-09-26 审查返工：修好 #else 分支 + 加上「从 main() 可达性剪枝」之后，静态数字和私有 headless
   // 对主分支 5181 实测的 gl.getProgramParameter(ACTIVE_UNIFORMS) 完全对上（scene-default /

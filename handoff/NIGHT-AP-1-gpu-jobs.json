@@ -1,0 +1,21 @@
+[
+  {
+    "name": "twilight-10",
+    "scene": { "name": "twilight-10", "p": { "preset": "scs", "date": "2026-07-29", "time": 1140, "cloud-preset": "towering", "coverage": 0.35, "seat": "right" }, "wait": 3000,
+      "js": "v.director.setHeading(225); v.state.heading = 225; v.state.bankDeg = 0; for (let i = 0; i < 400 && v.sunAltDeg() > -10; i++) { v.state.simTime += 20000; await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); } return 'sun ' + v.sunAltDeg().toFixed(2) + ' ' + JSON.stringify(v.atmosphere.apState);" },
+    "variants": [
+      { "name": "new", "js": "v.atmosphere.apMoon = true; v.atmosphere.apForce = null;" },
+      { "name": "old", "js": "v.atmosphere.apMoon = false; v.atmosphere.apForce = null;" },
+      { "name": "new2", "js": "v.atmosphere.apMoon = true; v.atmosphere.apForce = null;" }
+    ]
+  },
+  {
+    "name": "night-sea-fullmoon",
+    "scene": "night-sea-fullmoon",
+    "variants": [
+      { "name": "new", "js": "v.atmosphere.apMoon = true; v.atmosphere.apForce = null;" },
+      { "name": "old", "js": "v.atmosphere.apMoon = false; v.atmosphere.apForce = null;" },
+      { "name": "new2", "js": "v.atmosphere.apMoon = true; v.atmosphere.apForce = null;" }
+    ]
+  }
+]

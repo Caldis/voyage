@@ -266,7 +266,7 @@ function lutMaterial(fragmentShader: string, uniforms: Record<string, THREE.IUni
 
 // 地平线天光系数（NIGHT-AP-1）：天空视图 LUT 在地平线上第一行、所有方位的亮度均值（「光源照度 = 1」为单位），
 // 按光源高度角、相机海拔查表，只用来判断太阳 / 月亮哪一路主导空气透视、另一路可不可以忽略（相对量，不进画面）。
-// 数值是 log10，NIGHT-AP-1 用 tmp/nap/sky-scale.mjs 在本程序里实测（无霾、32 位 LUT，RTX 5090）；−30° 以下按最后一段斜率外推
+// 数值是 log10，NIGHT-AP-1 用 handoff/NIGHT-AP-1-sky-scale.mjs 在本程序里实测（无霾、32 位 LUT，RTX 5090）；−30° 以下按最后一段斜率外推
 const HORIZON_SKY_ELEV = [-30, -29, -28, -27, -26, -25, -24, -23, -22, -21, -20, -19, -18, -17, -16, -15, -14, -13, -12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, 0, 2, 5, 10, 20, 30, 45, 60, 90];
 const HORIZON_SKY_ALT_KM = [0.3, 3, 10.7, 13];
 const HORIZON_SKY_LOG10 = [
