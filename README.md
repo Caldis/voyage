@@ -46,7 +46,8 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
 ## 使用
 
 - 启动：仓库根目录 `pnpm dev:voyage`，打开 http://127.0.0.1:5181
-- 鼠标移动 = 挪动头部（窗框视差），滚轮 = 靠近 / 远离舷窗，`H` 隐藏面板
+- 在画面上按住拖动 = 转头（窗框视差），滚轮 = 前后挪（靠近 / 远离舷窗），双击复位；`H` 隐藏面板
+- 快捷键（UX-1a 统一守卫）：`H` / `B` / `M` / `N` 在焦点位于文字输入框、日期框、下拉时不触发（焦点在复选框、滑条、按钮上照常），带 `Ctrl` / `Alt` / `Meta` 时也不触发；方向键在焦点位于任何输入框 / 下拉时归控件自己。面板下拉用鼠标选完会把焦点还给画面（键盘在下拉里挑选项时不抢焦点）
 - 声音（T11）：默认关；面板勾选「声音」或按 `M` 开启（浏览器要求用户手势），背景板模式下照常播放、`M` 仍可开关
 - 时间：日期 + 当地时刻滑块，或用 60× / 600× 快进看日落
 - 连续航程（VOY-DEFAULT 起**默认开启**）：打开页面就按当天的默认时刻、从默认地点接入东亚航线网，1× 流速、时间与飞行一起流逝，云由天气场驱动（首帧直接对齐天气场，机头直接对准第一段航线，不在首屏做大坡度转弯）。面板取消勾选后记住（localStorage `voyage.continuousJourney` = `0`，只记真实点击，脚本 `dispatchEvent` 的切换不写），下次载入保持关；URL `?voyage=1` / `?voyage=0`（也认 `on/off`、`true/false`；同名参数多个时以最后一个为准）强制本次开 / 关，且不改写记住的选择
@@ -770,6 +771,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 <a id="pit-tools"></a>
 ### 工具与环境
 
+- **面板元素设了 `display` 就会盖住 `hidden` 属性**（T49、UX-1 各踩一次）：现象：代码里 `el.hidden = true`，截图里那一行照样在（连续航程关着时的「航程流速」、自动曝光开着时的「手动曝光」）。根因：`#panel label { display: flex }`、`.row { display: flex }` 的优先级高于浏览器自带的 `[hidden] { display: none }`。修法（UX-1a）：`style.css` 全局 `[hidden] { display: none !important; }`，显示 / 隐藏一律用 `hidden` 属性，不要再给单个选择器补 `xxx[hidden]`。识别：截图场景 `js` 里对照 `el.hidden` 与 `getComputedStyle(el).display`（`handoff/UX-1a-scenes-panel.json` 的 `ux1a-default-bottom`）。
 - **页面默认开启连续航程，测量脚本不带 `voyage=0` 截图就不确定**（VOY-DEFAULT）：现象：自写脚本 / 手动在 Playwright 里打开页面再 `applyScene`，同代码两次截图的云型、云影、海面、舱灯对不上。根因：载入到设场景之间导演已经按天气场硬切云参数（`type` / `density` 不在面板上）、摆了雷暴、写了海面风与舱灯，`applyScene` 的 `setActive(false)` 只停导演不撤回。修法：导航 URL 带 `?voyage=0`（仓库里的工具都已带，见「调试与验证」`applyScene` 一条）。识别：`__voyage.director.telemetry.legs.length > 0` 或 `director.weather.log` 非空，说明这一页进过连续航程。另：首载开启时机头直接对准第一段航线（`setActive(true, true)`）——默认地点西太平洋向南飞，前方没有机场，接入的第一段（羽田 → 关西）在西北，不对准的话首屏是 140° 的大坡度右转。
 - **长时间帧测量期间别改 `src/` 里的任何文件**（G08 踩过）：vite 开发服务器热更新 / 整页重载，测量脚本 `Execution context was destroyed` 直接退出（持的测量锁由 finally 释放，但半小时白跑）。先提交再开测，测量期间只写文档 / 读结果。
 - **node 直接跑 .ts（类型剥离）不支持参数属性、也不补 `.ts` 扩展名**（TR02）：`ground/geo.ts` 这类用了 `constructor(readonly x…)` 的模块会报 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`；项目里 import 不写扩展名，node 找不到。

@@ -33,7 +33,7 @@
         <div class="loading-hint">首次打开或程序更新后，浏览器需要编译着色器，可能要半分钟左右；命中缓存后会在一秒内完成。</div>
       </div>
     </div>
-    <aside id="panel">
+    <aside id="panel" aria-label="控制面板">
       <h1>航行伴侣 <small>按 H 隐藏</small></h1>
       <!-- 交通工具（TR02）：火车沿 JR 大糸线松本—信濃大町行驶；近景 / 中景还没做（TR03–TR05），窗外暂时只有远景 -->
       <label>交通工具 <output id="vehicle-status"></output>
@@ -42,13 +42,15 @@
           <option value="train">火车（大糸线，示例）</option>
         </select>
       </label>
+      <!-- 火车模式下飞机专用的控件变灰，这里说明原因（UX-1a；每个禁用控件的 title 也写了） -->
+      <p id="vehicle-hint" class="hint" hidden>火车模式下，地点、连续航程、航向、高度、机翼与襟翼等飞机专用设置不可用；切回「飞机」即可使用</p>
       <label>地点<select id="preset"></select></label>
       <div class="row">
         <label>日期<input id="date" type="date" /></label>
         <button id="now" type="button">现在</button>
       </div>
       <label>当地时刻 <span id="time-label"></span><input id="time" type="range" min="0" max="1439" step="1" /></label>
-      <div class="row rates">
+      <div class="row rates" role="group" aria-label="时间流速">
         <span>时间流速</span>
         <button type="button" data-rate="0" class="on">暂停</button>
         <button type="button" data-rate="1">1×</button>
@@ -57,7 +59,7 @@
       </div>
       <!-- 连续航程 / 背景板模式（T19a）：到达终点上空直接接下一段航线，时间与飞行按航程流速一起走 -->
       <label class="check"><input id="voyage-on" type="checkbox" />连续航程（自动接续东亚航线、时间流逝）</label>
-      <div id="voyage-rates" class="row rates" hidden>
+      <div id="voyage-rates" class="row rates" role="group" aria-label="航程流速" hidden>
         <span>航程流速</span>
         <button type="button" data-voyage-rate="1">1×</button>
         <button type="button" data-voyage-rate="10">10×</button>
@@ -66,7 +68,7 @@
       <button id="backdrop-on" type="button">背景板模式（隐藏面板，按 Esc 或 B 退出）</button>
       <!-- 航向控制（T49，flight.ts 的自动驾驶 + director.ts）：默认「自动航线」（沿大圆航线、到达后接下一段）；
            左右转 / 航向滑块 = 手动航向，直飞机场到达后盘旋，盘旋 = 跑道形等待航线。转弯按真实客机：坡度 ≤ 25°、滚转约 3°/s -->
-      <div class="row rates" id="nav-modes">
+      <div class="row rates" id="nav-modes" role="group" aria-label="航向模式">
         <span>航向</span>
         <button type="button" data-nav="route">自动航线</button>
         <button type="button" data-nav="heading">保持航向</button>
@@ -110,9 +112,11 @@
           <option value="left">左侧靠窗</option>
         </select>
       </label>
-      <label>视角 <small>（在画面上按住拖动转头，滚轮前后挪，双击复位）</small>
+      <label>视角
         <select id="view-preset"></select>
       </label>
+      <!-- 转头的操作说明只写这一处（原来面板底部还有一行过时的「移动鼠标 = 挪动头部」，UX-1a 删掉） -->
+      <p class="hint">在画面上按住拖动转头，滚轮前后挪，双击复位</p>
       <label>座位相对机翼
         <select id="wing-pos">
           <option value="8">机翼后方（能看到整片机翼）</option>
@@ -135,7 +139,7 @@
       <label>高度 <output id="altitude-out"></output><input id="altitude" type="range" min="0.5" max="13" step="0.1" value="10.7" /></label>
       <!-- 高度下限（T18）：陆地上方离地 ≥ 2.5 km、海面上 ≥ 0.5 km；滑块最小值跟着变，这里说明原因 -->
       <p id="altitude-floor" class="hint"></p>
-      <div class="row rates">
+      <div class="row rates" role="group" aria-label="飞行阶段">
         <span>飞行阶段<small>（10× 加速）</small></span>
         <button type="button" data-alt="10.7">巡航</button>
         <button type="button" data-alt="6">下降</button>
@@ -192,7 +196,6 @@
       <!-- 调试（T49）：不等飞到终点，立即走一次「到达」：自动航线接下一段（含大角度掉头的遮挡排队），直飞转入盘旋。同 __voyage.director.forceArrive() -->
       <button id="debug-arrive" type="button">立即触发到达 / 接下一段（调试）</button>
       <pre id="info"></pre>
-      <p class="hint">移动鼠标 = 挪动头部，滚轮 = 靠近 / 远离舷窗</p>
       <p class="credits">影像：<a id="credit-eox" href="https://cloudless.eox.at" target="_blank" rel="noopener">Sentinel-2 cloudless 2025</a> by EOX IT Services GmbH（含修改过的 Copernicus Sentinel 数据，CC BY-NC-SA 4.0）· 日本低空近景细节：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院（地理院タイル・全国最新写真（シームレス））</a>を加工して作成 · 地形：AWS Terrain Tiles · 水体：© OpenStreetMap contributors（OpenFreeMap）<br />关闭真实地理数据时，岛屿为程序生成的示例，不对应真实地理。<br />星表：耶鲁亮星表 BSC5（CDS V/50）· 月面贴图 © Solar System Scope（CC BY 4.0）</p>
     </aside>
     <!-- 背景板模式：只在鼠标移动后的几秒内显示的提示与退出按钮 -->
