@@ -185,7 +185,7 @@ try {
     for (const [a, b, mk] of j.compare ?? []) {
       const r = await page.evaluate(({ a, b, mk }) => {
         const A = window.__wsBufs[a], B = window.__wsBufs[b], M = mk ? window.__wsBufs[mk] : null;
-        let nonWing = 0, nonWingDiffPx = 0, nonWingMax = 0, diffPx = 0, maxAll = 0;
+        const pts = []; let nonWing = 0, nonWingDiffPx = 0, nonWingMax = 0, diffPx = 0, maxAll = 0;
         for (let p = 0; p < A.length; p += 4) {
           let d = 0, isNon = !!M;
           for (let c = 0; c < 4; c++) {
@@ -193,9 +193,9 @@ try {
             if (M && M[p + c] !== B[p + c]) isNon = false;
           }
           if (d > 0) { diffPx++; maxAll = Math.max(maxAll, d); }
-          if (isNon) { nonWing++; if (d > 0) { nonWingDiffPx++; nonWingMax = Math.max(nonWingMax, d); } }
+          if (isNon) { nonWing++; if (d > 0) { nonWingDiffPx++; nonWingMax = Math.max(nonWingMax, d); if (pts.length < 12) { const q = p / 4, W = window.__voyage.hdrWing.width, H = window.__voyage.hdrWing.height; pts.push([q % W, H - 1 - Math.floor(q / W), +d.toPrecision(3)]); } } }
         }
-        return { a, b, mask: mk, nonWing, nonWingDiffPx, nonWingMax, diffPx, maxAll };
+        return { a, b, mask: mk, nonWing, nonWingDiffPx, nonWingMax, diffPx, maxAll, nonWingPts: pts };
       }, { a, b, mk });
       log(j.name, "对照", JSON.stringify(r));
       fs.appendFileSync(path.join(OUT, "compare.jsonl"), JSON.stringify({ job: j.name, ...r }) + "\n");

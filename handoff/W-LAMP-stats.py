@@ -80,6 +80,7 @@ def main():
     out = {"job": os.path.basename(job), "wingPx": int(wing.sum()), "lamps": [(x, y, round(v, 1)) for y, x, v in lp]}
     radii = [3, 5, 8, 11, 15, 20, 26, 34, 44, 56]
     yy, xx = np.mgrid[0 : cov.shape[0], 0 : cov.shape[1]]
+    GLARE_R = 6
     for vn in variants:
         img = np.asarray(Image.open(os.path.join(job, vn, "full.png")).convert("RGB"))
         L = luma(img)
@@ -87,7 +88,25 @@ def main():
         lab, sizes = components(bright)
         wl = set(np.unique(lab[bright & wing]).tolist()) - {0}
         ws = sorted((sizes[i] for i in wl), reverse=True)
-        rec = {"variant": vn, "whiteBlobsOnWing": len(ws), "maxBlob": ws[0] if ws else 0, "blobsGt20": sum(1 for s in ws if s > 20), "top5": ws[:5],
+        # 只算翼面：覆盖率 = 1 的机翼像素，去掉灯芯周围 GLARE_R 像素（灯芯本身和眩光核，不是被照亮的翼漆）
+        near = np.zeros_like(full)
+        for (ly, lx, _) in lp:
+            near |= np.hypot(yy - ly, xx - lx) < GLARE_R
+        surf = bright & full & ~near
+        lab2, sizes2 = components(surf)
+        ss = sorted(sizes2[1:], reverse=True)
+        big = [i for i in range(1, len(sizes2)) if sizes2[i] > 20]
+        if "--overlay" in sys.argv:
+            ov = img.copy()
+            ov[surf] = [255, 0, 255]
+            for i in big:
+                ov[lab2 == i] = [255, 0, 0]
+            Image.fromarray(ov).save(os.path.join(job, vn, "blobs.png"))
+        blobs = []
+        for i in big:
+            ys_, xs_ = np.nonzero(lab2 == i)
+            blobs.append({"px": int(sizes2[i]), "bbox": [int(xs_.min()), int(ys_.min()), int(xs_.max()), int(ys_.max())]})
+        rec = {"variant": vn, "surfBlobs": len(ss), "surfMax": ss[0] if ss else 0, "surfGt20": blobs, "whiteBlobsOnWing": len(ws), "maxBlob": ws[0] if ws else 0, "top5": ws[:5],
                "wingMeanL": round(float(L[full].mean()), 2), "wingP99": round(float(np.percentile(L[full], 99)), 1) if full.any() else None}
         prof = []
         for (ly, lx, _) in lp:

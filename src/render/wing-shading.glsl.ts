@@ -35,6 +35,41 @@ vec3 wingLampIntensity(int i, vec3 dir) {
   return vec3(1.0, 0.95, 0.85) * (a > 110.0 ? 20.0 : 2.0);
 }
 
+// 灯照到翼面上用的配光（cd，W-LAMP）。灯本身的亮点和云雾光晕（wingLights）仍用上面的 wingLampIntensity，逐位不变。
+// wingLampIntensity 只有水平分布、各向同性地往上下照，用来照翼面有两处不对：
+// ① 灯罩的光主要集中在水平面附近。FAR 25.1393 规定位置灯（航行灯、尾灯）在竖直面内的最低光强比例：
+//    0° 1.0、0–5° 0.9、5–10° 0.8、10–15° 0.7、15–20° 0.5、20–30° 0.3、30–40° 0.1、40–90° 0.05；
+//    25.1401 规定防撞灯（频闪）：0–5° 1.0、5–10° 0.6、10–20° 0.3、20–30° 0.15、30–75° 0.075。
+//    小翼内侧、灯正下方的翼面都在灯的上下 40° 以外，只该拿到百分之几的光，旧版却按水平光强（尾灯 20 cd）照；
+// ② 水平角由 dir.xz 定，方向接近竖直时 xz 只剩零头，「向后 20 cd / 向前 2 cd」随着零头的正负来回翻，
+//    灯正上方 / 正下方的翼面上就是一块块亮暗突变的硬边（小翼内侧一块死白、灯下一条亮带）。
+// 这里用平滑曲线近似上面两张表（高斯按规定的台阶取中值）；表里是最低值，实际灯罩（透明圆罩、LED 阵列）往高仰角漏的光明显多于下限，
+// 高仰角的底取 0.15（位置灯）/ 0.2（频闪），是估计值，不是规定值。水平台阶放软 ±2°（真实灯罩的截止也有几度过渡），
+// 方向接近竖直时水平分布按水平平均取（水平角没有意义）。
+vec3 wingLampSurfI(int i, vec3 dir) {
+  float h = length(dir.xz);
+  float e = atan(abs(dir.y), h);                   // 离开水平面的角度（弧度）
+  float e2 = e * e;
+  if (i == 1) {
+    // 25.1401：5° 0.76、10° 0.47、20° 0.3、30° 0.24、再往外 0.2（估计的底）
+    float fv = 0.2 + 0.8 * (0.7 * exp(-e2 / 0.0149) + 0.3 * exp(-e2 / 0.147));
+    return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * fv;
+  }
+  // 25.1393：10° 0.84、20° 0.52、30° 0.28、40° 0.18、再往外 0.15（估计的底）
+  float fv = 0.15 + 0.85 * exp(-e2 / 0.147);
+  vec2 hz = dir.xz / max(h, 1e-6);
+  float a = degrees(atan(hz.y, hz.x));             // 0 = 正前方，正值朝外侧（+Z）
+  float aa = abs(a);
+  float wH = smoothstep(0.05, 0.3, h);             // 仰俯角 > 73° 起按水平平均
+  if (i == 0) {
+    float lit = smoothstep(-4.9, -0.9, a) * (1.0 - smoothstep(108.0, 112.0, a));
+    float cd = 3.0 + lit * (2.0 + 25.0 * (1.0 - smoothstep(18.0, 22.0, aa)) + 10.0 * (1.0 - smoothstep(8.0, 12.0, aa)));
+    return (uSeatSign > 0.0 ? vec3(0.1, 1.0, 0.35) : vec3(1.0, 0.08, 0.05)) * mix(5.6, cd, wH) * fv;
+  }
+  float cd = 2.0 + 18.0 * smoothstep(108.0, 112.0, aa);
+  return vec3(1.0, 0.95, 0.85) * mix(9.0, cd, wH) * fv;
+}
+
 // 环境反射的来源：天空；地平线以下是海面 / 地面（天空视图 LUT 的地面部分），飞在云层之上时混入云海的亮度
 vec3 wingEnv(vec3 rW, float rough, vec3 eSky, vec3 eDown, float belowAlbedo) {
   float tG = raySphere(vec3(0.0, uCamR, 0.0), rW, BOTTOM);
@@ -50,6 +85,9 @@ vec3 wingEnv(vec3 rW, float rough, vec3 eSky, vec3 eDown, float belowAlbedo) {
   vec3 avg = (eSky * (0.5 + 0.5 * rW.y) + belowAlbedo * eDown * (0.5 - 0.5 * rW.y)) / M_PI;
   return mix(env, avg, smoothstep(0.12, 0.6, rough));
 }
+
+// shadeWing 返回值里翼尖灯照明（lampLit）那一份，给 wingView 的去亮点单独处理（W-LAMP）
+vec3 gWingLamp;
 
 // 机翼着色（座舱系）。w 是 wingTrace 的结果（法线、自阴影、部件已经算好）；eSky / eDown / belowAlbedo 是窗外的天空光、下方反射光
 vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 eDown, float belowAlbedo) {
@@ -118,13 +156,31 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 e
   if (dot(nG, nA) < 0.0) nG = -nG;
   vec3 nGc = vec3(uSeatSign * nG.x, nG.y, nG.z);
   vec3 lampLit = vec3(0.0);
+  // 灯的镜面粗糙度不跟边缘判定走（W-LAMP）：太阳镜面在边缘像素上放宽波瓣（见上），灯要是也照做，同一条后缘 / 弯折线上
+  // 判成边缘的像素用宽波瓣、隔壁没判上的用窄波瓣，灯几乎贴着翼面照时宽波瓣正好接得住，窄的接不住——频闪一亮，
+  // 沿线隔几个像素一颗白点（边缘判定本身就是隔几个像素一个）。改成所有像素一样：α² 加上像素里法线转角的平方（Toksvig / LEAN 的思路）
+  float spreadN = min(pix * gWingCurv, 1.0);
+  float aCoatL = max(sqrt(cr2 * cr2 + 2.0 * max(w.bumpVar, 0.0) + spreadN * spreadN), 0.02);
+  float aBaseL = max(sqrt(m.rough * m.rough * m.rough * m.rough + 2.0 * max(w.bumpVar, 0.0) + spreadN * spreadN), 0.02);
   for (int i = min(uWingSteps, 0); i < 3; i++) {  // 起点依赖 uniform：不让 FXC 展开成三份
     vec3 d = wingLampPos(i) - P;
-    float dist2 = max(dot(d, d), 0.04);
-    vec3 l = d * inversesqrt(dist2);
+    float dd = dot(d, d);
+    vec3 l = d * inversesqrt(max(dd, 1e-8));
+    // 灯罩是有大小的发光面（半径 R 约 5 cm），W-LAMP 两处按面光源算：
+    // ① 照度 I / (d² + R²)（圆盘光源正对时的精确式），贴近灯罩时平滑地封顶。旧版 max(d², 0.04) 在 20 cm 以内
+    //    是一块照度处处相同的平台，被照亮的翼漆成了没有梯度的死白块；
+    // ② 地平线：光源张角 sinα = R / √(d² + R²)，n·l 在 ±sinα 之间时光源只露出一部分，用 (n·l + sinα)² / (4 sinα)
+    //    （球光源地平线的常用近似）代替硬截断。尾灯就装在翼尖弯折段的后缘上，旁边的翼面几乎和灯在同一个面里，
+    //    n·l 在 0 附近按距离场法线的零点几度起伏来回过零，照度又是 1/d² 放大过的——翼尖后缘一线隔几个像素一个黑点，
+    //    频闪一亮就是一串白点（W-STAIR 以为是去亮点限幅压的，实测关掉边缘超采样也照样有，是单条中心射线上的着色本身）
+    // ③ 像素足迹：弯曲的表面（翼尖弯折段、前缘）上一个像素里法线转过 pix / R，灯几乎贴着翼面照时，地平线附近被照亮的
+    //    只是一条比像素还细的带子，逐像素只取中心一点的 n·l，这条带子就被切成一段一段的虚线（夜里频闪时翼尖一线白点）。
+    //    过渡宽度取光源张角和「像素内法线转角的一半」中较大的那个，等于对像素里的 n·l 做平均
     float nlL = dot(nG, l);
-    if (nlL <= 0.0) continue;
-    vec3 e = wingLampIntensity(i, -l) / dist2 * 1e-3 * nlL;
+    float sinA = max(0.05 * inversesqrt(dd + 0.0025), 0.5 * spreadN);
+    float nlS = nlL >= sinA ? nlL : (nlL + sinA) * (nlL + sinA) / (4.0 * sinA);
+    if (nlL <= -sinA) continue;
+    vec3 e = wingLampSurfI(i, -l) / (dd + 0.0025) * 1e-3 * nlS;
     vec3 lC = vec3(uSeatSign * l.x, l.y, l.z);
     vec3 hL = normalize(lC + v);
     float nhL = max(dot(nGc, hL), 0.0);
@@ -133,12 +189,13 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 e
     // 轮廓上 n·v → 0.001 时灯的镜面被放大几百倍，边缘超采样的子射线一碰上就是一颗白点（后缘一串亮珠）
     float gv = 1.0 / (4.0 * max(nv, 0.25));
     lampLit += e * (m.albedo * (1.0 - m.metal) / M_PI
-      + coat * fL * ggxD(nhL, max(WING_A_COAT, 0.02)) * gv
-      + mix(vec3(0.04), m.albedo, m.metal) * ggxD(nhL, max(aBase, 0.02)) * gv);
+      + coat * fL * ggxD(nhL, aCoatL) * gv
+      + mix(vec3(0.04), m.albedo, m.metal) * ggxD(nhL, aBaseL) * gv);
   }
   if ((uWingDebug & 2) != 0) lampLit = vec3(0.0);
   if ((uWingDebug & 4) != 0) envSpec = vec3(0.0);
-  if ((uWingDebug & 16) != 0) return m.albedo * 1e-3 * dot(eSky, vec3(0.3333)) * 50.0;
+  gWingLamp = lampLit;
+  if ((uWingDebug & 16) != 0) { gWingLamp = vec3(0.0); return m.albedo * 1e-3 * dot(eSky, vec3(0.3333)) * 50.0; }
   return diffuse + spec + envSpec + lampLit + m.emit;
 }
 
@@ -184,9 +241,11 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
   vec3 nC = vec3(0.0);
   float shC = 1.0;
   vec3 colC = vec3(0.0);
+  vec3 lampC = vec3(0.0);   // 中心样本颜色里翼尖灯照明的那一份（W-LAMP：不进去亮点限幅）
   vec3 subCol[4];
+  vec3 subLamp[4];
   float subCov[4];
-  for (int i = 0; i < 4; i++) { subCol[i] = vec3(0.0); subCov[i] = 0.0; }
+  for (int i = 0; i < 4; i++) { subCol[i] = vec3(0.0); subLamp[i] = vec3(0.0); subCov[i] = 0.0; }
   for (int k = min(uWingSteps, 0); k < 5; k++) {
     if (k >= n) break;
     vec3 rdk = k == 0 ? rd : normalize(rd + (right * wingRgss(k).x + up * wingRgss(k).y) * pa);
@@ -227,25 +286,30 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     // 步数用完的子样本（wingStarved，见 wingTrace）一律沿用中心的颜色
     bool useC = k > 0 && (wingStarved(w) || ((uWingDebug & 256) == 0 && w.part == partC && dot(w.nA, nC) > 0.95));
     vec3 col = colC;
+    vec3 lamp = lampC;
     if (!useC) {
       if (k > 0) w.shadow = shC;
       col = shadeWing(ro + rdk * w.t, rdk, w, sunC, eSky, eDown, belowAlbedo);
+      lamp = gWingLamp;
       // 在云里：机翼隔着几米到十几米的雾。消光系数取探针测到的云密度，雾色取这条视线上云的亮度
       if (uCameraFog > 0.0) {
         float tFog = exp(-uCameraFog * w.t * 0.001);
         vec3 fogColor = cloud.rgb / max(1.0 - cloud.a, 0.05);
         col = mix(fogColor, col, tFog);
+        lamp *= tFog;
       }
       // 调试：超采样的像素染成品红（亮度不变，不影响自动曝光）
-      if (uWingEdgeAA > 1 && single < 0.5) col = vec3(1.0, 0.0, 1.0) * dot(col, vec3(0.2126, 0.7152, 0.0722)) * 1.4;
+      if (uWingEdgeAA > 1 && single < 0.5) { col = vec3(1.0, 0.0, 1.0) * dot(col, vec3(0.2126, 0.7152, 0.0722)) * 1.4; lamp = vec3(0.0); }
     }
     if (single > 0.5) {
       acc += col * c;
       covSum += c;
     } else if (k == 0) {
       colC = col;
+      lampC = lamp;
     } else {
       subCol[k - 1] = col;
+      subLamp[k - 1] = lamp;
       subCov[k - 1] = c;
     }
   }
@@ -257,18 +321,36 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     // 以前只用 4 条子射线，中心射线的颜色只给子样本沿用。细于半个像素的亮线（夜里频闪照亮的钝后缘端面）
     // 4 个样本的固定图案沿斜线轮流「碰上 / 碰不上」，成了一段一段的虚线；中心样本每个像素都碰上，线就连续了。
     // 中心射线能进到这里一定是打中了（覆盖率 1），不会把轮廓外扩
-    float lC = dot(colC, vec3(0.2126, 0.7152, 0.0722));
+    // W-LAMP：翼尖灯照明（lampC / subLamp）单独限幅。「最暗样本的 2 倍」对灯光不合适：灯几乎贴着翼面照，同一个像素里
+    // 背光的样本（弯折段背面、钝后缘背面）亮度是 0，限幅也跟着成了 0，被照亮的样本全被压掉——夜里翼尖后缘一线隔几个像素
+    // 一个黑点，频闪一亮是一串暗点。可也不能不限：钝后缘端面（约 4 mm，正对着灯）只被一个样本碰上时亮度是翼面的几十倍，
+    // 不限就是一串白点（试过）；按「第二亮的 2 倍」限也不够——比像素细的亮线沿斜线轮流被一两个样本碰上，还是一串白点（试过）。
+    // 灯光这一份改成「中位样本的 2 倍」：亮的样本不过半就当作像素里放不下的细节压掉（宁可没有这条细线，不要虚线），
+    // 过半才是看得见的亮线 / 亮面，照原样留着。
+    // 太阳 / 天空那一份仍按原来的「最暗样本的 2 倍、背后窗外亮度的 0.7 倍」限（T22、W-STAIR 的后缘亮珠）
+    const vec3 LW = vec3(0.2126, 0.7152, 0.0722);
+    float lC = dot(colC - lampC, LW);
     float lMin = lC;
+    float qC = dot(lampC, LW);
+    float q1 = qC, q2 = -1.0, q3 = -1.0;   // 灯光亮度的前三大
     for (int i = 0; i < 4; i++) {
-      if (subCov[i] > 0.0) lMin = min(lMin, dot(subCol[i], vec3(0.2126, 0.7152, 0.0722)));
+      if (subCov[i] <= 0.0) continue;
+      lMin = min(lMin, dot(subCol[i] - subLamp[i], LW));
+      float q = dot(subLamp[i], LW);
+      q3 = max(q3, min(q2, q));
+      q2 = max(q2, min(q1, q));
+      q1 = max(q1, q);
     }
     float lCap = max(2.0 * lMin, 0.7 * refL);
-    acc += colC * (lC > lCap ? lCap / lC : 1.0);
+    // 打中 ≥ 3 个样本时按第三亮（5 个里就是中位数）、只打中 2 个时按较暗的那个、只打中 1 个不限
+    float qCap = q3 >= 0.0 ? 2.0 * q3 : (q2 >= 0.0 ? 2.0 * q2 : 1e30);
+    acc += (colC - lampC) * (lC > lCap ? lCap / lC : 1.0) + lampC * (qC > qCap ? qCap / qC : 1.0);
     covSum += 1.0;
     for (int i = 0; i < 4; i++) {
       if (subCov[i] <= 0.0) continue;
-      float l = dot(subCol[i], vec3(0.2126, 0.7152, 0.0722));
-      acc += subCol[i] * (l > lCap ? lCap / l : 1.0) * subCov[i];
+      float l = dot(subCol[i] - subLamp[i], LW);
+      float q = dot(subLamp[i], LW);
+      acc += ((subCol[i] - subLamp[i]) * (l > lCap ? lCap / l : 1.0) + subLamp[i] * (q > qCap ? qCap / q : 1.0)) * subCov[i];
       covSum += subCov[i];
     }
   }
