@@ -8,6 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| WX11a | 第 7 波（天气，路线图主干） | — | worktree | Opus（风场数据：四层风气候态 + 随机扰动 + 按高度插值 + weather-stats 断言；零着色器） | — | 进行中 |
 | C10c | 第 7 波（云，C10b 审查 P2） | 5242 | worktree | Opus（俯视浓云海近处变暗：进云首样本受光偏暗 → 区间平均 / 插值估表面，零取样；正式加 sea-sc / sea-sc-low；主循环上限改 uLoopGuard） | — | 进行中 |
 | W-EDGE | 第 7 波（锯齿，W-STAIR 遗留） | 5239 | worktree | Opus（外轮廓 SDF 解析覆盖率替代 / 补充子射线；冷编译 ≤ +2%，机翼余量已吃一半） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
@@ -22,6 +23,14 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| WX11b | 风向接入（research/WX11-DESIGN.md）：砧 / 塔 / 卷云 / 云街方向随天气场；HIGH_WIND / LOW_WIND 常量改 uniform，方向只在借遮挡硬切时换（坑 A：绕原点旋转，1°≈1000 km 外平移 17 km）；uUpperWind 在云影图 / 占据网格缓存键里不可每帧写（坑 B） | 高 | weather-director / clouds.glsl / clouds.ts | clouds | PERF-15 安静窗口后；台风部分等 C-TYPH |
+| WX11c | 平流 + 重投影补偿（CPU 端 uMotion 减本帧平流位移，着色器不改）+ 云影中心跟随 + 雷暴按引导气流漂移（占据网格平移、闪电坐标同步）；冻结 / 场景偏移时平流归零；须与 DX-WX 同波 | 高 | clouds.* / weather.ts / main.ts 一两行 | clouds | 早于 WX12 |
+| DX-WX | flight / ab / gpu-ab 支持注入平流，job.offset 同时归零平流 | 中 | scripts/lib/* | — | 与 WX11c 同波 |
+| WX11d | 积云沿切变倾斜（静态几何剪切，斜率上限 0.6）、钩卷云拖尾 | 中 | clouds.glsl.ts | clouds | C06 合并后 |
+| WX11e | 云街间距 2–6 倍边界层厚、分区随机（打破 4 km 严格周期）；层积云卷轴排列 | 中 | clouds.glsl / weather.ts | clouds | WX11b 后 |
+| WX11f | 时间演变：细节噪声上滚、天气图与云体不同速平流；60× 压缩变化速度 | 中 | clouds.* | clouds | WX11c 后 |
+| WX11g | 海面风速按天气场（量化、限频、借遮挡；坑 C：海浪频谱重算十几 ms）；海浪方向常量单独计时再改 | 中 | weather-director / ocean/* | ocean | WX11a 后 |
+| WX11h | （可选）地速 = 真空速 + 风，偏流角 | 低 | flight.ts | — | 最后 |
 | T48d | T48c 遗留：50 ms 频闪时小翼后缘一条与闪光区边缘零星灯芯变暗（1067 px，均值 −4.4、最暗 −16.6；3×3 最小值在闪光边缘低估扣除量）——可试十字 5 格或按闪光区掩码放宽；低优先 | 低 | render/exposure.ts | exposure | T48c-pulse.mjs 同轮相对门限 + 变暗计数 |
 | C06 | 近处云第二级细节（菜花小卷团）：真值同样是泥塑，只能从密度场补（形状 55 m、细节 14 m 纹素是上限） | 中高 | clouds（密度） | clouds | cu-side 近景、backlit-close |
 | DX-25 | 云不透明度调试出口（exposure 加类似 uDebugMask 的开关或 ab job 导出云 alpha），让 `compare --halo` 能做真实验收；flicker 照搬 ab 逐张解码去掉 48 帧上限 | 低 | exposure（调试开关）/ scripts | exposure | ab 导出云 alpha 后 --halo 跑通 |
