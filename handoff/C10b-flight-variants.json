@@ -1,0 +1,40 @@
+[
+ {
+  "name": "new"
+ },
+ {
+  "name": "old",
+  "patch": {
+   "clouds.marchMat": [
+    [
+     "  bool wasEmpty = true;\n#ifdef CLOUD_WEATHER\n  bool refineOn",
+     "  bool wasEmpty = true;\n#ifndef CLOUD_WEATHER\n  int bis = 0; float bLo = seg.x; float bHi = seg.x; float tPrevS = seg.x; float firstK = 1.0;\n#endif\n#ifdef CLOUD_WEATHER\n  bool refineOn"
+    ],
+    [
+     "(!refineOn && i >= 384)) break;",
+     "(!refineOn && i >= 192)) break;"
+    ],
+    [
+     "|| i >= 384) break;",
+     "|| i >= 192) break;"
+    ],
+    [
+     "    float emptyK = (1.0 + smoothstep(60.0, 90.0, t)) * (i == 0 ? 0.5 : 1.0);\n",
+     "    float emptyK = 2.0;\n"
+    ],
+    [
+     "    float stepLen = wasEmpty ? emptyK * dt : dt;\n#endif\n    float tS = t + stepLen * jitter;\n",
+     "    float stepLen = (wasEmpty ? 2.0 * dt : dt) * firstK;\n    float tS = bis > 0 ? 0.5 * (bLo + bHi) : t + stepLen * jitter;\n#endif\n#ifdef CLOUD_WEATHER\n    float tS = t + stepLen * jitter;\n#endif\n"
+    ],
+    [
+     "    float dens = cloudDensity(p, lod, t < 150.0);\n",
+     "    float dens = cloudDensity(p, lod, t < 150.0);\n#ifndef CLOUD_WEATHER\n    firstK = bis == 1 ? 0.5 : 1.0;\n    if (bis > 0 || (dens > 0.002 && wasEmpty && t < 60.0)) {\n      if (bis == 0) { bLo = tPrevS; bis = 5; }\n      if (dens > 0.002) bHi = tS; else bLo = tS;\n      bis--;\n      if (bis == 0) { t = bHi; wasEmpty = false; }\n      continue;\n    }\n#endif\n"
+    ],
+    [
+     "      wasEmpty = true;\n#ifdef CLOUD_WEATHER\n      wasThin = false;",
+     "      wasEmpty = true;\n#ifndef CLOUD_WEATHER\n      tPrevS = tS;\n#endif\n#ifdef CLOUD_WEATHER\n      wasThin = false;"
+    ]
+   ]
+  }
+ }
+]
