@@ -1,0 +1,136 @@
+[
+ {
+  "name": "hnd-low-day",
+  "scene": {
+   "name": "hnd-low-day",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 900,
+    "altitude": 1.5,
+    "coverage": 0.1,
+    "wing-pos": "-4"
+   },
+   "ground": true
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "tintGround",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n      L *= vec3(1.6, 0.6, 0.6);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "tintSea",
+    "patch": {
+     "__outCur": [
+      [
+       "      L += refl;\n",
+       "      L += refl;\n      L *= vec3(0.6, 0.6, 1.6);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dbg5-sea",
+    "uniforms": {
+     "__outCur.uniforms.uDebug.value": 5
+    }
+   },
+   {
+    "name": "dbg6-refl",
+    "uniforms": {
+     "__outCur.uniforms.uDebug.value": 6
+    }
+   },
+   {
+    "name": "dbg7-insc",
+    "uniforms": {
+     "__outCur.uniforms.uDebug.value": 7
+    }
+   }
+  ],
+  "crop": [
+   400,
+   400,
+   800,
+   300
+  ]
+ },
+ {
+  "name": "hnd-low-day-26",
+  "scene": {
+   "name": "hnd-low-day-26",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 900,
+    "altitude": 2.6,
+    "coverage": 0.1,
+    "wing-pos": "-4"
+   },
+   "ground": true
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "tintGround",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n      L *= vec3(1.6, 0.6, 0.6);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "tintSea",
+    "patch": {
+     "__outCur": [
+      [
+       "      L += refl;\n",
+       "      L += refl;\n      L *= vec3(0.6, 0.6, 1.6);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dbg5-sea",
+    "uniforms": {
+     "__outCur.uniforms.uDebug.value": 5
+    }
+   },
+   {
+    "name": "dbg6-refl",
+    "uniforms": {
+     "__outCur.uniforms.uDebug.value": 6
+    }
+   },
+   {
+    "name": "dbg7-insc",
+    "uniforms": {
+     "__outCur.uniforms.uDebug.value": 7
+    }
+   }
+  ],
+  "crop": [
+   400,
+   400,
+   800,
+   300
+  ]
+ }
+]
