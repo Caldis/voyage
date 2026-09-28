@@ -1,0 +1,6 @@
+[
+  { "name": "clouds-variety", "scene": "clouds-variety", "offset": [37, -12], "crop": [520, 560, 560, 480] },
+  { "name": "backlit-close", "scene": "backlit-close", "crop": [560, 100, 560, 320] },
+  { "name": "noon-cumulus", "scene": "noon-cumulus", "offset": [0, 0], "crop": [520, 360, 480, 480] },
+  { "name": "sunset-wing", "scene": "sunset-wing", "offset": [0, 0], "crop": [420, 700, 760, 440] }
+]

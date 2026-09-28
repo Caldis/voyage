@@ -501,8 +501,24 @@ async function translateSide(root, only, bisectGroups, { lenient = false } = {})
   return translateAll(variants);
 }
 
+/** DX-23：基线树缺依赖时先给明确提示。临时 worktree（`git worktree add tmp/xxx <提交>`）默认没有 node_modules，
+ * vite ssrLoadModule 会在枚举到第一个 import "three" 的模块时抛一串看不出原因的解析错误（第 7 波 W-STAIR /
+ * T48c 审查各踩一次）。按 Node 的解析规则从基线目录往上找 node_modules/three，找不到就直接报错并给修法。 */
+function assertBaselineDeps(root) {
+  for (let dir = root; ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, "node_modules", "three"))) return;
+    if (path.dirname(dir) === dir) break;
+  }
+  throw new Error(
+    `--baseline "${root}" 这棵树找不到依赖（从它往上没有 node_modules/three）。临时 worktree 需要先装依赖：\n` +
+      `  在那棵树的仓库根执行 pnpm install --frozen-lockfile --prefer-offline（约 2 s，走本机 pnpm 仓库）\n` +
+      `或者改传一个已经装好依赖的 worktree 的 apps/voyage 目录。`,
+  );
+}
+
 async function runBaselineCompare(args, { fxc, quick, jobsN, only, bisectGroups }) {
   const baselineRoot = resolveBaselineRoot(args.baseline);
+  assertBaselineDeps(baselineRoot);
   const rounds = Number(args.rounds || 3);
   const keepHlsl = !!args["keep-hlsl"];
 

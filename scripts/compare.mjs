@@ -50,6 +50,13 @@
 //                        记过这条：「交叉 / 菱形纹用对角高频能量占比量，相邻像素差量不出（与横纹此消彼长）」，
 //                        此前只能靠 handoff/C03-hf.py 的 FFT 频谱才能看出来，这里给一个不用离开 Node 的近似。
 //   pctBright / pctDark  luma ≥ 250 / ≤ 5 的像素占比（%）——判断「死白過曝」或「死黑欠曝」的面积
+//   hsvSat / rgbSpread（DX-23）  HSV 饱和度（(max−min)/max，0–100）与 RGB max−min（0–255）的均值——
+//                        C / TM 系列任务的色度口径（HSL 饱和度在暗部会被放大，判断「夜里偏色」用这两个）
+//   blownBlobs / blownMaxArea（DX-23）  luma ≥ 250 的 4 邻域连通块个数与最大一块的像素数——死白验收看最大块
+//   streak / streakShift（DX-23）  斜纹指数：高通残差（L − 3×3 盒平均）在 10 个位移上的归一自相关最大值及其位移
+//                        （C12-metrics.py 口径）。**只在静止、同机位的截图之间比**，画面结构本身也贡献自相关
+//   halo（DX-23，给了 --halo <参照图> 时）  光晕指标（泛化自 handoff/TM02-halo.py）：需要 --mask-image 是云
+//                        不透明度图（≥ --mask-threshold 算云内），见 haloForRegion 注释
 //   maskedPixels         被 --mask 排除、没计入以上统计的像素数
 //
 // --mask-image <图.png> [--mask-channel alpha|luma] [--mask-threshold 128] [--mask-labels 高组,低组]（DX-22）：
@@ -225,6 +232,11 @@ async function main() {
   const [maskLabelHigh, maskLabelLow] = maskLabelsRaw;
   if (maskImagePath && !fs.existsSync(maskImagePath)) throw new Error(`--mask-image 找不到图片：${args["mask-image"]}`);
   const maskImageDataUrl = maskImagePath ? `data:image/png;base64,${fs.readFileSync(maskImagePath).toString("base64")}` : null;
+  // --halo <参照图>（DX-23）：光晕指标，需要 --measure 区域与 --mask-image（云不透明度图），见 haloForRegion
+  const haloPath = args.halo ? resolveRepoPath(REPO_ROOT, String(args.halo)) : null;
+  if (haloPath && !fs.existsSync(haloPath)) throw new Error(`--halo 找不到参照图：${args.halo}`);
+  if (haloPath && (!maskImagePath || regions.length === 0)) throw new Error("--halo 需要同时给 --measure 区域与 --mask-image（云不透明度图，≥ --mask-threshold 算云内）");
+  const haloDataUrl = haloPath ? `data:image/png;base64,${fs.readFileSync(haloPath).toString("base64")}` : null;
 
   const tiles = images.map((p) => {
     const abs = path.isAbsolute(p) ? p : path.join(REPO_ROOT, p);
@@ -243,7 +255,7 @@ async function main() {
   try {
     const page = await (await browser.newContext()).newPage();
     const { outDataUrl, measurements, diffStats, rowCurves, colCurves, thumbs, maskImageWarnings } = await page.evaluate(
-      async ({ tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap, maskImageDataUrl, maskChannel, maskThreshold, maskLabelHigh, maskLabelLow }) => {
+      async ({ tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap, maskImageDataUrl, maskChannel, maskThreshold, maskLabelHigh, maskLabelLow, haloDataUrl }) => {
         const loadImg = (src) =>
           new Promise((resolve, reject) => {
             const img = new Image();
@@ -252,6 +264,7 @@ async function main() {
             img.src = src;
           });
         const imgs = await Promise.all(tiles.map((t) => loadImg(t.dataUrl)));
+        const haloImg = haloDataUrl ? await loadImg(haloDataUrl) : null;
 
         // --mask-image（DX-22）：只解码一次，取满分辨率的 luma 或 alpha 通道当分组依据，和 --measure 各图
         // 各自比对分辨率（不要求和 crop/zoom 一致，要求和原图本身同尺寸，因为分组坐标系是原图像素坐标）
@@ -356,6 +369,79 @@ async function main() {
           }
           const nAdj = nH + nV;
           const sumAdjDiff = sumH + sumV;
+          // DX-23：HSV 饱和度（(max−min)/max，C / TM 系列任务用的口径；上面的 meanSaturation 是 HSL，暗部会被放大）
+          // 与 RGB max−min（绝对色度，0–255，暗部不放大）
+          let sumHsv = 0, sumSpread = 0;
+          for (let ly = 0, p = 0, j = 0; ly < sh; ly++) {
+            for (let lx = 0; lx < sw; lx++, p += 4, j++) {
+              if (!included[j]) continue;
+              const mx = Math.max(data[p], data[p + 1], data[p + 2]);
+              const mn = Math.min(data[p], data[p + 1], data[p + 2]);
+              sumSpread += mx - mn;
+              sumHsv += mx > 0 ? (mx - mn) / mx : 0;
+            }
+          }
+          // DX-23：死白连通块（luma ≥ 250，4 邻域）——死白验收看「最大一块多大」，不是总面积（散点高光无害、成片才出戏）
+          const seen = new Uint8Array(sw * sh);
+          let blobs = 0, blobMax = 0;
+          const stack = [];
+          for (let j0 = 0; j0 < sw * sh; j0++) {
+            if (seen[j0] || !included[j0] || lum[j0] < 250) continue;
+            blobs++;
+            let area = 0;
+            stack.push(j0);
+            seen[j0] = 1;
+            while (stack.length) {
+              const q = stack.pop();
+              area++;
+              const qx = q % sw, qy = (q - qx) / sw;
+              for (const [nx, ny] of [[qx + 1, qy], [qx - 1, qy], [qx, qy + 1], [qx, qy - 1]]) {
+                if (nx < 0 || ny < 0 || nx >= sw || ny >= sh) continue;
+                const nq = ny * sw + nx;
+                if (!seen[nq] && included[nq] && lum[nq] >= 250) {
+                  seen[nq] = 1;
+                  stack.push(nq);
+                }
+              }
+            }
+            if (area > blobMax) blobMax = area;
+          }
+          // DX-23：斜纹指数（C12-metrics.py 口径）：高通残差 H = L − 3×3 盒平均，对 10 个位移（横、纵、两条对角、
+          // 骑士步）求归一自相关，取最大值。噪声是白的 → 接近 0 或负；有方向性的斜纹 / 横纹 → 某个位移明显为正。
+          // **只适用于静止、同机位的截图**（画面内容本身的结构也会贡献自相关，只能跨变体比，不能看绝对值）。
+          let streak = null, streakShift = null;
+          if (sw > 12 && sh > 12) {
+            const Hh = new Float64Array(sw * sh);
+            let hm = 0, hn = 0;
+            for (let y = 1; y < sh - 1; y++)
+              for (let x = 1; x < sw - 1; x++) {
+                let s = 0;
+                for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) s += lum[(y + dy) * sw + x + dx];
+                const v = lum[y * sw + x] - s / 9;
+                Hh[y * sw + x] = v;
+                hm += v;
+                hn++;
+              }
+            hm /= Math.max(1, hn);
+            const inner = (x, y) => x >= 3 && y >= 3 && x < sw - 3 && y < sh - 3;
+            let v0 = 0, n0 = 0;
+            for (let y = 3; y < sh - 3; y++) for (let x = 3; x < sw - 3; x++) { const j = y * sw + x; if (!included[j]) continue; v0 += (Hh[j] - hm) ** 2; n0++; }
+            v0 /= Math.max(1, n0);
+            if (v0 > 0) {
+              for (const [dy, dx] of [[0, 1], [1, 0], [1, 1], [1, -1], [1, 2], [2, 1], [1, -2], [2, -1], [2, 2], [2, -2]]) {
+                let s = 0, n = 0;
+                for (let y = 3; y < sh - 3; y++)
+                  for (let x = 3; x < sw - 3; x++) {
+                    const j = y * sw + x, x2 = x + dx, y2 = y + dy;
+                    if (!inner(x2, y2) || !included[j] || !included[y2 * sw + x2]) continue;
+                    s += (Hh[j] - hm) * (Hh[y2 * sw + x2] - hm);
+                    n++;
+                  }
+                const ac = n ? s / n / v0 : 0;
+                if (streak === null || ac > streak) { streak = ac; streakShift = `${dy},${dx}`; }
+              }
+            }
+          }
           return {
             mean: +mean.toFixed(1),
             p99: +p99.toFixed(1),
@@ -369,8 +455,112 @@ async function main() {
             adjDiffDiag: nD ? +(sumD / nD).toFixed(2) : 0,
             pctBright: +((nBright / n) * 100).toFixed(2),
             pctDark: +((nDark / n) * 100).toFixed(2),
+            hsvSat: +((sumHsv / n) * 100).toFixed(2),
+            rgbSpread: +(sumSpread / n).toFixed(2),
+            blownBlobs: blobs,
+            blownMaxArea: blobMax,
+            streak: streak === null ? null : +streak.toFixed(4),
+            streakShift,
             maskedPixels: lum.length - nIncluded,
           };
+        }
+
+        // --halo <参照图>（DX-23，泛化自 handoff/TM02-halo.py）：局部色调映射 / 泛光类改动的光晕指标。
+        // 要求 --mask-image（云不透明度图：≥ --mask-threshold 算云内）。D = 本图 luma − 参照 luma；在离云边 ≥ 25 px 的
+        // 云内部，按参照 luma（每 1 级一格，≥ 20 像素才算）取 D 的中位数得到「逐点曲线」f(L)，残差 R = D − f(L_ref)；
+        // 近边各距离格（云内 1–2 / 3–4 / 5–8 / 9–16 / 17–24 px）R 的均值偏离内部均值就是光晕。
+        //   haloAmp   = 各近边格 |R 均值 − 内部 R 均值| 的最大值（显示级 0–255）
+        //   haloWidth = 该差 > 0.5 级的最远格外沿（px），0 = 无光晕
+        //   skyD      = 云外 1–2 / 3–4 / 5–8 px 的 D 均值（门控为 0 的改动应为 0）
+        function haloForRegion(img, refImg, r) {
+          const W = img.naturalWidth, H = img.naturalHeight;
+          const x0 = Math.max(0, r.x), y0 = Math.max(0, r.y);
+          const w = Math.min(r.w, W - x0), h = Math.min(r.h, H - y0);
+          const lumOf = (im) => {
+            const c = document.createElement("canvas");
+            c.width = w;
+            c.height = h;
+            const ctx = c.getContext("2d");
+            ctx.drawImage(im, x0, y0, w, h, 0, 0, w, h);
+            const d = ctx.getImageData(0, 0, w, h).data;
+            const L = new Float64Array(w * h);
+            for (let p = 0, j = 0; j < L.length; p += 4, j++) L[j] = 0.2126 * d[p] + 0.7152 * d[p + 1] + 0.0722 * d[p + 2];
+            return L;
+          };
+          const F = lumOf(img), R0 = lumOf(refImg);
+          const cloud = new Uint8Array(w * h), sky = new Uint8Array(w * h);
+          for (let y = 0; y < h; y++)
+            for (let x = 0; x < w; x++) {
+              const hi = maskHighAt(x0 + x, y0 + y);
+              cloud[y * w + x] = hi ? 1 : 0;
+              sky[y * w + x] = hi ? 0 : 1;
+            }
+          const distIn = (m, cap) => {
+            const d = new Uint8Array(w * h);
+            let cur = m.slice();
+            for (let i = 1; i <= cap; i++) {
+              let any = false;
+              const nxt = new Uint8Array(w * h);
+              for (let y = 0; y < h; y++)
+                for (let x = 0; x < w; x++) {
+                  const j = y * w + x;
+                  if (!cur[j]) continue;
+                  d[j] = i;
+                  const ok = (xx, yy) => (xx < 0 || yy < 0 || xx >= w || yy >= h ? cur[j] : cur[yy * w + xx]);
+                  if (ok(x - 1, y) && ok(x + 1, y) && ok(x, y - 1) && ok(x, y + 1)) { nxt[j] = 1; any = true; }
+                }
+              cur = nxt;
+              if (!any) break;
+            }
+            for (let j = 0; j < d.length; j++) if (cur[j]) d[j] = cap;
+            return d;
+          };
+          const din = distIn(cloud, 25), dout = distIn(sky, 25);
+          const D = new Float64Array(w * h);
+          for (let j = 0; j < D.length; j++) D[j] = F[j] - R0[j];
+          const byKey = Array.from({ length: 256 }, () => []);
+          for (let j = 0; j < D.length; j++) if (din[j] >= 25) byKey[Math.min(255, Math.max(0, Math.round(R0[j])))].push(D[j]);
+          const have = [], fv = new Float64Array(256);
+          for (let k = 0; k < 256; k++) {
+            if (byKey[k].length >= 20) {
+              const s = byKey[k].sort((a, b) => a - b);
+              fv[k] = s[Math.floor(s.length / 2)];
+              have.push(k);
+            }
+          }
+          if (have.length === 0) return { error: "云内部（离边 ≥ 25 px）像素太少，算不了光晕（检查 --mask-image / --mask-threshold）" };
+          for (let k = 0; k < 256; k++) {
+            if (byKey[k].length >= 20) continue;
+            let lo = null, hi = null;
+            for (const q of have) { if (q < k) lo = q; else if (hi === null && q > k) hi = q; }
+            fv[k] = lo === null ? fv[hi] : hi === null ? fv[lo] : fv[lo] + ((fv[hi] - fv[lo]) * (k - lo)) / (hi - lo);
+          }
+          const Rr = new Float64Array(D.length);
+          let base = 0, nb = 0;
+          for (let j = 0; j < D.length; j++) {
+            Rr[j] = D[j] - fv[Math.min(255, Math.max(0, Math.round(R0[j])))];
+            if (din[j] >= 25) { base += Rr[j]; nb++; }
+          }
+          base /= Math.max(1, nb);
+          const BINS = [[1, 2], [3, 4], [5, 8], [9, 16], [17, 24]];
+          const cells = [];
+          let amp = 0, width = 0;
+          for (const [a, b] of BINS) {
+            let s = 0, n = 0;
+            for (let j = 0; j < D.length; j++) if (din[j] >= a && din[j] <= b) { s += Rr[j]; n++; }
+            const v = n > 200 ? s / n : null;
+            cells.push(v === null ? null : +v.toFixed(2));
+            if (v !== null) {
+              amp = Math.max(amp, Math.abs(v - base));
+              if (Math.abs(v - base) > 0.5) width = Math.max(width, b);
+            }
+          }
+          const skyD = BINS.slice(0, 3).map(([a, b]) => {
+            let s = 0, n = 0;
+            for (let j = 0; j < D.length; j++) if (dout[j] >= a && dout[j] <= b) { s += D[j]; n++; }
+            return n > 200 ? +(s / n).toFixed(2) : null;
+          });
+          return { haloAmp: +amp.toFixed(2), haloWidth: width, innerR: +base.toFixed(2), cloudBins: cells, skyD };
         }
 
         const maskImageWarnings = [];
@@ -380,10 +570,17 @@ async function main() {
             const img = imgs[i];
             for (const r of regions) {
               const base = statsForRegion(img, r, null);
+              let halo = null;
+              if (haloImg) {
+                if (!maskImg || maskImg.width !== img.naturalWidth || maskImg.height !== img.naturalHeight) halo = { error: "--halo 需要和本图同尺寸的 --mask-image（云不透明度图）" };
+                else if (haloImg.naturalWidth !== img.naturalWidth || haloImg.naturalHeight !== img.naturalHeight) halo = { error: "--halo 参照图尺寸与本图不同" };
+                else halo = haloForRegion(img, haloImg, r);
+              }
               measurements.push({
                 image: tiles[i].label,
                 region: { x: r.x, y: r.y, w: r.w, h: r.h },
                 ...base,
+                ...(halo ? { halo } : {}),
               });
               if (maskImg) {
                 if (maskImg.width !== img.naturalWidth || maskImg.height !== img.naturalHeight) {
@@ -577,7 +774,7 @@ async function main() {
         }
         return { outDataUrl: final.toDataURL("image/png"), measurements, diffStats, rowCurves, colCurves, thumbs, maskImageWarnings };
       },
-      { tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap: !!heatmapPath, maskImageDataUrl, maskChannel, maskThreshold, maskLabelHigh, maskLabelLow },
+      { tiles, crop, zoom, outPath, regions, masks, rows, cols, thumbSize, diffTile, threshold, wantHeatmap: !!heatmapPath, maskImageDataUrl, maskChannel, maskThreshold, maskLabelHigh, maskLabelLow, haloDataUrl },
     );
     if (outPath) {
       fs.writeFileSync(outPath, Buffer.from(outDataUrl.split(",")[1], "base64"));
@@ -595,6 +792,16 @@ async function main() {
               `RGB=(${m.meanR},${m.meanG},${m.meanB})  sat=${m.meanSaturation}  adjDiff=${m.adjacentDiff}（横${m.adjDiffH}/纵${m.adjDiffV}/对角${m.adjDiffDiag}）  ` +
               `bright≥250=${m.pctBright}%  dark≤5=${m.pctDark}%${m.maskedPixels ? `  masked=${m.maskedPixels}` : ""}`,
           );
+          console.log(
+            `      HSV 饱和=${m.hsvSat}%  RGB max−min=${m.rgbSpread}  死白连通块 ${m.blownBlobs} 个 / 最大 ${m.blownMaxArea} px  斜纹指数=${m.streak ?? "n/a"}（位移 ${m.streakShift ?? "-"}，只在静止同机位间比）`,
+          );
+          if (m.halo) {
+            console.log(
+              m.halo.error
+                ? `      光晕：${m.halo.error}`
+                : `      光晕 幅度=${m.halo.haloAmp} 宽度=${m.halo.haloWidth}px  云内近边 R [1–2,3–4,5–8,9–16,17–24]=${JSON.stringify(m.halo.cloudBins)} 内部 R=${m.halo.innerR}  云外 D=${JSON.stringify(m.halo.skyD)}`,
+            );
+          }
         }
       }
     }

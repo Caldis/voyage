@@ -1,0 +1,16 @@
+[
+  { "name": "sunset-wing", "scene": "sunset-wing", "bench": true,
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" },
+      { "name": "new", "js": "" }, { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" }, { "name": "old", "js": "__wsPatch([], __wsBase);" }
+    ] },
+  { "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5], "bench": true,
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" },
+      { "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" },
+      { "name": "new", "js": "" }, { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" }, { "name": "old", "js": "__wsPatch([], __wsBase);" }
+    ] }
+]

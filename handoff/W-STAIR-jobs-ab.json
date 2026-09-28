@@ -1,0 +1,20 @@
+[
+  { "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5],
+    "variants": [
+      { "name": "old", "js": "__wsPatch([], __wsBase);" },
+      { "name": "new", "js": "" },
+      { "name": "old2", "js": "__wsPatch([], __wsBase);" },
+      { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }
+    ],
+    "compare": [["new", "old", "nowing"], ["old2", "old", "nowing"]] },
+  { "name": "ic_-30_-25", "scene": "in-cloud", "offset": [-30, -25], "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] },
+  { "name": "ic_-30_-5", "scene": "in-cloud", "offset": [-30, -5], "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] },
+  { "name": "ic_-10_15", "scene": "in-cloud", "offset": [-10, 15], "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] },
+  { "name": "ic_10_-25", "scene": "in-cloud", "offset": [10, -25], "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] },
+  { "name": "ic_10_15", "scene": "in-cloud", "offset": [10, 15], "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] },
+  { "name": "ic_30_-5", "scene": "in-cloud", "offset": [30, -5], "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] },
+  { "name": "ic_30_35", "scene": "in-cloud", "offset": [30, 35], "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] },
+  { "name": "sunset-wing", "scene": "sunset-wing", "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] },
+  { "name": "biz-seated-noon", "scene": { "name": "biz-seated-noon", "p": { "preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business" }, "head": [0, 0.02, -0.42] }, "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] },
+  { "name": "night-wing-on", "scene": { "name": "night-wing-on", "p": { "preset": "wpac", "date": "2026-01-16", "time": 1320, "coverage": 0.15, "cabin-light": true, "wing-pos": "8" } }, "variants": [{ "name": "old", "js": "__wsPatch([], __wsBase);" }, { "name": "new", "js": "" }, { "name": "old-strobe", "js": "__wsPatch([], __wsBase); v.wingDebug.strobe = 1;" }, { "name": "new-strobe", "js": "v.wingDebug.strobe = 1;" }, { "name": "nowing", "js": "__wsPatch([['if (wing.a > 0.0) {', 'if (false) {']], __wsBase);" }], "compare": [["new", "old", "nowing"]] }
+]
