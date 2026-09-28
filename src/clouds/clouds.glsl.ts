@@ -509,6 +509,26 @@ float heightProfile(float h, float type) {
   return mix(stratus, cumulus, type);
 }
 
+// ---- 积云的立体形状（C-TOFU：去掉「二维轮廓往上挤出来」的豆腐块）----
+// 旧版三个成因（research/TOWERING.md §2.1，着色器开关对照定位）：
+//  ①形状噪声竖直方向几乎不变：大云团那级 nB 竖直周期约 18 km（alt × 0.9 / 16.1 km）、小的 nA 约 5.4 km，
+//    积云层只有 2–5 km 厚 → 一层之内噪声只随水平位置变，云就是水平轮廓的竖直挤出；
+//  ②剖面 h 0.12–0.45 是满密度平台，再 ×4.5 饱和 → 侧壁竖直，云顶被剖面的下降段统一截平；
+//  ③远处取到形状噪声 mip 4–5（128³ 的 mip 5 只剩 4³ 纹素），三线性插值的平面小面在竖直方向连成肋纹。
+// 竖直频率：nA 竖直周期 7 / 2.6 ≈ 2.7 km、nB 16.1 / 1.8 ≈ 8.9 km（一层之内有一个以上的起伏，侧面成串鼓包）
+const float SHAPE_VA = 2.6;
+const float SHAPE_VB = 1.8;
+// 形状噪声 mip 封顶（nB 再低一级）：mip 3 一个纹素 0.44 km，远处的形状靠时间累积去噪，不再是 1.75 km 的纹素小面
+const float SHAPE_LOD_MAX = 3.0;
+// 云顶门槛：这一列的强度（大形超过覆盖阈值多少，0..1）要超过它，这个高度才有云。
+// h < CU_DOME_BASE 不设门槛（积云下部侧面近乎竖直、底平），往上按 ((h − 基)/(1 − 基))^CU_TOP_POW 升到 1：
+// 强度 s 的一列云顶约在 基 + (1 − 基)·s^(1/CU_TOP_POW)；弱的芯只长成矮矮的一团，最强的才顶到局部云顶
+const float CU_DOME_BASE = 0.15;
+const float CU_TOP_POW = 1.2;
+float cumulusTopReq(float h) {
+  return pow(clamp((h - CU_DOME_BASE) / (1.0 - CU_DOME_BASE), 0.0, 1.0), CU_TOP_POW);
+}
+
 // ---- 天气场：决定每个区域长什么样的云，而不只是「有没有云」----
 struct Weather {
   float coverage;  // 0..1
@@ -592,9 +612,12 @@ float layerDensity(vec3 p, float lod, bool detail) {
   }
 #endif
   // 两个尺度的形状噪声，相互旋转 37°，按区域混合：有的地方是小碎云，有的地方是大云团
-  vec4 nA = textureLod(uShapeNoise, vec3(xzn.x, alt * 1.3, xzn.y) / SHAPE_TILE, lod);
+  // 竖直频率与 mip 封顶（C-TOFU）见 SHAPE_VA / SHAPE_VB / SHAPE_LOD_MAX 的注释；卷云照旧（丝缕本来就该是薄层）
+  float va = mix(SHAPE_VA, 1.3, cir);
+  float vb = mix(SHAPE_VB, 0.9, cir);
+  vec4 nA = textureLod(uShapeNoise, vec3(xzn.x, alt * va, xzn.y) / SHAPE_TILE, min(lod, SHAPE_LOD_MAX));
   vec2 xzB = rot2(xzn, 0.65);
-  vec4 nB = textureLod(uShapeNoise, vec3(xzB.x, alt * 0.9, xzB.y) / (SHAPE_TILE * 2.3) + 0.37, max(lod - 1.0, 0.0));
+  vec4 nB = textureLod(uShapeNoise, vec3(xzB.x, alt * vb, xzB.y) / (SHAPE_TILE * 2.3) + 0.37, clamp(lod - 1.0, 0.0, SHAPE_LOD_MAX - 1.0));
   float fbmA = nA.g * 0.625 + nA.b * 0.25 + nA.a * 0.125;
   float fbmB = nB.g * 0.625 + nB.b * 0.25 + nB.a * 0.125;
   float baseA = remapc(nA.r, fbmA - 1.0, 1.0, 0.0, 1.0);
@@ -604,9 +627,14 @@ float layerDensity(vec3 p, float lod, bool detail) {
   // 按约 0.4 km 的小单体（nA.a）和几公里的大起伏（fbmB）上下错开，有的地方垂下来一兜、有的地方缩上去，
   // 云底才有明暗不一的絮团。只挪高度剖面的输入，不多取纹理
   float hB = h + (1.0 - cir) * (0.09 * (nA.a - 0.45) + 0.05 * (fbmB - 0.5)) * (1.0 - smoothstep(0.1, 0.3, h));
-  base *= heightProfile(hB, uCloudType);
+  // 积云族（云型 > 0.45）不再用「满密度平台 + 统一下降段」的剖面（C-TOFU），改成「云顶随这一列的强度变」：
+  // 剖面只管云底，云顶由 cumulusTopReq 从强度里扣掉——强的芯长得高、弱的矮，边缘处高度连续收到 0（圆顶），
+  // 层积云 / 高积云 / 卷云（云型 ≤ 0.45）逐字照旧
+  float cuW = smoothstep(0.45, 1.0, uCloudType);
+  base *= mix(heightProfile(hB, uCloudType), smoothstep(0.0, 0.12, hB), cuW);
   float coverage = wx.coverage;
-  float d = remapc(base, 1.0 - coverage, 1.0, 0.0, 1.0) * coverage;
+  float d = remapc(base, 1.0 - coverage, 1.0, 0.0, 1.0);
+  d = max(d - cuW * cumulusTopReq(h), 0.0) * coverage;
   // 卷云的丝缕要细：覆盖阈值再往上抬，只留噪声的脊
 #ifdef CLOUD_CIRRUS
   if (cir > 0.0) d = remapc(d, 0.25 * cir, 1.0, 0.0, 1.0);
