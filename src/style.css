@@ -109,12 +109,12 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
    或高 ≤ 500px」（比指南字面的 <600px 宽一点，专门盖住手机横屏——844×390 宽 844px 不算窄，但高 390px 算矮屏）。
    收起（默认）时只露 .panel-handle 一条：#panel 自身不设高度，交给内容自然撑开（只有把手可见时就是把手的高度，
    实测约 38–40px，390×844 下约 4.7% 面积、844×390 下约 10%，两边都在「≤ 12%」的验收线内，也够不到舷窗中心
-   的圆），不用为了卡死一个数字给 max-height 写死具体像素、冒着和真实渲染字号对不上的风险。展开后 ≤ 70vh，
+   的圆），不用为了卡死一个数字给 max-height 写死具体像素、冒着和真实渲染字号对不上的风险。展开后 ≤ 40vh（PANEL_UX_GUIDE §9 窄屏上限），
    在 .panel-body 内部滚动（#panel 自己不再滚，否则把手会被滚出屏幕，见 ui.ts setupDrawerUi）。
    桌面（本媒体查询之外）完全不受影响：.panel-handle 常年 display:none，#panel 逐位不变。 */
 @media (max-width: 720px), (max-height: 500px) {
   #panel {
-    left: 0; right: 0; top: auto; bottom: 0; width: 100%; max-height: 70vh;
+    left: 0; right: 0; top: auto; bottom: 0; width: 100%; max-height: 40vh;
     overflow: hidden; /* 换成 .panel-body 自己滚 */
     padding: 0; border-radius: 16px 16px 0 0;
   }

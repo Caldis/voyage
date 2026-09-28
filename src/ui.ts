@@ -1062,7 +1062,7 @@ const DRAWER_MEDIA = "(max-width: 720px), (max-height: 500px)";
 
 /**
  * 底部抽屉：收起（默认）时只露 `.panel-handle` 一条（把手 + 「此刻」摘要），点击整条把手或上下拖动展开 /
- * 收起到 ≤ 70vh、内部在 `.panel-body` 里滚动。展开状态记忆走 UX-3 同一个 `voyage.pref.panel`（try/catch、
+ * 展开到 ≤ 40vh、内部在 `.panel-body` 里滚动。展开状态记忆走 UX-3 同一个 `voyage.pref.panel`（try/catch、
  * 只记 `isTrusted`，与 `setupPanelFoldUi` / `setupDevSection` 共用同一个键，各自的字段互不覆盖）。
  * 键盘：`H`（整个面板隐藏 / 显示，`setupUi` 里已绑定）与抽屉展开状态是两件事，互不影响；把手本身是原生
  * `<button>`，Tab 能聚焦到，Enter / Space 能触发（浏览器原生行为，不用额外写键盘事件）。

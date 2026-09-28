@@ -181,3 +181,7 @@ pnpm --filter voyage exec vite --port 5382 --strictPort --host 127.0.0.1
   框架（`PANEL_UX_GUIDE.md` §10，还没落地）能顺带提供一个「模拟真实指针拖动」的小工具函数
   （给定起点/终点/位移，自动派发一串 `pointerdown/move/up`），会比每个任务各写一份稍微省事一点——
   但这个工具本身工作量不大，不值得为了这一次专门抽出来，留给以后真的需要多次复用时再抽。
+
+## 审查返工（协调者）
+
+审查指出窄屏抽屉展开上限应按 PANEL_UX_GUIDE §9 / PANEL_UX_AUDIT_1 P6 取 **≤ 40% 视口高**（70% 是桌面面板上限，被错套）。已把 `style.css` 的 `max-height` 改为 `40vh`，注释、`ui.ts` 文档注释、README 同步；上文表格里的 70vh 数字为返工前记录。
