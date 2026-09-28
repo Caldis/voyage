@@ -227,7 +227,7 @@ void main() {
 //   周围的城区灯芯、被照亮的云芯当帧就被压暗（审查 P2-1：频闪瞬间城区灯芯 −8、闪电云芯最多 −62）。人眼的局部适应有时间常数。
 //   做法：闪光是已知的事件（频闪开关 uStrobe、闪电亮度 uFlash.w，main.ts 每帧写进 Exposure.flash）。
 //   · 不闪时，粗格状态 S 每帧直接等于当帧（k = 1），扣除量 0——巡航、画面平移时与 T48b 逐位相同；
-//   · 闪的时候，S 只按 τ 0.25 s 慢慢跟（闪光基本不进适应），扣除量 T = 当帧粗格亮度 − 闪光前的 S（线性，按更新前的状态）；
+//   · 闪的时候，S 只按 τ 0.3 s 慢慢跟（闪光基本不进适应），扣除量 T = 当帧粗格亮度 − 闪光前的 S（线性，按更新前的状态）；
 //     最终合成用「细低通 − T」算局部适应，并让 T 在这个像素里占的那一份不吃局部适应（见 FINAL_FRAG 的 transFrac）。
 //   被推翻的写法（handoff/T48c.md「返工」、T48c-review.md）：
 //   · 整张半分辨率低通做指数平滑：移动的灯点跨纹素都要「先亮、再被压」，运动中整片抖动约 1.6 倍；
@@ -700,13 +700,13 @@ export class Exposure {
   /** T48c 夜间局部适应的闪光扣除（见 LOCAL_FRAG）：眩光纹理 1/8 尺寸（屏幕 1/16）、同类型的 RG ping-pong（R = 状态、G = 扣除量），第一次 render 时按眩光纹理建 */
   private local: THREE.WebGLRenderTarget[] = [];
   private localReset = true;
-  /** 闪光期间状态跟随的 τ：0.25 s（频闪 50 ms、闪电 0.1–0.2 s 基本不进适应） */
+  /** 闪光期间状态跟随的 τ：0.3 s（频闪 50 ms、闪电 0.1–0.2 s 基本不进适应；0.25 时 50 ms 频闪结束时机翼上变暗 ≤ 3 级的像素约 210 个，0.3 时约 110） */
   readonly localMat = material(LOCAL_FRAG, {
     uBloom: { value: null },
     uPrevLocal: { value: null },
     uBloomTexel: { value: new THREE.Vector2() },
     uBloomLevels: { value: Bloom.WEIGHT_SUM },
-    uLocalRate: { value: 1 / 0.25 },
+    uLocalRate: { value: 1 / 0.3 },
     uFlash: { value: 0 },
     uDt: { value: 0 },
   });
