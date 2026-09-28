@@ -700,7 +700,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         n.x = t - w.t;
         n.z += 1.0;
         t += dS;
-      } else if (d <= sumD || (sumD < -0.1 * pa * w.t && max(dHit - sumD, d - sumD) > 0.6 * n.y * dS)) {
+      } else if (d <= sumD) {
         // 走完还没见底：放弃；折角（薄后缘、薄板正对视线、盒子拼接的棱）：最低点是两个面的交线，两侧按面的斜率一次方升降，
         // |最小值| 是到「另一面」的距离、不是到轮廓的距离，当成轮廓会把整条薄后缘变成半透明——这两种照旧超采样
         phase = 2;
