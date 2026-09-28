@@ -1,0 +1,29 @@
+[
+  {
+    "name": "pillars-noon",
+    "scene": "ws-pillars-noon",
+    "variants": [
+      { "name": "on", "js": "v.wonders.enabled = true; v.wonders.trigger(\"pillars\", { forwardOffsetDeg: 0, distKm: 190, reveal: 1, seed: 0.83 });" },
+      { "name": "off", "js": "v.wonders.clear(); v.wonders.enabled = false;" },
+      { "name": "on2", "js": "v.wonders.enabled = true; v.wonders.trigger(\"pillars\", { forwardOffsetDeg: 0, distKm: 190, reveal: 1, seed: 0.83 });" }
+    ]
+  },
+  {
+    "name": "pillars-noon-up",
+    "scene": "ws-pillars-noon-up",
+    "variants": [
+      { "name": "on", "js": "v.wonders.enabled = true; v.wonders.trigger(\"pillars\", { forwardOffsetDeg: 0, distKm: 190, reveal: 1, seed: 0.83 });" },
+      { "name": "off", "js": "v.wonders.clear(); v.wonders.enabled = false;" },
+      { "name": "on2", "js": "v.wonders.enabled = true; v.wonders.trigger(\"pillars\", { forwardOffsetDeg: 0, distKm: 190, reveal: 1, seed: 0.83 });" }
+    ]
+  },
+  {
+    "name": "pillars-sea",
+    "scene": "ws-pillars-sea",
+    "variants": [
+      { "name": "on", "js": "v.wonders.enabled = true; v.wonders.trigger(\"pillars\", { forwardOffsetDeg: 0, distKm: 200, reveal: 1, seed: 0.42 });" },
+      { "name": "off", "js": "v.wonders.clear(); v.wonders.enabled = false;" },
+      { "name": "on2", "js": "v.wonders.enabled = true; v.wonders.trigger(\"pillars\", { forwardOffsetDeg: 0, distKm: 200, reveal: 1, seed: 0.42 });" }
+    ]
+  }
+]

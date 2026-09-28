@@ -7,6 +7,7 @@
  */
 
 import { FLOATCITY_KIND, FOGCITY_KIND, W00_PROBE_KIND, WONDER_CLOUD_KINDS } from "./wonder-cloud.glsl";
+import { RING_SKIN } from "./ring-shape";
 
 /** 奇观所在的层：sky = 天幕层（在所有云之外，云的遮挡是现成的）；cloud = 云间层（插进云的步进，W00，见 wonder-cloud.glsl.ts） */
 export type WonderLayer = "sky" | "cloud";
@@ -56,7 +57,7 @@ export interface WonderDef {
     radiusKm: number;
     /** 表面反照率 */
     albedo: [number, number, number];
-    /** 着色器皮肤编号：0 天梯、1 建木、2 天环（WS08，wonders/ring.glsl.ts） */
+    /** 着色器皮肤编号：0 天梯、1 建木、2 巨柱群（WS07）、3 天环（WS08，wonders/ring.glsl.ts，RING_SKIN） */
     skin: number;
     /** 天梯的附属结构：中继站、舱体、系留平台、航标灯（建木没有） */
     beacons: boolean;
@@ -135,6 +136,23 @@ export const WONDERS: WonderDef[] = [
     // （着色器从 uWonderShape.w 读种子，radiusKm 在建木上不用）。albedo 是树皮（「紫茎」：偏紫的灰褐，真实树皮 0.1 上下），
     // 见 render/wonder-sky.glsl.ts
     look: { radiusKm: 3.2, albedo: [0.15, 0.125, 0.125], skin: 1, beacons: false },
+  },
+  {
+    id: "pillars",
+    // 原创造型（参考图「垂直荒原」一类的巨构插画的视觉语言：极简混凝土柱、大气把上半截冲淡），不致敬具体作品
+    name: "巨柱群（贯穿云海的混凝土巨柱）",
+    layer: "sky",
+    // WS07：锚点（群中心附近）在 180–280 km 外；行往远处退，最近一根约 140–240 km、最远的柱脚沉到地平线以下只剩柱顶
+    distanceKm: [180, 280],
+    forwardOffsetDeg: [8, 30],
+    minAltitudeKm: 6,
+    // 白天到黄昏最好（柱顶还亮着、柱脚已入夜的那段最美）；夜里只剩一排同步慢闪的红灯，也出现，权重低
+    sunWeight: (a) => (a > -3 && a < 8 ? 3 : a >= 8 ? 1.5 : a > -12 ? 1.5 : 0.6),
+    riseS: 120,
+    holdSimS: [420, 720],
+    fadeS: 120,
+    // 尺寸、根数、摆放全按每次出现的种子（wonders/pillar-shape.ts）；radiusKm 不用。albedo 不用（着色器用 WONDER_CONCRETE 按柱微调）
+    look: { radiusKm: 2, albedo: [0.3, 0.3, 0.3], skin: 2, beacons: false },
   },
   {
     id: "fogcity",
@@ -230,8 +248,8 @@ export const WONDERS: WonderDef[] = [
     riseS: 60,
     holdSimS: [600, 900],
     fadeS: 60,
-    // skin 2：着色在 wonders/ring.glsl.ts（自己的 uRingOn，不走天梯 / 建木那段）；radiusKm / albedo 不用
-    look: { radiusKm: 0, albedo: [0.3, 0.3, 0.3], skin: 2, beacons: true },
+    // skin 3（RING_SKIN）：着色在 wonders/ring.glsl.ts（自己的 uRingOn，不走天梯 / 建木 / 巨柱群那段）；radiusKm / albedo 不用
+    look: { radiusKm: 0, albedo: [0.3, 0.3, 0.3], skin: RING_SKIN, beacons: true },
   },
 ];
 
