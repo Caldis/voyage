@@ -236,6 +236,16 @@ export class GroundClipmap {
   /** 瓦片统计，面板上显示加载状态 */
   pending = 0;
   /**
+   * G-FREEZE：地面「换版」计数——每有一级的新数据真正换上（纹理写入 + 换中心，见 build 的 after），加 1。
+   * 冻结对照工具在两张截图之间比这个数：变了就说明地面在两张之间换过版，差异不能算到变体头上
+   */
+  uploads = 0;
+  /** G-FREEZE 诊断：非 null 时记下每次开始构建 / 换上的事件（`__voyage.ground.events = []` 打开） */
+  events: { t: number; kind: string; level: number; [k: string]: unknown }[] | null = null;
+  private note(kind: string, level: number, extra: Record<string, unknown>) {
+    if (this.events) this.events.push({ t: +performance.now().toFixed(1), kind, level, ...extra });
+  }
+  /**
    * PERF-8：一次重建有 3 张纹理（各一层）要真正上传到 GPU（texSubImage3D）。加速航程时常有几级
    * 几乎同时建完，3 次上传（8.5 MB）挤在同一个真实动画帧里，实测帧间隔尖峰到 20–60 ms（个别情形下
    * 多级叠加到 69 MB / 5 次调用、帧间隔破百毫秒），见 handoff/PERF-6-8.md 的测量。
@@ -401,6 +411,7 @@ export class GroundClipmap {
       const cz = Math.round(z / snap) * snap;
       const detail = this.wantDetail(i, cx, cz);
       if (!l.stale && cx === l.cx && cz === l.cz && detail === l.detail && (l.fine || !fine)) continue;
+      this.note("build", i, { cx, cz, detail, fine, why: l.stale ? "stale" : cx !== l.cx || cz !== l.cz ? "move" : detail !== l.detail ? "detail" : "fine" });
       l.stale = false;
       // 回退链上合成 Worker 报错时这次构建会 reject：接住、只警告，不冒成 pageerror（G08 审查 M1）
       this.build(i, cx, cz, detail, fine).catch((e) => console.warn("[ground] 第", i, "级构建失败：", e));
@@ -572,6 +583,8 @@ export class GroundClipmap {
         () => {
           if (gen === this.generation) l.building = false;
           if (gen !== this.generation || i < this.minLevel) return;
+          this.uploads++;
+          this.note("land", i, { cx, cz, detail, fine });
           l.cx = cx;
           l.cz = cz;
           // 想要细节但这版没合上（没取齐）时记成 false，update 会再建一次；一张都取不到（全是「确定没有」）算完成，不反复重建
@@ -695,6 +708,21 @@ export class GroundClipmap {
     }
     end();
     return true;
+  }
+
+  /** G-FREEZE 诊断：各级的状态（cx / cz / valid / building / detail / fine / stale）与在途任务数 */
+  get levelState() {
+    return {
+      levels: this.levels.map((l) => ({ cx: l.cx, cz: l.cz, valid: l.valid, building: l.building, detail: l.detail, fine: l.fine, stale: !!l.stale })),
+      pending: this.pending,
+      queue: this.uploadQueue.length,
+      stitch: stitchPending.size,
+      compose: roadPending.size,
+      uploads: this.uploads,
+      warm: this.warm,
+      detailOn: this.detailOn,
+      minLevel: this.minLevel,
+    };
   }
 
   /** 调试 / 对照：所有级别按当前设置原地重建一遍（位置不变；`gpuMips` 切换后同页 A/B 用） */
