@@ -522,20 +522,27 @@ const float CU_VPER_A = 1.3;
 const float CU_VPER_B = 3.0;
 // 形状噪声 mip 封顶（nB 再低一级）：mip 3 一个纹素 0.44 km，远处的形状靠时间累积去噪，不再是 1.75 km 的纹素小面
 const float SHAPE_LOD_MAX = 3.0;
-// 云顶门槛 req(h)：h < CU_DOME_BASE 为 0（积云下部侧面近乎竖直、底平），往上按 ((h − 基)/(1 − 基))^CU_TOP_POW 升到 1。
-// layerDensity 里从密度 d 扣掉 req(h)·max(覆盖率 − CU_VIS_D, CU_RANGE_MIN)：d 的「看得见的那一段」是 (CU_VIS_D, 覆盖率)，
-// 归一强度 σ = (d − CU_VIS_D) / (覆盖率 − CU_VIS_D) 的一列，云顶约在 req⁻¹(σ) = 基 + (1 − 基)·σ^(1/CU_TOP_POW)：
-// 弱的芯只长成矮矮的一团、边缘处高度连续收到 0（圆顶），最强的才顶到局部云顶；同一片云场里云顶高低错落。
-//  - CU_VIS_D：细节侵蚀平均吃掉的 d（远处不取细节时 layerDensity 就按 0.275 侵蚀）；
+// 这一列的云顶（h 单位，按局部云顶归一）：归一强度 σ = (d − CU_VIS_D) / max(覆盖率 − CU_VIS_D, CU_RANGE_MIN)，
+// 云顶 = 基 + (1 − 基)·σ^(1/CU_TOP_POW)：弱的芯（σ → 0，云的水平边缘）只到 CU_DOME_BASE，高度连续收到云底（圆顶），
+// 最强的才顶到局部云顶；同一片云场里云顶高低错落，「多数矮、少数高」来自 σ 本身的分布（强芯少）。
+// 云顶用一块「斜天花板」压：d ≤ CU_VIS_D + CU_TOP_GRAD·(云顶 − h)，天花板正好在云顶处降到「看得见」的门槛。
+// 斜率 CU_TOP_GRAD 决定云顶那一层被细节侵蚀啃成菜花的厚度（旧版剖面下降段在 d 空间的斜率约 0.75；0.5 碎块偏多、0.75 稀疏天气里云量掉得多，取 0.6）：
+//  - 太缓（初版按 (覆盖率 − CU_VIS_D)·门槛(h) 从 d 里扣，斜率约 0.2）：云的上半截整段都是「刚过阈值」的淡密度，
+//    细节侵蚀把它啃成一片悬空的碎块（浓积云预设近处满是「爆米花」）；
+//  - 太陡（试过云顶下 0.12 内把 d 乘到 0，斜率约 3）：侵蚀没有余地，云顶是光滑的塑料团子，弱的云被削成薄片、云量明显变少。
+//  - CU_VIS_D：细节侵蚀平均吃掉的 d（远处不取细节时 layerDensity 就按 0.275 侵蚀），d 高出它的那段才看得见；
 //  - CU_RANGE_MIN：覆盖率接近 CU_VIS_D 时（稀疏的天气）「看得见的一段」很窄，不按它放大，否则一点点强度差就把弱云拉满整层；
-//  - CU_CEIL 以上乘法收到 0：最强的几列在局部云顶处收口，不在 h = 1 处被一刀截平后露出细节侵蚀的碎点
-const float CU_DOME_BASE = 0.2;
+//    直接用 d / 覆盖率（不扣 CU_VIS_D）的话，低覆盖率天气里所有看得见的云 σ 都挤在 0.7–1，全都一样高（初版踩过：成了扁饼）
+//  - CU_CEIL 以上乘法收到 0：最强的几列在局部云顶处收口，不在 h = 1 处一刀截平
+const float CU_DOME_BASE = 0.25;
 const float CU_TOP_POW = 1.2;
+const float CU_TOP_GRAD = 0.6;
 const float CU_VIS_D = 0.275;
 const float CU_RANGE_MIN = 0.15;
 const float CU_CEIL = 0.8;
-float cumulusTopReq(float h) {
-  return pow(clamp((h - CU_DOME_BASE) / (1.0 - CU_DOME_BASE), 0.0, 1.0), CU_TOP_POW);
+float cumulusTop(float d, float coverage) {
+  float sig = clamp((d - CU_VIS_D) / max(coverage - CU_VIS_D, CU_RANGE_MIN), 0.0, 1.0);
+  return CU_DOME_BASE + (1.0 - CU_DOME_BASE) * pow(sig, 1.0 / CU_TOP_POW);
 }
 
 // ---- 天气场：决定每个区域长什么样的云，而不只是「有没有云」----
@@ -639,14 +646,13 @@ float layerDensity(vec3 p, float lod, bool detail) {
   // 云底才有明暗不一的絮团。只挪高度剖面的输入，不多取纹理
   float hB = h + (1.0 - cir) * (0.09 * (nA.a - 0.45) + 0.05 * (fbmB - 0.5)) * (1.0 - smoothstep(0.1, 0.3, h));
   // 积云族（云型 > 0.45）不再用「满密度平台 + 统一下降段」的剖面（C-TOFU），改成「云顶随这一列的强度变」：
-  // 剖面只管云底，云顶由 cumulusTopReq 从强度里扣掉——强的芯长得高、弱的矮，边缘处高度连续收到 0（圆顶），
+  // 剖面只管云底，云顶由这一列的强度决定（cumulusTop）——强的芯长得高、弱的矮，边缘处高度连续收到云底（圆顶），
   // 层积云 / 高积云 / 卷云（云型 ≤ 0.45）照旧（只有形状噪声 mip 封顶对它们也生效）
   base *= mix(heightProfile(hB, uCloudType), smoothstep(0.0, 0.12, hB) * (1.0 - smoothstep(CU_CEIL, 1.0, h)), cuW);
   float coverage = wx.coverage;
   float d = remapc(base, 1.0 - coverage, 1.0, 0.0, 1.0) * coverage;
-  // 门槛按「看得见的强度范围」缩放（见 CU_VIS_D / CU_RANGE_MIN）：
-  // 直接按 0..1 从 d 里扣的话，覆盖率低的天气里 d 最大只有覆盖率，所有云都被压成扁饼（初版踩过）
-  d = max(d - cuW * max(coverage - CU_VIS_D, CU_RANGE_MIN) * cumulusTopReq(h), 0.0);
+  float topC = cumulusTop(d, coverage);
+  d = mix(d, max(min(d, CU_VIS_D + CU_TOP_GRAD * (topC - h)), 0.0), cuW);
   // 卷云的丝缕要细：覆盖阈值再往上抬，只留噪声的脊
 #ifdef CLOUD_CIRRUS
   if (cir > 0.0) d = remapc(d, 0.25 * cir, 1.0, 0.0, 1.0);
