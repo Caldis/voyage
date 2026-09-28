@@ -269,6 +269,16 @@ def diag_stripes3():
     ]
 
 
+def gpu():
+    surf = {"name": "reflSurf", **patch([(SKYCAM, SKYCAM_SURF), (OS_REFL, OS_REFL_SURF)])}
+    fix = {"name": "fixAP", **patch([(TR_ADD, TR_FIX)])}
+    j1 = job("hnd-low-day", [{"name": "cur"}, {"name": "cur2"}, surf])
+    j2 = job("sea-mod-low", [{"name": "cur"}, {"name": "cur2"}, surf])
+    j3 = job("noon-cumulus", [{"name": "cur"}, {"name": "cur2"}, fix])
+    j3["pre"] = traffic_pre(60, 0.6, 12)
+    return [j1, j2, j3]
+
+
 # 暗尾迹：把 0 号飞机摆在窗外正前方 dist km、比我们高 dy km、沿窗面横向飞（尾迹横穿窗口），1 号关掉
 def traffic_pre(dist, dy, back):
     return PRE.replace(
@@ -314,6 +324,7 @@ GROUPS = {
     "proto": proto,
     "proto2": proto2,
     "diag-stripes3": diag_stripes3,
+    "gpu": gpu,
 }
 
 if __name__ == "__main__":
