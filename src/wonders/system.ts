@@ -3,6 +3,7 @@ import { WONDERS, wonderById, wonderVolumeCompiled, type WonderContext, type Won
 import { createWonderCloudUniforms } from "./wonder-cloud.glsl";
 import { applyTetherUniforms, createTetherUniforms, tetherShape, type TetherShape } from "./tether-shape";
 import { applyPillarUniforms, createPillarUniforms, pillarShape, type PillarShape } from "./pillar-shape";
+import { applyRingUniforms, createRingUniforms, RING_SKIN, ringShape, type RingShape } from "./ring-shape";
 
 /**
  * 奇观系统（W01）：触发、放置、编排，驱动着色器的 uniform。设计见 research/WONDERS.md §5。
@@ -60,6 +61,8 @@ export interface ActiveWonder {
   tether?: TetherShape;
   /** 巨柱群（skin 2）按种子生成的根数 / 尺寸 / 摆放（WS07，pillar-shape.ts） */
   pillars?: PillarShape;
+  /** 天环（skin 3 = RING_SKIN）按种子生成的环平面与尺寸（WS08，ring-shape.ts） */
+  ring?: RingShape;
 }
 
 export interface TriggerOptions {
@@ -159,6 +162,8 @@ export class WonderSystem {
     ...createTetherUniforms(),
     // 巨柱群（WS07，只有窗外程序的 OWP 变体读）
     ...createPillarUniforms(),
+    // 天环（WS08，只有窗外程序的 OWT 变体读）：开关另立 uRingOn，不经 uWonderOn（那会让天梯 / 建木那段也跑）
+    ...createRingUniforms(),
     // 云间层（W00）：云步进程序读这一组（经 main.ts 合进场景 uniforms，Clouds 构造时共用同一批对象）
     ...createWonderCloudUniforms(),
   };
@@ -292,6 +297,11 @@ export class WonderSystem {
     };
     if (def.look?.skin === 0) this.active.tether = tetherShape(this.active.seed);
     if (def.look?.skin === 2) this.active.pillars = pillarShape(this.active.seed, bearing);
+    // 天环：环平面按种子取（在这个方位上横贯 / 斜贯天空），锚点换成环在窗口方向上的星下点（小地图、飞过判断用）
+    if (def.look?.skin === RING_SKIN) {
+      const ring = (this.active.ring = ringShape(this.active.seed, ctx.lat, ctx.lon, ctx.altitudeKm, bearing));
+      [this.active.lat, this.active.lon] = ring.anchor;
+    }
     this.markSeen(ctx.flightKey, def.id);
     this.log.push({ id: def.id, event: "出现", via: this.active.via });
     return true;
@@ -321,6 +331,7 @@ export class WonderSystem {
       if (this.active || this.pendingGate) this.clear();
       this.uniforms.uWonderOn.value = 0;
       this.uniforms.uWonderVol.value = 0;
+      this.uniforms.uRingOn.value = 0;
       return;
     }
     if (this.cooldown > 0) this.cooldown -= dt;
@@ -424,7 +435,12 @@ export class WonderSystem {
     const a = this.active;
     u.uWonderOn.value = 0;
     u.uWonderVol.value = 0;
+    u.uRingOn.value = 0;
     if (!ctx || !a || a.reveal <= 0) return;
+    if (a.ring) {
+      applyRingUniforms(u, a.ring, ctx.lat, ctx.lon, a.reveal, a.seed);
+      return;
+    }
     // 基座相对飞机的方位与地面距离 → 窗外坐标里「地心 → 基座」的单位向量（x 东、y 天顶、−z 北）
     const { bearingDeg, distKm } = geoBearingDistance(ctx.lat, ctx.lon, a.lat, a.lon);
     const th = distKm / EARTH_R_KM;
@@ -493,7 +509,9 @@ export class WonderSystem {
       ? ` · 塔高 ${a.tether.towerH.toFixed(1)} km · 环站 ${a.tether.rings.length} 只`
       : a.pillars
         ? ` · ${a.pillars.pillars.length} 根 · 最高 ${Math.max(...a.pillars.pillars.map((p) => p[3])).toFixed(0)} km`
-        : "";
+        : a.ring
+          ? ` · 环高 ${a.ring.hKm.toFixed(0)} km · 宽 ${(2 * a.ring.halfW).toFixed(0)} km · 仰角 ${a.ring.elevDeg.toFixed(0)}° · 倾斜 ${a.ring.tiltDeg.toFixed(0)}°`
+          : "";
     return `${name} · ${phase} · 方位 ${bearingDeg.toFixed(0)}° · ${distKm.toFixed(0)} km${size}`;
   }
 
