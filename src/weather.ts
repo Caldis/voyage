@@ -754,8 +754,8 @@ export function lenticularFrom(o: { speed: number; fromDeg: number; wavelengthKm
     chain: strength.chain,
     // 一片（接地笠）最常见，二重笠次之，三重笠少见 [Kusaka 2025 的主型是接地笠；比例是 [估算]]
     capLayers: h(1) < 0.55 ? 1 : h(1) < 0.87 ? 2 : 3,
-    // 主盘中心在山顶上方 0.15–0.35 km：主盘下表面比中心低 0.55–0.7 km，山顶包在云里（接地笠）
-    capKm: FUJI_SUMMIT.km + 0.15 + 0.2 * h(2),
+    // 主盘中心在山顶上方 0.25–0.45 km：主盘中心的下表面比中面低 0.38–0.5 km，落在山顶附近、把山顶包进去（接地笠），帽檐往下罩着山的上半截
+    capKm: FUJI_SUMMIT.km + 0.25 + 0.2 * h(2),
     // 2–5 个；吊し雲的湿层比笠云「略高」[Kusaka 2025]：基准 4.8–6.0 km [估算]
     chainCount: 2 + Math.floor(h(3) * 3.99),
     chainKm: 4.8 + 1.2 * h(4),
