@@ -398,6 +398,8 @@ export interface StormSystemSample {
   lon: number;
   /** 生命周期强度 0..1（出生—成熟—消散的正弦包络） */
   strength: number;
+  /** 生命周期进度 0..1（出生 → 消散；TW02 远景塔层按它区分生长期 / 消散期的形态） */
+  age01: number;
   kind: "isolated" | "cluster" | "squall";
   cells: StormCellSample[];
   /** 漂移速度（km/h，向东 / 向北）：出生时的引导气流（WX11a） */
@@ -1384,6 +1386,7 @@ export class WeatherField {
               lat: cLat,
               lon: cLon,
               strength,
+              age01: age / sd.life,
               kind: sd.kind,
               drift: { ve: sd.ve, vn: sd.vn },
               cells: sd.cells.map((c, n) => ({ id: `${sd.id}#${n}`, lat: cLat - c.dz / 110.57, lon: cLon + c.dx / kx, radius: c.radius, top: c.top })),

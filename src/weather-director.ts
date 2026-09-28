@@ -1,5 +1,6 @@
 import { haversineKm } from "./flight";
 import type { CloudParams } from "./clouds/clouds";
+import type { FarStormCell } from "./clouds/far-towers";
 import type { CoverKind, Director, DirectorHost, SwitchRequest } from "./director";
 import { FUJI_SUMMIT, REGIME_FAMILY, REGIME_NAMES, WeatherField, WeatherSystem, lenticularFrom, mountainWavelengthKm, windSpeed, type CloudRegime, type StormSystemSample, type TyphoonSample, type WeatherSample, type WindProfile } from "./weather";
 
@@ -57,6 +58,10 @@ const COMPOSE_CROSS_KM = 200;
 const COMPOSE_AHEAD_KM = 60;
 /** 整组都在机尾方向这么远（km）以外，就算「已经飞过去」：不再摆放，已摆放的看不见了就撤掉让出名额（TW01） */
 const PASSED_KM = 40;
+
+/** 远景对流塔层（TW02，clouds/far-towers.ts）：从天气场取这么远（km）以内的系统；每隔这么久（真实秒）重取一次（之间按漂移外推） */
+const FAR_RANGE_KM = 760;
+const FAR_REFRESH_REAL_S = 1;
 
 /** 名额挑选的候选：一个雷暴系统，组中心相对飞机的本地坐标（km，x 东 z 南） */
 export interface StormCandidate {
@@ -201,6 +206,11 @@ export class WeatherDirector {
   private gateCb: ((how: CoverKind | "forced") => void) | null = null;
   private lat = 0;
   private lon = 0;
+  /** TW02：远景层的单体缓存（取样时刻的位置 + 漂移）、上次取样的真实 / 模拟时刻；摆成过体积雷暴的系统不再进远景层（免得同一个系统在两处出现） */
+  private farCells: FarStormCell[] = [];
+  private farAtReal = -Infinity;
+  private farAtSim = 0;
+  private readonly farConsumed = new Set<string>();
 
   /** 笠云 / 吊し雲的目标强度（最近一次取样；0 / 1），每帧按生消时间逼近（stepLens） */
   private lensGoal = { cap: 0, chain: 0 };
@@ -247,6 +257,34 @@ export class WeatherDirector {
     this.cur = null;
     this.lastSampleT = -Infinity;
     this.snapNext = true;
+    this.farConsumed.clear();
+    this.farAtReal = -Infinity;
+  }
+
+  /**
+   * 远景对流塔层（TW02）这一刻的单体：天气场 FAR_RANGE_KM 内、**没有被体积雷暴占用**（已摆放的系统、摆放过的系统）的全部单体。
+   * 不占 WeatherSystem.MAX_STORMS 名额。天气场每 FAR_REFRESH_REAL_S 真实秒（或模拟时间跳了 2 分钟以上）重取一次，
+   * 之间由 far-towers.ts 按漂移外推；「已摆放」每次调用都按当前的 storms 重新过滤（摆放发生在两次重取之间时当帧就撤掉）。
+   * 连续航程关着 / 天气场不驱动时返回 null
+   */
+  farTowerCells(lat: number, lon: number): FarStormCell[] | null {
+    if (!this.enabled) return null;
+    const t = this.host.state.simTime;
+    if (this.realTime - this.farAtReal >= FAR_REFRESH_REAL_S || Math.abs(t - this.farAtSim) > 120e3) {
+      this.farAtReal = this.realTime;
+      this.farAtSim = t;
+      this.farCells = [];
+      for (const sys of this.field.stormsNear(lat, lon, t, FAR_RANGE_KM)) {
+        if (this.farConsumed.has(sys.id)) continue;
+        for (const c of sys.cells)
+          this.farCells.push({ id: c.id, lat: c.lat, lon: c.lon, t0: t, ve: sys.drift.ve, vn: sys.drift.vn, radius: c.radius, top: c.top, strength: sys.strength, age01: sys.age01 });
+      }
+    }
+    const placed = this.host.weather.storms;
+    if (!placed.some((s) => s.id)) return this.farCells;
+    const sysOf = (id: string) => id.split("#")[0];
+    const busy = new Set(placed.filter((s) => s.id).map((s) => sysOf(s.id!)));
+    return this.farCells.filter((c) => !busy.has(sysOf(c.id)) && !this.farConsumed.has(sysOf(c.id)));
   }
 
   /** 关闭连续航程：撤掉排队的天气切换（已摆放的保持原样，面板手选天气照常有效） */
@@ -508,6 +546,7 @@ export class WeatherDirector {
         const cells = placement();
         if (w.storms.length + cells.length > WeatherSystem.MAX_STORMS) return;
         for (const c of cells) w.addStorm(c);
+        this.farConsumed.add(sys.id); // TW02：交给体积云以后不再回到远景层
         const dist = Math.round(haversineKm(this.lat, this.lon, sys.lat, sys.lon));
         const kind = { isolated: "孤立雷暴", cluster: "雷暴群", squall: "飑线" }[sys.kind];
         this.note(`生成${kind}（${cells.length} 个单体，距 ${dist} km）`, how === "forced" ? (this.jumpRun ? "jump" : "out-of-view") : how);
