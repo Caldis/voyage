@@ -935,14 +935,14 @@ export class WeatherField {
     const land = this.landFraction(lat, lon);
     const G = windSpeed(p850);
     const hm = WIND_BL_TOP_KM * 1000;
-    // 海面 z₀ 按 Charnock 关系 z₀ = α·u*²/g（α = 0.011，[教科书]）随风速变，下限 1e-5 m（光滑流）；陆地 0.1 m（农田—疏林，[教科书：Stull 表 9-1 量级]）
+    // 海面 z₀ 按 Charnock 关系 z₀ = α·u*²/g（α = 0.011，[教科书]）随风速变，下限 1e-5 m（光滑流）；陆地 0.2 m（农田、村镇、疏林混杂，[教科书] 量级 0.1–0.5 m；取 0.1 时 10 m / 边界层顶恰好 = 0.5，贴在教科书区间的边上）
     let z0s = 2e-4;
     for (let it = 0; it < 3; it++) {
       const s10 = (G * Math.log(10 / z0s)) / Math.log(hm / z0s);
       const ustar = (0.4 * s10) / Math.log(10 / z0s);
       z0s = Math.max(1e-5, (0.011 * ustar * ustar) / 9.81);
     }
-    const z0 = Math.exp(Math.log(z0s) + (Math.log(0.1) - Math.log(z0s)) * land);
+    const z0 = Math.exp(Math.log(z0s) + (Math.log(0.2) - Math.log(z0s)) * land);
     // 埃克曼：地面风比边界层顶逆时针偏 海上约 15°、陆上约 35°（[教科书] 海上 10–20°、陆上 25–45°）；赤道附近科氏力趋零，偏角压掉
     const ekman = (15 + 20 * land) * Math.sign(lat || 1) * smooth(2, 8, Math.abs(lat));
     const k10 = Math.log(10 / z0) / Math.log(hm / z0);

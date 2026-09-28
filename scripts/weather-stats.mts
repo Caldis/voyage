@@ -7,7 +7,7 @@
 //   node --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi        ← 门禁（6 个种子全部通过才算过，约 2.5 分钟）
 //   node --experimental-transform-types --no-warnings scripts/weather-stats.mts                ← 只跑默认种子，打印完整统计表
 //   可选：--seed N | --seeds a,b,c | --multi；--years 2023,2024,2025,2026（区域 / 锋面统计的年份）；
-//         --ty-years 100（台风统计的年数，截止 2026 年）；--only region,front,ty,wind（WX11a 风场：--only wind 单种子约 7 s）；--json 输出.json；--quiet（只打印断言）
+//         --ty-years 100（台风统计的年数，截止 2026 年）；--only region,front,ty,wind（WX11a 风场：--only wind 单种子约 5 s）；--json 输出.json；--quiet（只打印断言）
 //
 // 取样口径（与附录 A 相同）：每个地区 3 个点；每月 1–28 日 × UTC 每 3 小时；当地时 ≈ UTC + 经度 / 15。
 // 雷暴：当地 15 时，150 km 内 stormsNear 非空的比例。锋面：每天 UTC 0 / 12 时、110–145°E 每 5°，扫 10–50°N 找 front().strength 最大处，
@@ -209,6 +209,12 @@ function runSeed(seed: number) {
       return s[Math.min(s.length - 1, Math.floor(q * s.length))];
     };
     const frac = (a: number[], ok: (v: number) => boolean) => pct(a.filter(ok).length, a.length);
+    const pearson = (x: number[], y: number[]) => {
+      const mx = mean(x), my = mean(y);
+      let sxy = 0, sxx = 0, syy = 0;
+      for (let i = 0; i < x.length; i++) (sxy += (x[i] - mx) * (y[i] - my)), (sxx += (x[i] - mx) ** 2), (syy += (y[i] - my) ** 2);
+      return sxy / Math.sqrt(sxx * syy);
+    };
     /** 月均 250 hPa 纬向风的经向剖面（135/140/145°E 平均）：最大值与所在纬度 */
     const jetProfile = (month: number, lons = [135, 140, 145], la0 = 20, la1 = 55) => {
       const ts = times(month).filter((_, i) => i % 2 === 0); // 每天两次，够了
@@ -260,6 +266,7 @@ function runSeed(seed: number) {
     // 雷暴系统漂移 vs 此刻所在处的 500 hPa 风：4–9 月与 1 月，每月 1/11/21 日 UTC 6 时（东亚午后，雷暴多），15–45°N、105–150°E 每 7.5° 搜 400 km，按 id 去重
     const seen = new Set<string>();
     const dAng: number[] = [], dAngS: number[] = [];
+    const spdD: number[] = [], spdW: number[] = []; // 漂移速度（km/h）与 500 hPa 风速（m/s），算相关系数
     for (const y of years)
       for (const m of [1, 4, 5, 6, 7, 8, 9])
         for (const d of [1, 11, 21])
@@ -275,6 +282,8 @@ function runSeed(seed: number) {
                   const a = Math.abs(((Math.atan2(s.drift.vn, s.drift.ve) - Math.atan2(w.v, w.u)) / (Math.PI / 180) + 540) % 360 - 180);
                   dAng.push(a);
                   if (s.lat < 25) dAngS.push(a);
+                  spdD.push(Math.hypot(s.drift.ve, s.drift.vn));
+                  spdW.push(W.windSpeed(w));
                 }
           }
     // 连续性：随机取点（确定性的线性同余序列），相邻 1 小时、相邻 25 km 的风矢量差 / max(|风|, 5 m/s)
@@ -298,7 +307,8 @@ function runSeed(seed: number) {
     return {
       jan, apr, jul, jpJan, scJul250, scJan250, scJulSW, jsNW: frac(jsDir, (d) => d >= 270 && d <= 360), jsMed: quant(jsSpd, 0.5),
       tradeJan, tradeJul, lljN: llj.length, llj12: frac(llj, (v) => v >= 12), lljMed: quant(llj, 0.5), ekSea, ekLand,
-      stormN: dAng.length, stormMed: quant(dAng, 0.5), stormSN: dAngS.length, stormMedS: quant(dAngS, 0.5), cont,
+      stormN: dAng.length, stormMed: quant(dAng, 0.5), stormP90: quant(dAng, 0.9), stormSN: dAngS.length, stormMedS: quant(dAngS, 0.5), stormP90S: quant(dAngS, 0.9),
+      stormIn45: frac(dAng, (a) => a <= 45), stormSpdR: pearson(spdD, spdW), cont,
     };
   }
 
@@ -339,7 +349,7 @@ function runSeed(seed: number) {
       console.log(`日本海 1 月 850 hPa：来向 270–360° ${w.jsNW.toFixed(0)}%，风速中位 ${w.jsMed.toFixed(1)} m/s；信风带 850 hPa 东风分量为正：1 月 ${w.tradeJan.toFixed(0)}%、7 月 ${w.tradeJul.toFixed(0)}%`);
       console.log(`梅雨低空急流（锋南 2.5°，${w.lljN} 样本）：850 hPa ≥ 12 m/s ${w.llj12.toFixed(0)}%，中位 ${w.lljMed.toFixed(1)}`);
       console.log(`埃克曼：海上偏角中位 ${w.ekSea.ang.toFixed(1)}°、10 m / 850 风速比 ${w.ekSea.ratio.toFixed(2)}；陆上 ${w.ekLand.ang.toFixed(1)}°、${w.ekLand.ratio.toFixed(2)}`);
-      console.log(`雷暴漂移 vs 500 hPa 风向夹角中位：全部 ${w.stormMed.toFixed(1)}°（${w.stormN} 个系统），25°N 以南 ${w.stormMedS.toFixed(1)}°（${w.stormSN} 个）`);
+      console.log(`雷暴漂移 vs 500 hPa 风向夹角 中位 / p90：全部 ${w.stormMed.toFixed(1)}° / ${w.stormP90.toFixed(1)}°（${w.stormN} 个系统，≤ 45° 的 ${w.stormIn45.toFixed(0)}%），25°N 以南 ${w.stormMedS.toFixed(1)}° / ${w.stormP90S.toFixed(1)}°（${w.stormSN} 个）；漂移速度与 500 hPa 风速相关系数 ${w.stormSpdR.toFixed(2)}`);
       console.log(`连续性（|Δ风| / max(|风|, 5)，%，p99 / 最大）：${Object.entries(w.cont).map(([k, c]) => `${k} 1h ${c.t99.toFixed(1)}/${c.tMax.toFixed(1)}、25km ${c.x99.toFixed(1)}/${c.xMax.toFixed(1)}`).join("；")}\n`);
     }
   }
@@ -419,9 +429,12 @@ function runSeed(seed: number) {
     check("风 埃克曼偏角 海上（中位）°", w.ekSea.ang, band(w.ekSea.ang, 10, 20), "10–20", "北半球地面风比地转风逆时针偏：海上 10–20° [教科书：Holton / Wallace & Hobbs]");
     check("风 埃克曼偏角 陆上（中位）°", w.ekLand.ang, band(w.ekLand.ang, 25, 45), "25–45", "陆上 25–45° [教科书]");
     check("风 10 m 风速占 850 hPa % 海上（中位）", 100 * w.ekSea.ratio, band(w.ekSea.ratio, 0.6, 0.8), "60–80", "地面风约为地转风的 60–80%（海上）[教科书]；对数律 z₀ 按 Charnock");
-    check("风 10 m 风速占 850 hPa % 陆上（中位）", 100 * w.ekLand.ratio, band(w.ekLand.ratio, 0.3, 0.5), "30–50", "陆上 30–50% [教科书]；对数律 z₀ = 0.1 m");
+    check("风 10 m 风速占 850 hPa % 陆上（中位）", 100 * w.ekLand.ratio, band(w.ekLand.ratio, 0.3, 0.5), "30–50", "陆上 30–50% [教科书]；对数律 z₀ = 0.2 m");
     check("风 雷暴漂移与 500 hPa 风向夹角中位 °", w.stormMed, w.stormMed <= 30, "≤ 30", "雷暴随引导气流（700–500 hPa）移动 [教科书]（WX11-DESIGN 验收）");
-    check("风 雷暴漂移夹角中位（25°N 以南）°", w.stormMedS, w.stormMedS <= 30, "≤ 30", "同上；副热带弱风区单独看，防止「以南一律往西」的写死方向混在全体中位数里");
+    // 上面这条改前的写死常数（25°N 以北往东、以南往西）也能过（16°）：常数本来就是气候平均方向。区分力靠下面三条（改前 69° / 168° / 0.50，都失败）
+    check("风 雷暴漂移与 500 hPa 风向夹角 p90 °", w.stormP90, w.stormP90 <= 50, "≤ 50", "系统移动偏离平均风一般在 20–30° 以内（传播、右移，[教科书]）；留出 10% 的尾巴 [估算]。写死方向不跟槽脊 / 季风转，尾巴会到 70° 左右");
+    check("风 雷暴漂移夹角 p90（25°N 以南）°", w.stormP90S, w.stormP90S <= 90, "≤ 90", "同上，副热带弱风区：夏季风下的系统往北 / 西北走，「以南一律往西」会有一成逆着风走 [估算]");
+    check("风 雷暴漂移速度与 500 hPa 风速相关系数", w.stormSpdR, w.stormSpdR >= 0.7, "≥ 0.7", "系统移速随引导气流强弱变化（约为平均风的 0.7–1 倍，[教科书]）；门限 [估算]");
     for (const k of ["p850", "p500", "p250"] as const) {
       const c = w.cont[k];
       check(`风 连续性 ${k} 相邻 1 小时 p99 %`, c.t99, c.t99 <= 15, "≤ 15", "WX11-DESIGN 验收：防止平流速度抖动；分母 max(|风|, 5 m/s)");
