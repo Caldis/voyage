@@ -538,6 +538,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
     float d = sdWing(q);
     if (phase == 0) {
       float fp = pa * t;                    // 这里一个像素多宽（米）
+      float hthr = shadowSteps > 0 ? 0.05 : 0.4;   // 试验：中心射线命中阈值
       bool done = false;
       if (d < 0.4 * fp && j == 5 && gWingPart != w.part) {
         // 延续段（W-EDGE，j == 5）打到别的部件（短舱压在翼面上、小翼前缘压在主翼上……）：轮廓背后还是机翼，
@@ -545,7 +546,7 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         w.edge = true;
         w.cov = 1.0;
         phase = 2;
-      } else if (d < 0.4 * fp && j != 5) {
+      } else if (d < hthr * fp && j != 5) {
         w.t = t;
         w.cov = 1.0;
         w.part = gWingPart;
