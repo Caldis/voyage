@@ -107,18 +107,21 @@ try {
       for (const vn of j.live.variants) {
         const vr = j.variants.find((x) => x.name === vn);
         await page.evaluate(async (js) => { window.__voyage.wingDebug.strobe = null; await window.__wsApply(js); window.__voyage.wingDebug.strobe = null; }, vr.js ?? "");
-        const res = await page.evaluate(async ({ crop, frames }) => {
+        // live.all = true：保留全部帧（频闪灭的帧也要，看非频闪时的闪烁 / 爬动），另存逐帧 uStrobe 与时间戳（W-LAMP 审查）
+        const res = await page.evaluate(async ({ crop, frames, all }) => {
           const v = window.__voyage;
           const gl = v.clouds.pass.renderer.getContext();
           const [x, y, w, h] = crop;
           const H = gl.drawingBufferHeight;
-          const out = [];
+          const out = [], strobe = [], ts = [];
           const buf = new Uint8Array(w * h * 4);
           let lit = 0;
           for (let f = 0; f < frames; f++) {
             await new Promise((r) => requestAnimationFrame(r));   // 主循环的回调先于本回调注册，这里读到的是本帧画好的画面
-            if (v.sceneMat.uniforms.uStrobe.value < 0.5) continue;
-            lit++;
+            const sv = v.sceneMat.uniforms.uStrobe.value;
+            if (!all && sv < 0.5) continue;
+            strobe.push(sv); ts.push(performance.now());
+            if (sv >= 0.5) lit++;
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             gl.readPixels(x, H - y - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
             const flip = new Uint8Array(w * h * 4);
@@ -126,11 +129,12 @@ try {
             let s = ""; for (let i = 0; i < flip.length; i += 0x8000) s += String.fromCharCode.apply(null, flip.subarray(i, i + 0x8000));
             out.push(btoa(s));
           }
-          return { lit, frames: out };
+          return { lit, frames: out, strobe, t: ts };
         }, j.live);
         const bufs = res.frames.map((b) => Buffer.from(b, "base64"));
         fs.mkdirSync(path.join(OUT, j.name), { recursive: true });
         fs.writeFileSync(path.join(OUT, j.name, `live_${vn}_${j.live.crop[2]}x${j.live.crop[3]}.u8`), Buffer.concat(bufs));
+        fs.writeFileSync(path.join(OUT, j.name, `live_${vn}_flags.json`), JSON.stringify({ strobe: res.strobe, t: res.t }));
         log(j.name, "live", vn, "频闪帧", res.lit);
       }
       continue;

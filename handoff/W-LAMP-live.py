@@ -29,6 +29,24 @@ def maxblob(b):
     return best
 
 
+if "--all" in sys.argv:
+    # 全部帧模式（live.all = true 录的，W-LAMP 审查口径）：只取连续三帧都是频闪灭的帧，每像素时间二阶差
+    # |L_t − (L_{t−1}+L_{t+1})/2|（平滑运动 ≈ 0，闪烁 / 爬动的点大）；「闪烁像素」= 二阶差 > 16 级的帧占比 > 5% 的像素。
+    # 分区（相对 680,400,200,90 裁剪，night-city-low）：小翼前缘斜线、后缘弯折线、灯芯附近
+    import json
+    regions = {"小翼前缘斜线": (0, 0, 75, 50), "后缘弯折线": (60, 40, 180, 75), "灯芯附近": (0, 45, 50, 75)}
+    for v in vs:
+        raw = np.fromfile(os.path.join(job, f"live_{v}_{w}x{h}.u8"), np.uint8).reshape(-1, h, w, 4)[..., :3].astype(np.float64)
+        L = raw @ np.array([0.2126, 0.7152, 0.0722])
+        fl = json.load(open(os.path.join(job, f"live_{v}_flags.json")))
+        st = np.array(fl["strobe"]) >= 0.5
+        idx = [i for i in range(1, len(L) - 1) if not (st[i - 1] or st[i] or st[i + 1])]
+        d2 = np.stack([np.abs(L[i] - 0.5 * (L[i - 1] + L[i + 1])) for i in idx])
+        m = (d2 > 16).mean(0) > 0.05
+        parts = [f"{nm} 闪烁像素 {int(m[y0:y1, x0:x1].sum())} / 每帧>16 {float((d2[:, y0:y1, x0:x1] > 16).sum((1, 2)).mean()):.1f}" for nm, (x0, y0, x1, y1) in regions.items()]
+        print(v, f"帧 {len(L)}（灭三连 {len(idx)}，帧间隔中位 {np.median(np.diff(fl['t'])):.1f} ms）", "；".join(parts))
+    sys.exit(0)
+
 for v in vs:
     raw = np.fromfile(os.path.join(job, f"live_{v}_{w}x{h}.u8"), np.uint8)
     fr = raw.reshape(-1, h, w, 4)[..., :3].astype(np.float64)

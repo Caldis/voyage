@@ -54,7 +54,9 @@ vec3 wingLampSurfI(int i, vec3 dir) {
   float wH = smoothstep(0.05, 0.3, h);             // 仰俯角 > 73° 起按水平平均（水平角没有意义）
   vec2 hz = dir.xz / max(h, 1e-6);                 // (cos, sin) of 水平角：0 = 正前方，sin > 0 朝外侧（+Z）
   if (i == 1) {
-    // 25.1401：5° 0.76、10° 0.47、20° 0.3、30° 0.24、再往外 0.2（估计的底）
+    // 25.1401：5° 0.76、10° 0.47、20° 0.3、30° 0.24、再往外 0.2（估计的底）。
+    // 注意 0–10° 这段相对比例低于规定的相对下限（规定 5–10° 为 0.6，这里 10° 处 0.47）；但规定管的是有效光强 ≥ 400 cd 乘这些比例，
+    // 这里的峰值 1500 cd（LED 防撞灯的量级）乘 0.47 仍约 700 cd，绝对光强远高于下限，所以没有为贴合相对台阶再加项
     float fv = 0.2 + 0.8 * (0.7 * exp(-s2 / 0.0149) + 0.3 * exp(-s2 / 0.147));
     // 翼尖频闪装在翼尖整流罩里、朝外半个空间照（机身一侧由尾部 / 另一侧翼尖的频闪负责，25.1401 允许被机体挡住的部分）；
     // 朝内（翼面方向）只有灯罩侧面的漏光，取 0.15（估计值）。旧版各向同性 1500 cd，翼尖内侧半米内的翼面一闪就是一大块死白
@@ -160,15 +162,18 @@ vec3 shadeWing(vec3 pc, vec3 rd, WingTraceResult w, vec3 sunC, vec3 eSky, vec3 e
   float spreadN = min(pix * gWingCurv, 1.0);
   // 灯的镜面粗糙度不跟边缘判定走（W-LAMP）：太阳镜面在边缘像素上放宽波瓣（见上），灯也照做的话，同一条弯折线上
   // 判成边缘的像素用宽波瓣、隔壁没判上的用窄波瓣，灯几乎贴着翼面照时正好一个接得住一个接不住。
-  // 改成所有像素一样：α² 加上像素里法线转角的平方（Toksvig / LEAN 的思路）
-  float aCoatL = max(sqrt(cr2 * cr2 + 2.0 * max(w.bumpVar, 0.0) + spreadN * spreadN), 0.02);
-  float aBaseL = max(sqrt(m.rough * m.rough * m.rough * m.rough + 2.0 * max(w.bumpVar, 0.0) + spreadN * spreadN), 0.02);
+  // 改成所有像素一样（只按材质粗糙度 + 滤掉的鼓包方差）。
+  // 坑（W-LAMP 审查返工）：曾把「像素里法线转角」spreadN² 也加进 α²（Toksvig 的思路），但 spreadN 靠四面体拉普拉斯估曲率，
+  // 在小翼前缘这种曲率大的地方顶到上限、逐像素逐帧乱跳，航行灯旁的前缘成了一条飞行中爬动闪烁的绿色高光细线
+  // （night-city-low 频闪灭的帧闪烁像素 1–4 → 203–272）。spreadN 只留给地平线过渡（那里取的是 max，跳动影响小）
+  float aCoatL = max(sqrt(cr2 * cr2 + 2.0 * max(w.bumpVar, 0.0)), 0.02);
+  float aBaseL = max(sqrt(m.rough * m.rough * m.rough * m.rough + 2.0 * max(w.bumpVar, 0.0)), 0.02);
   for (int i = min(uWingSteps, 0); i < 3; i++) {  // 起点依赖 uniform：不让 FXC 展开成三份
     vec3 d = wingLampPos(i) - P;
     float dd = dot(d, d);
     vec3 l = d * inversesqrt(max(dd, 1e-8));
     float nlL = dot(nG, l);
-    // 灯罩是有大小的发光面（半径 5 cm），W-LAMP 按面光源算：
+    // 灯罩是有大小的发光面（半径 R 取 5 cm，估计值：航行灯 / 尾灯透明罩的量级，没有查到具体型号的尺寸），W-LAMP 按面光源算：
     // ① 照度 I / (d² + R²)（圆盘光源正对时的精确式），贴近灯罩时平滑地封顶。旧版 max(d², 0.04) 在 20 cm 以内
     //    是一块照度处处相同的平台，被照亮的翼漆成了没有梯度的亮块；
     // ② 地平线（只给航行灯、尾灯）：光源张角 sinα = R / √(d² + R²)，n·l 在 ±sinα 之间时光源只露出一部分，
