@@ -19,7 +19,7 @@
      "|| i >= 192) break;"
     ],
     [
-     "    float emptyK = 1.0 + smoothstep(60.0, 90.0, t);\n",
+     "    float emptyK = (1.0 + smoothstep(60.0, 90.0, t)) * (i == 0 ? 0.5 : 1.0);\n",
      "    float emptyK = 2.0;\n"
     ],
     [

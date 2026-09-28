@@ -7,7 +7,7 @@ const OLD = [
    "  bool wasEmpty = true;\n#ifndef CLOUD_WEATHER\n  int bis = 0; float bLo = seg.x; float bHi = seg.x; float tPrevS = seg.x; float firstK = 1.0;\n#endif\n#ifdef CLOUD_WEATHER\n  bool refineOn"],
   ["(!refineOn && i >= 384)) break;", "(!refineOn && i >= 192)) break;"],
   ["|| i >= 384) break;", "|| i >= 192) break;"],
-  ["    float emptyK = 1.0 + smoothstep(60.0, 90.0, t);\n", "    float emptyK = 2.0;\n"],
+  ["    float emptyK = (1.0 + smoothstep(60.0, 90.0, t)) * (i == 0 ? 0.5 : 1.0);\n", "    float emptyK = 2.0;\n"],
   ["    float stepLen = wasEmpty ? emptyK * dt : dt;\n#endif\n    float tS = t + stepLen * jitter;\n",
    "    float stepLen = (wasEmpty ? 2.0 * dt : dt) * firstK;\n    float tS = bis > 0 ? 0.5 * (bLo + bHi) : t + stepLen * jitter;\n#endif\n#ifdef CLOUD_WEATHER\n    float tS = t + stepLen * jitter;\n#endif\n"],
   [DENS, DENS + `#ifndef CLOUD_WEATHER
@@ -46,4 +46,6 @@ export const VARIANTS = {
   noref: [["    if (refineOn) {\n      float hT", "    if (refineOn) { emptyK = 2.0;\n      float hT"]],
 };
 VARIANTS.r30 = [["    if (refineOn) {\n      float hT", "    if (refineOn) { emptyK = 1.0 + smoothstep(30.0, 45.0, t);\n      float hT"]];
+// 第一步不缩短（交付版第一步走半步；原型阶段 h0 = 半步、q0 = 1/4 步是在「不缩短」的版本上加的）
+VARIANTS.full0 = [["(i == 0 ? 0.5 : 1.0);\n", "1.0;\n"]];
 VARIANTS.st_thin2 = [...VARIANTS.thin2, ...STEPS];
