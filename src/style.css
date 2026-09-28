@@ -75,6 +75,8 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 .now-summary p { margin: 0; font-size: 12px; line-height: 1.5; }
 #now-line1 { color: var(--text); }
 #now-line2 { color: var(--muted); }
+/* STROBE-CLOUD：夜间云中自动关频闪的状态说明，用 accent 色与其余摘要行区分，不适用时整行 hidden */
+#now-line3 { color: var(--accent); }
 /* 快捷键键帽（§8.1：快捷键写成键帽，放标签右侧） */
 #panel kbd { font: 11px ui-monospace, Consolas, monospace; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.18); color: var(--text); }
 .row { display: flex; gap: 8px; align-items: flex-end; }

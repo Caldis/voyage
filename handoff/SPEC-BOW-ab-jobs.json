@@ -1,0 +1,26 @@
+[
+  {
+    "name": "bow-rain-live",
+    "scene": { "name": "bow-rain", "p": { "preset": "wpac", "date": "2026-06-21", "time": 560, "seat": "right", "cloud-preset": "towering", "coverage": 0.3, "wing-pos": "-4" },
+      "js": "v.optics.disabled=false; v.optics.force={bow:true}; v.optics.resetBowDemo()" },
+    "crop": [420, 800, 780, 200],
+    "variants": [
+      { "name": "cur", "js": "v.optics.disabled=false; v.optics.force={bow:true}" },
+      { "name": "cur2", "js": "v.optics.disabled=false; v.optics.force={bow:true}" },
+      { "name": "off", "js": "v.optics.disabled=true; v.optics.force={}" }
+    ],
+    "live": { "crop": [420, 800, 780, 200], "frames": 360, "regions": { "虹": [0, 20, 780, 120] }, "thr": 16, "frac": 0.05, "variants": ["cur", "cur2", "off"] }
+  },
+  {
+    "name": "bow-cloud-live",
+    "scene": { "name": "bow-cloud", "p": { "preset": "wpac", "date": "2026-06-21", "time": 360, "seat": "right", "cloud-preset": "stratocumulus", "coverage": 0.85, "view-preset": "close", "wing-pos": "-4" },
+      "js": "v.optics.disabled=false; v.optics.force={bow:true}" },
+    "crop": [200, 600, 1300, 500],
+    "variants": [
+      { "name": "cur", "js": "v.optics.disabled=false; v.optics.force={bow:true}" },
+      { "name": "cur2", "js": "v.optics.disabled=false; v.optics.force={bow:true}" },
+      { "name": "off", "js": "v.optics.disabled=true; v.optics.force={}" }
+    ],
+    "live": { "crop": [200, 600, 1300, 500], "frames": 360, "regions": { "宝光": [100, 150, 300, 250], "云虹": [900, 0, 350, 500] }, "thr": 16, "frac": 0.05, "variants": ["cur", "cur2", "off"] }
+  }
+]

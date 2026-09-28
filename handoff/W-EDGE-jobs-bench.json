@@ -1,0 +1,8 @@
+[
+ {"name": "sun", "scene": "sunset-wing", "bench": "benchWing",
+  "variants": [{"name": "old", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}}, {"name": "new"}]},
+ {"name": "biz", "scene": {"name": "biz-seated-noon", "p": {"preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business"}, "head": [0, 0.02, -0.42]}, "bench": "benchWing",
+  "variants": [{"name": "old", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}}, {"name": "new"}]},
+ {"name": "ic", "scene": "in-cloud", "offset": [-10, -5], "bench": "benchWing",
+  "variants": [{"name": "old", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}}, {"name": "new"}]}
+]

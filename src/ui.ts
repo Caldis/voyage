@@ -74,9 +74,11 @@ const timeInput = $<HTMLInputElement>("time");
 const timeLabel = $("time-label");
 const info = $("info");
 const altInput = $<HTMLInputElement>("altitude");
-// 「此刻」摘要（UX-3，PANEL_UX_GUIDE §2.1）：常驻的 1–2 行，普通区；完整信息留在开发者区的 #info（见 updateInfo）
+// 「此刻」摘要（UX-3，PANEL_UX_GUIDE §2.1）：常驻的 1–3 行，普通区；完整信息留在开发者区的 #info（见 updateInfo）。
+// now-line3 只在 STROBE-CLOUD 的「夜间云中自动关频闪」状态适用时显示，平时 hidden，不占布局空间
 const nowLine1 = $("now-line1");
 const nowLine2 = $("now-line2");
+const nowLine3 = $("now-line3");
 
 export function syncTimeUi(state: VoyageState) {
   const { date, minutes } = localParts(state.simTime, state.preset.tz);
@@ -119,10 +121,13 @@ let lastInfo = 0;
 /**
  * 信息栏文字：太阳 / 月亮方位、航向、位置，每 250 ms 刷新一次。
  * UX-3（PANEL_UX_GUIDE §2.1）：同时写两份——完整版留在开发者区的 `#info`（原样不变，dev-browser 截图 JSON 读它的
- * textContent，见 scripts/scenarios.mjs）；普通区的「此刻」摘要（`#now-line1` / `#now-line2`）只挑用户关心的几件事：
- * 航段 / 导航一句、当地时刻、窗外朝向、天气一句，不放太阳 / 月亮高度角、经纬度小数点后三位这类开发者数字。
+ * textContent，见 scripts/scenarios.mjs）；普通区的「此刻」摘要（`#now-line1` / `#now-line2` / `#now-line3`）只挑
+ * 用户关心的几件事：航段 / 导航一句、当地时刻、窗外朝向、天气一句，不放太阳 / 月亮高度角、经纬度小数点后三位这类
+ * 开发者数字。strobeCloudOff：STROBE-CLOUD 按夜间云中迟滞判定关闭频闪时追加一行状态（不对用户静默，见
+ * handoff/STROBE-CLOUD.md）——这条本来就是写给普通用户看的画面行为解释，不是开发者数字，UX-3 把 `#info` 挪进
+ * 开发者区后，另外用 `#now-line3` 让它继续留在普通区可见（不适用时该行隐藏）。
  */
-export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number, legLine = "") {
+export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number, legLine = "", strobeCloudOff = false) {
   if (now - lastInfo <= 250) return;
   lastInfo = now;
   syncFloorUi(state);
@@ -139,7 +144,9 @@ export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state
     (state.spoilerDeg > 0.5 ? `，减速板 ${state.spoilerDeg.toFixed(0)}°` : "") + "\n" +
     `位置 ${curLat.toFixed(3)}°N ${curLon.toFixed(3)}°E` + (state.groundOn && groundPending > 0 ? `，地面瓦片加载中（${groundPending}）` : "") +
     (legLine ? `
-${legLine}` : "");
+${legLine}` : "") +
+    (strobeCloudOff ? `
+频闪：夜间云中自动关闭（按惯例避免反光晃眼，出云后恢复）` : "");
 
   // 摘要第一行：连续航程 / 导航一句（有的话）；没有就退回高度（窗外朝向已经在第二行，不重复）
   const navLine = legLine.split("\n")[0] ?? "";
@@ -151,6 +158,9 @@ ${legLine}` : "");
   const cloudName = cloudSelEl?.selectedOptions[0]?.textContent ?? "";
   const coverageText = coverageOutEl?.textContent ?? "";
   nowLine2.textContent = `${timeLabel.textContent ?? ""} · 窗外朝${compass(outward)} · ${cloudName} ${coverageText}`.replace(/\s+/g, " ").trim();
+  // 摘要第三行（STROBE-CLOUD）：夜间云中自动关频闪的状态，本来就是写给用户看的画面行为解释，不适用时整行隐藏
+  nowLine3.hidden = !strobeCloudOff;
+  if (strobeCloudOff) nowLine3.textContent = "频闪：夜间云中自动关闭";
 }
 
 export interface UiDeps {

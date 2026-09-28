@@ -126,14 +126,41 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
     vec3 nView = n;
     vec3 water = vec3(0.0);
     vec3 skyCam = vec3(0.0);
+    vec3 skyHz = vec3(0.0);
     if (wet) {
       if (!onGround || gh.wat.g > 0.5) water = oceanRadiance(P, rd, tGround, body, 1.0, eSunW, eSkyW, fView, nView);
       else water = inlandWaterRadiance(P, rd, gh.fpM, body, eSunW, eSkyW, fView, nView);
       // 天空反射：天空视图 LUT 是从相机算的，L相机(反射方向) ≈ 内散射(相机→水面) + 透射率 × L水面(反射方向)。
       // 所以反射的贡献是 F·(L相机 − 内散射)，不能再乘一次透射率，否则地平线处会被衰减两次，出现一条暗线
-      skyCam = skyRadiance(reflect(rd, nView), false);
+      vec3 rR = reflect(rd, nView);
+      skyCam = skyRadiance(rR, false);
+      // SEA-3：反射方位上几何地平线处的天空 skyHz（含义见下）。与 skyCam 同一方位，天空视图 LUT 里就是同一列、天空侧最后一行，
+      // 直接按列坐标取这一行（太阳、月亮两路 + 气辉），不再调第二次 skyRadiance：
+      // 两个 skyRadiance 调用点时离线 FXC outside-default 实测 +10–12%（窗外是冷启动关键路径）；放进循环共用一个调用点则 FXC 编不过
+      // （分支里、循环里的隐式导数取样）
+      vec2 hR = normalize(rR.xz + vec2(1e-7, 0.0));
+      vec2 hS = normalize(uSunDir.xz + vec2(1e-7, 0.0));
+      vec2 hM = normalize(uMoonDir.xz + vec2(1e-7, 0.0));
+      float yHz = unitToUv(floor(0.5 * (SKY_VIEW_SIZE.y - 1.0)) / (SKY_VIEW_SIZE.y - 1.0), SKY_VIEW_SIZE.y);
+      float xS = unitToUv(sqrt(clamp(0.5 - 0.5 * dot(hR, hS), 0.0, 1.0)), SKY_VIEW_SIZE.x);
+      float xM = unitToUv(sqrt(clamp(0.5 - 0.5 * dot(hR, hM), 0.0, 1.0)), SKY_VIEW_SIZE.x);
+      float sDip = sqrt(max(1.0 - (BOTTOM / uCamR) * (BOTTOM / uCamR), 0.0));
+      skyHz = textureLod(uSkyViewLut, vec2(xS, yHz), 0.0).rgb * uSunIlluminance
+            + textureLod(uSkyViewMoonLut, vec2(xM, yHz), 0.0).rgb * uMoonIlluminance
+            + nightglow(vec3(hR.x, -sDip, hR.y));
     }
+    // SEA-3（低空海天「暗墙」）：上面的近似默认「水面往反射方向看到的天空」≈「相机往同一方向看到的天空」。
+    // 相机在霾顶之上、水面埋在霾里时不成立：掠射时水面反射的是一整段霾，相机往反射方向看到的却是霾顶以上的亮天空，
+    // 地平线下一两个像素海面就比地平线上方的暗带亮十几级。按水面处往反射方向到大气顶的透射率 tUpR 混合：
+    // tUpR → 1（反射视线很快出霾）沿用原公式；tUpR → 0 时反射的是贴着海面的那段霾本身。
+    // 它的亮度取「相机看反射方位的几何地平线」处的天空 skyHz（天空视图 LUT 天空侧最后一行，太阳 + 月亮两路 + 气辉）：
+    // 地平线处反射方向恰好退化到这里，与原公式连续；这条视线同样贴着霾层走，白天就是地平线上方那条暗带的亮度，夜里含月光与气辉。
+    // 返工（SEA-3 审查 P0）：第一版用「视线段的饱和内散射」apT·apL/(1 − apT)（开阔海面用 tView·内散射/(1 − tView)）。
+    // 这两个量只有太阳一路（空气透视 LUT、天空视图 LUT 地面侧都不含月光与气辉），夜里 ≈ 0，
+    // 远海反射整片归零、地平线下一行从 Y≈65 掉到纯黑（night-sea-milkyway / night-sea-fullmoon）
+    vec3 tUpR = transmittanceToTop(BOTTOM, max(dot(reflect(rd, nView), n), 0.0));
     if (onGround) {
+      skyCam = gh.apL + mix(max(skyHz - gh.apL, vec3(0.0)), max(skyCam - gh.apL, vec3(0.0)), tUpR);
       // 清晨谷地辐射雾（T18，render/haze.glsl.ts）：贴着地形，要盖在陆地和湖河上、再一起乘空气透视，
       // 所以放在 groundFinish 之前，不放在下面的统一出口（那里 L 已经含空气透视）
       vec4 vf = hazeValleyFog(P, gh.g, gh.fpM, gh.wat.g, eSunW, eSkyW);
@@ -161,7 +188,7 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
       vec3 inscatter = L;
       vec3 sea = tView * (water + vec3(0.02, 0.04, 0.05) / M_PI * eFlash);
       L += sea;
-      vec3 refl = fView * max(skyCam - inscatter, vec3(0.0));
+      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);
       L += refl;
       if (uDebug == 5 || uDebug >= 8) L = sea;
       if (uDebug == 6) L = refl;

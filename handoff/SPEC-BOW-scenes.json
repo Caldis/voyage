@@ -1,0 +1,8 @@
+[
+  { "name": "bow-rain", "p": { "preset": "wpac", "date": "2026-06-21", "time": 560, "seat": "right", "cloud-preset": "towering", "coverage": 0.3, "wing-pos": "-4" },
+    "js": "v.optics.disabled=false; v.optics.force={bow:true}; v.optics.resetBowDemo(); await new Promise(r=>setTimeout(r,500)); return JSON.stringify(v.optics.status)" },
+  { "name": "bow-cloud", "p": { "preset": "wpac", "date": "2026-06-21", "time": 360, "seat": "right", "cloud-preset": "stratocumulus", "coverage": 0.85, "view-preset": "close", "wing-pos": "-4" },
+    "js": "v.optics.disabled=false; v.optics.force={bow:true}; v.optics.resetBowDemo(); await new Promise(r=>setTimeout(r,500)); return JSON.stringify(v.optics.status)" },
+  { "name": "bow-cha", "p": { "preset": "wpac", "date": "2026-06-21", "time": 824, "seat": "right", "cloud-preset": "cirrus", "coverage": 0.9, "wing-pos": "-4" },
+    "js": "v.optics.disabled=false; v.optics.force={bow:true}; await new Promise(r=>setTimeout(r,500)); return JSON.stringify(v.optics.status)" }
+]

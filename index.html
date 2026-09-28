@@ -52,10 +52,12 @@
       <p id="vehicle-hint" class="hint" hidden>火车模式下，地点、连续航程、航向、高度、机翼与襟翼等飞机专用设置不可用；切回「飞机」即可使用</p>
 
       <!-- 「此刻」摘要（UX-3，PANEL_UX_GUIDE §2.1）：常驻、不折叠；完整版（太阳 / 月亮高度角、经纬度小数点后
-           三位等）在开发者区的 #info（ui.ts updateInfo 同时写两处） -->
+           三位等）在开发者区的 #info（ui.ts updateInfo 同时写两处）。now-line3：STROBE-CLOUD 夜间云中自动关
+           频闪的状态说明，只在适用时显示（合并 master 时保留这条「不对用户静默」的设计） -->
       <div class="now-summary">
         <p id="now-line1"></p>
         <p id="now-line2"></p>
+        <p id="now-line3" hidden></p>
       </div>
 
       <!-- 观景：调整「我怎么看」，默认展开 -->
