@@ -1,0 +1,121 @@
+[
+ {
+  "name": "hnd-low-day",
+  "scene": {
+   "name": "hnd-low-day",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 900,
+    "altitude": 1.5,
+    "coverage": 0.1,
+    "wing-pos": "-4"
+   },
+   "ground": true
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "exactSky",
+    "patch": {
+     "__outCur": [
+      [
+       "  if (!onGround) L = skyRadiance(rd, hitGround);\n",
+       "  if (!onGround) { vec3 Tx; L = integrateSegment(ro, rd, uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactAP",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactBoth",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ],
+      [
+       "  if (!onGround) L = skyRadiance(rd, hitGround);\n",
+       "  if (!onGround) { vec3 Tx; L = integrateSegment(ro, rd, uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-apL",
+    "patch": {
+     "__outCur": [
+      [
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return L + gh.apL;\n",
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return gh.apL;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-refl",
+    "patch": {
+     "__outCur": [
+      [
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return L + gh.apL;\n",
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return gh.wat.r * fView * max(skyCam - gh.apL, vec3(0.0));\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-skyCam",
+    "patch": {
+     "__outCur": [
+      [
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return L + gh.apL;\n",
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return skyCam;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-waterT",
+    "patch": {
+     "__outCur": [
+      [
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return L + gh.apL;\n",
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return gh.wat.r * water * gh.apT;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-F",
+    "patch": {
+     "__outCur": [
+      [
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return L + gh.apL;\n",
+       "  L = L * gh.apT + gh.wat.r * (water * gh.apT + fView * max(skyCam - gh.apL, vec3(0.0)));\n  return vec3(fView) * 2000.0;\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   400,
+   400,
+   800,
+   300
+  ]
+ }
+]

@@ -1,0 +1,219 @@
+[
+ {
+  "name": "hnd-low-day",
+  "scene": {
+   "name": "hnd-low-day",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 900,
+    "altitude": 1.5,
+    "coverage": 0.1,
+    "wing-pos": "-4"
+   },
+   "ground": true
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; v.__outCur.uniforms.uHaze = v.atmosphere.hazeUniforms.uHaze; v.__outCur.uniforms.uHazeShape = v.atmosphere.hazeUniforms.uHazeShape; return 'haze=' + v.atmosphere.hazeUniforms.uHaze.value.toArray().map((x) => x.toFixed(3)) + ' shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "exactSky",
+    "patch": {
+     "__outCur": [
+      [
+       "  if (!onGround) L = skyRadiance(rd, hitGround);\n",
+       "  if (!onGround) { vec3 Tx; L = integrateSegment(ro, rd, uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactBoth",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ],
+      [
+       "  if (!onGround) L = skyRadiance(rd, hitGround);\n",
+       "  if (!onGround) { vec3 Tx; L = integrateSegment(ro, rd, uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactAll",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ],
+      [
+       "  if (!onGround) L = skyRadiance(rd, hitGround);\n",
+       "  if (!onGround) { vec3 Tx; L = integrateSegment(ro, rd, uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ],
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n",
+       "      { vec3 Tx; skyCam = integrateSegment(ro, reflect(rd, nView), uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   400,
+   400,
+   800,
+   300
+  ]
+ },
+ {
+  "name": "hnd-low-day-26",
+  "scene": {
+   "name": "hnd-low-day-26",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 900,
+    "altitude": 2.6,
+    "coverage": 0.1,
+    "wing-pos": "-4"
+   },
+   "ground": true
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; v.__outCur.uniforms.uHaze = v.atmosphere.hazeUniforms.uHaze; v.__outCur.uniforms.uHazeShape = v.atmosphere.hazeUniforms.uHazeShape; return 'haze=' + v.atmosphere.hazeUniforms.uHaze.value.toArray().map((x) => x.toFixed(3)) + ' shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "exactSky",
+    "patch": {
+     "__outCur": [
+      [
+       "  if (!onGround) L = skyRadiance(rd, hitGround);\n",
+       "  if (!onGround) { vec3 Tx; L = integrateSegment(ro, rd, uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactBoth",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ],
+      [
+       "  if (!onGround) L = skyRadiance(rd, hitGround);\n",
+       "  if (!onGround) { vec3 Tx; L = integrateSegment(ro, rd, uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactAll",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ],
+      [
+       "  if (!onGround) L = skyRadiance(rd, hitGround);\n",
+       "  if (!onGround) { vec3 Tx; L = integrateSegment(ro, rd, uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ],
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n",
+       "      { vec3 Tx; skyCam = integrateSegment(ro, reflect(rd, nView), uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   400,
+   400,
+   800,
+   300
+  ]
+ },
+ {
+  "name": "cruise-ground",
+  "scene": {
+   "name": "cruise-ground",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 780,
+    "altitude": 10.7,
+    "coverage": 0.05,
+    "wing-pos": "8"
+   },
+   "ground": true,
+   "head": [
+    0,
+    0.14,
+    -0.2
+   ]
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; v.__outCur.uniforms.uHaze = v.atmosphere.hazeUniforms.uHaze; v.__outCur.uniforms.uHazeShape = v.atmosphere.hazeUniforms.uHazeShape; return 'haze=' + v.atmosphere.hazeUniforms.uHaze.value.toArray().map((x) => x.toFixed(3)) + ' shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "exactAP",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactSkyCam",
+    "patch": {
+     "__outCur": [
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n",
+       "      { vec3 Tx; skyCam = integrateSegment(ro, reflect(rd, nView), uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactAll",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 64.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ],
+      [
+       "  if (!onGround) L = skyRadiance(rd, hitGround);\n",
+       "  if (!onGround) { vec3 Tx; L = integrateSegment(ro, rd, uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ],
+      [
+       "      skyCam = skyRadiance(reflect(rd, nView), false);\n",
+       "      { vec3 Tx; skyCam = integrateSegment(ro, reflect(rd, nView), uSunDir, 1e9, 64.0, Tx) * uSunIlluminance; }\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   700,
+   60,
+   550,
+   260
+  ]
+ }
+]

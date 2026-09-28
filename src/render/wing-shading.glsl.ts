@@ -37,9 +37,20 @@ vec3 wingLampAt(int i) { return i == 0 ? gWingLamp0 : (i == 1 ? gWingLamp1 : gWi
 
 // 灯在 dir 方向（机体系，从灯出发）上的发光强度（cd）。
 // 航行灯按 FAR 25.1389–1391：正前方 0–10° 至少 40 cd，10–20° 30 cd，20–110°（朝外侧）5 cd；
-// 光区之外只剩灯罩的散射漏光（这里取 3 cd，经验值）。尾灯：向后 ±70° 内 20 cd。频闪：各向约 1500 cd（LED 防撞灯的峰值量级）。
+// 光区之外只剩灯罩的散射漏光（这里取 3 cd，经验值）。尾灯：向后 ±70° 内 20 cd。
+// 频闪：峰值约 1500 cd（LED 防撞灯的量级），配光同下面 wingLampSurfI 的 i == 1（STROBE-FLASH）：朝外半个空间照、上下集中在水平面附近，
+// 朝内（机身、舷窗一侧）只有灯罩侧面的漏光 0.15。旧版这里各向同性 1500 cd——照翼面按 0.15 漏光、照眼睛却按满光强，
+// 自相矛盾，眼睛看到的灯芯比翼面「该看到的」亮约 7 倍，光晕铺满整个舷窗（handoff/STROBE-FLASH.md）
+// 频闪的配光（相对峰值，dir 为机体系单位向量），与 wingLampSurfI 的 i == 1 同一套曲线
+float strobeDistribution(vec3 dir) {
+  float h = length(dir.xz);
+  float s2 = dir.y * dir.y;
+  float fv = 0.2 + 0.8 * (0.7 * exp(-s2 / 0.0149) + 0.3 * exp(-s2 / 0.147));
+  float fh = mix(0.15, 1.0, smoothstep(-0.25, 0.25, dir.z / max(h, 1e-6)));
+  return fv * mix(0.575, fh, smoothstep(0.05, 0.3, h));
+}
 vec3 wingLampIntensity(int i, vec3 dir) {
-  if (i == 1) return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe;
+  if (i == 1) return vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * strobeDistribution(dir);
   vec2 hz = normalize(dir.xz + vec2(1e-5, 0.0));
   float ang = atan(hz.y, hz.x);   // 0 = 正前方，正值朝外侧（+Z）
   float a = abs(degrees(ang));
@@ -50,7 +61,7 @@ vec3 wingLampIntensity(int i, vec3 dir) {
   return vec3(1.0, 0.95, 0.85) * (a > 110.0 ? 20.0 : 2.0);
 }
 
-// 灯照到翼面上用的配光（cd，W-LAMP）。灯本身的亮点和云雾光晕（wingLights）仍用上面的 wingLampIntensity，逐位不变。
+// 灯照到翼面上用的配光（cd，W-LAMP）。灯本身的亮点和云雾光晕（wingLights）用上面的 wingLampIntensity（STROBE-FLASH 起频闪也按这里的配光）。
 // wingLampIntensity 只有水平分布、各向同性地往上下照，用来照翼面有两处不对：
 // ① 灯罩的光主要集中在水平面附近。FAR 25.1393 规定位置灯（航行灯、尾灯）在竖直面内的最低光强比例：
 //    0° 1.0、0–5° 0.9、5–10° 0.8、10–15° 0.7、15–20° 0.5、20–30° 0.3、30–40° 0.1、40–90° 0.05；
@@ -251,8 +262,12 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
   float covSum = 0.0;
   int n = 1;
   float single = 1.0;  // 1 = 只有中心射线（解析覆盖率），0 = 超采样
+  float covA = 1.0;
   float t0 = tStart;
   float tJ = -1.0;
+  // 审查返工（建议项）：亮像素超采样不再是逐像素硬开关，见下面 fireflyMix 的用法
+  float fireflyMix = 1.0;
+  vec3 singleCol = vec3(0.0);
   const int SUB_MIN = 8;
   int pool = uWingSteps / 2;   // 四条子射线共用的求交步数
   // 边缘像素的中心射线：部件、法线、自阴影、颜色（子样本打在同一块表面上时沿用它的颜色）
@@ -315,6 +330,24 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
       // 调试：超采样的像素染成品红（亮度不变，不影响自动曝光）
       if (uWingEdgeAA > 1 && single < 0.5) col = vec3(1.0, 0.0, 1.0) * dot(col, vec3(0.2126, 0.7152, 0.0722)) * 1.4;
     }
+    // W-EDGE：解析覆盖率的像素只有中心一个样本，轮廓上的极亮点（夕阳在短舱唇口上的镜面反光、夜里翼尖灯照亮的薄边）
+    // 随像素中心落点逐帧忽有忽无，飞行中一闪一闪（光晕还会把它放大成一团）。中心样本比背后窗外亮时改走超采样取色 + 下面的
+    // 去亮点，覆盖率仍用解析值（covA）。
+    // 审查返工（建议项）：原判据是 3 倍处的逐像素硬开关（单样本 ↔ 5 样本 + 去亮点），门限附近颜色会跳（覆盖率不跳，
+    // 因为用的是 covA），商务舱正午小翼前缘反而因此多闪。改成从 2 倍起就付出超采样的开销，
+    // 但按 smoothstep(2, 4) 把单样本颜色（singleCol）与超采样结果连续混合（fireflyMix），不再是帧与帧之间的二选一
+    float lumC = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    if (k == 0 && single > 0.5 && c < 1.0 && uWingEdgeAA > 0 && lumC > 2.0 * refL) {
+      n = uWingEdgeAA == 3 ? 1 : 5;
+      single = 0.0;
+      covA = c;
+      partC = w.part;
+      nC = w.nA;
+      shC = w.shadow;
+      t0 = max(tStart, w.t - 4.0 * pa * w.t);
+      fireflyMix = smoothstep(2.0, 4.0, refL > 1e-6 ? lumC / refL : 4.0);
+      singleCol = col;
+    }
     if (single > 0.5) {
       acc += col * c;
       covSum += c;
@@ -349,11 +382,15 @@ vec4 wingView(vec3 ro, vec3 rd, float tStart, vec3 sunC, vec3 eSky, vec3 eDown, 
     }
   }
   if (covSum <= 0.0) return vec4(0.0);
-  return vec4(acc / covSum, single > 0.5 ? covSum : covSum * 0.2);
+  vec3 finalCol = acc / covSum;
+  // fireflyMix < 1：亮像素判据的中间地带，单样本颜色和超采样颜色按比例混合（真正的边缘 / 内轮廓超采样 fireflyMix 恒为 1，不受影响）
+  if (fireflyMix < 1.0) finalCol = mix(singleCol, finalCol, fireflyMix);
+  return vec4(finalCol, single > 0.5 ? covSum : (covA < 1.0 ? covA : covSum * 0.2));
 }
 
 // 翼尖的航行灯（右绿左红）、白色频闪、尾灯：小光源 + 周围的光晕（光晕靠后面的眩光处理放大）；
 // 在云里时再加上灯光照亮周围云雾的散射光（频闪一闪，整片雾跟着亮一下）
+#define STROBE_CORE_CD 30.0
 vec3 wingLights(vec3 ro, vec3 rd) {
   vec3 L = vec3(0.0);
   float sigma = uCameraFog * 1e-3;   // 云雾的消光系数，1/m（云滴几乎不吸收，散射系数取同一个值）
@@ -369,15 +406,41 @@ vec3 wingLights(vec3 ro, vec3 rd) {
     // 发光强度（cd）换算成一个 3 cm 光球的亮度
     if (t > 0.0) {
       float core = 1.0 - smoothstep(0.02, 0.03, dist);
-      L += I / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m² → kcd/m²
+      // 频闪的灯芯按软上限 STROBE_CORE_CD 画（STROBE-FLASH）：夜里窗外曝光比灯芯低十几个数量级，灯芯本身怎样都是纯白，
+      // 它的亮度只通过眩光（bloom 的点扩散，4% 能量铺到 1/θ² 的宽尾巴）显出来——按真实光强（朝舷窗约 100–300 cd）铺，
+      // 50 ms 一闪整窗远处也亮 10–40 级、灯周 100 px 死白。这里是显示上的取舍，不是物理：眩光只给到常亮航行灯正前方（40 cd）
+      // 同量级，频闪读成翼尖一个刺眼的点 + 翼面被照亮（翼面照度仍按 wingLampSurfI 的真实光强），不再是整个窗户爆白
+      // 只在天黑以后压（太阳 −12° → −3° 之间放开）：白天曝光低，灯芯的眩光本来就只是翼尖一个小亮点，白天看得见的白闪正是防撞灯的用途
+      float night = 1.0 - smoothstep(-0.21, -0.05, uSunDir.y);
+      vec3 Ic = i == 1 ? I / (1.0 + night * I.g / STROBE_CORE_CD) : I;
+      L += Ic / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m² → kcd/m²
     }
     // 云雾里的单次散射：沿视线积分 σ·I/(4π r²)，r² = h² + (s − t)²，有解析解。
-    // 用灯的平均强度（各方向）近似；视线穿过的雾同时也衰减一部分
+    // 用灯的平均强度（各方向）近似；视线穿过的雾同时也衰减一部分。
     if (sigma > 0.0) {
-      vec3 Iavg = i == 1 ? I : wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;
       float hh = max(dist, 0.05);
       float s1 = 60.0;
-      float integ = (atan((s1 - t) / hh) - atan(-t / hh)) / hh;
+      float p0 = atan(-t / hh), p1 = atan((s1 - t) / hh);
+      vec3 Iavg = wingLampIntensity(i, vec3(1.0, 0.0, 0.3)) * 0.3;
+      float integ = (p1 - p0) / hh;
+      // 频闪（STROBE-FLASH）：旧版用朝眼睛的满光强 1500 cd、各向同性的相函数照雾，夜里在云中每闪一次整窗纯白（+180 级）。
+      // 改成沿视线按角度 φ 积分（u = s − t = h·tanφ，ds / r² = dφ / h）云滴的前向散射相函数：
+      // · 云滴强烈前向散射（g 0.85，水云滴单次散射的典型值；灯到舷窗约 15 m、光学厚度 0.5–0.7，单次散射为主），侧向 90° 只有各向同性的
+      //   约 1/8、背向更少。视线离灯最近那一段正是侧向，所以远离灯的雾只是微微一亮，灯周（前向）才是一团亮雾——雾中看灯的真实样子；
+      // · 相函数用 Schlick 近似 4πp = (1 − k²)/(1 − k cosθ)²（k = 1.55g − 0.55g³ ≈ 0.98），cosθ = −sinφ，
+      //   ∫ (1 − k²)/(1 + k sinφ)² dφ 有初等原函数 k cosφ/(1 + k sinφ) + 2/√(1 − k²) · atan((tan(φ/2) + k)/√(1 − k²))，不用逐点积分；
+      // · 前向那一半（φ < 0，眼睛和灯之间）拿到的是灯朝内（舷窗一侧）的漏光：0.15 × 竖直分布约 0.6；另一半按配光平均 0.2。
+      // 试过：逐点按「灯 → 视线最近点」方向取配光——十字形亮瓣；12 点数值积分配光 × HG——平滑，但离线 FXC wing +11%、wing-wet +22%
+      if (i == 1) {
+        // 两端 φ = atan(x)：cosφ、sinφ、tan(φ/2) 都由 x 代数算出，只剩一次 vec2 的 atan（冷编译：三角函数 FXC 展开很长）
+        const float K = 0.98, SM = 0.199;   // SM = √(1 − K²)
+        vec2 x = vec2(-t, s1 - t) / hh;
+        vec2 rq = sqrt(1.0 + x * x);
+        vec2 F = K / (rq + K * x) + 2.0 / SM * atan((x / (1.0 + rq) + K) / SM);
+        float F0 = K + 2.0 / SM * atan(K / SM);          // φ = 0（最近点）处的原函数值
+        float Fm = x.x < 0.0 ? F0 : F.x;                 // 灯在眼睛背后（t < 0）时整段都在「另一半」
+        Iavg = vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * (0.09 * (Fm - F.x) + 0.2 * (F.y - Fm)) / max(p1 - p0, 1e-4);
+      }
       L += sigma * Iavg / (4.0 * M_PI) * integ * exp(-sigma * max(t, 0.0)) * 1e-3;
     }
   }

@@ -1,0 +1,127 @@
+[
+ {
+  "name": "cruise-ground",
+  "scene": {
+   "name": "cruise-ground",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 780,
+    "altitude": 10.7,
+    "coverage": 0.05,
+    "wing-pos": "8"
+   },
+   "ground": true,
+   "head": [
+    0,
+    0.14,
+    -0.2
+   ]
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; v.__outCur.uniforms.uHaze = v.atmosphere.hazeUniforms.uHaze; v.__outCur.uniforms.uHazeShape = v.atmosphere.hazeUniforms.uHazeShape; return 'haze=' + v.atmosphere.hazeUniforms.uHaze.value.toArray().map((x) => x.toFixed(3)) + ' shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "logZ",
+    "patch": {
+     "__outCur": [
+      [
+       "  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n",
+       "  { float Dz = AERIAL_SIZE.z; float zu = sqrt(clamp(tT / AERIAL_MAX_DISTANCE, 0.0, 1.0)) * (Dz - 1.0);\n    float k0 = min(floor(zu), Dz - 2.0);\n    float za = k0 / (Dz - 1.0), zb = (k0 + 1.0) / (Dz - 1.0);\n    float da = za * za * AERIAL_MAX_DISTANCE, db = zb * zb * AERIAL_MAX_DISTANCE;\n    float td = clamp((tT - da) / max(db - da, 1e-6), 0.0, 1.0);\n    vec3 a = vec3(uvw.xy, unitToUv(za, Dz)), b = vec3(uvw.xy, unitToUv(zb, Dz));\n    vec3 Ta = texture(uAerialTransmittanceS, a).rgb, Tb = texture(uAerialTransmittanceS, b).rgb;\n    vec3 La = texture(uAerialInscatterS, a).rgb, Lb = texture(uAerialInscatterS, b).rgb;\n    vec3 T = Ta * pow(max(Tb, vec3(1e-6)) / max(Ta, vec3(1e-6)), vec3(td));\n    vec3 dT = Ta - Tb;\n    vec3 w = mix(vec3(td), (Ta - T) / dT, step(vec3(1e-4), abs(dT)));\n    gh.apL = mix(La, Lb, w) * uSunIlluminance;\n    gh.apT = T; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "rowFrac",
+    "patch": {
+     "__outCur": [
+      [
+       "  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n",
+       "  { float Dy = AERIAL_SIZE.y; float tB = raySphere(ro, rd, BOTTOM);\n    float yu = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (Dy - 1.0);\n    float k0 = min(floor(yu), Dy - 2.0); float ty = yu - k0;\n    vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));\n    vec3 Ls = vec3(0.0), Tsum = vec3(0.0);\n    for (int j = 0; j < 2 + uLoopGuard; j++) {\n      float yk = (k0 + float(j)) / (Dy - 1.0); float c = 1.0 - 2.0 * yk; float vz = sign(c) * c * c;\n      vec3 rk = vec3(hz.x * sqrt(max(1.0 - vz * vz, 0.0)), vz, hz.y * sqrt(max(1.0 - vz * vz, 0.0)));\n      float tk = raySphere(ro, rk, BOTTOM);\n      float dk = (tB > 0.0 && tk > 0.0) ? tT * tk / tB : tT;\n      vec3 q = vec3(uvw.x, unitToUv(yk, Dy), unitToUv(sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0)), AERIAL_SIZE.z));\n      float wj = j == 0 ? 1.0 - ty : ty;\n      Ls += wj * texture(uAerialInscatterS, q).rgb; Tsum += wj * texture(uAerialTransmittanceS, q).rgb;\n    }\n    gh.apL = Ls * uSunIlluminance; gh.apT = Tsum; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactAP24",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 24.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   700,
+   60,
+   550,
+   260
+  ]
+ },
+ {
+  "name": "hnd-low-day",
+  "scene": {
+   "name": "hnd-low-day",
+   "p": {
+    "preset": "hnd-cts",
+    "date": "2026-09-28",
+    "time": 900,
+    "altitude": 1.5,
+    "coverage": 0.1,
+    "wing-pos": "-4"
+   },
+   "ground": true
+  },
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; v.__outCur.uniforms.uHaze = v.atmosphere.hazeUniforms.uHaze; v.__outCur.uniforms.uHazeShape = v.atmosphere.hazeUniforms.uHazeShape; return 'haze=' + v.atmosphere.hazeUniforms.uHaze.value.toArray().map((x) => x.toFixed(3)) + ' shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "logZ",
+    "patch": {
+     "__outCur": [
+      [
+       "  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n",
+       "  { float Dz = AERIAL_SIZE.z; float zu = sqrt(clamp(tT / AERIAL_MAX_DISTANCE, 0.0, 1.0)) * (Dz - 1.0);\n    float k0 = min(floor(zu), Dz - 2.0);\n    float za = k0 / (Dz - 1.0), zb = (k0 + 1.0) / (Dz - 1.0);\n    float da = za * za * AERIAL_MAX_DISTANCE, db = zb * zb * AERIAL_MAX_DISTANCE;\n    float td = clamp((tT - da) / max(db - da, 1e-6), 0.0, 1.0);\n    vec3 a = vec3(uvw.xy, unitToUv(za, Dz)), b = vec3(uvw.xy, unitToUv(zb, Dz));\n    vec3 Ta = texture(uAerialTransmittanceS, a).rgb, Tb = texture(uAerialTransmittanceS, b).rgb;\n    vec3 La = texture(uAerialInscatterS, a).rgb, Lb = texture(uAerialInscatterS, b).rgb;\n    vec3 T = Ta * pow(max(Tb, vec3(1e-6)) / max(Ta, vec3(1e-6)), vec3(td));\n    vec3 dT = Ta - Tb;\n    vec3 w = mix(vec3(td), (Ta - T) / dT, step(vec3(1e-4), abs(dT)));\n    gh.apL = mix(La, Lb, w) * uSunIlluminance;\n    gh.apT = T; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "rowFrac",
+    "patch": {
+     "__outCur": [
+      [
+       "  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;\n  gh.apT = texture(uAerialTransmittanceS, uvw).rgb;\n",
+       "  { float Dy = AERIAL_SIZE.y; float tB = raySphere(ro, rd, BOTTOM);\n    float yu = (0.5 - 0.5 * sign(rd.y) * sqrt(abs(rd.y))) * (Dy - 1.0);\n    float k0 = min(floor(yu), Dy - 2.0); float ty = yu - k0;\n    vec2 hz = normalize(rd.xz + vec2(1e-7, 0.0));\n    vec3 Ls = vec3(0.0), Tsum = vec3(0.0);\n    for (int j = 0; j < 2 + uLoopGuard; j++) {\n      float yk = (k0 + float(j)) / (Dy - 1.0); float c = 1.0 - 2.0 * yk; float vz = sign(c) * c * c;\n      vec3 rk = vec3(hz.x * sqrt(max(1.0 - vz * vz, 0.0)), vz, hz.y * sqrt(max(1.0 - vz * vz, 0.0)));\n      float tk = raySphere(ro, rk, BOTTOM);\n      float dk = (tB > 0.0 && tk > 0.0) ? tT * tk / tB : tT;\n      vec3 q = vec3(uvw.x, unitToUv(yk, Dy), unitToUv(sqrt(clamp(dk / AERIAL_MAX_DISTANCE, 0.0, 1.0)), AERIAL_SIZE.z));\n      float wj = j == 0 ? 1.0 - ty : ty;\n      Ls += wj * texture(uAerialInscatterS, q).rgb; Tsum += wj * texture(uAerialTransmittanceS, q).rgb;\n    }\n    gh.apL = Ls * uSunIlluminance; gh.apT = Tsum; }\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "exactAP24",
+    "patch": {
+     "__outCur": [
+      [
+       "      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n",
+       "      { vec3 Tx; gh.apL = integrateSegment(ro, rd, uSunDir, gh.t, 24.0, Tx) * uSunIlluminance; gh.apT = Tx; }\n      L = groundFinish(gh, land, water, fView, skyCam, eSunW, eSkyW, eFlash);\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   400,
+   400,
+   800,
+   600
+  ]
+ }
+]

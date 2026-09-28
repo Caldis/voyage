@@ -1,0 +1,55 @@
+[
+ {
+  "name": "incloud-night-wing",
+  "scene": {
+   "name": "night-incloud",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-01-16",
+    "time": 1320,
+    "cloud-preset": "stratocumulus",
+    "coverage": 0.95,
+    "altitude": 1.35,
+    "wing-pos": "8",
+    "cabin-light": false
+   },
+   "offset": [
+    -10,
+    -5
+   ],
+   "wait": 6000
+  },
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "master",
+    "materials": {
+     "wingMat.wet": "base:wingMat"
+    }
+   }
+  ]
+ },
+ {
+  "name": "night-city-wing",
+  "scene": "night-city",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "master",
+    "materials": {
+     "wingMat": "base"
+    }
+   }
+  ]
+ }
+]

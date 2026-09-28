@@ -1,0 +1,26 @@
+[
+ {"name": "biz-live", "scene": {"name": "biz-seated-noon", "p": {"preset": "wpac", "time": 720, "wing-pos": "8", "cabin-class": "business"}, "head": [0, 0.02, -0.42]},
+  "variants": [
+   {"name": "old", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}},
+   {"name": "new"},
+   {"name": "old2", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}},
+   {"name": "new2"}
+  ],
+  "live": {"crop": [640, 300, 260, 260], "frames": 480, "regions": {"小翼前缘": [120, 0, 140, 190], "主翼前缘": [0, 170, 110, 90]}, "thr": 8, "frac": 0.05}},
+ {"name": "sun-live", "scene": "sunset-wing",
+  "variants": [
+   {"name": "old", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}},
+   {"name": "new"},
+   {"name": "old2", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}},
+   {"name": "new2"}
+  ],
+  "live": {"crop": [390, 280, 500, 400], "frames": 480, "regions": {"小翼前缘": [310, 0, 120, 195], "小翼后缘": [430, 0, 70, 195], "主翼前缘": [0, 195, 440, 70], "后缘与整流罩": [180, 265, 320, 135]}, "thr": 8, "frac": 0.05}},
+ {"name": "night-live", "scene": {"name": "night-wing-on", "p": {"preset": "wpac", "date": "2026-01-16", "time": 1320, "coverage": 0.15, "cabin-light": true, "wing-pos": "8"}},
+  "variants": [
+   {"name": "old", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}},
+   {"name": "new"},
+   {"name": "old2", "materials": {"wingMat": "base", "wingMat.wet": "base:wingMat"}},
+   {"name": "new2"}
+  ],
+  "live": {"crop": [640, 280, 240, 260], "frames": 480, "record": {"uStrobe": "sceneMat.uniforms.uStrobe.value"}, "skip": "uStrobe >= 0.5", "regions": {"小翼前缘": [80, 20, 120, 180], "翼尖灯与主翼前缘": [0, 180, 240, 80]}, "thr": 8, "frac": 0.05}}
+]

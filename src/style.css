@@ -47,6 +47,8 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 .rates { align-items: center; color: var(--muted); flex-wrap: wrap; }
 #info { margin: 0; white-space: pre-wrap; font: 12px/1.6 ui-monospace, Consolas, monospace; color: var(--text); }
 .hint { margin: 0; color: var(--muted); font-size: 12px; }
+/* 被连续航程 / 天气场接管的控件旁标（UX-2，PANEL_UX_GUIDE §5.3 规则二）：显示 / 隐藏走 [hidden]，不占布局宽度之外的空间 */
+.auto-badge { color: var(--accent); font-size: 11px; font-weight: 600; }
 .credits { margin: 0; color: var(--muted); font-size: 11px; }
 /* 开发者区（FOCUS-ZOOM 起建）：与用户控件隔一道细线 */
 .dev-section { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.12); }

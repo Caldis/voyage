@@ -1,0 +1,95 @@
+[
+ {
+  "name": "night-sea-milkyway",
+  "scene": "night-sea-milkyway",
+  "pre": "for (let i = 0; i < 1200 && v.groundDetail.pending; i++) await new Promise((r) => requestAnimationFrame(r)); const k = v.groundDetail.shown; v.__outCur = k ? v.groundDetail.variants.get(k).material : v.outsideMat; return 'shown=' + JSON.stringify(k);",
+  "variants": [
+   {
+    "name": "new"
+   },
+   {
+    "name": "c-skyHz",
+    "patch": {
+     "__outCur": [
+      [
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n",
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n      L = skyHz;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-skyCam",
+    "patch": {
+     "__outCur": [
+      [
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n",
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n      L = skyCam;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-insc",
+    "patch": {
+     "__outCur": [
+      [
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n",
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n      L = inscatter;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-sea",
+    "patch": {
+     "__outCur": [
+      [
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n",
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n      L = sea;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-refl",
+    "patch": {
+     "__outCur": [
+      [
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n",
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n      L = refl;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-tUp",
+    "patch": {
+     "__outCur": [
+      [
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n",
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n      L = tUpR * skyHz.g * 3.0;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "c-nan",
+    "patch": {
+     "__outCur": [
+      [
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n",
+       "      vec3 refl = fView * mix(max(skyHz - inscatter, vec3(0.0)), max(skyCam - inscatter, vec3(0.0)), tUpR);\n      L = vec3(any(isnan(L)) ? 1.0 : 0.0, any(isnan(refl)) ? 1.0 : 0.0, any(isnan(tUpR)) ? 1.0 : 0.0) * 1e3;\n"
+      ]
+     ]
+    }
+   }
+  ],
+  "crop": [
+   380,
+   300,
+   850,
+   800
+  ]
+ }
+]
