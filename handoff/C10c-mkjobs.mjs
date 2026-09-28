@@ -12,6 +12,12 @@ const variants = varsArg.split(",").map((vn) => {
   if (p === undefined) throw new Error("没有变体 " + vn);
   return p.length ? { name: vn, patch: { "clouds.marchMat": p.map(([a, b, o]) => (o ? [a, b, true] : [a, b])) } } : { name: vn };
 });
+// --variants-only：只写变体数组（给 dev-browser.mjs flight --variants）；此时场景参数随便给
+if (flags.includes("--variants-only")) {
+  fs.writeFileSync(out, JSON.stringify(variants, null, 1));
+  console.log(`写了 ${variants.length} 个变体 → ${out}`);
+  process.exit(0);
+}
 if (flags.includes("--ref")) variants.push({ name: "ref", builtin: "cloud-ref" }, { name: "dist", builtin: "cloud-dist" });
 // 场景表里没有的（cu-side、graze-sc 等 C10 系列的临时场景）从 C10c-scenes.json 取对象
 const extra = JSON.parse(fs.readFileSync(new URL("./C10c-scenes.json", import.meta.url), "utf-8"));

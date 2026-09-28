@@ -1,0 +1,19 @@
+[
+ {
+  "name": "c10b",
+  "patch": {
+   "clouds.marchMat": [
+    [
+     "        pL = p - rd * (min(0.3 * stepLen, 4.0 / kv) * smoothstep(1.0, 3.0, sigL) * (1.0 - uCloudImmersion));\n",
+     "        pL = p;\n"
+    ]
+   ]
+  }
+ },
+ {
+  "name": "cur"
+ },
+ {
+  "name": "cur2"
+ }
+]
