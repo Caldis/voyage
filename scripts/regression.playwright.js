@@ -56,6 +56,8 @@ async (page) => {
   const SCENES = [
     { name: "noon-cumulus", p: { preset: "wpac", time: 720, "wing-pos": "8" } },
     { name: "sunset-wing", p: { preset: "wpac", time: 1040, "wing-pos": "8" } },
+    { name: "sea-sc", p: { preset: "wpac", date: "2026-09-28", time: 840, "cloud-preset": "stratocumulus", coverage: 0.7, "wing-pos": "-4" } },
+    { name: "sea-sc-low", p: { preset: "wpac", date: "2026-09-28", time: 1030, "cloud-preset": "stratocumulus", coverage: 0.7, "wing-pos": "-4" } },
     // DX-07：wpac 17:48 本地，2026-02-16 太阳高度 −4.7°（与旧行为的「当天」量级一致，地影拱仍在合适位置），
     // 月亮高度 −19.3°（新月相位 1%，在地平线下），不会露头
     { name: "dusk-earthshadow", p: { preset: "wpac", seat: "left", date: "2026-02-16", time: 1068, "wing-pos": "-4" } },
