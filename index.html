@@ -188,6 +188,8 @@
           <option value="off">全关（只剩阅读灯）</option>
         </select>
       </label>
+      <!-- REFLECT-OFF：舷窗玻璃上的舱内倒影，默认关（用户嫌强）；观看偏好，只记用户亲手拖的值；URL ?reflect=0..1 优先 -->
+      <label title="舷窗玻璃映出的舱内倒影（夜里开灯时最明显）。0 为关，100% 为物理强度；双击复位到关">窗上倒影 <output id="cabin-reflect-out"></output><input id="cabin-reflect" type="range" min="0" max="1" step="0.05" value="0" /></label>
       <label class="check"><input id="auto-exposure" type="checkbox" checked />人眼式自动曝光</label>
       <label>曝光补偿 <output id="ev-comp-out"></output><input id="ev-comp" type="range" min="-3" max="3" step="0.1" value="0" /></label>
       <label id="manual-row">手动曝光 <output id="manual-ev-out"></output><input id="manual-ev" type="range" min="-2" max="17" step="0.1" value="14" /></label>

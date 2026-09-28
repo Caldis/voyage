@@ -22,8 +22,17 @@
  *
  * 依赖：VIEW_COMMON（sdRoundRect、BEZEL_HALF、BEZEL_RADIUS）、CABIN_SHADING_COMMON（WINDOW_PITCH、cabinMoodWash、
  * READING_LIGHT_COLOR），以及 uSeatSign。
+ *
+ * REFLECT-OFF（2026-09-29，用户：「机舱反光过强了，也请弱化甚至默认关闭」）：整体强度由 uReflStrength（0–1）控制，
+ * **默认 0 = 关**。调用处（scene.ts）在 0 时整段跳过倒影计算（省 GPU），画面与「强度 0」逐位一致；1 与改前逐位一致。
+ * 强度乘在最终叠加上（软限幅之后），所以是「整层倒影按比例变淡」，不是改菲涅尔后再被上限压回去。
+ * 面板「窗上倒影」滑条与 URL `?reflect=0..1` 设它（ui.ts），调试 uDebug 31 / 33（只看倒影）不受它影响。
  */
+/** 舷窗上舱内倒影的整体强度（0 = 关，1 = 改前的物理强度）；舱内合成的各舱等变体共用这一个 uniform 对象 */
+export const CABIN_REFLECT_STRENGTH = { value: 0 };
+
 export const CABIN_REFLECT_COMMON = /* glsl */ `
+uniform float uReflStrength;     // REFLECT-OFF：倒影整体强度，0 = 关（整段跳过），1 = 物理强度
 // ---- 舱内盒子（座舱系，米；原点在本窗窗洞中心，z 朝窗外，舱内是 z < 0）。示例尺寸 ----
 const float RF_W = 5.5;          // 对面侧壁（窗高处）离本侧内饰面的距离
 const float RF_CEIL = 1.42;      // 天花板（过道上方）
