@@ -249,6 +249,7 @@ URL 参数压过面板时，在 hint 末尾加「（URL 参数 `groundres` 优�
 规则：
 
 - **单字母快捷键一律用同一个守卫函数** `isTypingTarget(e.target)`（input / select / textarea / contentEditable 返回真），以及不带 `Ctrl / Alt / Meta`。现状 `H` 没有守卫、`B` 只查 input、`M / N` 查 input + select、方向键查全四种，不一致。
+  - 补充（UX-1a 实施时定，协调者采纳）：守卫只拦**会接收字母的**输入（文本 / 日期 / 数字框、select、textarea、contenteditable）；复选框、滑条、按钮不拦——否则点完「声音」复选框再按 M、拖完滑条再按 H 都失灵。带 Ctrl / Alt / Meta 的组合一律不拦截。
 - 新增快捷键先查本表，不许与浏览器常用键（`Ctrl + 任意`、`F5`、`Space` 滚动）冲突；加进表里。
 - 快捷键在对应控件标签旁以 `<kbd>` 显示，并写进 `title`。
 

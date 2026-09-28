@@ -1,0 +1,51 @@
+[
+  {
+    "name": "ux1a-default-top",
+    "p": { "preset": "wpac", "time": 720 },
+    "wait": 3000,
+    "js": "const p=document.getElementById('panel');p.classList.remove('hidden');p.scrollTop=0;await new Promise(r=>setTimeout(r,300));const r=p.getBoundingClientRect();return JSON.stringify({vw:innerWidth,vh:innerHeight,panel:[Math.round(r.left),Math.round(r.top),Math.round(r.width),Math.round(r.height)],scrollH:p.scrollHeight,clientH:p.clientHeight,areaPct:+(r.width*r.height/(innerWidth*innerHeight)*100).toFixed(1),controls:p.querySelectorAll('input,select,button').length,ids:[...p.querySelectorAll('[id]')].map(e=>e.id).join(','),opts:[...p.querySelectorAll('select')].map(s=>s.id+':'+[...s.options].map(o=>o.value).join('|')).join(';'),renderer:(()=>{try{const g=document.createElement('canvas').getContext('webgl2');const e=g.getExtension('WEBGL_debug_renderer_info');return g.getParameter(e.UNMASKED_RENDERER_WEBGL)}catch(err){return String(err)}})()})"
+  },
+  {
+    "name": "ux1a-default-mid",
+    "p": { "preset": "wpac", "time": 720 },
+    "wait": 1500,
+    "js": "const p=document.getElementById('panel');p.classList.remove('hidden');p.scrollTop=Math.round((p.scrollHeight-p.clientHeight)/2);await new Promise(r=>setTimeout(r,300));return 'mid '+p.scrollTop"
+  },
+  {
+    "name": "ux1a-default-bottom",
+    "p": { "preset": "wpac", "time": 720 },
+    "wait": 1500,
+    "js": "const p=document.getElementById('panel');p.classList.remove('hidden');p.scrollTop=p.scrollHeight;await new Promise(r=>setTimeout(r,300));const m=document.getElementById('manual-row');const cb=document.getElementById('auto-exposure');return JSON.stringify({bottom:p.scrollTop,autoChecked:cb.checked,manualHidden:m.hidden,manualDisplay:getComputedStyle(m).display,manualH:m.getBoundingClientRect().height,checkboxAccent:getComputedStyle(cb).accentColor,creditsOpacity:getComputedStyle(document.querySelector('.credits')).opacity,mutedColor:getComputedStyle(document.querySelector('.hint')).color,panelBg:getComputedStyle(p).backgroundColor,oldHint:[...p.querySelectorAll('.hint')].some(e=>e.textContent.includes('移动鼠标'))})"
+  },
+  {
+    "name": "ux1a-expanded-top",
+    "p": { "preset": "wpac", "time": 720, "voyage-on": true, "wonders-on": true },
+    "continuousJourney": true,
+    "wait": 4000,
+    "js": "const p=document.getElementById('panel');p.classList.remove('hidden');const s=document.getElementById('sound-controls');s.hidden=false;p.scrollTop=0;await new Promise(r=>setTimeout(r,300));const tb=document.querySelector('[data-rate]');return JSON.stringify({scrollH:p.scrollHeight,clientH:p.clientHeight,timeRateDisabled:tb.disabled,timeRateTitle:tb.title,pressed:[...document.querySelectorAll('[data-rate],[data-voyage-rate],[data-nav]')].map(b=>(b.dataset.rate??b.dataset.voyageRate??b.dataset.nav)+'='+b.getAttribute('aria-pressed')).join(' ')})"
+  },
+  {
+    "name": "ux1a-train",
+    "p": { "vehicle": "train" },
+    "wait": 4000,
+    "js": "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100));await new Promise(r=>setTimeout(r,500));const p=document.getElementById('panel');p.classList.remove('hidden');p.scrollTop=0;await new Promise(r=>setTimeout(r,300));const ids=['preset','altitude','wing-pos','high-lift','voyage-on','hdg','nav-dest','turn-left','turn-right','debug-arrive'];const t=ids.map(id=>{const e=document.getElementById(id);return id+(e.disabled?'[禁]':'')+'='+e.title}).join(' | ');const alt=document.querySelector('[data-alt]');const nav=document.querySelector('[data-nav]');const h=document.getElementById('vehicle-hint');return JSON.stringify({railActive:v.rail.active,titles:t,alt:alt.disabled+':'+alt.title,nav:nav.disabled+':'+nav.title,vehicleHint:h?(h.hidden?'(hidden)':h.textContent):'(无)'})"
+  },
+  {
+    "name": "ux1a-plane-after-train",
+    "p": { "vehicle": "plane", "preset": "wpac", "time": 720 },
+    "wait": 3000,
+    "js": "for (let i = 0; i < 300 && v.rail.active; i++) await new Promise((r) => setTimeout(r, 100));await new Promise(r=>setTimeout(r,500));const ids=['preset','altitude','wing-pos','high-lift','voyage-on','hdg','nav-dest','turn-left','turn-right','debug-arrive'];const t=ids.map(id=>{const e=document.getElementById(id);return id+(e.disabled?'[禁]':'')+'='+e.title}).join(' | ');const alt=document.querySelector('[data-alt]');const h=document.getElementById('vehicle-hint');return JSON.stringify({railActive:v.rail.active,titles:t,alt:alt.disabled+':'+alt.title,vehicleHint:h?(h.hidden?'(hidden)':h.textContent):'(无)'})"
+  },
+  {
+    "name": "ux1a-keys",
+    "p": { "preset": "wpac", "time": 720 },
+    "wait": 1500,
+    "js": "const p=document.getElementById('panel');p.classList.remove('hidden');const res={};const key=(el,k,o={})=>el.dispatchEvent(new KeyboardEvent('keydown',Object.assign({key:k,bubbles:true,cancelable:true},o)));const date=document.getElementById('date');date.focus();key(date,'h');res.hInDate=p.classList.contains('hidden')?'隐藏了(错)':'未隐藏(对)';key(date,'b');res.bInDate=v.director.backdrop?'进背景板(错)':'未进(对)';const seat=document.getElementById('seat');seat.focus();key(seat,'m');res.mInSelect=v.audio.enabled?'开了声音(错)':'未开(对)';key(seat,'n');res.nInSelect=v.minimap.enabled?'开了小地图(错)':'未开(对)';key(seat,'h');res.hInSelect=p.classList.contains('hidden')?'隐藏了(错)':'未隐藏(对)';seat.blur();key(document.body,'h',{ctrlKey:true});res.ctrlH=p.classList.contains('hidden')?'隐藏了(错)':'未隐藏(对)';key(document.body,'h');res.hOnBody=p.classList.contains('hidden')?'隐藏了(对)':'未隐藏(错)';key(document.body,'h');const ws=document.getElementById('weather');ws.focus();ws.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));ws.dispatchEvent(new Event('change',{bubbles:true}));res.selectBlurAfterPointer=document.activeElement===ws?'仍聚焦(错)':'已还焦点(对)';const vp=document.getElementById('view-preset');vp.focus();vp.dispatchEvent(new Event('change',{bubbles:true}));res.selectKeepFocusKeyboard=document.activeElement===vp?'键盘操作保持焦点(对)':'失焦';vp.blur();const nb=document.querySelector('[data-rate]');nb.focus();await new Promise(r=>setTimeout(r,200));res.focusRing=getComputedStyle(nb).outlineStyle+' '+getComputedStyle(nb).outlineColor+' '+getComputedStyle(nb).outlineWidth;res.panelAria=p.getAttribute('aria-label');return JSON.stringify(res)"
+  },
+  {
+    "name": "ux1a-white-bg",
+    "p": { "preset": "wpac", "time": 720 },
+    "wait": 1500,
+    "js": "document.activeElement&&document.activeElement.blur&&document.activeElement.blur();const p=document.getElementById('panel');p.classList.remove('hidden');p.scrollTop=0;let d=document.getElementById('ux1a-white');if(!d){d=document.createElement('div');d.id='ux1a-white';d.style.cssText='position:fixed;top:0;right:0;width:360px;height:100%;background:#fff';document.body.insertBefore(d,p);}await new Promise(r=>setTimeout(r,400));const h=document.getElementById('nav-status').getBoundingClientRect();return JSON.stringify({navStatusBox:[Math.round(h.left),Math.round(h.top),Math.round(h.width),Math.round(h.height)],muted:getComputedStyle(document.querySelector('.hint')).color,text:getComputedStyle(p).color,bg:getComputedStyle(p).backgroundColor})"
+  }
+]

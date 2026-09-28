@@ -1,0 +1,6 @@
+[
+  { "name": "noon-cumulus", "scene": "noon-cumulus", "variants": [ { "name": "old", "materials": { "clouds.marchMat": "base" } }, { "name": "new" }, { "name": "old2", "materials": { "clouds.marchMat": "base" } } ] },
+  { "name": "clouds-variety", "scene": "clouds-variety", "variants": [ { "name": "old", "materials": { "clouds.marchMat": "base" } }, { "name": "new" }, { "name": "old2", "materials": { "clouds.marchMat": "base" } } ] },
+  { "name": "cu-6000", "scene": { "name": "v-cu-6000", "p": { "preset": "wpac", "date": "2026-09-28", "time": 900, "altitude": 6, "coverage": 0.35, "wing-pos": "-4" } }, "variants": [ { "name": "old", "materials": { "clouds.marchMat": "base" } }, { "name": "new" }, { "name": "old2", "materials": { "clouds.marchMat": "base" } } ] },
+  { "name": "cu-side", "scene": { "name": "cu-side", "p": { "preset": "wpac", "date": "2026-09-28", "time": 840, "altitude": 4.5, "coverage": 0.5, "cloud-preset": "towering", "wing-pos": "-4" } }, "variants": [ { "name": "old", "materials": { "clouds.marchMat": "base" } }, { "name": "new" }, { "name": "old2", "materials": { "clouds.marchMat": "base" } } ] }
+]

@@ -35,6 +35,38 @@ export function fromLocal(date: string, minutes: number, tz: number) {
   return Date.parse(`${date}T00:00:00Z`) - tz * 3600e3 + minutes * 60e3;
 }
 
+// ---------- 快捷键守卫与分段按钮状态（UX-1a，PANEL_UX_GUIDE §8） ----------
+
+/** 不接收字母输入的 input 类型：焦点停在这些控件上时，单字母快捷键照常生效（点完复选框 / 滑条再按 M、H 不该失灵） */
+const NON_TEXT_INPUTS = new Set(["checkbox", "radio", "range", "button", "submit", "reset", "color", "file", "image"]);
+
+/** 焦点是否在「会吃掉字母键」的控件里：文字类输入框（含日期框）、下拉（打字母跳选项）、文本框、可编辑区 */
+export function isTypingTarget(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false;
+  if (t.isContentEditable) return true;
+  if (t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return true;
+  return t instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(t.type);
+}
+
+/** 单字母快捷键（H / B / M / N）统一判断：键对上、不带 Ctrl / Alt / Meta、焦点不在会吃字母的控件里 */
+function isLetterShortcut(e: KeyboardEvent, letter: string): boolean {
+  return e.key.toLowerCase() === letter && !e.ctrlKey && !e.altKey && !e.metaKey && !isTypingTarget(e.target);
+}
+
+/** 方向键归焦点控件所有：任何 input（滑条用方向键调值）、下拉、文本框、可编辑区 */
+function ownsArrowKeys(t: EventTarget | null): boolean {
+  return t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement || (t instanceof HTMLElement && t.isContentEditable);
+}
+
+/** 分段按钮的选中态：`.on` 类管外观，`aria-pressed` 给读屏器 */
+function setPressed(btn: HTMLButtonElement, on: boolean) {
+  btn.classList.toggle("on", on);
+  btn.setAttribute("aria-pressed", String(on));
+}
+
+/** 火车模式下飞机专用控件的禁用原因（写进 title；面板上「交通工具」下方另有一行说明） */
+const TRAIN_DISABLED_REASON = "火车模式下不可用（飞机专用）；把「交通工具」切回「飞机」即可使用";
+
 const dateInput = $<HTMLInputElement>("date");
 const timeInput = $<HTMLInputElement>("time");
 const timeLabel = $("time-label");
@@ -166,10 +198,12 @@ export function setupUi(deps: UiDeps) {
     snapAll();
     syncTimeUi(state);
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-rate]").forEach((btn) => {
+  const timeRateBtns = document.querySelectorAll<HTMLButtonElement>("[data-rate]");
+  timeRateBtns.forEach((btn) => {
+    setPressed(btn, btn.classList.contains("on")); // 初始选中项沿用 index.html 的 class="on"
     btn.addEventListener("click", () => {
       state.playRate = Number(btn.dataset.rate);
-      document.querySelectorAll("[data-rate]").forEach((b) => b.classList.toggle("on", b === btn));
+      timeRateBtns.forEach((b) => setPressed(b, b === btn));
     });
   });
   $<HTMLInputElement>("ground-on").addEventListener("change", (e) => {
@@ -296,7 +330,7 @@ export function setupUi(deps: UiDeps) {
     state.cabinClass = (e.target as HTMLSelectElement).value === "economy" ? "economy" : "business";
   });
   window.addEventListener("keydown", (e) => {
-    if (e.key === "h" || e.key === "H") $("panel").classList.toggle("hidden");
+    if (isLetterShortcut(e, "h")) $("panel").classList.toggle("hidden");
   });
   setupVoyageUi(director);
   setupNavUi(director, deps.vehicle, state);
@@ -322,6 +356,19 @@ export function setupUi(deps: UiDeps) {
     setGroundResPref(groundResSel.value as GroundResPref);
     groundResStatus.textContent = describeGroundRes();
   });
+
+  // 下拉选完把焦点还给画面（§4.3）：否则焦点留在下拉上，接着按 ← / → 改的是下拉的值而不是转向、按 H / M 也不灵。
+  // 只在用鼠标 / 触摸选的时候还：键盘用户用方向键在下拉里挑选项时，每按一下都会触发 change，那时不能把焦点抢走
+  document.querySelectorAll<HTMLSelectElement>("#panel select").forEach((sel) => {
+    let viaPointer = false;
+    sel.addEventListener("pointerdown", () => (viaPointer = true));
+    sel.addEventListener("keydown", () => (viaPointer = false));
+    sel.addEventListener("blur", () => (viaPointer = false));
+    sel.addEventListener("change", () => {
+      if (viaPointer) sel.blur();
+      viaPointer = false;
+    });
+  });
 }
 
 // ---------- 连续航程 / 背景板模式（T19a） ----------
@@ -339,8 +386,12 @@ function setupVoyageUi(director: Director) {
   /** 面板控件与导演状态对齐：连续航程开着时，「时间流速」按钮让位给航程流速（两者都推时间，避免叠加） */
   function sync() {
     voyageBox.checked = director.active;
-    rateBtns.forEach((b) => b.classList.toggle("on", director.active && Number(b.dataset.voyageRate) === director.rate));
-    timeRateBtns.forEach((b) => (b.disabled = director.active));
+    rateBtns.forEach((b) => setPressed(b, director.active && Number(b.dataset.voyageRate) === director.rate));
+    timeRateBtns.forEach((b) => {
+      b.disabled = director.active;
+      // 禁用要说明原因（§5.3 规则四）
+      b.title = director.active ? "连续航程开着时，时间按下面的「航程流速」走；取消勾选「连续航程」后可用" : "";
+    });
     $("voyage-rates").hidden = !director.active;
     body.classList.toggle("backdrop", director.backdrop);
     if (!director.backdrop) body.classList.remove("backdrop-idle");
@@ -380,7 +431,7 @@ function setupVoyageUi(director: Director) {
   window.addEventListener("mousemove", wake);
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && director.backdrop) setBackdrop(false);
-    if ((e.key === "b" || e.key === "B") && !(e.target instanceof HTMLInputElement)) setBackdrop(!director.backdrop);
+    if (isLetterShortcut(e, "b")) setBackdrop(!director.backdrop);
   });
   hint.hidden = false;
   sync();
@@ -454,11 +505,15 @@ function setupNavUi(director: Director, vehicle: VehicleControl, s0: VoyageState
     const ap = director.ap;
     const s = state();
     // 直飞时三个按钮都不亮（状态行与「直飞机场」下拉显示直飞）
-    modeBtns.forEach((b) => b.classList.toggle("on", b.dataset.nav === ap.mode));
+    modeBtns.forEach((b) => setPressed(b, b.dataset.nav === ap.mode));
     // 调试「到达」：手动航向 / 盘旋时没有终点可到（relay 不做事），变灰并说明；火车模式下也不可用
     const manual = ap.mode === "heading" || ap.mode === "hold";
     arriveBtn.disabled = manual || vehicle.active;
-    arriveBtn.title = manual ? "手动航向 / 盘旋时没有终点，先点「自动航线」或选一个直飞机场" : "不等飞到终点，立即走一次到达：自动航线接下一段，直飞转入盘旋";
+    arriveBtn.title = vehicle.active
+      ? TRAIN_DISABLED_REASON
+      : manual
+        ? "手动航向 / 盘旋时没有终点，先点「自动航线」或选一个直飞机场"
+        : "不等飞到终点，立即走一次到达：自动航线接下一段，直飞转入盘旋";
     // 手动航向时滑块停在选定航向；其他方式跟着实际航向走（拖动中不去抢）
     const shown = ap.mode === "heading" ? ap.selHeading : s.heading;
     if (!dragging) hdg.value = String(Math.round(shown) % 360);
@@ -525,8 +580,8 @@ function setupNavUi(director: Director, vehicle: VehicleControl, s0: VoyageState
   window.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     // 焦点在输入框 / 下拉框 / 文本框里时方向键归它们（滑块、下拉的原生操作）；火车模式下没有航向可控
-    const t = e.target as HTMLElement | null;
-    if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement || t?.isContentEditable) return;
+    // 带 Ctrl / Alt / Meta 的组合键留给浏览器（Alt + ← 是后退）
+    if (ownsArrowKeys(e.target) || e.ctrlKey || e.altKey || e.metaKey) return;
     if (vehicle.active) return;
     e.preventDefault();
     director.turnBy((e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? TURN_CLICK_DEG : TURN_REPEAT_DEG));
@@ -624,7 +679,7 @@ function setupSoundUi(audio: CabinAudio) {
     caption.classList.toggle("on", !!t);
   }, 250);
   window.addEventListener("keydown", (e) => {
-    if ((e.key === "m" || e.key === "M") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) audio.toggle();
+    if (isLetterShortcut(e, "m")) audio.toggle();
   });
   sync();
 }
@@ -640,11 +695,22 @@ function setupVehicleUi(vehicle: VehicleControl) {
   const planeOnly = ["preset", "altitude", "wing-pos", "high-lift", "voyage-on", "hdg", "nav-dest", "turn-left", "turn-right"].map((id) =>
     $<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(id),
   );
+  // 禁用要说明原因（UX-1a，§5.3 规则四）：火车模式下这些控件（及包着它们的标签，悬停标签文字也能看到）的 title 换成原因，
+  // 切回飞机时还原各自原来的 title；另在「交通工具」下方显示一行说明
+  const hint = $("vehicle-hint");
+  const titled: HTMLElement[] = [...planeOnly, ...document.querySelectorAll<HTMLButtonElement>("[data-alt], [data-nav]")];
+  for (const el of planeOnly) {
+    const label = el.closest("label");
+    if (label && !titled.includes(label)) titled.push(label);
+  }
+  const baseTitle = new Map(titled.map((el) => [el, el.title]));
   const sync = () => {
     sel.value = vehicle.active || vehicle.loading ? "train" : "plane";
     status.textContent = vehicle.status;
     for (const el of planeOnly) el.disabled = vehicle.active;
     document.querySelectorAll<HTMLButtonElement>("[data-alt], [data-nav]").forEach((b) => (b.disabled = vehicle.active));
+    for (const el of titled) el.title = vehicle.active ? TRAIN_DISABLED_REASON : (baseTitle.get(el) ?? "");
+    hint.hidden = !vehicle.active;
   };
   vehicle.onChange = sync;
   sel.addEventListener("change", () => {
@@ -661,7 +727,7 @@ function setupMinimapUi(minimap: DebugMinimap) {
   const sync = () => (box.checked = minimap.enabled);
   box.addEventListener("change", () => minimap.setEnabled(box.checked));
   window.addEventListener("keydown", (e) => {
-    if ((e.key === "n" || e.key === "N") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) {
+    if (isLetterShortcut(e, "n")) {
       minimap.toggle();
       sync();
     }
