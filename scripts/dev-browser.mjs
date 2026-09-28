@@ -417,7 +417,9 @@ async function openPage(browser, port, angle, viewport = DEFAULT_VIEWPORT, dpr =
   await installGlProbe(page);
   const renderer = await assertRealGpu(page);
   // --query（DX-12）：附加到导航 URL 的额外查询参数（例如 "&eox=2024"），不传就是原来的行为
-  await page.goto(`${originFor(port)}/?dev=${Date.now()}${opts.extraQuery || ""}`, { waitUntil: "commit", timeout: 180000 });
+  // VOY-DEFAULT：页面默认开启连续航程；测量 / 截图工具一律带 voyage=0，页面从载入起就不进连续航程（导演不会先改云 / 高度 / 舱灯 / 海面风），
+  // 同代码重拍才逐位一致；要测连续航程开着的首载用 --query "&voyage=1"（同名参数以最后一个为准，见 src/ui.ts initialVoyageOn）
+  await page.goto(`${originFor(port)}/?dev=${Date.now()}&voyage=0${opts.extraQuery || ""}`, { waitUntil: "commit", timeout: 180000 });
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 180000, polling: 500 });
   return { context, page, renderer, angle, viewport, dpr, errors, tileErrors };
@@ -859,7 +861,7 @@ async function cmdShots(args) {
 // DX-12（PERF-13 反馈）：--baseline <端口> 时 --repeat 轮交替测 port / baseline 两侧（同一轮先测当前端口
 // 再测基线，和 bench 的交替顺序一致），不用每个代理各自手写一份 PowerShell 交替脚本；不传 --baseline
 // 就是原来的行为（只测 port，重复 repeat 次）。
-async function coldOnce(browser, origin, angle, viewport, dpr) {
+async function coldOnce(browser, origin, angle, viewport, dpr, extraQuery = "") {
   // 每次独立浏览器上下文：非持久化 context 本身不共享磁盘 profile，加上 nonce 破缓存双重保险
   // （手法抄自 tmp/review-t02/cold.js，开发体验官已实测端到端跑通，见 DX_REPORT_wave2.md §1.2）
   const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
@@ -878,7 +880,8 @@ async function coldOnce(browser, origin, angle, viewport, dpr) {
     }, nonce);
     const renderer = await assertRealGpu(page);
     const t0 = Date.now();
-    await page.goto(`${origin}/?cold=${t0}`, { waitUntil: "commit", timeout: 180000 });
+    // VOY-DEFAULT：默认 voyage=0（与 master 同口径、首帧不随当天的天气场变）；--query "&voyage=1" 测连续航程开着的真实首载
+    await page.goto(`${origin}/?cold=${t0}&voyage=0${extraQuery}`, { waitUntil: "commit", timeout: 180000 });
     await page.bringToFront();
     await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 250 });
     const startup = await page.evaluate(() => window.__voyageStartup);
@@ -972,7 +975,7 @@ async function cmdCold(args) {
   try {
     for (let i = 0; i < repeat; i++) {
       const cpuLoad = sampleAndWarn(`cold 第 ${i + 1}/${repeat} 轮之前`);
-      const entry = { ...(await coldOnce(browser, origin, angle, viewport, dpr)), side: baseline ? "current" : undefined, cpuLoadPercent: cpuLoad };
+      const entry = { ...(await coldOnce(browser, origin, angle, viewport, dpr, parseExtraQuery(args))), side: baseline ? "current" : undefined, cpuLoadPercent: cpuLoad };
       results.push(entry);
       console.log(`[dev-browser] cold #${i + 1}/${repeat}${baseline ? ` [当前 ${port}]` : ""}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  totalMs=${entry.totalMs}  renderer=${entry.renderer}`);
       console.log(
@@ -981,7 +984,7 @@ async function cmdCold(args) {
           .join("\n"),
       );
       if (baseOrigin) {
-        const baseEntry = { ...(await coldOnce(browser, baseOrigin, angle, viewport, dpr)), side: "baseline", cpuLoadPercent: cpuLoad };
+        const baseEntry = { ...(await coldOnce(browser, baseOrigin, angle, viewport, dpr, parseExtraQuery(args))), side: "baseline", cpuLoadPercent: cpuLoad };
         results.push(baseEntry);
         const delta = baseEntry.totalMs ? (((entry.totalMs - baseEntry.totalMs) / baseEntry.totalMs) * 100).toFixed(1) : null;
         console.log(`[dev-browser] cold #${i + 1}/${repeat} [基线 ${baseline}]: totalMs=${baseEntry.totalMs}  renderer=${baseEntry.renderer}${delta !== null ? `  Δ=${delta}%` : ""}`);

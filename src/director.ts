@@ -263,8 +263,10 @@ export class Director {
     if (this.active) this.weather.onJump();
   }
 
-  /** 开启 / 关闭连续航程 */
-  setActive(on: boolean) {
+  /** 开启 / 关闭连续航程。
+   *  snapWeather（VOY-DEFAULT）：页面载入时默认开启用 true——还没有「当前画面」可言，天气直接对齐天气场（与换预设同一条路），
+   *  首屏就是天气场的云；用户中途勾选开启时 false，从面板当前的云接着渐变，不跳 */
+  setActive(on: boolean, snapWeather = false) {
     this.active = on;
     this.cabinNight = null;
     if (!on) {
@@ -275,6 +277,7 @@ export class Director {
     }
     if (!this.leg) this.joinNetwork();
     this.phase = this.host.state.altitudeKm < (this.leg?.cruiseKm ?? 10) - 0.2 ? "climb" : "cruise";
+    if (snapWeather) this.weather.onJump();
   }
 
   /** 从当前位置（非航线预设）接入航线网：朝机头前方的机场飞 */

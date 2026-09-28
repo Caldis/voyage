@@ -91,6 +91,7 @@ function launchBrowser(angle) {
 function buildUrl(port, params) {
   const u = new URL(`http://127.0.0.1:${port}/`);
   u.searchParams.set("perf", String(Date.now())); // 破缓存，避免拿到别的调用留下的旧状态
+  u.searchParams.set("voyage", "0"); // VOY-DEFAULT：页面默认开连续航程，测量时关掉（params 里给 voyage=1 会覆盖）
   for (const p of params) {
     const eq = p.indexOf("=");
     if (eq === -1) u.searchParams.set(p, "");

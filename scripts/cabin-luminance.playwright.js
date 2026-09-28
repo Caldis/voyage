@@ -17,7 +17,7 @@ async (page) => {
     { name: "night-city-light", p: { preset: "fuji", time: 1260, altitude: 4, coverage: 0.15, "cabin-light": true }, offset: [0, -25], ground: true, head: -0.25 },
   ];
 
-  await page.goto(`${origin}/?t23=${Date.now()}`, { waitUntil: "commit", timeout: 180000 });
+  await page.goto(`${origin}/?t23=${Date.now()}&voyage=0`, { waitUntil: "commit", timeout: 180000 });
   await page.bringToFront();
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 180000, polling: 500 });
 

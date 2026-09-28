@@ -18,7 +18,7 @@ import { GroundClipmap } from "./ground/clipmap";
 import { OceanWaves } from "./ocean/waves";
 import { advanceFlight, greatCircleBearing, ownDirW, PRESETS, updateAltitudeFloor, updateHighLift, updateTurbulence } from "./flight";
 import { $, CRUISE_PITCH_DEG, type CabinClass, type Preset, type VoyageState } from "./state";
-import { fromLocal, localParts, setupUi, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
+import { fromLocal, localParts, setupUi, startVoyageByDefault, syncAltitudeUi, syncTimeUi, updateInfo } from "./ui";
 import { applyViewPreset, setupViewControls, VIEW_PRESETS } from "./view-presets";
 import { BootProgress } from "./boot/progress";
 import { Director } from "./director";
@@ -365,6 +365,8 @@ director.onCover((kind) => wonders.onCover(kind));
 
 // ---------- 主循环 ----------
 setPreset(state.preset.id);
+// VOY-DEFAULT：连续航程默认开启（URL ?voyage=0/1 与用户上次的手动选择优先，见 ui.ts initialVoyageOn）
+startVoyageByDefault(director);
 let last = performance.now();
 let frameCount = 0;
 // PERF-5：GPU 计时 / 挂钟帧间隔只在真实的 rAF 循环里量，不进 renderFrame 本体——benchFrame 直接调用
