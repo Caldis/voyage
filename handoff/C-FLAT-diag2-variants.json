@@ -1,0 +1,8 @@
+[
+  { "name": "cur" },
+  { "name": "od", "patch": { "clouds.marchMat": [["vec3 S = sunLight + ambient;", "vec3 S = vec3(od);"]] } },
+  { "name": "noMS", "patch": { "clouds.marchMat": [["const float CLOUD_MS_ALBEDO = 6.0;", "const float CLOUD_MS_ALBEDO = 0.0;"]] } },
+  { "name": "msb15", "patch": { "clouds.marchMat": [["float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msDecay2 * od);", "float msScatter = msDecay * phMs1 * exp(-1.5 * msDecay * od) + msDecay2 * phMs2 * exp(-1.5 * msDecay2 * od);"]] } },
+  { "name": "msb2", "patch": { "clouds.marchMat": [["float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msDecay2 * od);", "float msScatter = msDecay * phMs1 * exp(-2.0 * msDecay * od) + msDecay2 * phMs2 * exp(-2.0 * msDecay2 * od);"]] } },
+  { "name": "noPowder", "patch": { "clouds.marchMat": [["float powder = 1.0 - exp(-2.0 * od - 0.5);", "float powder = 1.0;"]] } }
+]

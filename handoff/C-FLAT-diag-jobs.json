@@ -1,0 +1,8 @@
+[
+  { "name": "noon-cumulus", "scene": "noon-cumulus", "cloudDump": { "warm": 96, "frames": 16 } },
+  { "name": "clouds-variety", "scene": "clouds-variety", "cloudDump": { "warm": 96, "frames": 16 } },
+  { "name": "cu-side", "scene": { "name": "cu-side", "p": { "preset": "wpac", "date": "2026-09-28", "time": 840, "altitude": 4.5, "coverage": 0.5, "cloud-preset": "towering", "wing-pos": "-4" } }, "cloudDump": { "warm": 96, "frames": 16 } },
+  { "name": "noon-cu-close", "scene": { "name": "noon-cu-close", "p": { "preset": "wpac", "date": "2026-09-28", "time": 750, "altitude": 3, "coverage": 0.45, "wing-pos": "-4" } }, "cloudDump": { "warm": 96, "frames": 16 } },
+  { "name": "sunset-wing", "scene": "sunset-wing", "cloudDump": { "warm": 96, "frames": 16 } },
+  { "name": "backlit-cu", "scene": { "name": "backlit-cu", "p": { "preset": "wpac", "date": "2026-09-28", "time": 1010, "altitude": 4, "coverage": 0.5, "wing-pos": "-4" } }, "cloudDump": { "warm": 96, "frames": 16 } }
+]
