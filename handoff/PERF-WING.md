@@ -2,7 +2,7 @@
 
 - 分支 `worktree-agent-a8dcd60b2b0aec1e1`，开发端口 5246，对照 5306（`D:\Code\opus-test\tmp\perfwing-base`，detach master 60cc7f2）。
 - 归属：`src/render/wing*.ts`，只做等价重构。工具与数据：`handoff/PERF-WING-*`，原始输出在 `tmp/perfwing/`（已忽略）。
-- 状态：**进行中**（见文末「下一步」）。
+- 状态：**交付**（机翼 pass 帧时间 +2–3% 待协调者取舍，见 §4）。
 
 ## 结论先说
 
@@ -107,7 +107,7 @@ ANGLE 只给「在不连续循环里被调用」的函数生成 `…Lod0` 版本
 | 场景 | 机翼像素 | 非机翼不同像素 | 机翼不同像素（其中灯照到的） | 机翼最大相对差 | newNG 对 oldNG |
 | --- | ---: | ---: | ---: | ---: | --- |
 | sunset-wing | 116073 | **0** | 9011（8615） | 2.9e-4 | 逐位 0（另一轮 88 像素、7.7e-7） |
-| 商务舱正午 | 80481 | **0** | 10431（9656） | 见下 | 逐位 0 |
+| 商务舱正午 | 80481 | **0** | 10431（9656） | 3.3e-3（见下） | 逐位 0 |
 | 云里（湿窗变体） | 217476 | **0** | 4541（3130） | 6.7e-4 | 逐位 0 |
 | 夜城低空 | 138007 | **0** | 11042（10802） | 3.1e-3（绝对 1.1e-8） | 逐位 0 |
 
@@ -116,27 +116,53 @@ ANGLE 只给「在不连续循环里被调用」的函数生成 `…Lod0` 版本
   而旧程序自己去掉 `wingLights` 后，机翼像素就会变（最大差处 new == oldNG ≠ old）。也就是说旧程序里 FXC 把两处内联的灯位置算式
   和各自上下文一起优化（非 IEEE 严格的重结合），灯照到的翼面随「光晕在不在」差最后几位；新程序灯位置只算一份，结果和「旧程序去掉光晕」逐位相同。
   改灯位置本身的新写法（守卫循环 B）与常数下标 A 在页内逐位相同，不是常数折叠造成的。
-- 商务舱正午的最大相对差在三次运行里分别是 5.6e-4、1.1e-3、0.18（绝对 3.56，出现在一次的一个像素上，其余运行 < 0.07）——待查（见下一步）。
+- 商务舱正午：之前单独一次运行出现过一个像素 0.18 的相对差（绝对 3.56）。复查（`tmp/perfwing/ab5`，2 轮）：两轮逐位一致，最大相对差 3.3e-3（像素值约 1180 的太阳高光上绝对差 0.066），newNG 对 oldNG 逐位 0。
+  每次 `ab` 运行冻结在不同的时刻（翼尖弯曲 / 颠簸相位不同），那一次正好有一个像素落在相对值很小的地方；所有运行里「两边都去掉光晕后逐位相同」都成立，根因同上，不是新写法算错。
 
-## 4. 机翼 pass 帧时间（`gpu-ab --time wing`，8 轮 ABBA，带 A/A）
+## 4. 机翼 pass 帧时间（`gpu-ab --time wing`，8 轮 ABBA，安静机器，带两侧 A/A）
 
-第一次测量（机器 CPU 满载时，协调者随后暂停了测量）：
+`PERF-WING-mkgpu.mjs` 生成 jobs；old2 = master 自己的 A/A，A2 = 当前写法的 A/A。三次独立运行（`tmp/perfwing/gpu-jobs{,2,3,4}.json`）：
 
-| 场景 | old 中位 ms | new ×old [p25, p75] | new2（A/A）×old |
-| --- | ---: | --- | --- |
-| sunset-wing | 0.603 | ×0.992 [0.943, 1.014] | ×1.005 |
-| 商务舱正午 | 0.524 | ×1.045 [1.029, 1.068] | ×1.041 |
-| 云里（湿窗） | 0.848 | ×1.001 [0.974, 1.025] | ×1.009 |
-| 夜城低空 | 0.679 | ×1.037 [1.022, 1.048] | ×1.060 |
+| 场景 | old 中位 ms | A（当前）×old | old2 ×old | 其他写法 ×old |
+| --- | ---: | --- | --- | --- |
+| sunset-wing | 0.590–0.645 | ×1.022 / ×1.016 / ×1.021 / ×0.997 | ×0.989 / ×1.006 / ×0.991 | V ×1.014，W ×1.017，B ×0.983，G ×1.027 |
+| 商务舱正午 | 0.524–0.534 | ×1.022 / ×1.024 / ×1.028 / ×1.017 | ×0.997 / ×0.993 / ×1.002 | V ×1.018，W ×1.040，B ×1.034，G ×1.035 |
+| 云里（湿窗） | 0.816–0.844 | ×1.023 / ×1.013 / ×1.018 / ×1.030 | ×0.995 / ×0.992 / ×0.998 | V ×1.013，W ×1.012，B ×1.036，G ×1.016 |
+| 夜城低空 | 0.680–0.686 | ×1.019 / ×1.031 / ×1.029 / ×1.031 | ×1.011 / ×1.001 / ×1.004 | V ×1.015，W ×1.027，B ×1.013，G ×1.036 |
 
-商务舱 / 夜城判「显著变慢」约 4%：三个全局 `vec3` 从 `main` 活到 `wingLights`，跨过整个 `wingView`（dcl_temps 76 → 77）。
-**待安静时复测**，同时对照「就地常数下标」写法 V（`PERF-WING-lamps2.mjs`：`shadeWing` 灯循环前、`wingLights` 灯循环前各算三次常数下标，不跨 `wingView` 活着）。
+- **机翼 pass 帧时间约 +2–3%（0.01–0.02 ms）**，old 的 A/A 在 ±1% 内，所以这是真的，大多数判定为「在离散度内」，个别判「显著变慢」（门槛 3%）。
+- 试过的写法（都与 A 同画面）：V = 两处灯循环前就地算（冷编译 **+50%**，又进了子射线循环，否决）；W = wingView / wingLights 两个入口各算一次（冷编译与 A 相同）；
+  B = main 里用守卫循环算一次（冷编译 −12%）；G = 只提着色里那份、光晕里照旧（冷编译约 −13%）。帧时间全都 +1.5–4%，
+  所以不是「全局变量跨 wingView 活着」（W 没改善），而是灯位置离开灯循环以后 FXC 对灯循环 / 着色的排布变了。没找到既省冷编译又不升帧时间的写法。
+- **取舍（请协调者定）**：冷编译机翼 −2.4 s（启动关键路径 −0.9 s），换每帧 +0.01–0.02 ms（机翼 pass 0.52–0.86 ms 的 2–3%）。我倾向采用 A；如果「不升」是硬门槛，就不能合。
 
-## 下一步（被协调者暂停测量时的立足点）
+## 5. B′（park/W-EDGE 的 `handoff/W-EDGE-v5-probe.diff`）在新基线上的冷编译
 
-1. 恢复后：`node handoff/PERF-WING-mkgpu.mjs ../../tmp/perfwing/gpu-jobs.json`，`dev-browser gpu-ab --port 5246 --base 5306 --jobs tmp/perfwing/gpu-jobs.json --rounds 8 --time wing`，
-   对比 old / A（当前）/ V / A2；`shader-budget --variants handoff/PERF-WING-lamps2.mjs --only wing,wing-wet --rounds 5` 看 V 的冷编译。选帧时间不升、冷编译降得多的那个。
-2. 复查商务舱正午那一次 0.18 的相对差（多跑两轮 `PERF-WING-ab-jobs.json` 的 biz）。
-3. B′ 试打：`git apply tmp/perfwing/bprime.diff`（park/W-EDGE 的 `handoff/W-EDGE-v5-probe.diff`，已确认能打上），
-   把 `tmp/perfwing-base` 切到本分支提交，`shader-budget --baseline D:/Code/opus-test/tmp/perfwing-base --only wing,wing-wet --rounds 5`，然后 `git checkout` 还原。
-4. `--ledger` 追加账本、README 冷编译坑点、`pnpm build`、控制台、删对照 worktree。
+补丁能原样打上。本分支 + B′ 对本分支（`tmp/perfwing-base` 切到 94dc148），`--baseline` 5 轮最小值：
+
+| 程序 | 新基线 | 新基线 + B′ | 增量 | 对 master（改动前） |
+| --- | ---: | ---: | ---: | ---: |
+| wing | 4711 | 5209 | **+10.6%**（+0.5 s） | 6854 → 5209，−24% |
+| wing-wet | 5788 | 6189 | **+6.9%**（+0.4 s） | 8383 → 6189，−26% |
+
+- **余量**：按绝对时间算，B′ 之后机翼仍比 PERF-WING 之前快 1.6 s；真冷启动里机翼约 5.3 + 0.5 ≈ 5.8 s，窗外 7.5 s，**机翼离关键路径还剩约 1.7 s**。
+- 按相对门槛算：B′ 单项 +10.6% 刚过「单任务 ≤ 10%」，但它的基线已经被本任务压了 28%，一波累计仍是大幅净降。建议协调者按绝对余量放行 B′。
+
+## 6. 账本与收尾
+
+- `research/compile-ledger.json` 追加 94dc148：wing 4723 / wing-wet 5661 ms（5 轮最小值，slots 2962 / 3574，temps 77）。
+- README「着色器编译」坑点加了一条（PERF-WING）。
+- check:glsl、typecheck、build 通过，dist 无 0 字节文件；所有 ab / gpu-ab 运行 console error 0 条。
+- 对照 worktree `tmp/perfwing-base` 已删，dev server 已关。
+
+## 复现
+
+```
+node handoff/PERF-WING-mkjobs.mjs handoff/PERF-WING-ab-jobs.json          # 同页 A/B（apps/voyage 下）
+node scripts/dev-browser.mjs ab --port 5246 --base 5306 --jobs apps/voyage/handoff/PERF-WING-ab-jobs.json --rounds 2 --out tmp/perfwing/abN
+node handoff/PERF-WING-mkgpu.mjs ../../tmp/perfwing/gpu-jobs.json
+node scripts/dev-browser.mjs gpu-ab --port 5246 --base 5306 --jobs tmp/perfwing/gpu-jobs.json --rounds 8 --time wing
+node scripts/shader-budget.mjs --baseline <master 的 worktree> --only wing,wing-wet --rounds 5
+node scripts/shader-budget.mjs --variants handoff/PERF-WING-abl.mjs --only wing --rounds 3   # abl2 / abl3 / trace / lamps / lamps2 / lamps3 同理
+```
+（`ab` / `gpu-ab` 的 `--jobs` 路径按仓库根解析。）
