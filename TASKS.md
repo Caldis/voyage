@@ -12,7 +12,6 @@
 | UX-4 | 第 7 波（面板，第一档） | 5292 | worktree | Sonnet（手机 / 小窗底部抽屉 + 收起按钮，不挡舷窗中心） | — | 进行中 |
 | TW04 | 第 7 波（高耸云第一档，含 SPEC-PILEUS、C-TYPH、飞碟） | 5288 | worktree | Opus（砧放大到真实比例用砧盾层状密度、塔身多尺度卷团与上冲、塔底遮挡与雨幡、飑线错落、幞状云、台风卷云盖去白平板、黄昏云底飞碟） | — | 进行中 |
 | WS08 | 第 7 波（新奇观，用户同意只在奇观模式） | 5286 | worktree | Opus（横贯天空的轨道环弧：解析几何、白天亮带 + 地影切断、夜间灯带、结构层级、大气透视、足迹抗锯齿） | — | 进行中 |
-| TW02 | 第 7 波（高耸云第一档） | 5285 | worktree | Opus（280–750 km 远景对流塔层：独立小程序 + scissor 地平线带、解析塔身与真实比例砧、强大气透视、底部被地平线遮、不占雷暴名额） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -25,6 +24,8 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| NIGHT-AP | 月夜远处空气透视偏暗：满月在身后 36° 时远塔与远处体积云都画成比地平线天空还暗的暗褐剪影（TW02 审查发现，非 TW02 引入），先由美术总监看一次再定 | 中高（看得见） | atmosphere / clouds | — | TW02 审查遗留 |
+| TW02-b | 【降级：细微 / 性能，晚做】远塔边角：关连续航程时瞬间消失无淡出；生命周期每秒取样不插值（高倍速一格一格跳）；32 座截断无淡变；一律按 400 km 深度合成（建木会挡住比它近的远塔）；无砧塔横向剔除半径偏小 | 低 | clouds/far-towers | clouds | TW02 审查遗留 |
 | DX-30 | 【降级：细微 / 性能，晚做】dev-browser ab / gpu-ab：变体 js 副作用不复原（ABBA 下「关」一直生效，TW02 首测得出假结论）→ 支持复原 js 或自动快照；shots 场景加「航向对准方位」字段；ab 输出同裁剪区多变体拼图（参考 handoff/TW02-montage.py）；冻结时「本帧画了没有」类调试量不更新要标注 | 中 | scripts | — | TW02 反馈 |
 | VOY-HKG | 南海预设首段航线 HKG→HKG 是个圈，自动驾驶一直压 25° 坡度、窗外只有海 → 首段改成真实外飞航线 | 中高（用户第一眼） | voyage 航线数据 | — | TW02 反馈 |
 | TW-LTG | 远景塔夜间地平线闪电（只改 uniform，无编译成本） | 中高（壮观） | clouds/far-towers | clouds | TW02 合并后 |
@@ -87,6 +88,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 合并日期 | 备注 |
 | --- | --- | --- | --- |
+| TW02 | 远景对流塔层：天气场 170–760 km 内未被体积雷暴占用的积雨云，由独立小程序按解析几何画（花椰菜塔身、下风砧、雨幡；生长 / 成熟 / 消散形态；按塔处当地太阳受光），afterMarch 钩子在云步进后、时间累积前 GL 混合叠入云缓冲；scissor 只画地平线带 | 2026-09-29 | GPU 0.006 ms；不在冷启动批次（FXC 0.63 s）；44 程序逐字不变；Opus 审查需返工一处（scissor 上沿切平生长期塔圆头），协调者按审查修法改并复测 rev-clip 两场景塔顶一致后合并；形态遗留（飑线砧等厚平板「门洞」、砧沿过直、气泡均匀、黄昏竖纹）转 TW04 顺手；月夜暗褐剪影另立 NIGHT-AP；边角立 TW02-b |
 | UX-3 | 面板分区折叠（<details>）+ 调试控件进开发者区、标签去括号、控件同行换行布局；1600×1200 面板 2681→1102 px 不滚动；修 focus-vignette id 冲突（聚焦暗角滑条自上线从未生效） | 2026-09-29 | Sonnet 审查通过（handoff/UX-3-review.md）：id / value 契约不变、合并接线全保留、折叠记忆 try/catch + isTrusted；遗留：isTrusted 只防 .open 赋值，脚本 .click() 会被记（已写进 PANEL_UX_GUIDE） |
 | WS-SCN | 奇观回归场景按巨构尺度更新：floatcity 80→110 km、jianmu 230 km seed 0.37、新增 ws-jianmu-dusk / -dusk-up（两表同改） | 2026-09-29 | Haiku 实现、协调者核 diff；fogcity 无基线数值可改 |
 | WS05 | 建木巨构化：拉近到 200–260 km、树干底 6–8 km、斜入云海的板根；共用 wonderStrut 加残差校验、wonderCapRef | 2026-09-29 | Sonnet 轻量审查通过（handoff/WS05-review.md）：天梯 bend=0 时残差校验恒等、天梯专属代码逐字节同 master、跨端口像素差在 master×master 噪声底内；outside-default 预处理后逐字相同；奇观变体不在冷启动批次 |
