@@ -827,6 +827,7 @@ uniform bool uResetDepth;   // 右半（深度）这一帧从停用变回启用�
 uniform vec2 uCloudResolution;
 uniform float uCloudImmersion; // 飞机在云里的程度（0–1，平滑过的；与步进程序、曝光的 uWhiteout 同一个 uniform 对象，C11）
 uniform float uSinceReset;     // 自上次 reset 起的帧数（reset 帧 = 0，C12b 审查）
+uniform float uPrevTanHalfFov; // 上一帧的垂直半视场正切（FOCUS-ZOOM：历史按它投影，视场不变时与 uTanHalfFov 相同）
 varying vec2 vUv;
 // 输出是两倍宽（T38）：左半是云（RGB + 透射率），右半是云的深度——窗外程序要拿它判断云在山前还是山后
 // （clouds.glsl.ts 的 cloudBeforeGround），放进同一张纹理，窗外 / 机翼程序不多占 sampler。两半各自时间累积、各自邻域夹取。
@@ -916,7 +917,7 @@ void main() {
   float blend = 0.12;
   vec2 puv = vec2(-1.0);
   if (v.z < 0.0) {
-    vec2 ndc = v.xy / (-v.z) / uTanHalfFov;
+    vec2 ndc = v.xy / (-v.z) / uPrevTanHalfFov;  // 上一帧的视场（FOCUS-ZOOM：聚焦时视场逐帧变）
     ndc.x /= uResolution.x / uResolution.y;
     puv = ndc * 0.5 + 0.5;
   }
@@ -1417,6 +1418,7 @@ export class Clouds {
         uCloudResolution: this.marchMat.uniforms.uCloudResolution,
         uCloudImmersion: EXPOSURE_WHITEOUT, // 云里的空间平均（C11，见 RESOLVE_FRAG）
         uSinceReset: { value: 0 },
+        uPrevTanHalfFov: { value: (viewUniforms.uTanHalfFov?.value as number | undefined) ?? 1 },
       },
     });
   }
@@ -1929,5 +1931,7 @@ export class Clouds {
     this.reset = false;
     this.prevCamBasis.copy(camBasis);
     this.prevCabinToWorld.copy(cabinToWorld);
+    // FOCUS-ZOOM：记下这一帧的视场，下一帧 resolve 按它把历史投影回来（聚焦过渡时视场逐帧变，按当前视场投影会把历史整体缩放错位）
+    if (v.uTanHalfFov) r.uPrevTanHalfFov.value = v.uTanHalfFov.value;
   }
 }

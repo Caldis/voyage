@@ -60,35 +60,75 @@ export function applyViewPreset(head: Head, preset: ViewPreset, seat: "right" | 
   head.tz = clamp(preset.z, HEAD_Z_FAR, HEAD_Z_NEAR);
 }
 
+/** 按住多久、且位移不超过多少像素，算「按住不动」→ 进入聚焦（FOCUS-ZOOM） */
+export const FOCUS_HOLD_MS = 180;
+export const FOCUS_HOLD_PX = 5;
+
+/** setupViewControls 的可选依赖（FOCUS-ZOOM）：聚焦观察与头部左右限位 */
+export interface ViewControlsOpts {
+  /** 聚焦：按住不动时 hold("pointer", true)；factor 是当前放大倍数（拖动灵敏度按它降低） */
+  focus?: { hold(src: "pointer", on: boolean): void; readonly factor: number };
+  /** 头部左右限位：拖动时的软限位（弹性阻尼：往外推越靠近限位越推不动，往回拉不受影响） */
+  limits?: { drag(x: number, delta: number): number };
+}
+
 /**
  * 画布上按住左键（或手指）拖动才改变视角，松开后停在那里；滚轮前后挪头；双击回到当前视角预设。
  * 面板上的操作不会触发（事件只挂在画布上）。
+ * FOCUS-ZOOM：按下后 FOCUS_HOLD_MS 内位移不超过 FOCUS_HOLD_PX 就进入「聚焦观察」（视场收窄，松开还原）；
+ * 按下就拖走的仍是原来的转头、这一按不再触发聚焦。聚焦期间照样可以拖动转头，灵敏度除以当前放大倍数
+ * （画面上的移动速度与不放大时相当）。触屏长按同理。拖动靠近左右限位时有弹性阻尼（head-limits.ts）。
  */
-export function setupViewControls(canvas: HTMLElement, head: Head, resetToPreset: () => void) {
-  let drag: { id: number; x: number; y: number } | null = null;
+export function setupViewControls(canvas: HTMLElement, head: Head, resetToPreset: () => void, opts: ViewControlsOpts = {}) {
+  let drag: { id: number; x: number; y: number; x0: number; y0: number; moved: boolean; focused: boolean; timer: number } | null = null;
   canvas.style.touchAction = "none"; // 触屏上拖动不要滚动页面
   canvas.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
-    drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    if (e.button !== 0 || drag) return;
+    const d = { id: e.pointerId, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false, focused: false, timer: 0 };
+    if (opts.focus) {
+      const focus = opts.focus;
+      d.timer = window.setTimeout(() => {
+        if (drag !== d || d.moved) return;
+        d.focused = true;
+        focus.hold("pointer", true);
+      }, FOCUS_HOLD_MS);
+    }
+    drag = d;
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!drag || e.pointerId !== drag.id) return;
-    const dx = (e.clientX - drag.x) / window.innerWidth;
-    const dy = (e.clientY - drag.y) / window.innerHeight;
+    // 还没进入聚焦时，离按下点超过几个像素就算「拖走了」，这一按不再聚焦
+    if (!drag.moved && !drag.focused && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > FOCUS_HOLD_PX) {
+      drag.moved = true;
+      window.clearTimeout(drag.timer);
+    }
+    const f = opts.focus ? Math.max(opts.focus.factor, 1) : 1;
+    const dx = (e.clientX - drag.x) / window.innerWidth / f;
+    const dy = (e.clientY - drag.y) / window.innerHeight / f;
     drag.x = e.clientX;
     drag.y = e.clientY;
     // 往右拖，头往屏幕右侧挪（屏幕右侧对应座舱坐标 −x）；灵敏度和原来「鼠标扫过整个屏幕」一致：横向 0.28 m、纵向 0.2 m
-    head.tx = clamp(head.tx - dx * 0.28, -HEAD_X_RANGE, HEAD_X_RANGE);
+    head.tx = opts.limits ? opts.limits.drag(head.tx, -dx * 0.28) : clamp(head.tx - dx * 0.28, -HEAD_X_RANGE, HEAD_X_RANGE);
     head.ty = clamp(head.ty - dy * 0.2, HEAD_Y_MIN, HEAD_Y_MAX);
   });
   const end = (e: PointerEvent) => {
     if (!drag || e.pointerId !== drag.id) return;
+    window.clearTimeout(drag.timer);
+    if (drag.focused) opts.focus?.hold("pointer", false);
     drag = null;
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
   };
   canvas.addEventListener("pointerup", end);
   canvas.addEventListener("pointercancel", end);
+  canvas.addEventListener("lostpointercapture", end);
+  // 切走窗口（Alt+Tab 等）时收不到 pointerup：松开聚焦，免得回来时还停在放大状态
+  window.addEventListener("blur", () => {
+    if (!drag) return;
+    window.clearTimeout(drag.timer);
+    if (drag.focused) opts.focus?.hold("pointer", false);
+    drag = null;
+  });
   canvas.addEventListener("dblclick", () => resetToPreset());
   canvas.addEventListener(
     "wheel",
