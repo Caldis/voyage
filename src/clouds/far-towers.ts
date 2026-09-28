@@ -16,7 +16,7 @@ import { VIEW_COMMON } from "../render/view.glsl";
  * （不走体积步进）：
  *   - 塔身：竖直的「圆柱」，半径随高度变（中上部最胖）、两侧轮廓各自按噪声起伏（花椰菜的鼓包），轴线随高度被高空风吹斜，
  *     顶上一个上冲穹顶（生长期没有砧时是大圆头的浓积云塔）；
- *   - 砧：塔顶附近向下风铺开的扁圆盘（半径是塔身的 3–6 倍，按真实比例远大于塔身），中间厚、边缘薄而破碎，
+ *   - 砧：塔顶附近向下风铺开的扁圆盘（半径是塔身的 2–4.6 倍，按真实比例远大于塔身），中间厚、边缘薄而破碎，
  *     视线穿过它的路程按「盘的水平弦长 × 这段视线落在砧的高度范围里的比例」解析求出；
  *   - 塔底：云底以下是淡淡的雨幡，再往下被地球挡住（地平线以外）或被霾吃掉（空气透视本来就强）；
  *   - 受光：太阳按**塔所在位置**的当地天顶算（400 km 外的当地天顶差 3.6°），keyLight 自带地影与透射变红 →
@@ -93,6 +93,26 @@ float ftNoise(vec2 p) {
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(mix(ftHash(i), ftHash(i + vec2(1.0, 0.0)), u.x), mix(ftHash(i + vec2(0.0, 1.0)), ftHash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
+// 2D 气泡场（花椰菜的鼓包）：平面按 1 格分块，每格一个随机圆（半径 0.45–0.8 格，圆心可贴近格边），
+// 返回 (最高的球冠高度, 该球冠相对采样点的圆心偏移 / 半径)——后两项就是球冠法线在平面内的分量（取负）
+vec3 ftBubbles(vec2 p, float seed) {
+  vec2 id = floor(p);
+  vec2 f = fract(p);
+  vec3 best = vec3(0.0);
+  for (int x = -1; x <= 1; x++)
+  for (int y = -1; y <= 1; y++) {
+    vec2 o = vec2(float(x), float(y));
+    vec2 c = id + o + seed;
+    vec2 d = o + 0.1 + 0.8 * vec2(ftHash(c), ftHash(c + 17.3)) - f;
+    float rad = 0.45 + 0.35 * ftHash(c + 5.1);
+    float s = rad * rad - dot(d, d);
+    if (s > 0.0) {
+      float hgt = sqrt(s) / rad;
+      if (hgt > best.x) best = vec3(hgt, -d / rad);
+    }
+  }
+  return best;
+}
 float ftHg(float c, float g) {
   float g2 = g * g;
   return (1.0 - g2) / (4.0 * M_PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
@@ -134,7 +154,6 @@ void main() {
   float tGround = raySphere(ro, rd, BOTTOM);
   // 一个云像素的角宽（弧度）：远塔轮廓按「距离 × 它」软化，约 1 个像素宽，不锯齿、不爬
   float pixAng = 2.0 * uTanHalfFov / uCloudResolution.y;
-  vec2 sunH = uKeyDir.xz;
   float cosV = dot(rd, uKeyDir);
 
   vec3 Lacc = vec3(0.0);
@@ -166,8 +185,8 @@ void main() {
       float h = rP - BOTTOM;
       float fp = tC * pixAng + 0.04;
       // 生长期没有砧：大圆头的浓积云塔；有砧后顶上只剩一个上冲穹顶
-      float domeH = mix(R * 0.9, 1.0, C.y);
-      float domeR = mix(0.95, 0.6, C.y);
+      float domeH = mix(R * 0.9, 1.5, C.y);
+      float domeR = mix(0.95, 0.62, C.y);
       if (h > 0.0 && h < top + domeH + 0.3) {
         float base = FT_BASE + 0.5 * seed;
         float hn = clamp((h - base) / max(top - base, 1.0), 0.0, 1.0);
@@ -175,18 +194,25 @@ void main() {
         vec2 axis = rel + dirA * (R * 0.7 * hn * hn);
         float x = -dot(axis, side);           // 像素相对塔轴的横向坐标（km）
         float sgn = x >= 0.0 ? 1.0 : -1.0;
-        // 翻卷：两侧轮廓各自起伏（约 2.5 km 与 1 km 两级），随时间缓慢上涌
+        // 大尺度：两侧轮廓各自缓慢起伏（约 2.5 km 一档），随时间缓慢上涌
         vec2 q = vec2(h * 0.42 - uTime * 0.004 + seed * 7.3, sgn * 3.7 + seed * 11.0);
         float n1 = ftNoise(q);
-        float n2 = ftNoise(q * vec2(2.6, 1.0) + 17.0);
-        float prof = 0.8 + 0.2 * sin(3.1416 * min(hn * 1.15, 1.0));
-        float rC = R * prof * (0.9 + 0.26 * n1 + 0.1 * n2);
+        // 花椰菜：塔面上两级圆鼓包（约 2.4 km 与 0.9 km，气泡场），随时间一起上涌
+        vec2 pb = vec2(x, h - uTime * 0.005);
+        vec3 b1 = ftBubbles(pb / 2.4, seed * 13.0);
+        vec3 b2 = ftBubbles(pb / 0.9, seed * 29.0 + 3.0);
+        // 下窄上宽（越往上越并进砧里），中段一个鼓肚
+        float prof = 0.68 + 0.32 * hn + 0.1 * sin(3.1416 * min(hn * 1.3, 1.0));
+        float rC = R * prof * (0.86 + 0.3 * n1);
         // 塔顶：靠近砧顶处收窄，上面是穹顶
-        rC *= mix(1.0, domeR, smoothstep(top - 1.5, top, h));
-        if (h > top) rC *= sqrt(max(1.0 - (h - top) * (h - top) / (domeH * domeH), 0.0));
-        float e = rC - abs(x);
+        rC *= mix(1.0, domeR, smoothstep(top - 1.2, top, h));
+        float dome = h > top ? sqrt(max(1.0 - (h - top) * (h - top) / (domeH * domeH), 0.0)) : 1.0;
+        rC *= dome;
+        // 轮廓上的鼓包：气泡高出一截的地方外凸（圆的花椰菜边）
+        float bulge = 1.3 * b1.x + 0.5 * b2.x - 0.55;
+        float e = rC - abs(x) + bulge * min(rC, 2.5) * 0.5;
         // 云底参差：底部一公里内渐隐（塔脚淹在霾与碎云里）
-        float bottom = smoothstep(base - 0.25, base + 0.9 + 0.5 * n2, h);
+        float bottom = smoothstep(base - 0.25, base + 0.9 + 0.6 * b1.x, h);
         aC = smoothstep(-fp, fp, e) * bottom * C.x;
         // 云底以下：雨幡（淡的灰幕，随强度），往下到海面按高度再淡一点
         float rainR = R * 0.7 * (0.75 + 0.5 * ftNoise(vec2(x * 0.7 + seed * 5.0, seed)));
@@ -196,24 +222,26 @@ void main() {
         float aTot = max(aC, rain);
         if (aTot > 1e-4) {
           vec3 upT = P / rP;
-          // 伪法线：横向按圆柱、穹顶处朝上，翻卷的明暗按「噪声沿太阳方向的差分」（受光的一侧亮、背面暗）
+          // 法线：大形按圆柱（横向）、穹顶处朝上；再叠两级鼓包各自的球冠法线（受光的一侧亮、背光的一侧暗，鼓包之间的折痕暗）
           float nx = clamp(x / max(rC, 1e-3), -1.0, 1.0);
           vec2 nh = side * nx - rh * sqrt(1.0 - nx * nx);
           float ny = h > top ? clamp((h - top) / domeH, 0.0, 1.0) : 0.25 * smoothstep(top - 2.0, top, h);
-          vec3 n = normalize(vec3(nh.x, 0.0, nh.y) * sqrt(1.0 - ny * ny) + upT * ny);
-          vec2 sunPlane = vec2(dot(sunH, side), uKeyDir.y);
-          vec2 qb = vec2(x * 0.8, h * 0.8) + seed * 3.1 + vec2(0.0, -uTime * 0.003);
-          float bump = ftNoise(qb) - ftNoise(qb - normalize(sunPlane + vec2(1e-4)) * 0.45);
+          vec3 n0 = vec3(nh.x, 0.0, nh.y) * sqrt(1.0 - ny * ny) + upT * ny;
+          vec3 sideW = vec3(side.x, 0.0, side.y);
+          vec3 n = normalize(n0 + 0.9 * (sideW * b1.y + upT * b1.z) + 0.45 * (sideW * b2.y + upT * b2.z));
+          float crease = mix(0.55, 1.0, smoothstep(0.05, 0.45, b1.x)) * mix(0.8, 1.0, smoothstep(0.05, 0.4, b2.x));
           vec3 Ek = keyLight(rP, upT);
           float mu = dot(upT, uKeyDir);
-          float diff = clamp(0.42 + 0.58 * dot(n, uKeyDir), 0.0, 1.0) * clamp(1.0 + 1.8 * bump, 0.45, 1.5);
-          // 砧底下的塔身在高太阳时被砧挡住；越往下越暗（云底一侧只受天空与海面的漫射）
-          float under = (1.0 - smoothstep(top - 3.5, top - 1.5, h)) * C.y * smoothstep(0.25, 0.8, mu);
-          float vert = mix(0.5, 1.0, smoothstep(base, base + 0.5 * (top - base), h));
+          // 厚云的背光面仍有大量多次散射（约受光面的三到四成），按包裹光照：背面不低于 0.3
+          float diff = mix(0.3, 1.0, clamp(0.5 + 0.5 * dot(n, uKeyDir), 0.0, 1.0)) * crease;
+          // 砧底下的塔身在高太阳时被砧挡住一部分；越往下越暗（云底一侧只受天空与海面的漫射）
+          float under = (1.0 - smoothstep(top - 3.5, top - 1.5, h)) * C.y * smoothstep(0.5, 0.9, mu);
+          float vert = mix(0.65, 1.0, smoothstep(base, base + 0.5 * (top - base), h));
           vec3 Esky = skyIrradiance(rP, upT);
-          Lc = FT_ALBEDO / M_PI * (Ek * diff * (1.0 - 0.55 * under) * vert + Esky * (0.45 + 0.3 * n.y) * vert);
-          // 背光时轮廓一圈前向散射的亮边（约 0.4 km 的薄边）
-          Lc += Ek * ftHg(cosV, 0.6) * 0.5 * exp(-max(e, 0.0) / 0.4) * vert;
+          // 环境：天空 + 下方被照亮的云海 / 海面的反光
+          Lc = FT_ALBEDO / M_PI * (Ek * (diff * (1.0 - 0.3 * under) + 0.1 * max(mu, 0.0)) * vert + Esky * (0.45 + 0.3 * n.y) * vert);
+          // 逆光时轮廓一圈前向散射的亮边（约 0.4 km 的薄边，只在接近正对太阳时）
+          Lc += Ek * ftHg(cosV, 0.85) * 0.25 * smoothstep(0.5, 0.95, cosV) * exp(-max(e, 0.0) / 0.4) * vert;
           // 雨幡：灰，只受漫射与少量直射
           vec3 Lr = 0.5 / M_PI * (Esky * 0.6 + Ek * 0.2 * max(mu, 0.0));
           Lc = mix(Lr, Lc, aC / aTot);
@@ -242,12 +270,18 @@ void main() {
           tA = 0.5 * (t0 + t1);
           float rho = abs(xa) / RaE;
           float thick = B.w;
-          // 砧顶：中间高、向外缘略垂，起伏几百米；砧底：靠塔处厚、外缘薄（透镜）
-          float aTop = top - 0.3 - 0.7 * rho * rho + 0.5 * (ftNoise(vec2(xa * 0.5, seed * 3.0)) - 0.5);
-          float aBot = top - thick * (1.0 - 0.8 * pow(rho, 1.5));
+          // 楔形：按离塔的横向距离，靠塔处（上风一侧的钝边）厚，往下风越来越薄、砧顶略垂
+          float xt = -dot(rel, side);
+          float dT = clamp(abs(xt) / (1.5 * Ra), 0.0, 1.0);
+          // 砧根：塔身正上方砧底往下垂、和塔身连成一体；砧底参差（乳状云 / 雨幡的起伏）
+          float root = exp(-xt * xt / (R * R * 2.2));
+          // 砧顶贴着对流层顶：几乎是一条直线（只在塔顶上方被上冲气流顶起一点、远端略垂），起伏只有一两百米
+          float aTop = top - 0.3 - 0.35 * dT * dT + 0.15 * (ftNoise(vec2(xa * 0.5, seed * 3.0)) - 0.5) + 0.35 * root;
+          float aBot = top - thick * (1.0 - 0.92 * smoothstep(0.0, 1.0, dT)) - 1.0 * root
+                     + 0.7 * (ftNoise(vec2(xa * 0.9 + seed * 4.0, seed * 7.0)) - 0.5);
           float a0 = length(ro + rd * t0) - BOTTOM;
           float a1 = length(ro + rd * t1) - BOTTOM;
-          float w = tA * pixAng + 0.12;
+          float w = tA * pixAng + 0.03;
           float amn = min(a0, a1) - 0.5 * w;
           float amx = max(a0, a1) + 0.5 * w;
           float lo = max(aBot, amn), hi = min(aTop, amx);
@@ -266,11 +300,14 @@ void main() {
             vec3 Ek = keyLight(BOTTOM + am, upA);
             // 从下往上看到的是砧底（高太阳时在砧自己的影子里，低太阳时被侧光照亮）；看到砧顶 / 侧面时是受光的亮白
             float underLit = mix(0.85, 0.25, smoothstep(0.1, 0.5, muA));
-            float diffA = mix(underLit, 1.0, smoothstep(0.15, 0.85, v));
+            // 侧面（朝相机的竖直边）整片受光，按太阳在它前后分受光 / 背光；只有视线贴着砧底进去的那一薄层才是暗的砧底——
+            // 按高度连续渐变会把整张砧染成上亮下暗的「圆管」
+            float face = mix(0.4, 1.0, clamp(0.5 - 0.5 * dot(vec3(rh.x, 0.0, rh.y), uKeyDir), 0.0, 1.0));
+            float diffA = mix(underLit, face, smoothstep(0.0, 0.25, v)) * (0.88 + 0.24 * ftNoise(vec2(xa * 0.7 + seed * 2.0, am * 1.6)));
             vec3 Esky = skyIrradiance(BOTTOM + am, upA);
-            La = FT_ALBEDO / M_PI * (Ek * diffA + Esky * (0.4 + 0.4 * v));
+            La = FT_ALBEDO / M_PI * (Ek * diffA + Esky * (0.55 + 0.25 * v));
             // 薄的外缘背光时透亮
-            La += Ek * ftHg(cosV, 0.7) * 0.6 * (1.0 - aA);
+            La += Ek * ftHg(cosV, 0.85) * 0.4 * smoothstep(0.5, 0.95, cosV) * (1.0 - aA);
           }
         }
       }
@@ -278,7 +315,8 @@ void main() {
 
     float aT = 1.0 - (1.0 - aC) * (1.0 - aA);
     if (aT < 1e-4) continue;
-    vec3 Lt = Lc * aC + La * aA * (1.0 - aC);   // 预乘；塔身在砧前
+    // 预乘；砧是围着塔的一整张盘，近侧挡在塔身前面（塔顶藏进砧里，只有上冲穹顶冒出砧顶）
+    vec3 Lt = La * aA + Lc * aC * (1.0 - aA);
     float tAP = (tC * aC + tA * aA) / max(aC + aA, 1e-4);
     vec3 apL, apT;
     ftAerial(ro, rd, tAP, apL, apT);
@@ -578,25 +616,26 @@ export class FarTowers {
 /**
  * 天气场的一个单体 → 远塔的形态（按生命周期）：
  *   - 生长期（进度 < 0.5）：塔从浓积云长到对流层顶，进度约 0.12 起砧开始铺开；
- *   - 成熟：砧半径是塔身的 3.2–6 倍（孤立单体的砧几十公里，TOWERING §2.3）、偏向下风；
+ *   - 成熟：砧半径是塔身的 2–4.6 倍（孤立单体的砧几十公里，TOWERING §2.3）、偏向下风；
  *   - 消散期（进度 > 0.6）：塔身塌掉、砧继续摊开变薄，最后只剩一片孤砧（真实积雨云消散时的样子）。
  * 大小与体积雷暴的摆放（weather-director.ts requestStormPlacement）同一套强度缩放，交接时尺寸对得上
  */
 function towerFromCell(c: FarStormCell, x: number, z: number, dist: number): FarTower {
   const str = c.strength;
   const age = c.age01;
-  const R = c.radius * (0.75 + 0.25 * str);
+  // 远处看到的是整团对流（主塔 + 伴生塔，体积雷暴里伴生塔在 0.45R 外），塔身按 1.3 倍主塔半径
+  const R = 1.3 * c.radius * (0.75 + 0.25 * str);
   const topFull = c.top - 1.2 * (1 - str);
   // 生长期前段塔还没到顶
   const top = topFull * (0.55 + 0.45 * smooth(0.02, 0.22, age));
   const h1 = hash01(c.id, 1), h2 = hash01(c.id, 2), h3 = hash01(c.id, 3);
   const anvil = smooth(0.1, 0.32, age) * (1 - smooth(0.88, 1.0, age));
   const col = 1 - smooth(0.6, 0.95, age);
-  const Ra = R * (3.2 + 2.8 * h1) * (0.45 + 0.55 * smooth(0.1, 0.55, age)) * (1 + 0.45 * smooth(0.5, 1.0, age));
+  const Ra = R * (2.0 + 2.6 * h1) * (0.45 + 0.55 * smooth(0.1, 0.55, age)) * (1 + 0.45 * smooth(0.5, 1.0, age));
   // 砧朝下风（系统的引导气流方向，本地 x 东、z 南），每个单体再偏 ±25°
   const vl = Math.hypot(c.ve, c.vn);
   let ang = vl > 1 ? Math.atan2(-c.vn, c.ve) : h2 * Math.PI * 2;
   ang += (h3 - 0.5) * 0.87;
   const fade = smooth(0.25, 0.4, str) * smooth(FAR_MAX_KM, FAR_MAX_KM - 60, dist) * smooth(FAR_MIN_KM, FAR_MIN_KM + 40, dist);
-  return { id: c.id, x, z, dist, R, top, dirX: Math.cos(ang), dirZ: Math.sin(ang), Ra, thick: 1.6 + 1.4 * h2, col, anvil, seed: h1 * 0.999, fade };
+  return { id: c.id, x, z, dist, R, top, dirX: Math.cos(ang), dirZ: Math.sin(ang), Ra, thick: 2.0 + 1.6 * h2, col, anvil, seed: h1 * 0.999, fade };
 }

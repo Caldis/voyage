@@ -1,0 +1,13 @@
+[
+  {
+    "name": "dbg-noon",
+    "scene": {"name":"tw02-dbg-noon","p":{"preset":"scs","date":"2026-08-04","time":900,"wing-pos":"-4","quality":"high"},"wait":3000},
+    "pre": "const ob = (v.state.heading + (v.state.seat === 'right' ? 90 : -90)) * Math.PI / 180; const b0 = Math.atan2(-Math.cos(ob), Math.sin(ob)); const L = [[-22,260,0.1,0.35],[-12,330,0.9,0.5],[-4,420,0.55,0.62],[4,520,0.3,0.45],[10,600,0.7,0.55],[17,690,0.2,0.4],[22,380,0.45,0.8]]; v.farTowers.override = L.map(([a,d,s,age],i) => { const b = b0 + a*Math.PI/180; return {id:'d'+i, x: Math.cos(b)*d, z: Math.sin(b)*d, R: 4.5+2*s, top: 13.5+1.5*s, Ra: (4.5+2*s)*(3.2+2.8*s), dirX: Math.cos(1+i*2.3), dirZ: Math.sin(1+i*2.3), thick: 3+1.5*s, col: age>0.75?0.3:1, anvil: age<0.2?0.3:1, seed: (i*0.377+s)%1}; }); await new Promise(r=>setTimeout(r,1500));",
+    "crop": [390, 470, 820, 130],
+    "variants": [
+      { "name": "cur" },
+      { "name": "noAP", "patch": { "farTowers.mat": [["ftAerial(ro, rd, tAP, apL, apT);", "apL = vec3(0.0); apT = vec3(1.0);"]] } },
+      { "name": "off", "js": "v.farTowers.enabled = false;" }
+    ]
+  }
+]
