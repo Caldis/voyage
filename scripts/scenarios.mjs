@@ -124,6 +124,12 @@ export const SCENES = [
   // default：12.65 km 豊科过后的平原段，往信濃大町、左座朝西（北阿尔卑斯）；curve：1.79 km 松本出发后的弯道（近处有女鳥羽川 / 奈良井川）
   { name: "rail-oito-default", p: { vehicle: "train", date: "2026-08-05", time: 720 }, wait: 3000, js: "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(12650, 1, 0); for (let i = 0; i < 90 && v.ground.pending > 0; i++) await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(12650, 1, 0); return v.rail.describe() + \" · \" + (v.groundDetail.railStatus ?? v.groundDetail.status);" },
   { name: "rail-oito-curve", p: { vehicle: "train", date: "2026-08-05", time: 720 }, wait: 3000, js: "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(1790, 1, 0); for (let i = 0; i < 90 && v.ground.pending > 0; i++) await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(1790, 1, 0); return v.rail.describe() + \" · \" + (v.groundDetail.railStatus ?? v.groundDetail.status);" },
+  // SPEC-BOW：巡航高度看下方阵雨上的虹（演示雨区摆在对日点外 46°，主虹横穿窗的下半部，红在外）、贴窗看云海上的宝光 + 云虹（宝光在左下、
+  // 云虹是右侧一道宽而淡的白带）、卷云里的环地平弧（太阳 62°，窗上沿一道与地平线平行的彩带，红在上）。wpac 2026-06-21 的时刻按窗朝向挑的；
+  // 放在表尾：场景开了 optics.force.bow（演示雨区），别串到后面的场景里
+  { name: "bow-rain", p: { preset: "wpac", date: "2026-06-21", time: 560, seat: "right", "cloud-preset": "towering", coverage: 0.3, "wing-pos": "-4" }, js: "v.optics.disabled = false; v.optics.force = { bow: true }; v.optics.resetBowDemo(); await new Promise((r) => setTimeout(r, 300)); return JSON.stringify(v.optics.status.rain);" },
+  { name: "bow-cloud", p: { preset: "wpac", date: "2026-06-21", time: 360, seat: "right", "cloud-preset": "stratocumulus", coverage: 0.85, "view-preset": "close", "wing-pos": "-4" }, js: "v.optics.disabled = false; v.optics.force = { bow: true }; v.optics.resetBowDemo(); await new Promise((r) => setTimeout(r, 300)); return String(v.optics.status.cloudBow);" },
+  { name: "bow-cha", p: { preset: "wpac", date: "2026-06-21", time: 824, seat: "right", "cloud-preset": "cirrus", coverage: 0.9, "wing-pos": "-4" }, js: "v.optics.disabled = false; v.optics.force = { bow: true }; await new Promise((r) => setTimeout(r, 300)); return String(v.optics.status.cha);" },
 ];
 
 /**

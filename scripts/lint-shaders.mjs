@@ -881,7 +881,9 @@ async function main() {
     // -- 1c. PERF-13：窗外默认程序预处理后不含罕见光学（宝光 / 影子 / 幻日 / 晕）与天幕层奇观代码；变体里必须有（断言有区分力） --
     // 这两块一旦写到 #ifdef OUTSIDE_OPTICS / OUTSIDE_WONDER 外面，就又编进了冷启动关键路径上的窗外默认程序
     console.log("\n-- 窗外默认程序不含罕见光学 / 天幕层奇观代码（PERF-13，glslangValidator -E） --");
-    const EXTRA_IDS = ["opticsGlory", "opticsPlaneShadow", "opticsCloudFactor", "opticsHaloRadiance", "uOpticsGlory", "wonderSky", "wonderStrut", "wonderFrustum", "uWonderOn"];
+    // SPEC-BOW 起还有雨区 / 雨虹 / 云虹 / 环地平弧 / 日柱（opticsRain、opticsBowPhase、opticsCloudBow、opticsArcRadiance）
+    const EXTRA_IDS = ["opticsGlory", "opticsPlaneShadow", "opticsCloudFactor", "opticsHaloRadiance", "uOpticsGlory", "wonderSky", "wonderStrut", "wonderFrustum", "uWonderOn",
+      "opticsRain", "opticsBowPhase", "opticsCloudBow", "opticsArcRadiance", "uBowRain", "uBowOn", "uOpticsArc"];
     const preprocess = (prog) => {
       const file = path.join(tmpDir, `${prog.id}.pp13.frag`);
       writeFileSync(file, FRAG_PREFIX + resolveIncludes(prog.fragmentShader, new Set()));
