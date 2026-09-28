@@ -18,6 +18,17 @@ try {
     const re = /tiles\.maps\.eox\.at/;
     await page.route(re, (r) => (Math.random() < block ? r.abort() : r.continue()));
   }
+  // G08_NOWORKER=stitch：拼接 Worker 起不来（由合成 Worker 自己拼）；=all：两个都起不来（主线程兜底）。测回退路径用
+  const noWorker = process.env.G08_NOWORKER;
+  if (noWorker) {
+    await page.addInitScript((mode) => {
+      const W = window.Worker;
+      window.Worker = function (url, opts) {
+        if (mode === "all" || String(url).includes("tile-compose")) throw new Error("G08 测试：禁止创建 Worker");
+        return new W(url, opts);
+      };
+    }, noWorker);
+  }
   const t0 = Date.now();
   await page.goto(`http://127.0.0.1:${port}/?g08=${Date.now()}${query ? "&" + query : ""}`, { waitUntil: "commit", timeout: 180000 });
   await page.waitForFunction(() => window.__voyageStartup, null, { timeout: 300000, polling: 500 });
