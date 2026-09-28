@@ -121,7 +121,8 @@ export const WONDERS: WonderDef[] = [
     // 建木出自《淮南子·地形训》（公有领域典籍），不是致敬某部作品
     name: "建木（《淮南子·地形训》：众帝所自上下）",
     layer: "sky",
-    distanceKm: [340, 410],
+    // WS05 巨构化：从 340–410 km 拉近到 200–260 km（树脚在地平线以内，埋在它自己的云海里）
+    distanceKm: [200, 260],
     forwardOffsetDeg: [8, 30],
     minAltitudeKm: 6,
     // 「日中无景」：白天与黄昏；深夜它就隐没了，几乎不出现
@@ -129,9 +130,11 @@ export const WONDERS: WonderDef[] = [
     riseS: 120,
     holdSimS: [420, 720],
     fadeS: 120,
-    // 深色的木质、偏暖：树干白天几乎看不见，黄昏上段被染成暗金（比天梯稍粗、稍亮）。
-    // W01b：高处九根弯枝（九欘）、12–30 km 缠着树干的云气（白天最先被注意到的就是它）、树冠一带的萤光，见 render/wonder-sky.glsl.ts
-    look: { radiusKm: 0.34, albedo: [0.05, 0.035, 0.022], skin: 1, beacons: false },
+    // WS05：一座山那样粗的树——底部直径 5–8 km、往上收成笔直的柱（百仞无枝），九片板根（九枸）斜入脚下的云海，
+    // 48 km 以上九根巨枝（九欘）伸出 38–88 km、挂着稀疏的青色叶簇；8–24 km 缠着三圈云气。尺寸按每次出现的种子取
+    // （着色器从 uWonderShape.w 读种子，radiusKm 在建木上不用）。albedo 是树皮（「紫茎」：偏紫的灰褐，真实树皮 0.1 上下），
+    // 见 render/wonder-sky.glsl.ts
+    look: { radiusKm: 3.2, albedo: [0.15, 0.125, 0.125], skin: 1, beacons: false },
   },
   {
     id: "fogcity",
