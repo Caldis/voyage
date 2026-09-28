@@ -32,36 +32,36 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | WS03 | 奇观尺度对照场景与 M1–M7 指标脚本（research/WONDER_SCALE.md） | 中 | scripts / handoff | — | — |
 | WS04 | 浮空古城放大到 25–35 km、根须垂进云海、~30 km 投影（用户回「我同意」未明确此项，协调者默认：保留原尺寸小版按低概率出现，可随时改） | 高 | wonders/floatcity | wonders | — |
 | WS05 | 建木：树干底部 5–8 km、斜入云海的板根（与 WS01 同文件，WS01 后） | 高 | wonders | wonders | WS01 后 |
-| WS06 | 巨影（奇观投在云海 / 大地上的巨大阴影，看 WS01 效果再定） | 中 | wonders / clouds | — | — |
+| WS06 | 【降级：细微 / 性能，晚做】 巨影（奇观投在云海 / 大地上的巨大阴影，看 WS01 效果再定） | 中 | wonders / clouds | — | — |
 | WS07 | 新奇观：贯穿云海的巨柱群（解析几何、低成本） | 高 | wonders | wonders | — |
 | WS08 | 新奇观：横贯天空的轨道环弧（用户 09-28 同意：只在奇观模式出现） | 高 | wonders | wonders | — |
 | WS09 / WS10 | 新奇观：垂直大陆、跨海巨门（悬空巨舰排后） | 中 | wonders | wonders | — |
 | SPEC-FUJI | 富士山笠云 / 吊るし雲（山地波荚状云，METEOROLOGY W15）：天气场判山顶风速 ≥15 m/s、风向垂直山脊、稳定湿 → 峰顶笠云 + 下风一排荚状云；解析 SDF 按需变体 | 高（壮观，用户优先） | clouds（变体）/ weather | clouds | fuji 预设；C-TOFU 合并后 |
 | SPEC-BOW | 光学补全（METEOROLOGY W26，T17 框架）：巡航高度全圆虹（下方雨区、太阳在背后）、层积云上的云虹 / 雾虹（与宝光同框）、日柱、环地平弧 | 高（壮观） | 窗外光学变体 | optics | 按需变体 |
 | SPEC-PILEUS | 幞状云：生长中的浓积云 / 积雨云塔顶的光滑头巾（彩虹色虹彩可选） | 中高（壮观） | clouds（天气宏） | clouds | 并入 TW04 |
-| SPEC-KH | Kelvin–Helmholtz 波状云（fluctus）：切变层上一排浪花，短暂出现（可用 WX11a 切变） | 中 | clouds | clouds | TW04 后 |
+| SPEC-KH | 【降级：细微 / 性能，晚做】 Kelvin–Helmholtz 波状云（fluctus）：切变层上一排浪花，短暂出现（可用 WX11a 切变） | 中 | clouds | clouds | TW04 后 |
 | SPEC-ARCUS | 弧状云 / 滚轴云（飑线阵风锋前的架状云），原属 TW07 提前 | 中高（壮观） | clouds（天气宏） | clouds | TW04 后 |
-| DX-29 | ab / gpu-ab 材质别名 `outsideMat.current`（当前实际画的窗外变体，低空海面走低空细节变体，已踩两次）；ab 自带目标区遮罩与孤立点 / 单像素死白指标；live 与冻结表格分开输出；ab 每变体指定自己的真值（refOf）；内置 cloud-alt 高度出口与竖壁 / 平顶游程指标；--montage 裁剪拼图；测量锁排队拥堵（4 个以上代理时等锁 20 min 后不持锁开测，结果只能参考） | 中 | scripts/* | — | — |
-| VOY-START | 首屏构图：连续航程默认开后首屏从「右窗朝西夕阳逆光」变成「顺光积云与海」（默认地点西太平洋向南飞前方无机场，机头转向西北航段）；在 routes.ts 加关岛 / 塞班等南方机场让首段继续向南，或改默认地点 / 时刻；给美术总监看一眼 | 中 | routes.ts / 默认预设 | — | default 首屏对照 first-5317.png |
+| DX-29 | 【降级：细微 / 性能，晚做】 ab / gpu-ab 材质别名 `outsideMat.current`（当前实际画的窗外变体，低空海面走低空细节变体，已踩两次）；ab 自带目标区遮罩与孤立点 / 单像素死白指标；live 与冻结表格分开输出；ab 每变体指定自己的真值（refOf）；内置 cloud-alt 高度出口与竖壁 / 平顶游程指标；--montage 裁剪拼图；测量锁排队拥堵（4 个以上代理时等锁 20 min 后不持锁开测，结果只能参考） | 中 | scripts/* | — | — |
+| VOY-START | 【降级：细微 / 性能，晚做】 首屏构图：连续航程默认开后首屏从「右窗朝西夕阳逆光」变成「顺光积云与海」（默认地点西太平洋向南飞前方无机场，机头转向西北航段）；在 routes.ts 加关岛 / 塞班等南方机场让首段继续向南，或改默认地点 / 时刻；给美术总监看一眼 | 中 | routes.ts / 默认预设 | — | default 首屏对照 first-5317.png |
 | UX-2 | 接管显示：每 250 ms 读回云量 / 云底 / 云厚 / 风速 / 开关实际值并标「自动」（连续航程下面板显示值是错的：云量 42% 实 34%、风速 7 实 1.0、地点停在旧位置）；天气系统与云型锁定语义写明；地点显示当前航段；注意与 WX11g 风速滑条同步重叠 | 高 | ui.ts 等 | 面板 | 半天；UX-1a 后 |
 | UX-3 | 分区折叠 + 开发者区（`<details>`、调试控件移入、?dev / Shift+D、标签去括号、信息栏分简短 / 完整）；验收 1600×1200 默认不滚动（现 2719 px、2.3 屏） | 中高 | ui.ts / index.html / style.css | 面板 | 1 天 |
 | UX-4 | 手机 / 小窗：底部抽屉 + 收起按钮（现手机面板 6.7 屏、占 41% 且挡舷窗中心） | 中 | 同上 | 面板 | 半天 |
 | UX-5 | 控件类型统一：时间流速与航程流速合并为「流速」一行、座位 / 舱等 / 灯光 / 稀有度改分段按钮（场景表按原 id 设值不变） | 中 | 同上 | 面板 | 半天–1 天 |
-| UX-6~9 | 记忆与恢复默认、ControlSpec 框架试点、「准备中」反馈统一、快捷键帮助（见 research/PANEL_UX_GUIDE.md） | 低 | 同上 | 面板 | — |
-| C10d | C-FLAT 后远处 / 近处对真值偏暗被放大（sea-sc 0–20 km 0.959→0.932、60–90 km 0.85→0.77；storm-sc 同向）：C10c 的 odCut 在远处放宽或按 C-FLAT 新响应重标定 | 中 | clouds（受光） | clouds | sea-sc / storm-sc 分带对真值 |
-| WX-LTG | 海上雷暴闪电频率按陆上（平均 5 s 一次），实际海上闪电少得多（TW01 发现）：按海陆比例降闪电率，给出处 | 低 | weather / clouds 闪电调度 | — | weather-stats |
-| TW-NIGHT | 月夜雷暴塔身黑白硬边横带（BIS-8：非 C10c 回归，C10c 前同样存在）：推测月夜环境光比近满月直射月光弱数个量级，塔身细化凹凸在「直对月光 / 自遮挡」间逐像素硬翻转；先 ab 开关定根因（环境光量级 / 多次散射 / 自阴影柔化），可并入 TW05 | 中高 | clouds（天气宏受光） | clouds | f-storm-night-2 机位 |
+| UX-6~9 | 【降级：细微 / 性能，晚做】 记忆与恢复默认、ControlSpec 框架试点、「准备中」反馈统一、快捷键帮助（见 research/PANEL_UX_GUIDE.md） | 低 | 同上 | 面板 | — |
+| C10d | 【降级：细微 / 性能，晚做】 C-FLAT 后远处 / 近处对真值偏暗被放大（sea-sc 0–20 km 0.959→0.932、60–90 km 0.85→0.77；storm-sc 同向）：C10c 的 odCut 在远处放宽或按 C-FLAT 新响应重标定 | 中 | clouds（受光） | clouds | sea-sc / storm-sc 分带对真值 |
+| WX-LTG | 【降级：细微 / 性能，晚做】 海上雷暴闪电频率按陆上（平均 5 s 一次），实际海上闪电少得多（TW01 发现）：按海陆比例降闪电率，给出处 | 低 | weather / clouds 闪电调度 | — | weather-stats |
+| TW-NIGHT | 【降级：细微 / 性能，晚做】 月夜雷暴塔身黑白硬边横带（BIS-8：非 C10c 回归，C10c 前同样存在）：推测月夜环境光比近满月直射月光弱数个量级，塔身细化凹凸在「直对月光 / 自遮挡」间逐像素硬翻转；先 ab 开关定根因（环境光量级 / 多次散射 / 自阴影柔化），可并入 TW05 | 中高 | clouds（天气宏受光） | clouds | f-storm-night-2 机位 |
 | TW02 | 远景对流塔层 280–750 km（解析廉价画法）、雷暴名额 4→6–8（research/TOWERING.md） | 高 | clouds（天气宏） / weather | clouds | TW01 后 |
-| TW03 | 积云云顶高低错落、少数塔冲出云层 | 高 | clouds / weather | clouds | C-TOFU 后 |
+| TW03 | 【降级：细微 / 性能，晚做】 积云云顶高低错落、少数塔冲出云层 | 高 | clouds / weather | clouds | C-TOFU 后 |
 | TW04 | 积雨云几何与质感重做：砧放大 2–5 倍、塔身比例、多尺度卷团、塔底低云 / 霾遮挡、飑线单体不再等厚长板（冷编译风险最高） | 高 | clouds（天气宏） | clouds | 与 C06 错开 |
-| TW05 | 塔特有受光：夕照只染塔顶、塔间长影；远塔大气透视偏蓝灰 | 中高 | clouds / atmosphere | clouds | C-FLAT 后 |
-| TW06 | 对流生命周期（原 WX14：午后生长，1× 可见） | 中 | clouds / weather | clouds | TW04 后 |
+| TW05 | 【降级：细微 / 性能，晚做】 塔特有受光：夕照只染塔顶、塔间长影；远塔大气透视偏蓝灰 | 中高 | clouds / atmosphere | clouds | C-FLAT 后 |
+| TW06 | 【降级：细微 / 性能，晚做】 对流生命周期（原 WX14：午后生长，1× 可见） | 中 | clouds / weather | clouds | TW04 后 |
 | TW07 | 雷暴类型扩展（原 WX27：多单体更替、弧状云、夜间 MCS 大砧、幞状云） | 中 | clouds / weather | clouds | TW04 后 |
-| C13 | 云的空间降噪（ART-8 #3）：斜纹 / 棋盘已去，但噪声幅度没降（相邻差 3.9→3.7），暗面铺白色砂粒；做在 resolve 后的边缘保持空间滤波或更好的时空重建 | 高 | clouds（resolve） | clouds | noon-cumulus、cu-side 近处放大、flight |
+| C13 | 【降级：细微 / 性能，晚做】 云的空间降噪（ART-8 #3）：斜纹 / 棋盘已去，但噪声幅度没降（相邻差 3.9→3.7），暗面铺白色砂粒；做在 resolve 后的边缘保持空间滤波或更好的时空重建 | 高 | clouds（resolve） | clouds | noon-cumulus、cu-side 近处放大、flight |
 | ART-8 余项 | 黄昏雷暴云底发光「飞碟」（连续 3 次上报）；台风卷云盖 / 眼壁；夜间机翼后缘整流罩黑盒 + 尾端梳齿锯齿；大风海面巡航高度读成一层云；低空海天暗墙；开灯舱内倒影；机身影子在翼面饱和藏青 + 小翼镀铬；夜间低云未被城市灯光从下照亮 | 中 | 各 | — | research/ART_REVIEW_wave8.md 第 6–12 条 |
-| DX-28 | 场景 `hnd-cts` 系会悄悄改掉请求的高度（hnd-night-1km 实为 2.6 km）；截图 JSON 加地面状态与云累积帧数；compare 加分位数；按高度扫描截图命令；审计代理曾拿到无 .git 的坏 worktree 目录（查 isolation 未设时的 cwd 残留） | 中 | scripts/* | — | — |
-| WX11a-c | WX11a 气候态：秋季东北季风起始提前（西太 10 月海面风中位 ~3.1 vs 八丈島 10 月平均 5.6）；日本海 4–10 月中位 ~6 可能偏高一成（缺开阔海面实测，查资料后定）；注意 850 hPa 相邻 25 km 连续性 p99 已 13.8–14.4%（门限 15%） | 低 | weather.ts / weather-stats | — | weather-stats 多种子 |
-| DX-27 | weather-stats 加 `--field <weather.ts 路径>` 以对比新旧版本；「改坏矩阵」工具（读替换规则 → 逐条改坏 → 跑断言 → 自动恢复 → 汇总表，一条命令证明「改前必须失败」；WX11a 用 git checkout 恢复时冲掉过未提交修改） | 低 | scripts/* | — | 对 WX11a 断言跑一遍 |
+| DX-28 | 【降级：细微 / 性能，晚做】 场景 `hnd-cts` 系会悄悄改掉请求的高度（hnd-night-1km 实为 2.6 km）；截图 JSON 加地面状态与云累积帧数；compare 加分位数；按高度扫描截图命令；审计代理曾拿到无 .git 的坏 worktree 目录（查 isolation 未设时的 cwd 残留） | 中 | scripts/* | — | — |
+| WX11a-c | 【降级：细微 / 性能，晚做】 WX11a 气候态：秋季东北季风起始提前（西太 10 月海面风中位 ~3.1 vs 八丈島 10 月平均 5.6）；日本海 4–10 月中位 ~6 可能偏高一成（缺开阔海面实测，查资料后定）；注意 850 hPa 相邻 25 km 连续性 p99 已 13.8–14.4%（门限 15%） | 低 | weather.ts / weather-stats | — | weather-stats 多种子 |
+| DX-27 | 【降级：细微 / 性能，晚做】 weather-stats 加 `--field <weather.ts 路径>` 以对比新旧版本；「改坏矩阵」工具（读替换规则 → 逐条改坏 → 跑断言 → 自动恢复 → 汇总表，一条命令证明「改前必须失败」；WX11a 用 git checkout 恢复时冲掉过未提交修改） | 低 | scripts/* | — | 对 WX11a 断言跑一遍 |
 | WX11b | 风向接入（research/WX11-DESIGN.md）：砧 / 塔 / 卷云 / 云街方向随天气场；HIGH_WIND / LOW_WIND 常量改 uniform，方向只在借遮挡硬切时换（坑 A：绕原点旋转，1°≈1000 km 外平移 17 km）；uUpperWind 在云影图 / 占据网格缓存键里不可每帧写（坑 B） | 高 | weather-director / clouds.glsl / clouds.ts | clouds | PERF-15 安静窗口后；台风部分等 C-TYPH |
 | WX11c | 平流 + 重投影补偿（CPU 端 uMotion 减本帧平流位移，着色器不改）+ 云影中心跟随 + 雷暴按引导气流漂移（占据网格平移、闪电坐标同步）；冻结 / 场景偏移时平流归零；须与 DX-WX 同波 | 高 | clouds.* / weather.ts / main.ts 一两行 | clouds | 早于 WX12 |
 | DX-WX | flight / ab / gpu-ab 支持注入平流，job.offset 同时归零平流 | 中 | scripts/lib/* | — | 与 WX11c 同波 |
@@ -69,11 +69,11 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | WX11e | 云街间距 2–6 倍边界层厚、分区随机（打破 4 km 严格周期）；层积云卷轴排列 | 中 | clouds.glsl / weather.ts | clouds | WX11b 后 |
 | WX11f | 时间演变：细节噪声上滚、天气图与云体不同速平流；60× 压缩变化速度 | 中 | clouds.* | clouds | WX11c 后 |
 | WX11h | （可选）地速 = 真空速 + 风，偏流角 | 低 | flight.ts | — | 最后 |
-| T48d | T48c 遗留：50 ms 频闪时小翼后缘一条与闪光区边缘零星灯芯变暗（1067 px，均值 −4.4、最暗 −16.6；3×3 最小值在闪光边缘低估扣除量）——可试十字 5 格或按闪光区掩码放宽；低优先 | 低 | render/exposure.ts | exposure | T48c-pulse.mjs 同轮相对门限 + 变暗计数 |
-| C06 | 近处云第二级细节（菜花小卷团）：真值同样是泥塑，只能从密度场补（形状 55 m、细节 14 m 纹素是上限） | 高（C-TOFU 审查：cu-side 近塔失焦白团，必测 cu-side） | clouds（密度） | clouds | cu-side 近景、backlit-close |
-| DX-25 | 云不透明度调试出口（exposure 加类似 uDebugMask 的开关或 ab job 导出云 alpha），让 `compare --halo` 能做真实验收；flicker 照搬 ab 逐张解码去掉 48 帧上限 | 低 | exposure（调试开关）/ scripts | exposure | ab 导出云 alpha 后 --halo 跑通 |
+| T48d | 【降级：细微 / 性能，晚做】 T48c 遗留：50 ms 频闪时小翼后缘一条与闪光区边缘零星灯芯变暗（1067 px，均值 −4.4、最暗 −16.6；3×3 最小值在闪光边缘低估扣除量）——可试十字 5 格或按闪光区掩码放宽；低优先 | 低 | render/exposure.ts | exposure | T48c-pulse.mjs 同轮相对门限 + 变暗计数 |
+| C06 | 【降级：细微 / 性能，晚做】 近处云第二级细节（菜花小卷团）：真值同样是泥塑，只能从密度场补（形状 55 m、细节 14 m 纹素是上限） | 高（C-TOFU 审查：cu-side 近塔失焦白团，必测 cu-side） | clouds（密度） | clouds | cu-side 近景、backlit-close |
+| DX-25 | 【降级：细微 / 性能，晚做】 云不透明度调试出口（exposure 加类似 uDebugMask 的开关或 ab job 导出云 alpha），让 `compare --halo` 能做真实验收；flicker 照搬 ab 逐张解码去掉 48 帧上限 | 低 | exposure（调试开关）/ scripts | exposure | ab 导出云 alpha 后 --halo 跑通 |
 | C-TYPH | 台风外围卷云盖过曝白平板（中位数 235、一半以上 ≥235，底面水平直线 + 规则水波纹；TM02 量化证实非色调映射所致，属 clouds 台风段，T44 遗留；ART-7 #5） | 中高 | clouds（台风段） | clouds | typhoon-outer-11、typhoon-bands |
-| C-TAIL | C11 合并后重定 `CLOUD_MS_TAIL.y`（C01 为压棋盘纹定成 2，约束已解除，按观感重调） | 低 | clouds | clouds | in-cloud |
+| C-TAIL | 【降级：细微 / 性能，晚做】 C11 合并后重定 `CLOUD_MS_TAIL.y`（C01 为压棋盘纹定成 2，约束已解除，按观感重调） | 低 | clouds | clouds | in-cloud |
 | SC-4 | 云程序与场景并行编译 | 最高 | main.ts 启动段、boot/* | 碰 main | 冷启动 −约 6 s，无 ≥1 s 冻结 |
 | SC-6 | （可选）`?dev=` 特性隔离 | 低 | scene.ts、main.ts | 碰 | dev=cabin 场景编译 ≤8 s |
 | T07 | 光学细节：太阳附近的眼睛衍射星芒；窗板边缘色散；高空低温时内层窗板透气孔周围的冰晶 | 中 | `src/render/bloom.ts`、`src/render/exposure.ts`、`src/render/cabin.glsl.ts`（窗板部分） | 否 | sunset-wing、noon-cumulus |
@@ -120,7 +120,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | C10b | 近处云步进细化：撤 C10 二分、60 km 内空白步也走 dt（60–90 km 连续过渡回 2dt）、首步半步、非天气步数上限 192→384、天气程序层状云同算法（层高 ±300 m 内细步） | 2026-09-28 | 审查通过（handoff/C10b-review.md）：云边对真值 noon 5.25→4.5（真值 3.75）等；薄丝 α 0.08–0.50→0.55–0.98；噪声 ×0.86；flight 全面变好；顺带修掉 master 在 60 km 处的硬台阶；冷编译 cloud-march −3.4%。推翻：「只减有云步」无效、「20 km」太窄（云边像素中位距离 24–37 km）。**天气 GPU ×1.07–1.12（最坏 ×1.38）按审查推荐 (a) 接受**：noref 在雷暴 / 台风天等于整窗退回 master 且带整窗跳变，按画质档需着色器变体翻倍。账本更正：C10 二分实际让非天气云慢 ×1.45–2.7。P2 俯视浓云海近处暗 5–18% HDR → C10c。L：主循环 `i < 448` 裸常量 → C10c |
 | G08c | 地形高度图与夜光改用 tileRect（按行中间纬度对接）修原点以西竖缝；新场景 fuji-west-seam-low / night-city-low-west；G08 文档 L1 / L2 | 2026-09-28 | 协调者核验合并（小改，tileRect 已在 G08 审查）：离线 3 预设 × 5 位置 × 7 级缝宽全 0（旧：地形最宽 15 列、夜光 180 列）；fuji 以西 heightAt 0→554 m、剖面相邻最大跳变 89→3 m；同页 A/B 噪声底 0，夜景一次性灯点换版（hnd-cts-night 平均差 1.1、>8 占 2.3%）。遗留：fuji 以西 L2 一处 1×9 的 0 m 短段判断为数据本身 |
 | W-LAMP | 机翼灯光：照翼面专用配光 wingLampSurfI（FAR 25.1393/1401 平滑近似，高仰角下限 / 频闪朝内 0.15 / R=5 cm 为估计值已标）、圆盘照度 I/(d²+R²)、航行灯 / 尾灯面光源地平线过渡按像素法线转角放宽 | 2026-09-28 | 审查返工一次后通过（handoff/W-LAMP-review.md）：1 km 夜城翼面死白块 223→20 px、尾灯剖面单调；FAR 数值逐条核对；非机翼按覆盖率逐位 0；白天最大 1–2 级（接受，不按昼夜门控）。返工：镜面粗糙度加 spreadN² 致小翼前缘绿线飞行中闪（203–272 px）→ 去掉后 0–1（与 master 同），后缘弯折线闪烁 ~22→8/帧保留。推翻 W-STAIR「限幅致频闪后缘点列」：根因 n·l 过零 ×1/d²。冷编译 wing +2.1% / wet +3.1%，与 W-STAIR 累计 +0.3 s → 波次收尾 `cold --repeat` 看机翼是否成关键路径 |
-| G08-STITCH | 影像瓦片解码与拼接挪进独立拼接 Worker（主线程只取 Blob、无同步读回；三级回退：拼接 Worker → 合成 Worker → 主线程 canvas）；瓦片矩形按行中间纬度对接修接缝 | 2026-09-28 | 审查通过（handoff/G08-STITCH-review.md）：1× 尖峰 ~3/分 → 约 0（同页交替持锁）、首载粗版 8.3→7.9 s、60× 无积压；跨线程契约 / 缓存 1200 张 ~300 MB 无泄漏；新矩形东西缝严格 0；夜景灯点一次性换版可接受；CPU/GPU 缩放无锯齿。协调者落地 M1（build reject 接住只警告）。M2（地形 / 夜光仍旧矩形，原点以西竖缝，heightAt 缝上 0 m）→ G08c；L1 首载 237 s 不成立（24.2 s）；L3 过期拼接任务不能取消（15 s 回落，可接受） |
+| G08-STITCH | 【降级：细微 / 性能，晚做】 影像瓦片解码与拼接挪进独立拼接 Worker（主线程只取 Blob、无同步读回；三级回退：拼接 Worker → 合成 Worker → 主线程 canvas）；瓦片矩形按行中间纬度对接修接缝 | 2026-09-28 | 审查通过（handoff/G08-STITCH-review.md）：1× 尖峰 ~3/分 → 约 0（同页交替持锁）、首载粗版 8.3→7.9 s、60× 无积压；跨线程契约 / 缓存 1200 张 ~300 MB 无泄漏；新矩形东西缝严格 0；夜景灯点一次性换版可接受；CPU/GPU 缩放无锯齿。协调者落地 M1（build reject 接住只警告）。M2（地形 / 夜光仍旧矩形，原点以西竖缝，heightAt 缝上 0 m）→ G08c；L1 首载 237 s 不成立（24.2 s）；L3 过期拼接任务不能取消（15 s 回落，可接受） |
 | C10 | 云边锐度第一步：进云二分定位表面再走半步、layerDensity 饱和倍率 3.5→4.5 | 2026-09-28 | 审查通过（handoff/C10-review.md）：云边 −4~−17%、噪声 ×0.92、GPU 持平、对 1/4 步长真值误差更小、冷编译 +7.6%（卷云 +11% 贴线，负载噪声约 5%，波次收尾复核）；云里时间波动 ×0.13、雾浓 −6%。已知偏置：二分只在粗样本命中时触发、丢 2dt 权重 → 薄丝 α ×0.45–0.72（README 已写，fixF 对照）。美术：奇观亮纱→团块是改进（真值同样）。诊断：表皮消光 12–18 /km（真实 50–150），根因是单样本光学厚度过大 → C10b；近景泥塑 → C06 |
 | DX-23/24 | 收编同页多变体 A/B `dev-browser ab`（多材质 / 补丁 / uniform / file:，逐字节预热、pending 与 CORS 自动作废、交替噪声底、HDR 逐位对照、benchWing）与确定性航迹 `dev-browser flight`（static / reset / cruise / turn / exit / live，真值取 raw 平均，云边 σ，页内逐帧抖动）；compare 补 HSV 饱和度 / 死白连通块 / 斜纹指数 / 光晕；freeze 已冻结保留冻结时刻（main.ts 一行）；shots 默认高画质档；EOX 报错聚合；--only 未知场景报错；shader-budget 缺依赖提示；GPU 计时钩子防御；路径统一相对 worktree 根 | 2026-09-28 | 协调者核验合并（工具类，main.ts 仅 freeze 一行）；DEV_SOP 测量约定冲突两边保留。已通知 C10、T48c、W-LAMP 改用。演示：freeze 隔 0.7 s 重冻结 master 平均差 3.14 → 0；flight 复现 C12b 结论方向。遗留 → DX-25（云 alpha 调试出口、flicker 去 48 帧上限） |
 | W-STAIR | 机翼边阶梯 / 点阵：sdWingMain 分段距离场取下界（段边界按弦向分区防幻影墙）、边缘子射线步数不足 1/4 按打中沿用中心色、内轮廓擦边 2 px、边缘 5 样本 | 2026-09-28 | 审查通过（handoff/W-STAIR-review.md）：真下界、Lipschitz ≤1，sdWing 调用 +0.1–1.8%、单像素最多步数反降；命中落体内像素 0.58%→0，云里 8 姿态点阵消失；与参考图差和降 4–10 倍；无外扩 / 缝被填；TM02 dW 判据下无亮暗环；帧时间 +5.5%（约 0.03 ms）、冷编译 +2–3%（机翼程序只比窗外早 0.2–0.7 s 编好，波次收尾看余量）。遗留 → W-EDGE（前缘解析覆盖率）、W-LAMP（频闪钝后缘虚线）。DX：云里 / 湿窗画的是 wingVariant.wet；跨运行冻结时刻不同机翼会挪；迭代计数代替负载下帧时间 |

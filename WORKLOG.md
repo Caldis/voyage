@@ -34,7 +34,7 @@
 
 ### 待派（按优先）
 1. PERF-15 安静窗口性能复核（主线 vs 今早 7436ba1 逐场景，逐合并归因）——在途结束后。
-2. **执行顺序（用户 09-28 晚：看得见的优先、不做提前优化）**：进行中 C-TOFU 审查 / PERF-STORM / SEA-3 / W-EDGE / UX-1a / STROBE-FLASH / FOCUS-ZOOM / SPEC-RAYS 收尾后 → SPEC-FUJI → SPEC-BOW → TW02 远景塔层 → C13 便宜版降噪 → TW04 积雨云重做（含幞状云）+ C-TYPH → C06 近处细节 → TW03 → SPEC-ARCUS → TW05（含 TW-NIGHT）→ SPEC-KH → TW06；城市灯光照低云 / 飞碟 / 倒影等穿插。美术总监需求仍先过性能预审，但预审只给上限不阻塞效果。
+2. **执行顺序（用户 09-29 再定：细微视觉与性能优化降级，不是不做而是晚做）**：第一档——在途的用户报告项（STROBE-FLASH、REFLECT-OFF、FOCUS-ZOOM）、奇观巨构 WS01 / WS02 → WS04 浮空城 / WS05 建木 / WS07 巨柱群 / WS08 轨道环弧、壮观天象 SPEC-FUJI 笠云 / SPEC-BOW 全圆虹 / TW02 远景塔层 / TW04 积雨云重做（含幞状云）/ SPEC-ARCUS 弧状云、面板 UX-2 / UX-3；第二档——SEA-3（在做，明显伪影）、W-EDGE（审查中）；第三档（积压，标【降级】）——C13、C06、C10d、T48d、TW03/05/06、SPEC-KH、各 DX、PERF 类、WX 细调。PERF-STORM 已要求就地收尾。
 3. C10 云边锐度（与 jitter 无关的表面距离场，先研究）。
 4. 地面：G07（mip 按层生成 + 首载先粗后细 + 按 GPU 定档）、T43b（夜间道路残留）、G05 级别交界锐度台阶；G04 Esri 待用户。
 5. 美术总监第 7 次检查、开发体验官第 7 波（波次收尾）。
