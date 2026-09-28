@@ -385,7 +385,9 @@ vec3 wingLights(vec3 ro, vec3 rd) {
       // 它的亮度只通过眩光（bloom 的点扩散，4% 能量铺到 1/θ² 的宽尾巴）显出来——按真实光强（朝舷窗约 100–300 cd）铺，
       // 50 ms 一闪整窗远处也亮 10–40 级、灯周 100 px 死白。这里是显示上的取舍，不是物理：眩光只给到常亮航行灯正前方（40 cd）
       // 同量级，频闪读成翼尖一个刺眼的点 + 翼面被照亮（翼面照度仍按 wingLampSurfI 的真实光强），不再是整个窗户爆白
-      vec3 Ic = i == 1 ? I / (1.0 + I.g / STROBE_CORE_CD) : I;
+      // 只在天黑以后压（太阳 −12° → −3° 之间放开）：白天曝光低，灯芯的眩光本来就只是翼尖一个小亮点，白天看得见的白闪正是防撞灯的用途
+      float night = 1.0 - smoothstep(-0.21, -0.05, uSunDir.y);
+      vec3 Ic = i == 1 ? I / (1.0 + night * I.g / STROBE_CORE_CD) : I;
       L += Ic / (M_PI * 0.03 * 0.03) * 1e-3 * core * exp(-sigma * t); // cd/m² → kcd/m²
     }
     // 云雾里的单次散射：沿视线积分 σ·I/(4π r²)，r² = h² + (s − t)²，有解析解。
@@ -405,11 +407,14 @@ vec3 wingLights(vec3 ro, vec3 rd) {
       // · 前向那一半（φ < 0，眼睛和灯之间）拿到的是灯朝内（舷窗一侧）的漏光：0.15 × 竖直分布约 0.6；另一半按配光平均 0.2。
       // 试过：逐点按「灯 → 视线最近点」方向取配光——十字形亮瓣；12 点数值积分配光 × HG——平滑，但离线 FXC wing +11%、wing-wet +22%
       if (i == 1) {
+        // 两端 φ = atan(x)：cosφ、sinφ、tan(φ/2) 都由 x 代数算出，只剩一次 vec2 的 atan（冷编译：三角函数 FXC 展开很长）
         const float K = 0.98, SM = 0.199;   // SM = √(1 − K²)
-        float pm = clamp(0.0, p0, p1);
-        vec3 fq = vec3(p0, pm, p1);
-        vec3 F = K * cos(fq) / (1.0 + K * sin(fq)) + 2.0 / SM * atan((tan(0.5 * fq) + K) / SM);
-        Iavg = vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * (0.09 * (F.y - F.x) + 0.2 * (F.z - F.y)) / max(p1 - p0, 1e-4);
+        vec2 x = vec2(-t, s1 - t) / hh;
+        vec2 rq = sqrt(1.0 + x * x);
+        vec2 F = K / (rq + K * x) + 2.0 / SM * atan((x / (1.0 + rq) + K) / SM);
+        float F0 = K + 2.0 / SM * atan(K / SM);          // φ = 0（最近点）处的原函数值
+        float Fm = x.x < 0.0 ? F0 : F.x;                 // 灯在眼睛背后（t < 0）时整段都在「另一半」
+        Iavg = vec3(1.0, 0.98, 1.0) * 1500.0 * uStrobe * (0.09 * (Fm - F.x) + 0.2 * (F.y - Fm)) / max(p1 - p0, 1e-4);
       }
       L += sigma * Iavg / (4.0 * M_PI) * integ * exp(-sigma * max(t, 0.0)) * 1e-3;
     }
