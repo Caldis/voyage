@@ -87,7 +87,8 @@ night-city / -on / -econ 的分区按固定灯芯位置 (705, 445)；其余按�
 **离线 FXC**（`shader-budget --baseline <master 树> --rounds 15 --jobs 1`，机器上同时有别的代理在测，噪声 ±4%）：wing min +0.7% / med −1.5%，wing-wet min +4.2% / med −1.8%；
 exposure-final / exposure-local 几十到一百多毫秒，噪声内。改成闭式积分之前（12 点循环）wing +11%、wing-wet +22%。
 
-**gpu-ab**：见下（在跑 / 已填）。
+**gpu-ab**（`--time wing`，8 轮 ABBA，`STROBE-FLASH-gpu-ab.json`）：夜里云中（走雾散射分支、湿窗变体）master 对改后 ×0.983 [0.960, 1.018]、同代码 ×0.990；night-city ×1.019 [0.992, 1.025]、同代码 ×1.016——都在离散度内，不升。
+
 ## 复现
 
 ```
