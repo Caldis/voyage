@@ -568,6 +568,8 @@ function renderFrame(now: number) {
   if (ui !== cabinClassUi) $("cabin-class-status").textContent = cabinClassUi = ui;
   wingMat.uniforms.uScene.value = hdr.texture;
   pass.render(wingVariant.pick(renderer, u.uWetness.value), hdrWing);
+  // T48c：告诉曝光「现在在闪」（翼尖频闪开关、闪电亮度），闪光不进夜间局部适应（render/exposure.ts 的 LOCAL_FRAG）
+  exposure.flash = Math.max(u.uStrobe.value, THREE.MathUtils.smoothstep(cloudUniforms.uFlash.value.w, 0.3, 3));
   exposure.render(hdrWing.texture, bloom.render(hdrWing), dt);
 
   // 面板「画质」下面那行状态（PERF-5）：手动档标「固定」，自动档带上当前落在哪一档 + 依据的数字

@@ -222,19 +222,19 @@ void main() {
 }
 `;
 
-// T48c 夜间局部适应的「瞬态扣除」（1/16 屏幕分辨率的粗网格）。
-//   T48b 的局部适应直接用当帧的眩光低通：翼尖频闪 / 夜间闪电这类 50–200 ms 的瞬态一亮，低通跟着涨，
+// T48c 夜间局部适应的「闪光扣除」（屏幕 1/16 的粗网格，ping-pong）。
+//   T48b 的局部适应直接用当帧的眩光低通：翼尖频闪 / 夜间闪电这类 50–200 ms 的闪光一亮，低通跟着涨，
 //   周围的城区灯芯、被照亮的云芯当帧就被压暗（审查 P2-1：频闪瞬间城区灯芯 −8、闪电云芯最多 −62）。人眼的局部适应有时间常数。
-//   做法：粗网格（眩光纹理 8×8 纹素的平均亮度，16 次双线性取样）在对数域做指数平滑（变亮 τ 0.25 s、变暗 0.1 s），
-//   瞬态 = 当帧粗格**线性**亮度 − 平滑值（线性，按更新前的状态算），再做 3×3 腐蚀（取最小值）；最终合成照旧用当帧的细低通，
-//   只减去这份线性瞬态：局部适应回到「闪光前」的状态。
-//   被推翻的写法（handoff/T48c.md、T48c-review.md）：
+//   做法：闪光是已知的事件（频闪开关 uStrobe、闪电亮度 uFlash.w，main.ts 每帧写进 Exposure.flash）。
+//   · 不闪时，粗格状态 S 每帧直接等于当帧（k = 1），扣除量 0——巡航、画面平移时与 T48b 逐位相同；
+//   · 闪的时候，S 只按 τ 0.25 s 慢慢跟（闪光基本不进适应），扣除量 T = 当帧粗格亮度 − 闪光前的 S（线性，按更新前的状态）；
+//     最终合成用「细低通 − T」算局部适应，并让 T 在这个像素里占的那一份不吃局部适应（见 FINAL_FRAG 的 transFrac）。
+//   被推翻的写法（handoff/T48c.md「返工」、T48c-review.md）：
 //   · 整张半分辨率低通做指数平滑：移动的灯点跨纹素都要「先亮、再被压」，运动中整片抖动约 1.6 倍；
-//   · 粗格的瞬态按对数算、不腐蚀：① 夜城是稀疏点光源，一盏灯跨进一格这格就跳零点几到两档，被当成瞬态，
-//     巡航中城区出现 16 px 方格状的「少压」斑块（P1-a）；② 常亮位置灯所在的格子被灯核主导，频闪的相对变化小、几乎扣不到，
-//     四周却扣满，灯周围成了暗洞（P1-b）。线性域 + 腐蚀两处都修：孤立的跳变被 3×3 最小值归零，频闪的大光晕在线性域里各格相近。
-//   两个模式共用一个程序（uMode）：0 = 更新状态（RG：R = 平滑后的 log2 亮度，G = 线性瞬态），1 = 对 G 做 3×3 腐蚀（输出 R）。
-//   uDt ≥ 1e8 视为「直接收敛」（瞬态 0）：跳变（snap）与冻结（dt = 0）都走这条，冻结时与 T48b 逐位相同。
+//   · 从画面里「猜」哪里是瞬态（粗格按对数 / 线性的时间平滑 + 3×3 最小值、成片比值、相对跳变、邻格规则、140 px 区域净变化，
+//     共试了七种）：巡航中灯点跨格的跳变实测可到 5 倍，区域净变化也会因城区整体进出画面而长期偏正，和频闪的边缘分不开，
+//     要么出方格斑块（审查 P1-a），要么常亮位置灯所在那一格被拦下、灯周成暗洞（P1-b）。已知的闪光就按已知的来。
+//   uDt ≥ 1e8 视为「直接收敛」：跳变（snap）与冻结（dt = 0）都走这条，冻结时与 T48b 逐位相同。
 /** 粗网格一格 = 眩光纹理（半分辨率）的多少个纹素（偶数） */
 const LOCAL_CELL = 8;
 const LOCAL_FRAG = /* glsl */ `
@@ -243,32 +243,11 @@ uniform sampler2D uBloom;
 uniform sampler2D uPrevLocal;
 uniform vec2 uBloomTexel; // 眩光纹理的纹素大小（uv）
 uniform float uBloomLevels;
-uniform vec3 uLocalRate;  // x、y：1/秒（变亮、变暗）；z：死区（档），比平滑值亮不到 z 档的部分不算瞬态
-uniform float uHalfDead;  // 半精度路径额外的死区（档），见 Exposure.renderLocal
+uniform float uLocalRate;  // 闪光期间状态跟随当帧的速率（1/秒）
+uniform float uFlash;      // 闪光程度（0 = 没在闪，1 = 在闪），见 Exposure.flash
 uniform float uDt;
-uniform int uMode;        // 0 = 更新，1 = 腐蚀
-uniform vec2 uErode;      // 调试：x = 成片比值门控开关，y = 3×3 取最小值开关
 varying vec2 vUv;
 void main() {
-  if (uMode == 1) {
-    // 成片判定：3×3 邻格（约 48 px 见方）里带符号的变化之和 ÷ 变亮部分之和。频闪 / 闪电是整片同时变亮（比值 ≈ 1）；
-    // 画面平移时灯点从一格挪到邻格，这边亮、那边暗，互相抵消（比值 ≈ 0）——不算瞬态（审查 P1-a：不这样判，
-    // 巡航中城区一块块方格被当成瞬态、少压 8–40 级）
-    ivec2 p = ivec2(gl_FragCoord.xy), sz = textureSize(uPrevLocal, 0) - 1;
-    float c = texelFetch(uPrevLocal, p, 0).g;
-    float ss = 0.0, sp = 0.0, mn = 1e30;
-    for (int i = -1; i <= 1; i++)
-      for (int j = -1; j <= 1; j++) {
-        float d = texelFetch(uPrevLocal, clamp(p + ivec2(i, j), ivec2(0), sz), 0).g;
-        ss += d; sp += max(d, 0.0); mn = min(mn, d);
-      }
-    float gate = uErode.x > 0.5 ? smoothstep(0.5, 0.9, ss / max(sp, 1e-30)) : 1.0;
-    float tv = uErode.y > 0.5 ? max(mn, 0.0) : max(c, 0.0);
-    // 屏幕最外一圈格子不算：画面平移时新内容从屏幕边进来，那一排整排变亮、没有邻格抵消（返工实测底边一格亮 28 级）
-    bool edge = any(equal(p, ivec2(0))) || any(equal(p, sz));
-    gl_FragColor = vec4(edge ? 0.0 : tv * gate, 0.0, 0.0, 1.0);
-    return;
-  }
   // 一格 = 眩光纹理 LOCAL_CELL × LOCAL_CELL 纹素：每次双线性取样正好是 2×2 纹素的平均（偏移 ±1、±3…个纹素）
   const int H = LOCAL_CELL / 2;
   float s = 0.0;
@@ -279,16 +258,12 @@ void main() {
     }
   }
   float Lc = s / float(H * H) / uBloomLevels;   // 与最终合成的 glare 同单位
-  // 状态存**线性**亮度的指数平滑：对数域平滑跟的是几何平均，夜城的灯在粗格里一闪一闪，算术均值恒大于几何均值，
-  // 「当帧 − 平滑」于是长期为正，整片城区都被当成瞬态（返工中实测巡航时正变化占总亮度 8.6%）
   float Sp = texture(uPrevLocal, vUv).r;
   bool conv = uDt >= 1e8 || isnan(Sp) || isinf(Sp) || Sp < 0.0; // 直接收敛；状态坏了（NaN / Inf / 负）也按收敛重来
-  float k = 1.0 - exp(-uDt * (Lc > Sp ? uLocalRate.x : uLocalRate.y));
-  float S = conv ? Lc : mix(Sp, Lc, k);
-  // 瞬态用更新前的状态：阶跃第一帧整份扣掉，与帧率无关。G 存带符号的线性变化（变暗为负），成片判定要用它；死区只作用在变亮一侧
-  float d0 = Lc - Sp;
-  float tr = conv ? 0.0 : (d0 > 0.0 ? max(Lc - Sp * exp2(uLocalRate.z + uHalfDead), 0.0) : d0);
-  gl_FragColor = vec4(S, tr, 0.0, 1.0);
+  float k = conv ? 1.0 : mix(1.0, 1.0 - exp(-uDt * uLocalRate), uFlash);
+  // 扣除量用更新前的状态：闪光第一帧整份扣掉，与帧率无关
+  float tr = conv ? 0.0 : max(Lc - Sp, 0.0) * uFlash;
+  gl_FragColor = vec4(conv ? Lc : mix(Sp, Lc, k), tr, 0.0, 1.0);
 }
 `;
 const FINAL_FRAG = /* glsl */ `
@@ -310,7 +285,7 @@ uniform vec4 uMesopicKeep;    // T48 饱和发光体不做浦肯野：饱和度 
 uniform vec3 uNightChroma;    // T48 夜里色调映射后的色度保持：x = 强度，窗外适应亮度 log10 cd/m² 在 y→z 之间由 1 过渡到 0
 uniform vec3 uNightLocal;     // T48b 夜里窗外的局部适应：低通亮度超过中灰 x 档的部分，整个像素压暗 y × 超出量（log2）；y = 0 关；z：T48c 机翼翼面自身参与的比例（见下文）
 uniform float uLocalFrac;     // T48c 调试：闪光份额不吃局部适应的开关（1 开）
-uniform sampler2D uLocalLum;  // T48c 粗网格的线性瞬态亮度（LOCAL_FRAG 腐蚀后的 R，与 glare 同单位）
+uniform sampler2D uLocalLum;  // T48c 粗网格的闪光扣除量（LOCAL_FRAG 的 G：线性亮度，与 glare 同单位；不闪时为 0）
 uniform vec4 uDayHiLook;      // TM01 白天窗外高光段（AgX 之前，相对中灰 0.18 的档）：x = 膝点、y = 顶点、z = 收回终点（按最大通道）、w = 段内斜率（1 = 关）
 uniform vec3 uDayHiCloud;     // TM01 返工：高光段只给云——云不透明度 x→y 之间由 0 过渡到 1，z = 1 开 / 0 不看云（整窗都给）
 uniform float uDayHiSatRoll;  // TM01 返工：收回段按饱和度前移的倍数（见 dayHighlightGain）
@@ -459,7 +434,7 @@ void main() {
   // T48c 粗网格上「刚刚突然变亮」的线性亮度（频闪 / 闪电，与 glare 同单位；冻结、稳态时为 0）和它在这个像素里的份额：
   //   这一份（眩光里新增的闪光）不吃局部适应——否则常亮位置灯旁被「闪光前的适应」压着，闪光的白雾在灯周围成了暗盘（审查 P1-b：
   //   即使按闪光前的状态适应，灯把自己周围压暗了，叠上去的闪光在那里也被压暗，径向剖面 r 15 → 55 反而上升 15–25 级）
-  float transient = texture(uLocalLum, vUv).r;
+  float transient = texture(uLocalLum, vUv).g;
   float transFrac = uLocalFrac * clamp(uGlare * transient / max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-12), 0.0, 1.0);
   // 舱内色适应：只改色度，亮度保持（亮度适应已由上面的曝光负责）；遮罩是解析的，交界处按 alpha 过渡
   vec3 ca = max(LMS2RGB * (catGain * (RGB2LMS * c)), vec3(0.0));
@@ -509,7 +484,8 @@ void main() {
     //    T48c：低通再减去粗网格上「刚刚突然变亮」的线性亮度（见 LOCAL_FRAG），频闪 / 闪电不当帧进适应
     //    线性域扣（Lfine − 瞬态，对数域扣时常亮位置灯那一格几乎扣不到，审查 P1-b），最多扣到 Lfine 的 1/16
     float lFine = dot(glare, vec3(0.2126, 0.7152, 0.0722));
-    float lb = log2(max(max(lFine - transient, lFine * 0.0625) * exposure, 1e-9) / 0.18) - uNightLocal.x;
+    //    不闪时（transient = 0）照 T48b 原式算，逐位相同（先乘曝光再求亮度与先求亮度再乘曝光差一个舍入，黄昏会差 1 级）
+    float lb = log2(max(transient > 0.0 ? max(lFine - transient, lFine * 0.0625) * exposure : dot(glare * exposure, vec3(0.2126, 0.7152, 0.0722)), 1e-9) / 0.18) - uNightLocal.x;
     float lq = clamp(lb + 0.5, 0.0, 1.0);
     float gLoc = exp2(-uNightLocal.y * (0.5 * lq * lq + max(lb - 0.5, 0.0)) * nightLoc);
     //    T48c 机翼（TM02 的 notWing 判据，dW 上面已算好，不多采样）：落在翼面上的眩光那一份照常压，翼面自身只按 uNightLocal.z 的比例压。
@@ -721,31 +697,30 @@ export class Exposure {
     true,
   );
 
-  /** T48c 夜间局部适应的瞬态扣除（见 LOCAL_FRAG）：眩光纹理 1/8 尺寸（屏幕 1/16）、同类型的 RG ping-pong（状态 + 瞬态），第一次 render 时按眩光纹理建 */
+  /** T48c 夜间局部适应的闪光扣除（见 LOCAL_FRAG）：眩光纹理 1/8 尺寸（屏幕 1/16）、同类型的 RG ping-pong（R = 状态、G = 扣除量），第一次 render 时按眩光纹理建 */
   private local: THREE.WebGLRenderTarget[] = [];
-  /** 腐蚀后的瞬态（R），最终合成读它 */
-  private localEroded: THREE.WebGLRenderTarget | null = null;
   private localReset = true;
-  /** τ：变亮 0.25 s（频闪 50 ms、闪电 0.1–0.2 s 基本不进适应）、变暗 0.1 s（闪光过后很快复原）。1 km 低空画面移动快，τ 不宜更长（拖影） */
+  /** 闪光期间状态跟随的 τ：0.25 s（频闪 50 ms、闪电 0.1–0.2 s 基本不进适应） */
   readonly localMat = material(LOCAL_FRAG, {
     uBloom: { value: null },
     uPrevLocal: { value: null },
     uBloomTexel: { value: new THREE.Vector2() },
     uBloomLevels: { value: Bloom.WEIGHT_SUM },
-    // 死区 0.15 档：粗格变亮不到 11% 的不算瞬态（巡航中零星一格被灯点带亮 10–20 级的情况因此归零，handoff/T48c.md 返工节）
-    uLocalRate: { value: new THREE.Vector3(1 / 0.25, 1 / 0.25, 0.15) },
-    uHalfDead: { value: 0 },
+    uLocalRate: { value: 1 / 0.25 },
+    uFlash: { value: 0 },
     uDt: { value: 0 },
-    uMode: { value: 0 },
-    uErode: { value: new THREE.Vector2(1, 1) },
   });
   /**
-   * 调试：覆盖瞬态扣除这一帧用的 dt（秒）。null = 按真实 dt；冻结（dt = 0）时视为直接收敛（扣除量 0，与 T48b 相同），
-   * 冻结对照照旧逐像素可比。设成 0 = 保持不动（冻结后钉亮频闪 / 按住闪电，模拟「瞬态还没进适应」），
+   * 闪光程度（0–1）：main.ts 每帧写（翼尖频闪开关、闪电亮度），只有它大于 0 时局部适应才把新增的亮度当闪光扣掉。
+   * 不接线时恒为 0，逐位退回 T48b。
+   */
+  flash = 0;
+  /**
+   * 调试：覆盖闪光扣除这一帧用的 dt（秒）。null = 按真实 dt；冻结（dt = 0）时视为直接收敛（扣除量 0，与 T48b 相同），
+   * 冻结对照照旧逐像素可比。设成 0 = 保持不动（冻结后钉亮频闪 / 按住闪电，模拟「闪光还没进适应」），
    * 设成 0.05 再渲染一帧 = 模拟 50 ms 的频闪进了多少适应。
    */
   localDt: number | null = null;
-
   constructor(private readonly pass: FullscreenPass) {
     EXPOSURE_STATE.value = this.adapted[0].texture;
   }
@@ -756,39 +731,28 @@ export class Exposure {
     this.localReset = true;
   }
 
-  /** 瞬态扣除：按眩光纹理（半分辨率；能线性过滤 32 位浮点时是 FloatType）的 1/8 建目标，时间平滑后交给最终合成 */
+  /** 闪光扣除：按眩光纹理（半分辨率；能线性过滤 32 位浮点时是 FloatType）的 1/8 建目标，交给最终合成 */
   private renderLocal(bloom: THREE.Texture, dt: number) {
     const img = bloom.image as { width: number; height: number };
     const w = Math.max(1, Math.ceil(img.width / LOCAL_CELL)), h = Math.max(1, Math.ceil(img.height / LOCAL_CELL));
     if (!this.local.length || this.local[0].width !== w || this.local[0].height !== h || this.local[0].texture.type !== bloom.type) {
       for (const t of this.local) t.dispose();
-      this.localEroded?.dispose();
       const opts = { type: bloom.type, format: THREE.RGFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
-      this.local = [new THREE.WebGLRenderTarget(w, h, opts), new THREE.WebGLRenderTarget(w, h, opts)]; // R = 平滑 log2、G = 线性瞬态
-      this.localEroded = new THREE.WebGLRenderTarget(w, h, { ...opts, format: THREE.RedFormat });
+      this.local = [new THREE.WebGLRenderTarget(w, h, opts), new THREE.WebGLRenderTarget(w, h, opts)];
       this.localReset = true;
-      // 半精度路径（没有 OES_texture_float_linear）：状态是 log2 亮度（夜城约 −10…−20），半精度一个 ULP 0.008–0.016 档，
-      // 高帧率下每帧增量小于半个 ULP 时平滑停在原地，残留 0.14–0.28 档（审查 P3-1 离线模拟）；给 0.15 档死区兜住
-      this.localMat.uniforms.uHalfDead.value = bloom.type === THREE.FloatType ? 0 : 0.15;
     }
-    this.localMat.uniforms.uBloomTexel.value.set(1 / img.width, 1 / img.height);
-    const ld = this.localReset ? 1e9 : this.localDt ?? (dt > 0 ? dt : 1e9);
     const [prev, next] = this.local;
     const u = this.localMat.uniforms;
+    u.uBloomTexel.value.set(1 / img.width, 1 / img.height);
     u.uBloom.value = bloom;
     u.uPrevLocal.value = prev.texture;
-    u.uDt.value = ld;
-    u.uMode.value = 0;
+    u.uDt.value = this.localReset ? 1e9 : this.localDt ?? (dt > 0 ? dt : 1e9);
+    u.uFlash.value = Math.min(Math.max(this.flash, 0), 1);
     this.pass.render(this.localMat, next);
-    // 3×3 腐蚀：瞬态要成片出现（频闪 / 闪电一亮就是几十上百格），一盏灯跨进一格造成的孤立跳变归零
-    u.uPrevLocal.value = next.texture;
-    u.uMode.value = 1;
-    this.pass.render(this.localMat, this.localEroded!);
     this.local = [next, prev];
     this.localReset = false;
-    this.finalMat.uniforms.uLocalLum.value = this.localEroded!.texture;
+    this.finalMat.uniforms.uLocalLum.value = next.texture;
   }
-
   render(hdr: THREE.Texture, bloom: THREE.Texture, dt: number) {
     this.finalMat.uniforms.uBloom.value = bloom;
     this.meterMat.uniforms.uHdr.value = hdr;

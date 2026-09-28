@@ -31,6 +31,23 @@ try {
     await page.waitForFunction(() => !window.__voyage.ground || window.__voyage.ground.pending === 0, null, { timeout: 120000, polling: 500 }).catch(() => {});
     await page.evaluate(() => { if (window.__voyage.wingDebug) window.__voyage.wingDebug.strobe = 0; });
     await page.waitForTimeout(3000);
+    if (args.strobe) {
+      // --strobe：冻结后让频闪亮 50 ms 进一帧，读这一帧各格的相对跳变（看频闪近场的跳变有多大）
+      const st = await page.evaluate(() => {
+        const v = window.__voyage, ex = v.exposure, r = ex.pass.renderer;
+        v.freeze(true); v.wingDebug.strobe = 0; ex.localDt = null; v.benchFrame(2);
+        ex.localDt = 0.05; v.wingDebug.strobe = 1; v.benchFrame(1); ex.localDt = null;
+        const rt = ex.local[0], n = rt.width * rt.height, buf = new Float32Array(n * 4);
+        r.readRenderTargetPixels(rt, 0, 0, rt.width, rt.height, buf);
+        const rel = [];
+        for (let i = 0; i < n; i++) { const S = buf[i * 2], d = buf[i * 2 + 1]; if (d > 0) rel.push(d / Math.max(S - d * 0, 1e-30)); }
+        rel.sort((a, b) => b - a);
+        v.wingDebug.strobe = 0; v.freeze(false);
+        return { top: rel.slice(0, 12).map((x) => +x.toFixed(1)), n10: rel.filter((x) => x > 10).length, n4: rel.filter((x) => x > 4).length };
+      });
+      console.log(`${sc.name} 频闪 50 ms：相对跳变最大 12 格 ${st.top.join(" ")}；>4 的格 ${st.n4}，>10 的格 ${st.n10}`);
+      continue;
+    }
     const res = await page.evaluate(async (FR) => {
       const ex = window.__voyage.exposure, r = ex.pass.renderer;
       const out = [];

@@ -3,7 +3,7 @@
 // 冻结工具把瞬态扣除视为「直接收敛」，看不到飞行中的状态，所以：飞机照常飞 → 等频闪灭且离上次闪光 ≥ 0.4 s →
 // 同一个 rAF 回调里 localDt = 0 并冻结（保持那一刻的平滑状态）→ 截 A；localDt = null（直接收敛，扣除 0）→ 截 B。
 // A − B = 飞行中这一刻瞬态扣除让画面亮了多少（应 ≈ 0：巡航中没有瞬态）。
-// 用法（apps/voyage 下）：node handoff/T48c-live.mjs --port 5224 --scenes-file <json> --out <dir> [--samples 4] [--only a,b] [--js "l.uErode.value.set(0, 1)"]
+// 用法（apps/voyage 下）：node handoff/T48c-live.mjs --port 5224 --scenes-file <json> --out <dir> [--samples 4] [--only a,b] [--js "l.uLocalRate.value = 1e6"]
 // 分析：python handoff/T48c-cfg/t48c_livean.py <dir>
 import { chromium } from "playwright-core";
 import fs from "node:fs";

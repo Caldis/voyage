@@ -28,18 +28,12 @@ const SEGS = Number(args.segs || 5);
 const SETTLE = Number(args.settle || 700);
 const [cx, cy, cw, ch] = String(args.crop || "400,700,800,450").split(",").map(Number);
 const ALL_MODES = {
-  tau: "u.uNightLocal.value.y = 0.6; r.value.set(4, 10, 0);",
-  inst: "u.uNightLocal.value.y = 0.6; r.value.set(1e6, 1e6, 0);",
-  noLocal: "u.uNightLocal.value.y = 0; r.value.set(4, 10, 0);",
-  tauF: "u.uNightLocal.value.y = 0.6; r.value.set(4, 1e6, 0);",   // 变暗即时
-  tau15: "u.uNightLocal.value.y = 0.6; r.value.set(1 / 0.15, 10, 0);",
-  tauS: "u.uNightLocal.value.y = 0.6; r.value.set(4, 4, 0);",          // 对称 τ 0.25 s
-  tauS15: "u.uNightLocal.value.y = 0.6; r.value.set(1 / 0.15, 1 / 0.15, 0);",
-  dz05: "u.uNightLocal.value.y = 0.6; r.value.set(4, 10, 0.05);",   // 瞬态死区 0.05 档
-  dz10: "u.uNightLocal.value.y = 0.6; r.value.set(4, 10, 0.1);",
-  dz20: "u.uNightLocal.value.y = 0.6; r.value.set(4, 10, 0.2);",
+  // 返工后（已知闪光才扣）的参数只剩闪光期间的速率 uLocalRate（标量）；不闪时扣除量恒为 0，tau / inst 的差别只在频闪那 50 ms
+  tau: "u.uNightLocal.value.y = 0.6; r.value = 4;",
+  inst: "u.uNightLocal.value.y = 0.6; r.value = 1e6;",
+  noLocal: "u.uNightLocal.value.y = 0; r.value = 4;",
 };
-// --modes tau,inst,noLocal（默认）；可选 tauF（变暗即时）、tau15（变亮 τ 0.15 s）
+// --modes tau,inst,noLocal（默认）
 const MODES = Object.fromEntries(String(args.modes || "tau,inst,noLocal").split(",").map((m) => [m, ALL_MODES[m]]));
 if (readLock(REPO_ROOT)) await waitForRelease(REPO_ROOT, { log: (s) => console.log(`[motion] ${s}`) });
 const browser = await launchBrowser(chromium, { angle: "vulkan" });
