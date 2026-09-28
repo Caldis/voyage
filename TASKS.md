@@ -8,7 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PERF-CPU | **最高优先（用户 09-28 报告）** | 5249 | worktree | Opus 性能工程师（「帧率非常低、CPU 打满、GPU <40%」：CDP profile 主线程 Top 函数、每帧 WebGL 同步调用计数、GPU 进程 CPU、按今日合并二分、修前几名） | — | 进行中 |
+| PERF-CPU | **最高优先（用户 09-28 报告）** | 5249 | `worktree-agent-af7ee412adf4b466c` | Opus 性能工程师 | — | **已定位：不是代码回归**——用户 Chrome 的 GPU 进程在 9/27 23:59 NVIDIA 驱动重装后掉到 WARP 软件光栅（D3D10Warp、无 nvwgf2umx），d3d11-warp 复现 2.4 fps、GPU 进程占 26 核；硬件模式各场景稳态 160 fps（vsync）、主线程 JS ~1 ms/帧。修法：`chrome://restart`。代码改动进行中：软件渲染检测 + 页面提示 + 自动最低画质、空气透视 LUT 输入不变跳过重算（64 draw/帧）、depthMask/enable 冗余；新工具 scripts/cpu-prof.mjs |
 | PERF-WING | 第 7 波（W-EDGE 前置） | 5246 | `worktree-agent-a8dcd60b2b0aec1e1`（94dc148） | Opus | — | **暂停（让 PERF-CPU）**：已证实改前机翼已成冷启动关键路径（比窗外晚 0.35–0.5 s）；冷编译主要花在着色（去着色 −69%），翼尖灯位置 wingLampPos 两份占 19%；每像素预算三盏灯位置后 FXC wing −28% / wet −31%、真冷编译机翼 −31%、后台总时长 −11%，关键路径回到窗外；非机翼逐位 0。待恢复：帧时间 gpu-ab 复测（负载下疑似 +4%，备选写法 V）、B′ 在新基线试打 |
 | C10c | 第 7 波（云，C10b 审查 P2） | 5242 | `worktree-agent-adf86f983a310129d`（532489b） | Opus | 待复测后审查 | 已交付画质部分：进浓云首段受光 od 减去「样本比表面深」那份（零额外密度调用）；sea-sc / sea-sc-low 近处三带均比 C10 更接近真值（0–20 km 0.842→0.960 / 0.704→0.890）；C10b 云边 / α 逐项不变；sunset-wing 近处变亮 1.05（误差 0.161→0.192）；主循环 448 + uLoopGuard；越界改 ab.mjs 两正则。**GPU / 冷编译 / flight / 云里因 PERF-CPU 暂停未复测**，对照 worktree tmp/c10c-base 保留 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
