@@ -877,7 +877,8 @@ async function main() {
     console.log("\n-- 窗外默认程序不含罕见光学 / 天幕层奇观代码（PERF-13，glslangValidator -E） --");
     // SPEC-BOW 起还有雨区 / 雨虹 / 云虹 / 环地平弧 / 日柱（opticsRain、opticsBowPhase、opticsCloudBow、opticsArcRadiance）
     const EXTRA_IDS = ["opticsGlory", "opticsPlaneShadow", "opticsCloudFactor", "opticsHaloRadiance", "uOpticsGlory", "wonderSky", "wonderStrut", "wonderFrustum", "uWonderOn",
-      "opticsRain", "opticsBowPhase", "opticsCloudBow", "opticsArcRadiance", "uBowRain", "uBowOn", "uOpticsArc"];
+      "opticsRain", "opticsBowPhase", "opticsCloudBow", "opticsArcRadiance", "uBowRain", "uBowOn", "uOpticsArc",
+      "orbitRing", "uRingOn"]; // WS08 天环
     const preprocess = (prog) => {
       const file = path.join(tmpDir, `${prog.id}.pp13.frag`);
       writeFileSync(file, FRAG_PREFIX + resolveIncludes(prog.fragmentShader, new Set()));

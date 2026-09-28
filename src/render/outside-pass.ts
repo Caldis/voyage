@@ -15,6 +15,7 @@ import { TRAFFIC_COMMON } from "./traffic.glsl";
 import { VIEW_COMMON } from "./view.glsl";
 import { HAZE_COMMON } from "./haze.glsl";
 import { WONDER_SKY_COMMON } from "./wonder-sky.glsl";
+import { ORBIT_RING_COMMON } from "../wonders/ring.glsl";
 import { OPTICS_COMMON } from "./optics.glsl";
 import { RAIL_FAR_COMMON, RAIL_FAR_HIT } from "../rail/far-view.glsl";
 import { railFarUniforms } from "../rail/far-view";
@@ -71,6 +72,7 @@ ${HAZE_COMMON}
 // 默认程序（启动批次、冷启动关键路径）预处理后不含它们；太阳圆盘 + 绿闪（opticsSunDisk）每个程序都有
 #ifdef OUTSIDE_WONDER
 ${WONDER_SKY_COMMON}
+${ORBIT_RING_COMMON}
 #endif
 ${OPTICS_COMMON}
 
@@ -210,6 +212,9 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   // 只在 OUTSIDE_WONDER 变体里（PERF-13）：uWonderOn = 0 时两个程序逐像素相同，选哪个由 wantedOutsideKey 决定
 #ifdef OUTSIDE_WONDER
   L = wonderSky(L, rd, hitGround ? tGround : 1e9);
+  // 天环（WS08，wonders/ring.glsl.ts）：在大气层外，比所有云都远；盖住的地方不画点星
+  L = orbitRing(L, rd, hitGround);
+  gStarVis *= 1.0 - gRingCov;
 #endif
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
   L += opticsSunDisk(rd, hitGround);
@@ -333,7 +338,7 @@ export interface OutsideWant {
  * 退路：火车 → 低空细节（沿用 TR03 的过渡）→ 带 O / W 的（只在确实要它们时）→ 默认。退到默认时 O / W 的效果暂时不画。
  */
 export function wantedOutsideKey(w: OutsideWant): { key: OutsideKey; fallback: OutsideKey[] } {
-  const wonder = ((w.uniforms.uWonderOn?.value as number | undefined) ?? 0) > 0.5;
+  const wonder = ((w.uniforms.uWonderOn?.value as number | undefined) ?? 0) > 0.5 || ((w.uniforms.uRingOn?.value as number | undefined) ?? 0) > 0.5;
   const extras = wonder || opticsWanted(w.uniforms);
   const tail: OutsideKey[] = extras ? ["OW", ""] : [""];
   if (w.rail) return { key: "DROW", fallback: ["DOW", ...tail] };

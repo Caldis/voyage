@@ -56,7 +56,7 @@ export interface WonderDef {
     radiusKm: number;
     /** 表面反照率 */
     albedo: [number, number, number];
-    /** 着色器皮肤编号：0 天梯、1 建木 */
+    /** 着色器皮肤编号：0 天梯、1 建木、2 天环（WS08，wonders/ring.glsl.ts） */
     skin: number;
     /** 天梯的附属结构：中继站、舱体、系留平台、航标灯（建木没有） */
     beacons: boolean;
@@ -180,6 +180,25 @@ export const WONDERS: WonderDef[] = [
       // 影子浓度 0.6：椭球只是整座城的粗近似（树冠有缝、根须透光），不该投出一个实心的坑
       caster: { center: [0, 0.5, 0], radii: [3.0, 3.0, 3.0], strength: 0.6 },
     },
+  },
+  {
+    id: "orbital-ring",
+    // 设定出自 Paul Birch 的「轨道环」构想（Orbital Ring Systems and Jacob's Ladders, JBIS 1982），不是致敬某部作品；
+    // 造型（箱形环体、转子护套、缆塔、灯带）都是程序生成
+    name: "天环（轨道环：Paul Birch 1982 年的设想）",
+    layer: "sky",
+    // 环本身的位置按种子定（wonders/ring-shape.ts：高 500–1400 km、在窗口方向仰角 7–18° 处横贯 / 斜贯天空），
+    // 这里的距离只是挂给系统的锚点（环在窗口方向上的星下点，最远收到 1200 km）
+    distanceKm: [900, 1200],
+    forwardOffsetDeg: [0, 20],
+    minAltitudeKm: 6,
+    // 黄昏最美（一段在阳光里、一段在地影里，交界发红）；夜里是城市般的灯带；白天是一道淡白的弧
+    sunWeight: (a) => (dusk(a) ? 3 : a <= -12 ? 2 : 1.2),
+    riseS: 60,
+    holdSimS: [600, 900],
+    fadeS: 60,
+    // skin 2：着色在 wonders/ring.glsl.ts（自己的 uRingOn，不走天梯 / 建木那段）；radiusKm / albedo 不用
+    look: { radiusKm: 0, albedo: [0.3, 0.3, 0.3], skin: 2, beacons: true },
   },
 ];
 
