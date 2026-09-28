@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { ATMOSPHERE_COMMON, FULLSCREEN_VERT } from "./common.glsl";
 import { CLOUD_COMMON } from "../clouds/clouds.glsl";
 import { VIEW_COMMON } from "../render/view.glsl";
+import { GROUND_COMMON } from "../render/ground.glsl";
 import type { FullscreenPass } from "../render/pass";
 
 /**
@@ -36,16 +37,19 @@ export const RAYS_STEPS = 48;
 export const RAYS_DOWNSCALE = 4;
 /** 步进只算到这么远（km）：云影图最外一级半边长 400 km，再远的空气里不算影子 */
 const RAYS_MAX_KM = 400;
+/** 开始画之后淡入的时长（秒） */
+const RAYS_FADE_S = 0.5;
 
 const MARCH_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
 ${VIEW_COMMON}
 ${CLOUD_COMMON}
+uniform int uLoopGuard;         // 恒为 0（循环上限写成「常数 + uLoopGuard」，FXC 不展开，见 README 着色器编译坑点）；GROUND_COMMON 也要它
+${GROUND_COMMON}
 uniform vec3 uSunDir;
 uniform vec3 uKeyDir;
 uniform float uCamR;
 uniform vec2 uRaysRes;          // 步进目标的像素尺寸
-uniform int uLoopGuard;         // 恒为 0（循环上限写成「常数 + uLoopGuard」，FXC 不展开，见 README 着色器编译坑点）
 varying vec2 vUv;
 
 const float OUTSIDE_WINDOW_PITCH = 0.533; // 和 outside-pass.ts 一致，只用来判定本窗
@@ -117,12 +121,18 @@ void main() {
   }
   float dt = (tB - tA) / float(${RAYS_STEPS});
   float j = raysBayer(ivec2(gl_FragCoord.xy));
+  // 地形（审查 P1）：终点原来是海平面球面，视线打到近处的地面 / 山体后还一路走到海平面，把地面背后的空气也当成云影减掉
+  // （火车模式前景草地压暗十几到几十级、远山被去霾）。低于附近地形最高点的步点查一次高度场（窗外程序同一个 groundHeightAt），
+  // 落到地面以下就停：这一步和之后都不算。级别按距离和步进像素的覆盖角取（1/4 分辨率，比窗外求交粗一级也够用）
+  bool terrain = uGroundOn > 0.5 && uTerrainMax > 0.0;
+  float pixelAngle = 2.0 * uTanHalfFov / uRaysRes.y;
   vec3 Lnear = vec3(0.0), Lfar = vec3(0.0);
   for (int i = 0; i < ${RAYS_STEPS} + uLoopGuard; i++) {
     float t = tA + (float(i) + j) * dt;
     vec3 p = o + rdW * t;
     float r = length(p);
     float h = r - BOTTOM;
+    if (terrain && h < uTerrainMax && h < groundHeightAt(p.xz + uCloudOffset, groundLod(length(p.xz), t * pixelAngle))) break;
     float dR = exp(-h / RAYLEIGH_SCALE_HEIGHT);
     float dM = exp(-h / MIE_SCALE_HEIGHT);
     vec3 haze = hazeExtinction(h) * hazeSpec;
@@ -174,6 +184,7 @@ uniform vec2 uResolution;
 uniform vec2 uRaysRes;
 uniform vec3 uSunIlluminance;
 uniform float uRaysGain;         // 1 = 物理量；调试 / 对照用
+uniform float uRaysFade;         // 0 → 1：开始画之后 RAYS_FADE_S 秒内淡入（编译完成、云从无到有时整窗不跳）
 varying vec2 vUv;
 const float PANE_TRANSMITTANCE = 0.85; // 和 outside-pass.ts 一致：窗外 HDR 已乘窗板透射率
 const float RAYS_MAX_CUT = 0.9;
@@ -184,7 +195,7 @@ void main() {
   vec2 uv = gl_FragCoord.xy / uResolution;
   vec4 r = texture(uRaysBlur, uv - 0.5 / uRaysRes);
   float cloudT = cloudBufferColor(uClouds, uv).a;
-  vec3 d = r.rgb * (1.0 - r.a * (1.0 - cloudT)) * uSunIlluminance * (PANE_TRANSMITTANCE * uRaysGain);
+  vec3 d = r.rgb * (1.0 - r.a * (1.0 - cloudT)) * uSunIlluminance * (PANE_TRANSMITTANCE * uRaysGain * uRaysFade);
   // 最多减掉原值的 RAYS_MAX_CUT：步进与 LUT 的积分误差、近 / 远拆分的近似不许把像素减成负数或死黑。
   // 三个通道共用一个缩放 k（不逐通道夹）：逐通道夹时红通道先触底、蓝通道照减，海浪的暗像素被染成一粒粒紫色（第一版踩过）
   vec3 room = src.rgb * RAYS_MAX_CUT;
@@ -241,6 +252,7 @@ export function createRaysMaterials(shared: Record<string, THREE.IUniform>, haze
       uRaysRes,
       uSunIlluminance: shared.uSunIlluminance ?? { value: new THREE.Vector3(120, 120, 120) },
       uRaysGain: { value: 1 },
+      uRaysFade: { value: 1 },
     },
     "云隙光合成",
   );
@@ -264,6 +276,9 @@ export class CloudRays {
   state: State = "idle";
   compileMs = 0;
   private frames = 0;
+  /** 淡入进度（0..1）与上一次调用的挂钟时刻 */
+  fade = 0;
+  private lastMs = 0;
   /** 首帧后多少帧才开始后台编译（让启动批次先走，不上冷启动关键路径） */
   static readonly PREWARM_AFTER_FRAMES = 60;
 
@@ -389,7 +404,17 @@ export class CloudRays {
     if (!this.enabled) return outside.texture;
     const want = this.wanted;
     if (++this.frames > CloudRays.PREWARM_AFTER_FRAMES || (want && this.frames > 2)) this.prepare();
-    if (!want || this.state !== "ready") return outside.texture;
+    const now = performance.now();
+    if (!want || this.state !== "ready") {
+      this.fade = 0;
+      this.lastMs = now;
+      return outside.texture;
+    }
+    // 淡入（审查 P3）：从不画到画（编译完成那一帧、云覆盖率从 0 变正、云影图刚建好）时 ΔL 在 RAYS_FADE_S 秒内从 0 升到 1。
+    // 按挂钟走（冻结时照样收敛，对照工具等 0.5 s 以上即可）
+    this.fade = Math.min(1, this.fade + Math.max(0, now - this.lastMs) / 1000 / RAYS_FADE_S);
+    this.lastMs = now;
+    this.composite.uniforms.uRaysFade.value = this.fade;
     this.composite.uniforms.uOutsideSrc.value = outside.texture;
     this.pass.render(this.march, this.raw);
     this.pass.render(this.blur, this.blurred);
