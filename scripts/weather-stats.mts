@@ -4,7 +4,7 @@
 // 锋面带位置与活跃度、台风年频数 / 月份分布，并对照目标区间做断言：任何一条不满足，退出码非 0。
 //
 // 用法（在 apps/voyage 下）：
-//   node --import ./scripts/lib/ts-resolve.mjs --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi        ← 门禁（6 个种子全部通过才算过，约 2.5 分钟）
+//   node --import ./scripts/lib/ts-resolve.mjs --experimental-transform-types --no-warnings scripts/weather-stats.mts --multi        ← 门禁（6 个种子全部通过才算过，约 3 分钟）
 //   node --import ./scripts/lib/ts-resolve.mjs --experimental-transform-types --no-warnings scripts/weather-stats.mts                ← 只跑默认种子，打印完整统计表
 //   可选：--seed N | --seeds a,b,c | --multi；--years 2023,2024,2025,2026（区域 / 锋面统计的年份）；
 //         --ty-years 100（台风统计的年数，截止 2026 年）；--only region,front,ty,wind,towering（WX11a 风场：--only wind 单种子约 5 s；TW01 高耸对流云：--only towering 单种子约 15 s）；--json 输出.json；--quiet（只打印断言）
