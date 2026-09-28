@@ -226,7 +226,7 @@ URL 参数压过面板时，在 hint 末尾加「（URL 参数 `groundres` 优�
 ### 7.3 规则
 
 1. **优先级**：URL 参数 > localStorage > 默认值。URL 强制的这一次**不写** localStorage（VOY-DEFAULT 的做法，推广）。
-2. **只记用户亲手的操作**：`event.isTrusted` 为真才写（VOY-DEFAULT 的做法，推广；否则回归脚本在共享浏览器里会改掉用户的偏好）。
+2. **只记用户亲手的操作**：`event.isTrusted` 为真才写（VOY-DEFAULT 的做法，推广；否则回归脚本在共享浏览器里会改掉用户的偏好）。注意：`isTrusted` 只挡住脚本直接改属性（如 `details.open = true`）；脚本调 `.click()` 触发的事件在 Playwright 等工具里可能被当作可信事件——**回归 / 截图脚本不要点面板分区与偏好控件**，要改状态就走 `__voyage` 接口或 URL 参数（UX-3 审查遗留）。
 3. 键名统一前缀 `voyage.`，结构化的值带版本号（`{ v: 1, ... }`），读到不认识的版本就当没记过。
 4. 所有读写包 `try / catch`（隐私模式拿不到 localStorage），失败就按默认。
 5. **复位**：面板页脚「恢复默认设置」清空 7.1 表里的偏好键（不清 `voyage.wonders.seen`、`voyage.bootTimings.v1`），并立即把控件与状态设回默认（不需要刷新；地面精度照常「下次载入生效」）。每个区的摘要行右键 / 区内「复位本区」按钮只复位本区。滑条双击复位单项。

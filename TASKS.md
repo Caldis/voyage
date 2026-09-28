@@ -8,11 +8,11 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| WS-SCN | 第 7 波（奇观回归场景） | — | worktree | Haiku（floatcity 80→110 km、jianmu distKm 380→230 seed 0.37、加 ws-jianmu-dusk / -dusk-up、更新 fogcity 基线；scenarios.mjs 与 regression.playwright.js 两表同改） | — | 进行中 |
+| WS07 | 第 7 波（奇观巨构，第一档） | 5291 | worktree | Opus（贯穿云海的巨柱群：解析几何、低成本、部分高过视平线、比雷暴大；与 WS08 同在 wonders，注意 catalog 冲突） | — | 进行中 |
+| UX-4 | 第 7 波（面板，第一档） | 5292 | worktree | Sonnet（手机 / 小窗底部抽屉 + 收起按钮，不挡舷窗中心） | — | 进行中 |
 | TW04 | 第 7 波（高耸云第一档，含 SPEC-PILEUS、C-TYPH、飞碟） | 5288 | worktree | Opus（砧放大到真实比例用砧盾层状密度、塔身多尺度卷团与上冲、塔底遮挡与雨幡、飑线错落、幞状云、台风卷云盖去白平板、黄昏云底飞碟） | — | 进行中 |
 | WS08 | 第 7 波（新奇观，用户同意只在奇观模式） | 5286 | worktree | Opus（横贯天空的轨道环弧：解析几何、白天亮带 + 地影切断、夜间灯带、结构层级、大气透视、足迹抗锯齿） | — | 进行中 |
 | TW02 | 第 7 波（高耸云第一档） | 5285 | worktree | Opus（280–750 km 远景对流塔层：独立小程序 + scissor 地平线带、解析塔身与真实比例砧、强大气透视、底部被地平线遮、不占雷暴名额） | — | 进行中 |
-| UX-3 | 第 7 波（面板第一档） | 5284 | worktree | Sonnet（<details> 分区折叠、调试控件进 #dev-section、标签去括号、信息栏简 / 全；1600×1200 默认不滚动；id 不改） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -28,20 +28,17 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | DX-30 | 【降级：细微 / 性能，晚做】dev-browser ab / gpu-ab：变体 js 副作用不复原（ABBA 下「关」一直生效，TW02 首测得出假结论）→ 支持复原 js 或自动快照；shots 场景加「航向对准方位」字段；ab 输出同裁剪区多变体拼图（参考 handoff/TW02-montage.py）；冻结时「本帧画了没有」类调试量不更新要标注 | 中 | scripts | — | TW02 反馈 |
 | VOY-HKG | 南海预设首段航线 HKG→HKG 是个圈，自动驾驶一直压 25° 坡度、窗外只有海 → 首段改成真实外飞航线 | 中高（用户第一眼） | voyage 航线数据 | — | TW02 反馈 |
 | TW-LTG | 远景塔夜间地平线闪电（只改 uniform，无编译成本） | 中高（壮观） | clouds/far-towers | clouds | TW02 合并后 |
-| WS-SCN | 奇观回归场景更新：wonder-floatcity-day/-dusk 80→110 km；wonder-jianmu-day distKm 380→230 + seed 0.37，加 ws-jianmu-dusk / -dusk-up（handoff/WS05-scenes.json）；wonder-fogcity-night 基准更新；scenarios.mjs + regression.playwright.js 两表同改（WS05 合并后派，Haiku） | 中 | scripts | — | check:glsl 两表一致 |
 | SPEC-FUJI-b | 【降级：细微 / 性能，晚做】笠云后续：收回归场景 fuji-cap-low / cruise / dusk（scenarios + regression 两表）、地面笠云影子、穿吊し雲判进云、近看顶面静帧细颗粒 | 低 | clouds / scripts | — | — |
 | PERF-ZOOM | 【降级：细微 / 性能，晚做】聚焦时省 GPU：聚焦时降云缓冲分辨率、机翼按像素足迹减步数（FOCUS-ZOOM 实测 4× 整帧 ×1.16–1.56，主因窗外占满全屏） | 低 | clouds / wing | — | — |
 | W-WINDOW | 很斜看本窗（>~35°）窗板开口近侧竖直纯黑带（FOCUS-ZOOM 发现，现靠限位避开，根因未查）；4–8× 聚焦下襟翼与主翼交界后缘亚像素缝漏背景（橙色点线） | 中 | cabin / wing | — | — |
 | WS03 | 奇观尺度对照场景与 M1–M7 指标脚本（research/WONDER_SCALE.md） | 中 | scripts / handoff | — | — |
 | WS06 | 【降级：细微 / 性能，晚做】 巨影（奇观投在云海 / 大地上的巨大阴影，看 WS01 效果再定） | 中 | wonders / clouds | — | — |
-| WS07 | 新奇观：贯穿云海的巨柱群（解析几何、低成本） | 高 | wonders | wonders | — |
 | WS09 / WS10 | 新奇观：垂直大陆、跨海巨门（悬空巨舰排后） | 中 | wonders | wonders | — |
 | SPEC-PILEUS | 幞状云：生长中的浓积云 / 积雨云塔顶的光滑头巾（彩虹色虹彩可选） | 中高（壮观） | clouds（天气宏） | clouds | 并入 TW04 |
 | SPEC-KH | 【降级：细微 / 性能，晚做】 Kelvin–Helmholtz 波状云（fluctus）：切变层上一排浪花，短暂出现（可用 WX11a 切变） | 中 | clouds | clouds | TW04 后 |
 | SPEC-ARCUS | 弧状云 / 滚轴云（飑线阵风锋前的架状云），原属 TW07 提前 | 中高（壮观） | clouds（天气宏） | clouds | TW04 后 |
 | DX-29 | 【降级：细微 / 性能，晚做】 ab / gpu-ab 材质别名 `outsideMat.current`（当前实际画的窗外变体，低空海面走低空细节变体，已踩两次）；ab 自带目标区遮罩与孤立点 / 单像素死白指标；live 与冻结表格分开输出；ab 每变体指定自己的真值（refOf）；内置 cloud-alt 高度出口与竖壁 / 平顶游程指标；--montage 裁剪拼图；测量锁排队拥堵（4 个以上代理时等锁 20 min 后不持锁开测，结果只能参考） | 中 | scripts/* | — | — |
 | VOY-START | 【降级：细微 / 性能，晚做】 首屏构图：连续航程默认开后首屏从「右窗朝西夕阳逆光」变成「顺光积云与海」（默认地点西太平洋向南飞前方无机场，机头转向西北航段）；在 routes.ts 加关岛 / 塞班等南方机场让首段继续向南，或改默认地点 / 时刻；给美术总监看一眼 | 中 | routes.ts / 默认预设 | — | default 首屏对照 first-5317.png |
-| UX-4 | 手机 / 小窗：底部抽屉 + 收起按钮（现手机面板 6.7 屏、占 41% 且挡舷窗中心） | 中 | 同上 | 面板 | 半天 |
 | UX-5 | 控件类型统一：时间流速与航程流速合并为「流速」一行、座位 / 舱等 / 灯光 / 稀有度改分段按钮（场景表按原 id 设值不变） | 中 | 同上 | 面板 | 半天–1 天 |
 | UX-6~9 | 【降级：细微 / 性能，晚做】 记忆与恢复默认、ControlSpec 框架试点、「准备中」反馈统一、快捷键帮助（见 research/PANEL_UX_GUIDE.md） | 低 | 同上 | 面板 | — |
 | C10d | 【降级：细微 / 性能，晚做】 C-FLAT 后远处 / 近处对真值偏暗被放大（sea-sc 0–20 km 0.959→0.932、60–90 km 0.85→0.77；storm-sc 同向）：C10c 的 odCut 在远处放宽或按 C-FLAT 新响应重标定 | 中 | clouds（受光） | clouds | sea-sc / storm-sc 分带对真值 |
@@ -90,6 +87,8 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 合并日期 | 备注 |
 | --- | --- | --- | --- |
+| UX-3 | 面板分区折叠（<details>）+ 调试控件进开发者区、标签去括号、控件同行换行布局；1600×1200 面板 2681→1102 px 不滚动；修 focus-vignette id 冲突（聚焦暗角滑条自上线从未生效） | 2026-09-29 | Sonnet 审查通过（handoff/UX-3-review.md）：id / value 契约不变、合并接线全保留、折叠记忆 try/catch + isTrusted；遗留：isTrusted 只防 .open 赋值，脚本 .click() 会被记（已写进 PANEL_UX_GUIDE） |
+| WS-SCN | 奇观回归场景按巨构尺度更新：floatcity 80→110 km、jianmu 230 km seed 0.37、新增 ws-jianmu-dusk / -dusk-up（两表同改） | 2026-09-29 | Haiku 实现、协调者核 diff；fogcity 无基线数值可改 |
 | WS05 | 建木巨构化：拉近到 200–260 km、树干底 6–8 km、斜入云海的板根；共用 wonderStrut 加残差校验、wonderCapRef | 2026-09-29 | Sonnet 轻量审查通过（handoff/WS05-review.md）：天梯 bend=0 时残差校验恒等、天梯专属代码逐字节同 master、跨端口像素差在 master×master 噪声底内；outside-default 预处理后逐字相同；奇观变体不在冷启动批次 |
 | WS04 | 浮空古城巨构化：直径 25–35 km、台地底 12–16 km、冠顶 25–32 km、根须约三分之二垂到 1.4–3 km 扎进层积云顶（根尖顺风云涡）、3–5 道 10 km 落差化雾瀑布、三级细节（足迹平均）、8 km 以下更朦胧、同高度航班 + 航迹云 450 s 一趟擦城、~28 km 投影；小岛版 floatcity-small 保留（权重 1/4） | 2026-09-29 | 协调者核验合并：M1 冠顶 3.2–3.7°→10.8–12.4°、M2 0.3–1.2%→4.8–5.3%、M3 ≥5×、M4 3 级、M5 3 条；飞行中树冠 / 台地闪烁 0；默认程序不含浮空城代码；奇观 pass 在场约 +0.9 ms（>0.6 参考）、离线编译 +56%（后台、不在启动批次，接受）。未达：M6 大气分层 1.0–1.6（降级）。遗留：小岛 / 巨构两 id 可同航程各出现一次（互斥需改 system.ts）、回归场景机位 → WS-SCN |
 | SPEC-BOW | 飞机上才看得到的虹（OUTSIDE_OPTICS 按需变体）：雨虹主 42° / 副 51° 色序相反 + 亚历山大暗带（10 波长几何光学，Daimon & Masumura 2007 折射率、CIE 1931）；雨柱来自雷暴雨幡 / 浓积云阵雨区（新增雨幕）/ 演示；云虹 / 雾虹（BHMIE 形状、与宝光同框，×2 按照片定标）；环地平弧（份额 1e-2）、日柱；?bow=1 / 场景 bow-rain / bow-cloud / bow-cha | 2026-09-29 | 协调者核验合并：默认窗外程序预处理逐字相同、冷启动批次不变；OW 离线编译 +13.5%（后台预编）；雨虹区飞行闪烁在噪声内。已知：舷窗视场 50° 只见一段弧；雨虹多落在阵雨区；阵雨区不知积云单体位置（纹理槽满）偶见雨落云隙；日柱在现有卷云下几乎不可见；台风雨带未接雨区；云虹 ×2 / 环地平弧份额待美术按照片再调 |
