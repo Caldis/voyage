@@ -8,8 +8,8 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| ART-8 | 第 7 波收尾 | — | 主仓库 research/ | Opus 美术总监（第 8 次检查，核对 wave7 十二条状态 → research/ART_REVIEW_wave8.md） | — | 进行中 |
-| W-EDGE | 第 7 波（锯齿，重启 B′） | 5251 | worktree | Opus（在 PERF-WING 新基线实现 B′ 弦内探测；飞行中外轮廓爬行不升为硬验收；冷编译按绝对余量放行 wing ≤+11%） | — | 进行中 |
+| ART-8 | 第 7 波收尾 | — | 主仓库 research/ | Opus 美术总监（额度中断后接手，已有 ~60 张截图 tmp/screenshot/art-wave8） | — | 进行中 |
+| W-EDGE | 第 7 波（锯齿，B′） | 5251 | worktree（接手 park/W-EDGE-b2） | Opus（额度中断后接手：现场 900d1b3 已由协调者保存） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
