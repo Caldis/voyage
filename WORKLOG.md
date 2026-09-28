@@ -23,7 +23,6 @@
 | --- | --- | --- | --- |
 | PERF-WING 机翼冷编译 | a8dcd60b2b0aec1e1 | 开发中（5246 / 5306） | 交付后按冷编译纪律审；之后按余量重启 W-EDGE B′ |
 | W-EDGE（暂停） | 分支 park/W-EDGE（aac90f8，含 handoff/W-EDGE.md 与 B′ 补丁） | 方案 A 飞行中爬行变差不合；B′ 冷编译 +10% | 先派 PERF-WING（压缩 wingTrace 冷编译 + cold --repeat 定关键路径），再重启 B′ |
-| WX11a-b 风场加性扰动 | af0039c6bfbd6e459 | 开发中（纯 CPU） | 协调者核验（断言 + 改坏实验） |
 | C10c 浓云海近处变暗 | adf86f983a310129d | 画质部分已交付（532489b），**因 PERF-CPU 暂停，GPU / 冷编译 / flight / 云里待复测** | PERF-CPU 结论后 SendMessage 让它复测，再派审查 |
 
 ### 待派（按优先）
