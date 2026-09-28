@@ -212,14 +212,15 @@ export function installVariantLib() {
 export const BUILTIN_VARIANTS = {
   "cloud-ref": [
     ["(bis > 0 || (dens > 0.002 && wasEmpty && t < 60.0))", "(bis > 0)", true],
-    { re: "for \\(int i = 0; i < (\\d{3,}); i\\+\\+\\) \\{", to: "for (int i = 0; i < 3000; i++) {" },
+    // 循环头可带「+ uLoopGuard」（C10c 起云主循环是「448 + uLoopGuard」）
+    { re: "for \\(int i = 0; i < (\\d{3,})( \\+ uLoopGuard)?; i\\+\\+\\) \\{", to: "for (int i = 0; i < 3000$2; i++) {" },
     { re: "i >= \\d{3,}(\\)+) break;", to: "i >= 3000$1 break;" },
     { re: "float dtBase = (clamp\\(t \\* [\\d.]+, [\\d.]+, [\\d.]+\\));", to: "float dtBase0 = $1; float dtBase = 0.25 * dtBase0;" },
     { re: "log2\\(dtBase / ", to: "log2(dtBase0 / " },
   ],
   "cloud-dist": [["  L = L * apT + apL * (1.0 - T);", "  L = vec3(depth) * (1.0 - T);"]],
   "cloud-steps": [
-    { re: "\\n  for \\(int i = 0; i < (\\d{3,}); i\\+\\+\\) \\{\\n", to: "\n  float iUsed = 0.0;\n  for (int i = 0; i < $1; i++) {\n    iUsed = float(i);\n" },
+    { re: "\\n  for \\(int i = 0; i < (\\d{3,})( \\+ uLoopGuard)?; i\\+\\+\\) \\{\\n", to: "\n  float iUsed = 0.0;\n  for (int i = 0; i < $1$2; i++) {\n    iUsed = float(i);\n" },
     ["gl_FragColor = vec4(min(L, vec3(60000.0)), T);", "gl_FragColor = vec4(vec3(iUsed), 0.0);"],
     { re: "if \\(wSum <= 0\\.0\\) return;", to: "if (wSum <= 0.0) { depthSum = 1.0; wSum = 1.0; }" },
   ],

@@ -1,0 +1,4 @@
+[
+  { "name": "ic_-10_-5", "scene": "in-cloud", "offset": [-10, -5], "crop": [880, 250, 280, 750] },
+  { "name": "ic_30_-5", "scene": "in-cloud", "offset": [30, -5], "crop": [880, 250, 280, 750] }
+]
