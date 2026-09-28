@@ -15,7 +15,7 @@
 //                                       [--pair '<js1>' --pair '<js2>' | --pair '<预设置js>' --base-shader <端口|目录|提交>
 //                                         [--material sceneMat] [--define KEY[=VALUE] ...]]
 //                                       [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
-//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--baseline 5181] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--baseline 5181] [--query "&voyage=1"] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
 //   node scripts/dev-browser.mjs flicker --port 5230 --only <场景> [--step 0.06] [--frames 20] [--cloud-live] [--crop x,y,w,h] [--debug N]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
