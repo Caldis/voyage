@@ -554,6 +554,8 @@ export class FarTowers {
     for (const t of this.towers) {
       const ext = Math.max(t.R * 1.8, t.Ra * 1.55 + 1);
       const ux = t.x / t.dist, uz = t.z / t.dist; // 相机 → 塔的水平方向
+      // 每座塔先求自己的包围盒，完全在屏幕外的不进并集（列表按 ±FAR_VIEW_DEG 挑，比窗户宽得多）
+      let tx0 = Infinity, ty0 = Infinity, tx1 = -Infinity, ty1 = -Infinity;
       for (const along of [-ext, ext])
         for (const across of [-ext, ext])
           for (const alt of [0, t.top + 1.6]) {
@@ -569,11 +571,16 @@ export class FarTowers {
             const nx = v.x / -v.z / tan / aspect;
             const ny = v.y / -v.z / tan;
             const sx = (nx * 0.5 + 0.5) * w, sy = (ny * 0.5 + 0.5) * h;
-            x0 = Math.min(x0, sx);
-            x1 = Math.max(x1, sx);
-            y0 = Math.min(y0, sy);
-            y1 = Math.max(y1, sy);
+            tx0 = Math.min(tx0, sx);
+            tx1 = Math.max(tx1, sx);
+            ty0 = Math.min(ty0, sy);
+            ty1 = Math.max(ty1, sy);
           }
+      if (tx1 < 0 || ty1 < 0 || tx0 > w || ty0 > h) continue;
+      x0 = Math.min(x0, tx0);
+      x1 = Math.max(x1, tx1);
+      y0 = Math.min(y0, ty0);
+      y1 = Math.max(y1, ty1);
     }
     const ix0 = Math.max(0, Math.floor(x0) - 4), iy0 = Math.max(0, Math.floor(y0) - 4);
     const ix1 = Math.min(w, Math.ceil(x1) + 4), iy1 = Math.min(h, Math.ceil(y1) + 4);

@@ -1,0 +1,6 @@
+[
+  {"name": "noon-cumulus", "scene": "noon-cumulus", "crop": [400, 300, 800, 700],
+   "variants": [{"name": "cur", "js": "v.farTowers.enabled = true;"}, {"name": "off", "js": "v.farTowers.enabled = false;"}, {"name": "cur2", "js": "v.farTowers.enabled = true; if (v.farTowers.towers.length || v.farTowers.active) throw new Error('voyage=0 下不该有远塔');"}]},
+  {"name": "storm-day", "scene": "storm-day", "crop": [400, 300, 800, 700],
+   "variants": [{"name": "cur", "js": "v.farTowers.enabled = true;"}, {"name": "off", "js": "v.farTowers.enabled = false;"}, {"name": "cur2", "js": "v.farTowers.enabled = true; if (v.farTowers.towers.length || v.farTowers.active) throw new Error('voyage=0 下不该有远塔');"}]}
+]
