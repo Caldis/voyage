@@ -1,0 +1,4 @@
+[
+  { "name": "old", "patch": { "clouds.marchMat": [["const float CLOUD_MS_STEEP = 2.0;", "const float CLOUD_MS_STEEP = 1.0;"], ["mix(1.0, powder, powderW *", "mix(1.0, powder, 0.5 *"]] } },
+  { "name": "new" }
+]

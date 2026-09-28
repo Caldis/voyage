@@ -1,0 +1,55 @@
+[
+ {
+  "name": "noon-cumulus",
+  "scene": "noon-cumulus",
+  "variants": [
+   {
+    "name": "master",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "master2",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   }
+  ]
+ },
+ {
+  "name": "cu-side",
+  "scene": {
+   "name": "cu-side",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 840,
+    "altitude": 4.5,
+    "coverage": 0.5,
+    "cloud-preset": "towering",
+    "wing-pos": "-4"
+   }
+  },
+  "variants": [
+   {
+    "name": "master",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "master2",
+    "materials": {
+     "clouds.marchMat": "base"
+    }
+   }
+  ]
+ }
+]

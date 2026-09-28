@@ -1,0 +1,6 @@
+[
+  { "name": "cur" },
+  { "name": "b15p", "patch": { "clouds.marchMat": [["float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msDecay2 * od);", "float msScatter = msDecay * phMs1 * exp(-1.5 * msDecay * od) + msDecay2 * phMs2 * exp(-1.5 * msDecay2 * od);"], ["float powder = 1.0 - exp(-2.0 * od - 0.5);", "float powder = 1.0;"]] } },
+  { "name": "b2p", "patch": { "clouds.marchMat": [["float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msDecay2 * od);", "float msScatter = msDecay * phMs1 * exp(-2.0 * msDecay * od) + msDecay2 * phMs2 * exp(-2.0 * msDecay2 * od);"], ["float powder = 1.0 - exp(-2.0 * od - 0.5);", "float powder = 1.0;"]] } },
+  { "name": "b3p", "patch": { "clouds.marchMat": [["float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msDecay2 * od);", "float msScatter = msDecay * phMs1 * exp(-3.0 * msDecay * od) + msDecay2 * phMs2 * exp(-3.0 * msDecay2 * od);"], ["float powder = 1.0 - exp(-2.0 * od - 0.5);", "float powder = 1.0;"]] } }
+]

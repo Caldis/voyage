@@ -1,0 +1,317 @@
+[
+ {
+  "name": "noon-cu-close",
+  "scene": {
+   "name": "noon-cu-close",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 750,
+    "altitude": 3,
+    "coverage": 0.45,
+    "wing-pos": "-4"
+   }
+  },
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16
+  },
+  "variants": [
+   {
+    "name": "old",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.0;"
+      ],
+      [
+       "mix(1.0, powder, powderW *",
+       "mix(1.0, powder, 0.5 *"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldref",
+    "builtin": "cloud-ref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.0;"
+      ],
+      [
+       "mix(1.0, powder, powderW *",
+       "mix(1.0, powder, 0.5 *"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "newref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "k15",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.5;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "k15ref",
+    "builtin": "cloud-ref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.5;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "k2only",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float msScatter = msDecay * phMs1 * exp(-msK * msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);",
+       "float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "k2onlyref",
+    "builtin": "cloud-ref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float msScatter = msDecay * phMs1 * exp(-msK * msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);",
+       "float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "cu-side",
+  "scene": {
+   "name": "cu-side",
+   "p": {
+    "preset": "wpac",
+    "date": "2026-09-28",
+    "time": 840,
+    "altitude": 4.5,
+    "coverage": 0.5,
+    "cloud-preset": "towering",
+    "wing-pos": "-4"
+   }
+  },
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16
+  },
+  "variants": [
+   {
+    "name": "old",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.0;"
+      ],
+      [
+       "mix(1.0, powder, powderW *",
+       "mix(1.0, powder, 0.5 *"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldref",
+    "builtin": "cloud-ref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.0;"
+      ],
+      [
+       "mix(1.0, powder, powderW *",
+       "mix(1.0, powder, 0.5 *"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "newref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "k15",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.5;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "k15ref",
+    "builtin": "cloud-ref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.5;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "k2only",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float msScatter = msDecay * phMs1 * exp(-msK * msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);",
+       "float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "k2onlyref",
+    "builtin": "cloud-ref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float msScatter = msDecay * phMs1 * exp(-msK * msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);",
+       "float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ },
+ {
+  "name": "sea-sc",
+  "scene": "sea-sc",
+  "cloudDump": {
+   "warm": 96,
+   "frames": 16
+  },
+  "variants": [
+   {
+    "name": "old",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.0;"
+      ],
+      [
+       "mix(1.0, powder, powderW *",
+       "mix(1.0, powder, 0.5 *"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "oldref",
+    "builtin": "cloud-ref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.0;"
+      ],
+      [
+       "mix(1.0, powder, powderW *",
+       "mix(1.0, powder, 0.5 *"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "new"
+   },
+   {
+    "name": "newref",
+    "builtin": "cloud-ref"
+   },
+   {
+    "name": "k15",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.5;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "k15ref",
+    "builtin": "cloud-ref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "const float CLOUD_MS_STEEP = 2.0;",
+       "const float CLOUD_MS_STEEP = 1.5;"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "k2only",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float msScatter = msDecay * phMs1 * exp(-msK * msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);",
+       "float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "k2onlyref",
+    "builtin": "cloud-ref",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "float msScatter = msDecay * phMs1 * exp(-msK * msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);",
+       "float msScatter = msDecay * phMs1 * exp(-msDecay * od) + msDecay2 * phMs2 * exp(-msK * msDecay2 * od);"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "dist",
+    "builtin": "cloud-dist"
+   }
+  ]
+ }
+]
