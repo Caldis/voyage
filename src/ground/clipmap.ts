@@ -402,7 +402,8 @@ export class GroundClipmap {
       const detail = this.wantDetail(i, cx, cz);
       if (!l.stale && cx === l.cx && cz === l.cz && detail === l.detail && (l.fine || !fine)) continue;
       l.stale = false;
-      void this.build(i, cx, cz, detail, fine);
+      // 回退链上合成 Worker 报错时这次构建会 reject：接住、只警告，不冒成 pageerror（G08 审查 M1）
+      this.build(i, cx, cz, detail, fine).catch((e) => console.warn("[ground] 第", i, "级构建失败：", e));
     }
   }
 
