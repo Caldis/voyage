@@ -236,6 +236,16 @@ export class GroundClipmap {
   /** 瓦片统计，面板上显示加载状态 */
   pending = 0;
   /**
+   * G-FREEZE：地面「换版」计数——每有一级的新数据真正换上（纹理写入 + 换中心，见 build 的 after），加 1。
+   * 冻结对照工具在两张截图之间比这个数：变了就说明地面在两张之间换过版，差异不能算到变体头上
+   */
+  uploads = 0;
+  /** G-FREEZE 诊断：非 null 时记下每次开始构建 / 换上的事件（`__voyage.ground.events = []` 打开） */
+  events: { t: number; kind: string; level: number; [k: string]: unknown }[] | null = null;
+  private note(kind: string, level: number, extra: Record<string, unknown>) {
+    if (this.events) this.events.push({ t: +performance.now().toFixed(1), kind, level, ...extra });
+  }
+  /**
    * PERF-8：一次重建有 3 张纹理（各一层）要真正上传到 GPU（texSubImage3D）。加速航程时常有几级
    * 几乎同时建完，3 次上传（8.5 MB）挤在同一个真实动画帧里，实测帧间隔尖峰到 20–60 ms（个别情形下
    * 多级叠加到 69 MB / 5 次调用、帧间隔破百毫秒），见 handoff/PERF-6-8.md 的测量。
@@ -392,19 +402,62 @@ export class GroundClipmap {
     // G06：流速 ≤ 2× 时影像按 2048² 选缩放级（fine）；加速时按 1024 选、请求量不涨。已经是 fine 的一版在加速时照常用（不为变粗重建），
     // 流速降回来以后还不是 fine 的级别重建一次。G07：首载时也先按 1024 出一版（见 warm）
     this.updateWarm();
-    const fine = RES <= TILE_RES_COARSE || (this.warm && this.rate <= FINE_MAX_RATE);
     for (let i = GROUND_LEVELS - 1; i >= this.minLevel; i--) {
       const l = this.levels[i];
       if (l.building) continue;
-      const snap = l.size / 8;
-      const cx = Math.round(x / snap) * snap;
-      const cz = Math.round(z / snap) * snap;
-      const detail = this.wantDetail(i, cx, cz);
-      if (!l.stale && cx === l.cx && cz === l.cz && detail === l.detail && (l.fine || !fine)) continue;
+      const { cx, cz, detail, fine } = this.wanted(i, x, z);
+      const why = this.rebuildReason(l, cx, cz, detail, fine);
+      if (!why) continue;
+      this.note("build", i, { cx, cz, detail, fine, why });
       l.stale = false;
       // 回退链上合成 Worker 报错时这次构建会 reject：接住、只警告，不冒成 pageerror（G08 审查 M1）
       this.build(i, cx, cz, detail, fine).catch((e) => console.warn("[ground] 第", i, "级构建失败：", e));
     }
+  }
+
+  /** 第 i 级在飞机位于 (x, z) 时想要的一版：中心（按 1/8 边长对齐）、要不要高清细节、按哪种缩放级选影像 */
+  private wanted(i: number, x: number, z: number) {
+    const snap = this.levels[i].size / 8;
+    const cx = Math.round(x / snap) * snap;
+    const cz = Math.round(z / snap) * snap;
+    const fine = RES <= TILE_RES_COARSE || (this.warm && this.rate <= FINE_MAX_RATE);
+    return { cx, cz, detail: this.wantDetail(i, cx, cz), fine };
+  }
+
+  /** 这一级现有的数据和想要的一版不一致时返回原因（update 据此重建），一致时返回 null */
+  private rebuildReason(l: Level, cx: number, cz: number, detail: boolean, fine: boolean) {
+    if (l.stale) return "stale";
+    if (cx !== l.cx || cz !== l.cz) return "move";
+    if (detail !== l.detail) return "detail";
+    if (fine && !l.fine) return "fine";
+    return null;
+  }
+
+  /**
+   * G-FREEZE：地面此刻是不是「完全稳定」——再怎么渲染也不会换版。不稳定时返回原因（诊断用），稳定时返回 null。
+   * 判据：没有在途的瓦片请求（pending）、上传队列空、拼接 / 合成 Worker 没有在途任务，且 minLevel 起每一级都
+   * valid、不在建，并且按上一次 update 的飞机位置算，update 不会再触发重建（中心、高清细节、fine 都已是想要的那一版）。
+   * 只看 pending === 0 不够：瓦片全部取回之后，拼接 + 合成（2048² 每级 0.3–0.7 s，合成 Worker 串行）和暂存上传
+   * 还要几秒，这期间各级陆续换上新数据（G-FREEZE 实测 night-city-off 冻结 + pending 归零 + 2 s 后仍有 3 级在建）。
+   * 注意这个判据按「上一次 update」的位置算：刚改完 uCloudOffset、还没跑过一帧时会误报稳定，
+   * 调用方（scripts/lib/ab-live.mjs 的 groundSettle）要求连续若干帧稳定且 uploads 不变
+   */
+  unsettled(): string | null {
+    if (this.pending !== 0) return `pending=${this.pending}`;
+    if (this.uploadQueue.length) return `upload queue=${this.uploadQueue.length}`;
+    if (stitchPending.size || roadPending.size) return `worker stitch=${stitchPending.size} compose=${roadPending.size}`;
+    for (let i = this.minLevel; i < GROUND_LEVELS; i++) {
+      const l = this.levels[i];
+      if (l.building) return `L${i} building`;
+      if (!l.valid) return `L${i} invalid`;
+      const w = this.wanted(i, this.lastX, this.lastZ);
+      const why = this.rebuildReason(l, w.cx, w.cz, w.detail, w.fine);
+      if (why) return `L${i} ${why}`;
+    }
+    return null;
+  }
+  get settled() {
+    return this.unsettled() === null;
   }
 
   /** 首载粗版全部就位（最细可用级以上都 valid）→ 放开 fine；再记一下全部升级完的时刻。
@@ -572,6 +625,8 @@ export class GroundClipmap {
         () => {
           if (gen === this.generation) l.building = false;
           if (gen !== this.generation || i < this.minLevel) return;
+          this.uploads++;
+          this.note("land", i, { cx, cz, detail, fine });
           l.cx = cx;
           l.cz = cz;
           // 想要细节但这版没合上（没取齐）时记成 false，update 会再建一次；一张都取不到（全是「确定没有」）算完成，不反复重建
@@ -695,6 +750,22 @@ export class GroundClipmap {
     }
     end();
     return true;
+  }
+
+  /** G-FREEZE 诊断：各级的状态（cx / cz / valid / building / detail / fine / stale）与在途任务数 */
+  get levelState() {
+    return {
+      levels: this.levels.map((l) => ({ cx: l.cx, cz: l.cz, valid: l.valid, building: l.building, detail: l.detail, fine: l.fine, stale: !!l.stale })),
+      pending: this.pending,
+      queue: this.uploadQueue.length,
+      stitch: stitchPending.size,
+      compose: roadPending.size,
+      uploads: this.uploads,
+      unsettled: this.unsettled(),
+      warm: this.warm,
+      detailOn: this.detailOn,
+      minLevel: this.minLevel,
+    };
   }
 
   /** 调试 / 对照：所有级别按当前设置原地重建一遍（位置不变；`gpuMips` 切换后同页 A/B 用） */

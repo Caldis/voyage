@@ -11,20 +11,47 @@ import path from "node:path";
 import { stepsStats } from "./cloud-metrics.mjs";
 
 // ---------- 1. ground 简写 ----------
-/** 等地面完全到位（G08c-seam 的 settled 判据）；返回 { ok, pending, ms } */
-export async function groundSettle(page, timeoutMs = 120000) {
-  return page.evaluate(async (tmo) => {
+/**
+ * 等地面完全稳定（G-FREEZE）：`ground.unsettled()` 连续 frames 帧为 null（没有在途瓦片 / 拼接 / 合成 / 上传，
+ * 每级都是按当前机位想要的那一版），且这期间换版计数 `ground.uploads` 不变。
+ * 以前（DX-26 / G08c-seam）只看 pending 0 + 各级 valid 不在建 + 上传队列空，按 250 ms 轮询：刚 pinGeometry 还没跑一帧、
+ * 或一级刚换上、下一帧才因 fine / 高清细节 / 中心不符而重建时，会在两帧之间误判稳定。
+ * 老页面（没有 unsettled，如 --base 指向的旧提交）退回旧判据。返回 { ok, pending, ms, uploads, reason }
+ */
+export async function groundSettle(page, timeoutMs = 120000, frames = 10) {
+  return page.evaluate(async ({ tmo, frames }) => {
     const g = window.__voyage.ground;
     const t0 = performance.now();
-    if (!g) return { ok: true, pending: null, ms: 0 };
-    const settled = () => g.pending === 0 && (!g.levels || g.levels.every((l) => l.valid && !l.building && !l.stale)) && (!g.uploadQueue || g.uploadQueue.length === 0);
-    while (!settled()) {
-      if (performance.now() - t0 > tmo) return { ok: false, pending: g.pending, ms: performance.now() - t0 };
-      await new Promise((r) => setTimeout(r, 250));
+    // 关了真实地面（ground-on = false）时 clipmap 不 update，各级不会就位，不用等
+    if (!g || (window.__voyage.state && window.__voyage.state.groundOn === false)) return { ok: true, pending: null, ms: 0, uploads: null, reason: null };
+    const reason = () =>
+      typeof g.unsettled === "function"
+        ? g.unsettled()
+        : g.pending === 0 && (!g.levels || g.levels.every((l) => l.valid && !l.building && !l.stale)) && (!g.uploadQueue || g.uploadQueue.length === 0)
+          ? null
+          : `pending=${g.pending}（旧判据）`;
+    const raf = () => new Promise((r) => requestAnimationFrame(r));
+    let calm = 0;
+    let up = g.uploads;
+    let why = null;
+    while (calm < frames) {
+      if (performance.now() - t0 > tmo) return { ok: false, pending: g.pending, ms: performance.now() - t0, uploads: g.uploads ?? null, reason: why };
+      await raf();
+      why = reason();
+      if (why === null && g.uploads === up) calm++;
+      else calm = 0;
+      up = g.uploads;
     }
-    await new Promise((r) => setTimeout(r, 500));
-    return { ok: true, pending: g.pending, ms: performance.now() - t0 };
-  }, timeoutMs);
+    return { ok: true, pending: g.pending, ms: performance.now() - t0, uploads: g.uploads ?? null, reason: null };
+  }, { tmo: timeoutMs, frames });
+}
+
+/** 地面换版计数（G-FREEZE，`ground.uploads`）；老页面没有时返回 null。冻结对照在两张截图之间比它，变了就作废 */
+export async function groundUploads(page) {
+  return page.evaluate(() => {
+    const g = window.__voyage.ground;
+    return g && typeof g.uploads === "number" ? g.uploads : null;
+  });
 }
 
 /** 读当前 ground 上这些开关的值 */
@@ -61,7 +88,7 @@ export async function setGround(page, want, log, label = "") {
   if (!changed) return { changed: false };
   await page.waitForTimeout(500);
   const st = await groundSettle(page);
-  log(`  ground ${JSON.stringify(want)}${label ? `（${label}）` : ""}：rebuildAll 后等瓦片 ${(st.ms / 1000).toFixed(1)} s${st.ok ? "" : `，超时（pending=${st.pending}）`}`);
+  log(`  ground ${JSON.stringify(want)}${label ? `（${label}）` : ""}：rebuildAll 后等地面稳定 ${(st.ms / 1000).toFixed(1)} s${st.ok ? "" : `，超时（${st.reason}）`}`);
   return { changed: true, settle: st };
 }
 

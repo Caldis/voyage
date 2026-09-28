@@ -1,0 +1,10 @@
+[
+  {
+    "name": "night-city-off-void",
+    "scene": "night-city-off",
+    "variants": [
+      { "name": "a", "js": "" },
+      { "name": "rebuild", "js": "v.ground.rebuildAll(); await new Promise((r) => setTimeout(r, 3000));" }
+    ]
+  }
+]
