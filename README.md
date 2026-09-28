@@ -51,6 +51,10 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
   （默认隐藏，`?dev` 或 `Shift + D`）→ 页脚（数据来源与许可，折叠为一行）。折叠状态记在 localStorage
   `voyage.pref.panel`（`sections` 字段各区、`dev` 字段开发者区，只记用户亲手点的）。完整信息栏（太阳 / 月亮高度角、
   经纬度小数点后三位）在开发者区的 `<pre id="info">`；控件 id 与规范 §1「控件 id 契约」保持不变，场景表按 id 设值不受分区影响。
+- **手机 / 窄屏底部抽屉**（UX-4，`research/PANEL_UX_GUIDE.md` §9，断点宽 ≤ 720px 或高 ≤ 500px）：面板变成底部抽屉，
+  默认收起成一条把手（抓手 + 「此刻」一行摘要 + 展开箭头，≤ 屏高 12%，不挡舷窗中心），点击整条把手或上下拖动
+  （触屏 pointer events）展开到 ≤ 70% 屏高、内部滚动；展开状态记在 `voyage.pref.panel`（`drawer` 字段，只记
+  `isTrusted` 操作）。桌面宽屏（断点之外）完全不受影响，`#panel` 逐位不变。
 - 在画面上按住拖动 = 转头（窗框视差），滚轮 = 前后挪（靠近 / 远离舷窗），双击复位；`H` 隐藏面板
 - 聚焦观察（FOCUS-ZOOM）：在画面上**按住不动**约 0.2 秒（位移不超过 5 px），视场平滑收窄到「默认 / 倍率」（默认 2.5×，缓入缓出约 0.2 秒），松开平滑还原；按下就拖走的仍是转头。聚焦中照样可以拖动转头，灵敏度按倍率降低。触屏长按同理；键盘按住 `Z` 等价（焦点在输入框 / 下拉里时不触发）。聚焦时四角轻微压暗（CSS 叠层，不进渲染管线）
 - 头部左右限位（FOCUS-ZOOM 追加）：头往舷窗前伸得越多、视场越宽，左右能挪的就越少——保证视锥永远看不到没建模的前后机舱（纯黑 / 空白侧壁）和本窗很斜时的窗洞黑带；聚焦（视场变窄）时可以转得更偏。拖到限位附近有弹性阻尼，前伸或松开聚焦使限位收紧时头部被平滑拉回。限位表与判据见 `handoff/FOCUS-ZOOM.md`，离线重算 `node --experimental-transform-types --no-warnings apps/voyage/handoff/FOCUS-ZOOM-limits.mts`
@@ -87,7 +91,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/main.ts` | 创建渲染器与各系统、主循环编排（各 pass 调度）、`setPreset` / `snapAll` / `resize`、调试句柄 `window.__voyage` |
 | `src/state.ts` | 共享类型 `VoyageState` / `Preset`、`CRUISE_PITCH_DEG`、`$` 小工具 |
 | `src/flight.ts` | 预设（地点 / 航线）、大圆航向与距离、每帧飞行更新：`updateTurbulence`（颠簸、湿度、滚转）、`advanceFlight`（航向、倾斜转弯、高度爬升、俯仰、位置推进）；自动驾驶（T49，`autopilotOf(state)`：沿航线 / 手动航向 / 直飞 / 跑道形等待航线，坡度与滚转速率按真实时间限制） |
-| `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`（拆「此刻」摘要 `#now-line1/2` 与开发者区完整版 `#info`，UX-3）、时间 / 高度控件同步；六个分区的折叠记忆 `setupPanelFoldUi`（`voyage.pref.panel.sections`，UX-3）；开发者区（`?dev` / `Shift + D`）与聚焦设置、`Z` 键 |
+| `src/ui.ts` | 面板 DOM 绑定 `setupUi`、信息栏 `updateInfo`（拆「此刻」摘要 `#now-line1/2` 与开发者区完整版 `#info`，UX-3）、时间 / 高度控件同步；六个分区的折叠记忆 `setupPanelFoldUi`（`voyage.pref.panel.sections`，UX-3）；窄屏底部抽屉 `setupDrawerUi`（`voyage.pref.panel.drawer`，UX-4，把手点击 / 拖动展开收起，断点见 `style.css`）；开发者区（`?dev` / `Shift + D`）与聚焦设置、`Z` 键 |
 | `src/view-presets.ts` / `src/focus-zoom.ts` / `src/head-limits.ts` | 视角预设与画布输入（按住拖动转头、滚轮前后、双击复位、按住不动聚焦）；聚焦观察（视场过渡、设置与记忆、暗角叠层）；头部左右限位（按前伸 / 视场 / 座位 / 舱等求不露出未建模区域的上限，拖动弹性阻尼）（FOCUS-ZOOM） |
 | `src/astro.ts` | 太阳 / 月亮位置、月相、当地→赤道坐标矩阵（astronomy-engine） |
 | `src/sky-assets.ts` | 星图（RGB：BSC5 星表格子，每格最多一颗星，T41；A 通道是银河）、月面贴图 |
