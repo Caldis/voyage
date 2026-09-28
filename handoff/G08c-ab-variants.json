@@ -1,0 +1,10 @@
+[
+  {
+    "name": "old",
+    "js": "const g = v.ground; const ok = () => g.pending === 0 && g.levels.every((l) => l.valid && !l.building && !l.stale) && g.uploadQueue.length === 0; g.demNightEdgeShared = false; g.rebuildAll(); await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && !ok(); i++) await new Promise((r) => setTimeout(r, 250)); await new Promise((r) => setTimeout(r, 500)); return 'demNightEdgeShared=' + g.demNightEdgeShared + ' pending=' + g.pending;"
+  },
+  {
+    "name": "new",
+    "js": "const g = v.ground; const ok = () => g.pending === 0 && g.levels.every((l) => l.valid && !l.building && !l.stale) && g.uploadQueue.length === 0; g.demNightEdgeShared = true; g.rebuildAll(); await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && !ok(); i++) await new Promise((r) => setTimeout(r, 250)); await new Promise((r) => setTimeout(r, 500)); return 'demNightEdgeShared=' + g.demNightEdgeShared + ' pending=' + g.pending;"
+  }
+]

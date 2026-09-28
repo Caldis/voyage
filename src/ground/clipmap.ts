@@ -632,6 +632,12 @@ export class GroundClipmap {
   imageryInWorker = true;
   /** G08：影像 / 高清细节瓦片的矩形按同一行的中间纬度算左右边，东西相邻的瓦片严格对接（见 tileRect）；false = G07b 的矩形（同页 A/B 用，改后 `rebuildAll()`） */
   tileEdgeShared = true;
+  /**
+   * G08c：地形高度图（256²，最近邻）与夜光（1024²）的瓦片矩形也按同一行的中间纬度对接（tileRect）。
+   * 它们一直在主线程 CPU 画布上拼（willReadFrequently，边上不抗锯齿），旧矩形在原点以西每条瓦片竖缝上留出整列底色：
+   * 地形是 0 m 深沟（heightAt 在缝上返回 0），夜光是无灯带。false = 旧矩形（同页 A/B 用，改后 `rebuildAll()`）
+   */
+  demNightEdgeShared = true;
   attachGl(renderer: THREE.WebGLRenderer) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
     this.gl = gl;
@@ -986,9 +992,9 @@ export class GroundClipmap {
         const bmp = await loadBitmap(NIGHT_URL(zoom, t.x, t.y));
         this.pending--;
         if (!bmp) return;
-        const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
-        const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
+        // G08c：矩形按行中间纬度对接（旧矩形在原点以西留出整列黑缝 = 无灯带，见 demNightEdgeShared）
+        const r = tileRect(cover.toPx, zoom, t, this.demNightEdgeShared);
+        ctx.drawImage(bmp, r.x, r.y, r.w, r.h);
       }),
     );
     return ctx.getImageData(0, 0, NIGHT_RES, NIGHT_RES).data;
@@ -1010,9 +1016,9 @@ export class GroundClipmap {
         const bmp = await loadBitmap(DEM_URL(zoom, t.x, t.y));
         this.pending--;
         if (!bmp) return;
-        const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
-        const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
+        // G08c：矩形按行中间纬度对接（旧矩形在原点以西留出整列 0 m 底色 = 深沟，heightAt 在缝上返回 0，见 demNightEdgeShared）
+        const r = tileRect(cover.toPx, zoom, t, this.demNightEdgeShared);
+        ctx.drawImage(bmp, r.x, r.y, r.w, r.h);
       }),
     );
     const px = ctx.getImageData(0, 0, HRES, HRES).data;
@@ -1066,6 +1072,8 @@ export class GroundClipmap {
  * 按同一纬度算两边后同一行的瓦片严格对接；上下相邻的两行本来就共用同一条纬线（y 只和纬度有关）。
  * 顺带：矩形角点的最大位置误差从 1 倍缩到 0.5 倍上述差值（原来右上 / 左下角是整个差值）。
  * shared = false：G07b 的矩形（同页 A/B 用，`ground.tileEdgeShared = false`）
+ * G08c：地形高度图、夜光也用这里（`ground.demNightEdgeShared`）。它们的画布同样是 CPU 画布、边上不抗锯齿，
+ * 旧矩形在原点以西每条瓦片竖缝上是整列底色：地形 0 m（最近邻，fuji 以西 112 km 第 0 级约 125 m 宽的深沟），夜光黑（无灯带）。
  */
 function tileRect(toPx: (lat: number, lon: number) => [number, number], zoom: number, t: { x: number; y: number }, shared: boolean) {
   const latT = tileYToLat(t.y, zoom), latB = tileYToLat(t.y + 1, zoom);

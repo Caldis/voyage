@@ -50,7 +50,7 @@ G08 唯一那 1 个尖峰落在两个 Worker 的任务之外。G07b 这次比 G0
 
 **瓦片矩形对接（`G07B_FLAG=tileEdgeShared`，有意改动）**：fuji-day 0.03 / 1 / 32，fuji-low-detail 0.01 / 0.33 / 15，route-hnd-cts 0.01 / 0 / 15，night-city 0.05 / 0.67 / 186，route-hnd-cts-night **0.58 / 8.3 / 236（> 8：1.0%）**。夜景离原点远，影像挪了几个像素，灯点（按影像判建成区）整片换一版，一次性的。不做这一项的话 CPU 拼接会在原点以西每条瓦片竖缝上出一条整像素透明的暗线（`fuji-seam.png`）。
 
-**其他**：typecheck、build 通过，`find dist/assets -type f -size 0` = 0（`tile-compose.worker-*.js` 已打包），`check:glsl` 全部通过；控制台零 error（2048、`?groundres=1024`、`dev-browser check`，瓦片 CORS 限流错误除外）。回退路径实测：`G08_NOWORKER=stitch`（合成 Worker 自己拼）首载 27.8 s 正常；`G08_NOWORKER=all`（主线程算）功能正常，但首载 237 s（主线程每级约 0.7 s，G07b 以前的主线程兜底同样慢），只保证能用。
+**其他**：typecheck、build 通过，`find dist/assets -type f -size 0` = 0（`tile-compose.worker-*.js` 已打包），`check:glsl` 全部通过；控制台零 error（2048、`?groundres=1024`、`dev-browser check`，瓦片 CORS 限流错误除外）。回退路径实测：`G08_NOWORKER=stitch`（合成 Worker 自己拼）首载 27.8 s 正常；`G08_NOWORKER=all`（主线程算）功能正常，首载到 warmup 完成 24.2 s（coarse 7.3 s / fine 14.3 s，审查复现；实现时记的 237 s 不能复现，多半碰上了 EOX 限流）；代价在巡航：1× 巡航 60 s 有 26 帧超过 16.7 ms（正常 0），帧数 6272 对 7780。只保证能用，不需要给用户提示。（2026-09-28 按 G08 审查 L1 更正）
 
 ## 平台（Safari / Mac）
 
@@ -62,7 +62,8 @@ G08 唯一那 1 个尖峰落在两个 Worker 的任务之外。G07b 这次比 G0
 
 - 夜光（1024²）与地形（256²）仍在主线程的 CPU 画布上拼（本来就是 `willReadFrequently`，不是 GPU 读回，G07b 归因里没有尖峰）；它们的瓦片矩形也还是旧算法（左边上沿、右边下沿），离原点远时有亚像素到几个像素的缝。地形用最近邻、缝处是 0 m 底色，理论上会在高度图里出一条 0 m 的细线——没有测，建议下一个地面任务顺手看（`tileRect` 可以直接复用）。
 - `fine = false`（加速航程 / 首载粗版，2× 放大）时 CPU 与 GPU 的放大滤波差异没单独做 A/B（A/B 都在 fine 之后拍）。
-- 主线程兜底很慢（上面 237 s），只是保底。
+- 主线程兜底只是保底：首载正常（24.2 s），1× 巡航每分钟约 26 帧超过 16.7 ms（见上）。
+- （G08c 已修）夜光 / 地形的瓦片矩形已改用 `tileRect` 对接，见 `handoff/G08c.md`。
 - G07b 的 `imageryCanvasCpu` 开关只在 `imageryInWorker = false` 时有效，留作对照。
 
 ## 复现
