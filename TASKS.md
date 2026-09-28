@@ -11,7 +11,7 @@
 | C10b | 第 7 波（云锐度，用户主诉求） | 5235 | worktree | Opus（近处只对有云的步细化使单步光学厚度 ≲1；评估撤 C10 二分；天气程序同步） | — | 进行中 |
 | G08-STITCH | 第 7 波（地面性能） | 5233 | `worktree-agent-a0799f38165606dd7`（e7c77cc） | Opus | 审查中（5236） | 已交付：主线程只取 Blob、独立拼接 Worker 解码拼接、三级回退；1× 尖峰 3.14→0.05/分、首载持平；修瓦片矩形接缝（按行中间纬度）→ 夜景灯点一次性换版（hnd-cts-night 平均差 0.58）；夜光 / 地形仍旧矩形 |
 | W-LAMP | 第 7 波（机翼灯光） | 5232 | worktree | Opus（白位置灯旁翼面过曝按真实灯光物理量修、频闪钝后缘虚线修去亮点限幅；不在无机翼像素写入） | — | 进行中 |
-| T48c | 第 7 波（T48b 审查 P2-1） | 5224 | `worktree-agent-a2abd849f48161621`（58ffa9c） | Opus | 复审中 | 返工交付：改为「闪光按已知事件」（main.ts 一行把频闪 / 闪电强度传给 exposure；不闪时与 T48b 逐位相同）；P1-a 方格斑块、P1-b 灯周暗洞已消；频闪变暗 110–116 px（审查要求 ≤50 未达，T48b 为 ~6000）；新增闪烁光源须接进这一行 |
+| T48c | 第 7 波（T48b 审查 P2-1） | 5224 | `worktree-agent-a2abd849f48161621`（58ffa9c） | Opus | 复审：返工（小） | 返工交付：改为「闪光按已知事件」（main.ts 一行把频闪 / 闪电强度传给 exposure；不闪时与 T48b 逐位相同）；P1-a 方格斑块、P1-b 灯周暗洞已消；频闪变暗 110–116 px（审查要求 ≤50 未达，T48b 为 ~6000）；新增闪烁光源须接进这一行；**复审返工**：P1-c 频闪 50 ms 内远处城区 16 px 方块闪亮（1 km 均值 +8.1、p95 +32；灯点跨格运动差混进扣除量）→ 扣除量 3×3 min 或更粗网格；110 px 已接受 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口） |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
