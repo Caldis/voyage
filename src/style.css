@@ -19,15 +19,29 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 
 #panel {
   position: fixed; top: 16px; right: 16px; width: 300px; max-height: calc(100% - 32px); overflow: auto;
-  padding: 14px 16px; border-radius: 12px; background: var(--panel-bg-strong);
+  padding: 12px 16px; border-radius: 12px; background: var(--panel-bg-strong);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  display: flex; flex-direction: column; gap: 10px; transition: opacity .3s;
+  display: flex; flex-direction: column; gap: 6px; transition: opacity .3s;
 }
 #panel.hidden { opacity: 0; pointer-events: none; }
+/* UX-4：抽屉把手默认不占地方（桌面 / 未命中窄屏媒体查询时都不需要）；窄屏媒体查询里改回可见 */
+.panel-handle { display: none; }
+/* .panel-body 复刻拆分前 #panel 自己的 flex 布局（display:flex/flex-direction:column/gap:6px）：
+   桌面下 .panel-handle 不占位、不参与 gap，#panel 里实际只剩这一个可见的 flex 子项，视觉与拆分前逐位相同。
+   窄屏抽屉模式下它是把手下面唯一滚动的内容区（见下面的媒体查询） */
+.panel-body { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 #panel h1 { margin: 0; font-size: 15px; font-weight: 600; }
 #panel h1 small { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: 6px; }
-#panel label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
-#panel label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
+/* 控件行（UX-3）：标签文字 + 徽标 + 数值挤在第一行，下拉 / 输入框跟着长到剩余宽度；范围滑条 flex-basis 100%，
+   自动挤到第二行（§4.2「output 在标签同一行右侧」，原来是文字、数值、滑条各占一行，1600×1200 下面板要滚 2.3 屏，
+   见 research/PANEL_UX_AUDIT_1.md P2）。行内放不下时（长标签 + 长选项）自然换行，不会横向溢出。 */
+#panel label { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 4px; color: var(--muted); }
+#panel label.check { flex-wrap: nowrap; gap: 8px; color: var(--text); }
+/* flex-basis 0（不是 auto）：换行判断按这个算「假想主轴尺寸」，不按下拉里最长选项文字的天然宽度，
+   否则长选项（如地点名）会把整行挤到换行；min-width 兜底，长文字在下拉框内自然裁切，不会横向溢出 */
+#panel label select, #panel label input:not([type="checkbox"]) { flex: 1 1 0%; min-width: 64px; }
+#panel label input[type="range"] { min-width: 90px; }
+#panel label output { flex: 0 0 auto; margin-left: auto; }
 #panel output, #time-label { color: var(--text); }
 #panel select, #panel input[type="date"], #panel button {
   font: inherit; color: var(--text); background: rgba(255, 255, 255, 0.08);
@@ -40,8 +54,37 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 #panel input[type="checkbox"] { accent-color: var(--accent); }
 /* 禁用的下拉 / 输入框变淡（按钮的禁用样式在 index.html 内联样式里）；原因写在 title 与下方说明里 */
 #panel select:disabled, #panel input:disabled { opacity: .45; cursor: not-allowed; }
-/* 键盘焦点环（§8.2）：半透明深底上浏览器自带的焦点环几乎看不见 */
-:is(#panel, #backdrop-hint) :is(button, input, select, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 键盘焦点环（§8.2）：半透明深底上浏览器自带的焦点环几乎看不见；summary 是分区折叠的可交互元素，一并给焦点环 */
+:is(#panel, #backdrop-hint) :is(button, input, select, a, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 分区折叠（UX-3，PANEL_UX_GUIDE §2）：观景 / 航程默认展开，天气 / 声音 / 画质 / 页脚默认折叠；
+   summary 行右侧一行摘要（.section-summary），折叠状态记忆见 ui.ts setupPanelFoldUi */
+#panel details.panel-section { border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 4px; }
+#panel details.panel-section:first-of-type { border-top: none; padding-top: 0; }
+#panel details.panel-section > summary {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+  font-size: 13px; font-weight: 600; padding: 5px 0; color: var(--text);
+}
+#panel details.panel-section > summary::-webkit-details-marker { display: none; }
+#panel details.panel-section > summary::before {
+  content: "▸"; display: inline-block; width: 1em; flex: none; color: var(--muted); transition: transform .15s;
+}
+#panel details.panel-section[open] > summary::before { transform: rotate(90deg); }
+.section-title { flex: none; }
+.section-summary {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+  color: var(--muted); font-weight: 400; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.section-body { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 4px; }
+.footer-section .section-body { padding-top: 4px; }
+/* 「此刻」摘要（UX-3）：常驻在标题栏下方，不进折叠区；完整版在开发者区的 #info */
+.now-summary { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; margin-bottom: 2px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+.now-summary p { margin: 0; font-size: 12px; line-height: 1.5; }
+#now-line1 { color: var(--text); }
+#now-line2 { color: var(--muted); }
+/* STROBE-CLOUD：夜间云中自动关频闪的状态说明，用 accent 色与其余摘要行区分，不适用时整行 hidden */
+#now-line3 { color: var(--accent); }
+/* 快捷键键帽（§8.1：快捷键写成键帽，放标签右侧） */
+#panel kbd { font: 11px ui-monospace, Consolas, monospace; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.18); color: var(--text); }
 .row { display: flex; gap: 8px; align-items: flex-end; }
 .row label { flex: 1; }
 .rates { align-items: center; color: var(--muted); flex-wrap: wrap; }
@@ -62,8 +105,36 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 }
 .credits a { color: var(--text); }
 
-@media (max-width: 600px) {
-  #panel { left: 16px; right: 16px; width: auto; top: auto; bottom: 16px; max-height: 45%; }
+/* UX-4（PANEL_UX_GUIDE §9「窄屏 / 手机」）：窄屏或矮屏下面板变成底部抽屉。断点按任务简报定为「宽 ≤ 720px
+   或高 ≤ 500px」（比指南字面的 <600px 宽一点，专门盖住手机横屏——844×390 宽 844px 不算窄，但高 390px 算矮屏）。
+   收起（默认）时只露 .panel-handle 一条：#panel 自身不设高度，交给内容自然撑开（只有把手可见时就是把手的高度，
+   实测约 38–40px，390×844 下约 4.7% 面积、844×390 下约 10%，两边都在「≤ 12%」的验收线内，也够不到舷窗中心
+   的圆），不用为了卡死一个数字给 max-height 写死具体像素、冒着和真实渲染字号对不上的风险。展开后 ≤ 40vh（PANEL_UX_GUIDE §9 窄屏上限），
+   在 .panel-body 内部滚动（#panel 自己不再滚，否则把手会被滚出屏幕，见 ui.ts setupDrawerUi）。
+   桌面（本媒体查询之外）完全不受影响：.panel-handle 常年 display:none，#panel 逐位不变。 */
+@media (max-width: 720px), (max-height: 500px) {
+  #panel {
+    left: 0; right: 0; top: auto; bottom: 0; width: 100%; max-height: 40vh;
+    overflow: hidden; /* 换成 .panel-body 自己滚 */
+    padding: 0; border-radius: 16px 16px 0 0;
+  }
+  .panel-handle {
+    display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px;
+    padding: 9px 14px calc(9px + env(safe-area-inset-bottom, 0px)); border: 0; border-radius: 16px 16px 0 0;
+    background: var(--panel-bg-strong); color: var(--text); font: inherit; text-align: left; cursor: pointer;
+    touch-action: none; /* 拖动手势自己接管（见 ui.ts setupDrawerUi），不让浏览器当成页面滚动处理 */
+  }
+  .panel-grip { flex: none; width: 4px; height: 20px; border-radius: 2px; background: rgba(255, 255, 255, .35); }
+  .panel-peek {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; color: var(--muted);
+  }
+  .panel-handle-icon { flex: none; color: var(--muted); transition: transform .2s; }
+  /* 展开时箭头朝下（表示「点一下收起」）；收起时朝上（表示「点一下展开」，默认状态，HTML 里已经是 ▲） */
+  #panel:not(.drawer-collapsed) .panel-handle-icon { transform: rotate(180deg); }
+  .panel-body { overflow: auto; padding: 4px 16px calc(16px + env(safe-area-inset-bottom, 0px)); flex: 1 1 auto; min-height: 0; }
+  /* 收起：只留把手这一行；.panel-body 直接 display:none，#panel 的高度跟着唯一可见的子项（把手）自然收缩 */
+  #panel.drawer-collapsed .panel-body { display: none; }
 }
 
 #loading {

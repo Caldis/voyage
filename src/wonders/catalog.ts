@@ -121,7 +121,8 @@ export const WONDERS: WonderDef[] = [
     // 建木出自《淮南子·地形训》（公有领域典籍），不是致敬某部作品
     name: "建木（《淮南子·地形训》：众帝所自上下）",
     layer: "sky",
-    distanceKm: [340, 410],
+    // WS05 巨构化：从 340–410 km 拉近到 200–260 km（树脚在地平线以内，埋在它自己的云海里）
+    distanceKm: [200, 260],
     forwardOffsetDeg: [8, 30],
     minAltitudeKm: 6,
     // 「日中无景」：白天与黄昏；深夜它就隐没了，几乎不出现
@@ -129,9 +130,11 @@ export const WONDERS: WonderDef[] = [
     riseS: 120,
     holdSimS: [420, 720],
     fadeS: 120,
-    // 深色的木质、偏暖：树干白天几乎看不见，黄昏上段被染成暗金（比天梯稍粗、稍亮）。
-    // W01b：高处九根弯枝（九欘）、12–30 km 缠着树干的云气（白天最先被注意到的就是它）、树冠一带的萤光，见 render/wonder-sky.glsl.ts
-    look: { radiusKm: 0.34, albedo: [0.05, 0.035, 0.022], skin: 1, beacons: false },
+    // WS05：一座山那样粗的树——底部直径 5–8 km、往上收成笔直的柱（百仞无枝），九片板根（九枸）斜入脚下的云海，
+    // 48 km 以上九根巨枝（九欘）伸出 38–88 km、挂着稀疏的青色叶簇；8–24 km 缠着三圈云气。尺寸按每次出现的种子取
+    // （着色器从 uWonderShape.w 读种子，radiusKm 在建木上不用）。albedo 是树皮（「紫茎」：偏紫的灰褐，真实树皮 0.1 上下），
+    // 见 render/wonder-sky.glsl.ts
+    look: { radiusKm: 3.2, albedo: [0.15, 0.125, 0.125], skin: 1, beacons: false },
   },
   {
     id: "fogcity",
@@ -158,13 +161,43 @@ export const WONDERS: WonderDef[] = [
     // 致敬宫崎骏《天空之城》（1986）：原创造型（巨树树冠、层层台地、倒扣的岩石底座与垂根、化雾的瀑布都是程序生成），不用任何官方资产
     name: "浮空古城（致敬《天空之城》）",
     layer: "cloud",
-    // 直径约 6 km、连根须高约 8 km：80 km 处宽约 4.3°（约 100 像素），远而朦胧，剪影仍认得出
-    distanceKm: [75, 130],
+    // WS04 巨构化（research/WONDER_SCALE.md §3.4）：直径 25–35 km（按种子），台地底 12–16 km、冠顶 25–32 km，
+    // 粗根垂进下方的云海（根尖 1.4–3 km）。110 km 处宽约 15°（约 350 像素），冠顶在地平线上方约 11–13°，要仰视
+    distanceKm: [90, 140],
     forwardOffsetDeg: [5, 25],
     minAltitudeKm: 6,
     // 白天到黄昏（研究文档 A1：太阳 5–25° 的侧逆光最好）；太阳落下后只剩剪影，入夜（< −5°）不自动出现
     sunWeight: (a) => (a < -5 ? 0 : a < 5 ? 2 : a <= 25 ? 3 : 1.5),
     // 浮现 90 s：先是一团「形状不太对劲的云」，雾散开后城显出来；停留约 5–8 模拟分钟；退场再被雾吞没
+    riseS: 90,
+    holdSimS: [300, 480],
+    fadeS: 90,
+    // 局部原点海拔 14 km（= 着色器的 FLC_BIG_BASE），台地底面按种子在 ±2 km 里挪。包围盒：城本身水平最大半径约 17.4 km、
+    // 顺风吹偏的瀑布雾约 22 km、浮现时那团「云」约 23 km；水平放到 ±45 km 是给尺度参照的航迹云（离城轴 34–44 km 淡出）。
+    // 竖直从海平面（根尖、瀑布雾、根尖云涡）到冠顶 + 浮现的那团云（约 21 km）。
+    // 介质区间由着色器收窄（显形后只走台地底面以下、离城轴 3.05·Kh + 5.5 km 的圆柱），步长 0.5 km（96 步封顶）
+    volume: {
+      kind: FLOATCITY_KIND,
+      baseKm: 14,
+      box: [[-45, -14.5, -45], [45, 22, 45]],
+      surface: true,
+      medium: true,
+      stepKm: 0.5,
+      params: [1],
+      // 投影：约 28 km 宽的椭球（研究文档：影子投在云海上约 30 km 宽），浓度 0.75（树冠有缝、根须透光，不投实心的坑）
+      caster: { center: [0, 3, 0], radii: [14, 6, 14], strength: 0.75 },
+    },
+  },
+  {
+    // WS04：W03 原尺寸的小岛，保留下来低概率出现（权重是巨构版的四分之一，约两成）；着色器同一段，params[0] = 0 走原来的路径
+    id: "floatcity-small",
+    name: "浮空古城·小岛（致敬《天空之城》）",
+    layer: "cloud",
+    // 直径约 6 km、连根须高约 8 km：80 km 处宽约 4.3°（约 100 像素），远而朦胧，剪影仍认得出
+    distanceKm: [75, 130],
+    forwardOffsetDeg: [5, 25],
+    minAltitudeKm: 6,
+    sunWeight: (a) => 0.25 * (a < -5 ? 0 : a < 5 ? 2 : a <= 25 ? 3 : 1.5),
     riseS: 90,
     holdSimS: [300, 480],
     fadeS: 90,

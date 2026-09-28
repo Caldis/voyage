@@ -449,7 +449,8 @@ export class WonderSystem {
     const front =
       r < 0.9 ? FRONT_MIN_KM * Math.pow(FRONT_MID_KM / FRONT_MIN_KM, ease(r / 0.9)) : FRONT_MID_KM * Math.pow(FRONT_MAX_KM / FRONT_MID_KM, (r - 0.9) / 0.1);
     const look = a.def.look;
-    u.uWonderShape.value.set(look.radiusKm, front, look.skin, look.beacons ? 1 : 0);
+    // w：有航标灯的（天梯）= 1；没有的（建木）= −种子（WS05：建木的尺寸按种子在着色器里取）
+    u.uWonderShape.value.set(look.radiusKm, front, look.skin, look.beacons ? 1 : -a.seed);
     u.uWonderAlbedo.value.set(...look.albedo);
     if (a.tether) applyTetherUniforms(u, a.tether, this.tetherWindows);
     u.uWonderOn.value = 1;
