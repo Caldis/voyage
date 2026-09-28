@@ -221,12 +221,17 @@ vec3 oceanRadiance(vec3 P, vec3 rd, float tGround, vec3 body, float calm, vec3 e
     float cb2 = cb * cb;
     float tan2 = (1.0 - cb2) / cb2;
     float p = exp(-tan2 / sigma2) / (M_PI * sigma2);
-    // 波光粼粼：像素里「恰好把阳光反射进眼睛」的小波面数服从泊松分布，λ ∝ 像素覆盖面积 × 斜率概率。
-    // 耀斑中心 λ 大，画面平滑；尾部 λ < 1，只剩稀疏的亮点闪烁；高空时像素覆盖大，λ 大，自然变平滑。
-    // 结果保持期望值不变（除以 λ），只改变分布。
+    // 波光粼粼：像素里「恰好把阳光反射进眼睛」的小波面数 N 服从泊松分布，λ ∝ 像素覆盖面积 × 斜率概率，
+    // 像素亮度 = 期望 × N / λ，相对起伏 1/√λ。耀斑中心 λ 大，画面平滑；高空时像素覆盖大，λ 大，自然变平滑。
+    // WX11g-b：λ < 1 时照泊松抽样，像素要么全黑、要么亮 1/λ 倍——低风速时 σ² 小，一个闪点的亮度 ∝ 1/(σ²·足迹面积)，
+    // 近处与耀斑两侧成片的孤立单像素亮点（椒盐），飞行中逐帧跳。一个像素里平均不到一个闪点时，显示器上没法画「一个亚像素亮点」，
+    // 只能画它的期望：相对起伏改成 √λ/(1+λ)（λ ≫ 1 时 ≈ 1/√λ，与泊松相同；λ = 1 时最大 0.5；λ → 0 时 → 0，回到连续的期望亮度），
+    // 且是均值 1 的连续随机数、不再是 0 / 1/pHit 两值，整条光柱不再有全黑像素和孤立亮点；期望值仍然不变，只改变分布。
     // 随机数的来源（T21）：格子钉在世界坐标上（随海水流过窗外，而不是跟着飞机走）；尺寸按像素足迹取 2 的整数次幂
     // （沿视线长、垂直视线短），足迹连续变化时格子不会跟着伸缩「游动」；方向按视线方位量化成 16 个扇区，扇区内格子不随视线转动。
-    // 每个格子有自己的相位，各自以约 8 Hz 换一次随机数，不再全场同步地一齐跳（原来整片耀斑以 8 Hz 频闪）
+    // 时间上（WX11g-b）：每个格子有自己的相位，约 6 Hz 换一个随机数，相邻两个随机数之间平滑过渡（smoothstep 权重，
+    // 按 √(w₀² + w₁²) 归一化，过渡中途起伏幅度不缩水），不再每 1/8 s 硬跳一次。
+    // 随机数：格子哈希给相位和种子，两个时隙的随机数用一次向量化的整数哈希（lowbias32）算出，不多调用 oceanHash3
     vec2 fp = vec2(footprint, max(footAcross, 0.5));
     vec2 lv = floor(log2(fp));
     float sect = (floor(atan(dir2.y, dir2.x) * (8.0 / M_PI)) + 0.5) * (M_PI / 8.0);
@@ -234,17 +239,17 @@ vec3 oceanRadiance(vec3 P, vec3 rd, float tGround, vec3 body, float calm, vec3 e
     vec2 wM = xzM + uOceanCam.xy;
     cell = floor(vec2(dot(wM, ax), dot(wM, vec2(-ax.y, ax.x))) * exp2(-lv));
     ivec3 cid = ivec3(ivec2(cell), int(lv.x) * 64 + int(lv.y) + int(sect * 100.0) * 4096);
-    float ph = oceanHash3(cid).x;
-    vec3 hs = oceanHash3(cid + ivec3(0, 0, int(floor(uTime * 8.0 + ph)) * 7919));
-    float u = hs.x;
+    vec3 hc = oceanHash3(cid);
+    float tt = uTime * 6.0 + hc.x;
+    float ti = floor(tt);
+    float fw = tt - ti;
+    fw = fw * fw * (3.0 - 2.0 * fw);
+    uvec2 q = uvec2(ivec2(int(ti)) + ivec2(0, 1)) * 747796405u + uint(hc.y * 16777216.0);
+    q ^= q >> 16u; q *= 0x7feb352du; q ^= q >> 15u; q *= 0x846ca68bu; q ^= q >> 16u;
+    vec2 r2 = vec2(q) * (2.0 / 4294967296.0) - 1.0;       // 两个时隙各一个 [-1, 1) 的均匀随机数
+    float z = (r2.x * (1.0 - fw) + r2.y * fw) * 1.7320508 / sqrt((1.0 - fw) * (1.0 - fw) + fw * fw); // 均值 0、方差 1
     float lambda = 5.0 * fp.x * fp.y * exp(-tan2 / sigma2);
-    float sparkle;
-    if (lambda < 4.0) {
-      float pHit = 1.0 - exp(-lambda);
-      sparkle = u < pHit ? 1.0 / max(pHit, 1e-4) : 0.0;
-    } else {
-      sparkle = 1.0 + (u * 2.0 - 1.0) * sqrt(3.0 / lambda);
-    }
+    float sparkle = max(1.0 + z * sqrt(lambda) / (1.0 + lambda), 0.0);
     L += eSun * fresnelWater(dot(v, hv)) * p / (4.0 * cosV * cb2 * cb2) * sparkle;
   }
   if (uDebug == 8) L = vec3(sigma2 * 20.0, footprint / 50.0, 0.0);
