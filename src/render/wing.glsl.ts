@@ -674,11 +674,12 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         // W-EDGE：打中了、离外轮廓可能不远（曲率估计不到 3 个像素，或 n·v < 0.12——拉普拉斯曲率逐像素跳，只按 1.5 像素判
         // 会漏掉贴着轮廓、却算成覆盖率 1 的像素）、不是内轮廓的中心射线，先探测「像素中心在轮廓里面多深」，
         // 再看轮廓背后是不是窗外，是的话按解析覆盖率出结果、不做边缘超采样（见下面的探测段、延续段）
-        if (w.cov == 1.0 && (silPx < 3.0 || dot(nFlat, -dA) < 0.12) && !grazed && shadowSteps > 0 && (uWingEdgeAA == 1 || uWingEdgeAA == 2) && (uWingDebug & 16384) == 0) {
+        if (w.cov == 1.0 && !grazed && shadowSteps > 0 && (uWingEdgeAA == 1 || uWingEdgeAA == 2) && (uWingDebug & 16384) == 0) {
+          bool nearSil = silPx < 3.0 || dot(nFlat, -dA) < 0.12;
           phase = 3;
-          n = vec3(0.0, max(dot(nFlat, -dA), 0.02), 0.0);
+          n = vec3(0.0, max(dot(nFlat, -dA), 0.02), nearSil ? 0.0 : 13.0);
           sumD = dHit;
-          t = w.t + 0.15 * pa * w.t / n.y;
+          t = w.t + (nearSil ? 0.15 : 0.75) * pa * w.t / n.y;
         } else phase = 2;
         // 不要自阴影的调用（边缘超采样的子射线，沿用中心射线的阴影）到这里就结束。
         // 以前 shadowSteps = 0 只是少算了循环总数，阴影段照样走到循环用完（子射线 64·3+4 次里剩下的一百多次），
@@ -700,6 +701,9 @@ WingTraceResult wingTrace(vec3 ro, vec3 rd, float tStart, vec3 lA, int marchStep
         n.x = t - w.t;
         n.z += 1.0;
         t += dS;
+      } else if (n.z > 12.5) {
+        n.z = 0.0;
+        t = w.t + 0.15 * pa * w.t / n.y;
       } else if (d <= sumD) {
         // 走完还没见底：放弃；折角（薄后缘、薄板正对视线、盒子拼接的棱）：最低点是两个面的交线，两侧按面的斜率一次方升降，
         // |最小值| 是到「另一面」的距离、不是到轮廓的距离，当成轮廓会把整条薄后缘变成半透明——这两种照旧超采样
