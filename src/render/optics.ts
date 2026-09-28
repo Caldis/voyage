@@ -235,7 +235,7 @@ export class Optics {
 
   /**
    * SPEC-BOW：这一帧放进 4 个槽的雨柱（按「强度 / 距离」排序取前 4）。三种来源：
-   * 1. 雷暴雨幡（weather.storms）：云步进已经画了雨幕，这里只为雨虹，所以只在「虹可能落在它上面」时才放（雨柱中心方向离对日点 25°–62°，
+   * 1. 雷暴雨幡（weather.storms）：云步进已经画了雨幕，这里只为雨虹，所以只在「虹可能落在它上面」时才放（雨柱离对日点 90° 以内，
    *    再放宽雨柱的角半径）。从巡航高度看，雨幡大半被自己的塔身 / 砧挡住，常只剩边上一段虹（物理如此）。
    * 2. 阵雨雨区：浓积云（积状云、层厚 ≥ 约 3.5 km）下的一片阵雨。世界上按 80 km 的格子放，每格每 50 分钟一段、约三成的段有雨
    *    （估算；西太暖池浓积云占降水性对流云的一半以上，research/TOWERING.md），段内按 sin² 生消（段首段尾为 0，换段不跳）。
@@ -268,8 +268,10 @@ export class Optics {
       // 中心消光 1.8 × (0.5 + 0.9 × 0.5) ≈ 1.7 /km，再乘云的密度倍率（与云步进一致）
       const r = 0.45 * st.radius;
       const g = geom(x, z, r);
-      if (g.anti - g.ang > 62 || g.anti + g.ang < 25 || g.h > 250) continue;
-      cols.push({ x, z, r, sigma: 1.7 * cloud.density, top: STORM_RAIN_TOP, veil: 0, seed: 0, rank: 1 / (g.d + 10) });
+      // 着色器里虹的相函数在对日点外 70°–90° 渐隐到 0、主虹里面一直有填充光：只按 90° 判（再放宽雨柱的角半径），免得跨门槛时跳变
+      if (g.anti - g.ang > 90 || g.h > 250) continue;
+      cols.push({ x, z, r, sigma: 1.7 * cloud.density, top: STORM_RAIN_TOP, veil: 0, seed: 0, rank: 0.1 / (g.d + 10) });
+      // 排序靠后（×0.1）：槽满时先让出雷暴的（它的雨幕由云步进画，被挤掉只少一段多半被塔身挡住的虹；阵雨雨幕被挤掉会整片消失）
     }
     // 2. 阵雨雨区
     const showers = smooth(0.6, 0.9, cloud.type) * smooth(3.0, 4.5, cloud.top - cloud.bottom) * smooth(0.15, 0.3, cloud.coverage) * smooth(3.5, 2.5, cloud.bottom);
