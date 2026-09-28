@@ -13,6 +13,13 @@
  * - opticsHaloRadiance：卷云里的冰晶：水平取向的六角片状冰晶产生的幻日（与太阳同高、方位差 = Bravais 等效折射率下的
  *   最小偏向角，红色在内缘），随机取向的冰晶产生 22° 晕。按「这一像素里卷云的光学厚度 × 单次散射」算辐亮度。
  *
+ * SPEC-BOW 加了四项（都在 OUTSIDE_OPTICS 里，各一个调用点，都经过 opticsComposite / opticsCloudFactor）：
+ * - opticsRain：雨区（CPU 给的 ≤ 4 个高斯雨柱：雷暴雨幡 / 阵雨雨区 / 演示雨区）沿视线的解析光学厚度，雨虹（10 个代表波长的
+ *   几何光学主 / 副虹 + 亚历山大暗带）与阵雨雨幕（消光 + 漫散射）；
+ * - opticsCloudBow：云虹 / 雾虹（Mie 拟合的宽白环，乘在云海辐亮度上，与宝光同一群云滴）；
+ * - opticsArcRadiance：环地平弧与日柱（卷云里的水平片状冰晶）。
+ * 参数出处与拟合脚本见 handoff/SPEC-BOW.md、handoff/SPEC-BOW-optics.py。
+ *
  * PERF-13：宝光 / 本机影子 / 幻日 / 晕只编进 `#ifdef OUTSIDE_OPTICS` 变体（窗外程序的按需变体，启动后后台预编），
  * 默认程序只有太阳圆盘 + 绿闪。新加的「平时不出现」的光学现象一律写进这个宏里，并让 render/optics.ts 的 opticsWanted 认得它。
  */

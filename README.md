@@ -110,7 +110,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 | `src/render/terrain-shading.glsl.ts` | 真实地面着色 `groundRadiance` |
 | `src/render/seat-pass.ts` | 座椅 pass（PERF-14）：座椅的追踪与着色从舱内合成里拆出来，画到 `hdrSeat`（rgb 颜色、a 覆盖率），舱内合成按像素读回；灯光与舱内合成共用 `scene.ts` 的 `cabinLightsSetup` |
 | `src/render/wing-shading.glsl.ts` | 机翼着色 `shadeWing` 与航行灯 / 频闪 `wingLights` |
-| `src/render/optics.ts` / `optics.glsl.ts` | 罕见光学现象（T17）：宝光与本机影子（乘在云的辐亮度上）、幻日与 22° 晕（卷云单次散射）、太阳圆盘与绿闪（地平线亚像素裁切 + 三色色散 + 蜃景放大）；CPU 端按条件 + 分段随机决定出不出现、多强 |
+| `src/render/optics.ts` / `optics.glsl.ts` | 罕见光学现象（T17）：宝光与本机影子（乘在云的辐亮度上）、幻日与 22° 晕（卷云单次散射）、太阳圆盘与绿闪（地平线亚像素裁切 + 三色色散 + 蜃景放大）；CPU 端按条件 + 分段随机决定出不出现、多强。SPEC-BOW：雨区（雷暴雨幡 / 浓积云下的阵雨，≤ 4 个解析高斯雨柱）上的雨虹（10 波长几何光学主 / 副虹 + 亚历山大暗带）与阵雨雨幕、云海上的云虹（Mie 拟合）、卷云里的环地平弧 / 日柱；演示 `?bow=1` |
 | `src/render/lightning.glsl.ts` | 闪电照度 `flashIlluminance` 与云地闪通道 `boltRadiance` |
 | `src/render/view.glsl.ts` | 相机射线、舷窗尺寸 |
 | `src/render/cabin.glsl.ts` | 窗洞内衬（漏斗）、窗板光源、划痕 / 油污 / 水痕 |
@@ -151,6 +151,7 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   夜景 `night-city`、`wonder-jianmu-day`）`shots --pair` 同一份 js 跑两次，`compare.mjs --diff --threshold 8`
   验证 mean/p99/max/超阈值像素全部为 0（此前的临时绕法 `v.benchFrame = () => 0` 已不需要）。
 - **罕见光学现象**（T17，`src/render/optics.ts`）：平时按条件 + 随机出现（宝光：云顶在下方且是水滴云、太阳在海平线以上、每 20 模拟分钟掷一次；幻日 / 22° 晕：卷云、每 30 分钟掷一次，常只出一侧；绿闪：每个日落都有色散，约三成日落有把它放大到看得见的逆温蜃景）。强制出现：URL `?optics=glory,halo,flash`（或 `all`），全关对照 `?optics=off`；运行时 `__voyage.optics.force = { glory: true }`、`__voyage.optics.disabled = true`；`__voyage.optics.status` 看当前强度 / 云滴半径 / 放大倍数。`__voyage.optics.pinGreenFlash(0.5)` 把模拟时间钉在绿闪那一刻（0 = 红色日像上缘刚落到海平线、1 = 绿色上缘落下；飞机在动，每帧重新对准），`pinGreenFlash(null)` 解除；`__voyage.optics.pixelOf(__voyage.sceneMat.uniforms[, 方向])` 算反日点（或任意窗外方向）落在屏幕哪个像素，找「宝光 / 幻日在窗里」的时刻用。几何上：宝光要座位背对太阳（如 wpac 左座 16:30），幻日在太阳两侧约 22°（wpac 右座 16:30 卷云）。自测场景见 `handoff/T17-shots.ps1`。
+  **SPEC-BOW**：`?bow=1`（= `?optics=bow`）或 `__voyage.optics.force = { bow: true }` 演示虹——强制云虹 + 宝光、在对日点外 46° 那一圈上摆一片演示阵雨（窗外往下约 20° 的方向）、卷云里强制出片状冰晶（环地平弧要太阳 ≥ 58°，日柱要太阳 ≤ 6°）；拨了时间 / 航向后 `__voyage.optics.resetBowDemo()` 重摆；`status.rain` 列出槽里的雨柱（来源 / 距离 / 消光 / 离对日点角距）、`status.cloudBow` / `cha` / `pillar` 是强度。回归场景 `bow-rain` / `bow-cloud` / `bow-cha`（表尾）；对照、计时、闪烁的 jobs 在 `handoff/SPEC-BOW-*.json`。
 - **调试小地图**（DX-06，`src/debug/minimap.ts`）：面板底部「调试小地图」开关，或按 `N`（不在输入框里时）；默认关，纯 2D canvas 叠层，画在左下角（约 280×300、半透明深色底，不挡舷窗中心），关着时 `update()` 第一行就返回、canvas `display:none`，零开销。内容：本机（图标固定圆心，地图始终「航向朝上」）、已飞过的轨迹、当前航线（`director.leg` 的航段或 `state.preset.dest`）、远处的其他飞机（`traffic.ts`）、奇观（`wonders.active`）、以及「云的多普勒」——仿气象雷达回波图，背景网格从 `director.weather.field.sample()`（天气场）按经纬度采样云量 / 云型换算出回波强度，叠加当前**实际渲染中**的 `weather.storms` / `weather.hurricane`（不论天气是导演按天气场摆的还是面板手选的，雷达图都和窗外一致）。点击地图本体在 50 / 200 / 800 km 三档量程间切换。雷达网格（48×48）每约 800 ms 重采样一次，且分帧算（每帧最多 4 行），避免拖帧；台风的螺旋雨带是按角度做正弦调制的近似图形（用于「看起来像螺旋回波」），不是 `clouds.glsl.ts` 里真正的密度场（CPU 侧读不到那份数据）。
 - `sceneMat.uniforms.uDebug.value`（窗外与舱内共用同一份 uniforms，1–4 在舱内程序，其余在窗外程序）：1 内衬命中深度，2 亮度伪彩，3 内衬受到的窗光，4 内衬法线，5 海面本身，6 海面天空反射，7 海面内散射，8 海面粗糙度 / 像素覆盖，9 海面直射照度，10 闪烁格子。
 - **航向 / 接力调试**（T49）：面板底部「立即触发到达 / 接下一段（调试）」按钮 = `__voyage.director.forceArrive()`：不等飞到终点，立即走一次「到达」（自动航线接下一段，要掉头 > 90° 时照常排进遮挡队列；直飞模式转入盘旋）。其他句柄：`__voyage.director.ap`（自动驾驶：`mode` / `selHeading` / `turnDir` / `timeScale` / `hold` / `nextCourse` / `holdCourse`）、`director.setHeading(deg, dir?)`、`director.turnBy(±deg)`、`director.hold()`、`director.directTo("ITM")`、`director.resumeRoute()`、`director.nextLeg`（离终点 400 km 内预挑的下一段）、`director.describeNav()`。离线复现 / 单测（不开浏览器，几秒跑完）：`node --import ./handoff/T49-resolve.mjs --experimental-transform-types --no-warnings handoff/T49-test.mts`；按真实时间打印航向 / 坡度曲线与 > 60° 转向事件：同样的前缀跑 `handoff/T49-sim.mts [流速] [真实分钟] [预设]`。
@@ -512,6 +513,14 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
 - **从巡航高度看海平线，绿闪在物理上几乎看不见，不是着色器没生效**（T17）：色散只让绿色日像比红色高约 20 角秒（一个像素约 2.7 角分），而最后那一丝阳光贴着海面擦过整个低层大气两次（进、出各一次，Rayleigh 光学厚度约 7.6，加气溶胶），绿光透射率只有红光的约 1%。10.7 km 上即使放大 8 倍，那一个像素也只是很暗的一点绿；1 km 高度时就是看得出的一点绿。
   真实的「看得见的绿闪」靠近地逆温层的蜃景把地平线附近竖直放大（Young 的 mock mirage）——放大的是角尺寸，不是时间，所以 `opticsSunDisk` 做的是「视高度 → 真高度」的映射，而不是把色散量乘大（乘大会让绿闪持续十几秒）。
   识别：`__voyage.optics.pinGreenFlash(-3)` 时能看到白亮的日边，`0.5` 时只剩一点绿，`disabled` 时什么都没有；想确认机制在工作，临时把 `uOpticsFlash.y` 调到 10 看绿边是否变高。
+- **虹 / 云虹 / 环地平弧的几条（SPEC-BOW）**：
+  ① **舷窗视场装不下一整圈虹**：虹半径 42°、云虹约 38°，相机竖直视场才 50°，从巡航高度「整圈都在地平线下」是物理上的全圆，窗里只看得到一段弧；想看到弧，窗的视线要离对日点约 40°（太阳高、在背后），想让宝光与云虹同框要贴窗（`view-preset: close`）、对日点在画面一角。挑时刻别手试：`handoff/SPEC-BOW.md` 里有「扫一天找窗中心离对日点 N° 的时刻」的场景 js。
+  ② **雨区从巡航高度要看俯角 ≥ 10° 的**：俯角 5° 的视线落在 100 km 外，雨和虹都被空气光吃掉；演示雨区因此摆在窗下半部的方向。
+  ③ **雨幕只能挡它后面的东西**：背景 L 里含相机到地面整段空气的内散射，直接 L·e^(−τ) 会把前面几十公里的蓝色空气光一起吃掉，雨成一块黑斑。要按 `L·Tv + (1 − Tv)·airL`（airL 取空气透视 LUT 到雨的那一段）合成。识别：雨区比周围海面还黑、边缘发蓝。
+  ④ **雷暴雨幡从巡航高度大多被自己的塔身挡住**（视线先穿塔底再到雨），雨虹主要落在「阵雨雨区」（浓积云下、光学在 OW 里自己画雨幕）上；雷暴的只剩边上一段，物理如此。
+  ⑤ **云虹按单次散射份额算只有 +10%，色调映射后在白云肩部只剩 3–4%，肉眼看不出**：按照片定标 ×2（`CLOUDBOW_GAIN`，估算）。量对比要拿同机位 on / off 两张相除（`shots --pair "v.optics.disabled=true" --pair "v.optics.disabled=false"`），单看一张截图判断不了有没有。
+  ⑥ **环地平弧的光铺在几十度宽的方位上**：份额照幻日给 1e-3 时峰值只有幻日的 1/100，看不见；给 1e-2。
+  ⑦ **雨的受光别在窗外程序里再调一次 `cloudShadow`**：它是三级 × 4 次取样，FXC 每个调用点整份内联，OW 离线编译多 6%；`opticsRainLit` 只查中间一级一次双线性。
 - **晕和幻日的份额要按「单次散射 × 归一化相函数」定标，别凭感觉给 0.05**（T17）：幻日的角分布很集中（约 1°×1.3°，峰值约 1000 /sr），份额给 0.05 时幻日比太阳周围的天空亮上千倍、22° 晕成了一道彩虹。按「卷云约一半是前向衍射、水平片状冰晶约 1%、每个幻日分到约 10%」估到 5e-4（晕 5e-3），幻日才是「比周围卷云亮几倍」。三原色通道的晕颜色会比真实的连续光谱纯得多，各通道内缘往中间收一半才像「红色内缘、往外发白」。
 - **夜里发光体发白 / 发灰，不是「浦肯野按全局适应亮度」的锅，是「按亮度线性褪色」+ AgX 高光压色度**（T48）：现象：钠灯照亮的雾（R:G:B ≈ 1 : 0.23 : 0.01、约 0.16 cd/m²）屏幕上是奶白，night-city 的钠灯路网是白的。
   根因两段：① 浦肯野的混合是「全局适应因子 × 像素亮度因子」，夜里全局因子恒为 1，实际由像素亮度决定——0.16 cd/m² 时仍混约 28% 的视杆灰蓝，不管像素多饱和；② 窗外对数平均测光被大片黑底拉低（0.001 cd/m²），雾被曝光推到中灰之上 4–7 档，AgX 在对数域逐通道压缩，通道比被压扁成奶白，城市灯（约 3 cd/m²）直接截白。

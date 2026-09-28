@@ -11,6 +11,11 @@ import type { VoyageState } from "../state";
  * 段与段之间用最后 15% 的时间平滑过渡，不会突然跳变。随机数按页面打开时的种子 + 段号生成。
  * 绿闪的物理条件（太阳上缘正好在地平线上、地平线没被云挡住）本身就只有一两秒，随机的是有没有近地逆温层的蜃景把绿边放大到看得见。
  *
+ * SPEC-BOW：雨区与雨虹（雷暴雨幡、浓积云下的阵雨雨区，rainColumns）、云虹（与宝光同一片水滴云、同一段云滴半径）、
+ * 环地平弧 / 日柱（与幻日同一群片状冰晶，按太阳高度分）。演示：URL `?bow=1`（= `?optics=bow`）或 `__voyage.optics.force = { bow: true }`，
+ * 强制云虹 + 宝光、在对日点外 46° 那一圈上（窗外、往下约 20°）摆一片演示阵雨、卷云里强制出片状冰晶；`resetBowDemo()` 按当前机位重摆；
+ * `status.rain` 列出槽里的雨柱（来源、距离、消光、离对日点的角距）。
+ *
  * 调试：URL `?optics=glory,halo,flash`（或 `all`）强制出现、`?optics=off` 全关；运行时 `__voyage.optics.force.glory = true`。
  * `__voyage.optics.pinGreenFlash(phase)` 把模拟时间钉在绿闪的那一刻（phase 0 = 红色日像上缘刚好落到海平线，
  * 1 = 绿色日像上缘落到海平线，0.5 是只剩一丝绿的中间时刻；飞机在动，每帧重新对准），`pinGreenFlash(null)` 解除。
