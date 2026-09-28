@@ -104,7 +104,7 @@ vec3 ftBubbles(vec2 p, float seed) {
     vec2 o = vec2(float(x), float(y));
     vec2 c = id + o + seed;
     vec2 d = o + 0.1 + 0.8 * vec2(ftHash(c), ftHash(c + 17.3)) - f;
-    float rad = 0.45 + 0.35 * ftHash(c + 5.1);
+    float rad = 0.35 + 0.5 * ftHash(c + 5.1);
     float s = rad * rad - dot(d, d);
     if (s > 0.0) {
       float hgt = sqrt(s) / rad;
@@ -185,8 +185,8 @@ void main() {
       float h = rP - BOTTOM;
       float fp = tC * pixAng + 0.04;
       // 生长期没有砧：大圆头的浓积云塔；有砧后顶上只剩一个上冲穹顶
-      float domeH = mix(R * 0.9, 1.5, C.y);
-      float domeR = mix(0.95, 0.62, C.y);
+      float domeH = mix(R * 0.9, 0.7, C.y);
+      float domeR = mix(0.95, 0.4, C.y);
       if (h > 0.0 && h < top + domeH + 0.3) {
         float base = FT_BASE + 0.5 * seed;
         float hn = clamp((h - base) / max(top - base, 1.0), 0.0, 1.0);
@@ -204,6 +204,8 @@ void main() {
         // 下窄上宽（越往上越并进砧里），中段一个鼓肚
         float prof = 0.68 + 0.32 * hn + 0.1 * sin(3.1416 * min(hn * 1.3, 1.0));
         float rC = R * prof * (0.86 + 0.3 * n1);
+        // 有砧时塔身上段向外张开、并进砧底（砧底在塔上方约 top − 砧厚 − 1 km）
+        rC *= 1.0 + 0.45 * C.y * smoothstep(top - B.w - 3.0, top - 1.0, h);
         // 塔顶：靠近砧顶处收窄，上面是穹顶
         rC *= mix(1.0, domeR, smoothstep(top - 1.2, top, h));
         float dome = h > top ? sqrt(max(1.0 - (h - top) * (h - top) / (domeH * domeH), 0.0)) : 1.0;
@@ -229,17 +231,17 @@ void main() {
           vec3 n0 = vec3(nh.x, 0.0, nh.y) * sqrt(1.0 - ny * ny) + upT * ny;
           vec3 sideW = vec3(side.x, 0.0, side.y);
           vec3 n = normalize(n0 + 0.9 * (sideW * b1.y + upT * b1.z) + 0.45 * (sideW * b2.y + upT * b2.z));
-          float crease = mix(0.55, 1.0, smoothstep(0.05, 0.45, b1.x)) * mix(0.8, 1.0, smoothstep(0.05, 0.4, b2.x));
+          float crease = mix(mix(0.85, 0.68, hn), 1.0, smoothstep(0.05, 0.45, b1.x)) * mix(0.88, 1.0, smoothstep(0.05, 0.4, b2.x));
           vec3 Ek = keyLight(rP, upT);
           float mu = dot(upT, uKeyDir);
           // 厚云的背光面仍有大量多次散射（约受光面的三到四成），按包裹光照：背面不低于 0.3
           float diff = mix(0.3, 1.0, clamp(0.5 + 0.5 * dot(n, uKeyDir), 0.0, 1.0)) * crease;
           // 砧底下的塔身在高太阳时被砧挡住一部分；越往下越暗（云底一侧只受天空与海面的漫射）
-          float under = (1.0 - smoothstep(top - 3.5, top - 1.5, h)) * C.y * smoothstep(0.5, 0.9, mu);
+          float under = smoothstep(top - B.w - 4.0, top - B.w - 1.0, h) * (1.0 - smoothstep(top - 0.8, top, h)) * C.y * smoothstep(0.35, 0.8, mu);
           float vert = mix(0.65, 1.0, smoothstep(base, base + 0.5 * (top - base), h));
           vec3 Esky = skyIrradiance(rP, upT);
           // 环境：天空 + 下方被照亮的云海 / 海面的反光
-          Lc = FT_ALBEDO / M_PI * (Ek * (diff * (1.0 - 0.3 * under) + 0.1 * max(mu, 0.0)) * vert + Esky * (0.45 + 0.3 * n.y) * vert);
+          Lc = FT_ALBEDO / M_PI * (Ek * (diff * (1.0 - 0.45 * under) + 0.1 * max(mu, 0.0)) * vert + Esky * (0.45 + 0.3 * n.y) * vert);
           // 逆光时轮廓一圈前向散射的亮边（约 0.4 km 的薄边，只在接近正对太阳时）
           Lc += Ek * ftHg(cosV, 0.85) * 0.25 * smoothstep(0.5, 0.95, cosV) * exp(-max(e, 0.0) / 0.4) * vert;
           // 雨幡：灰，只受漫射与少量直射
@@ -299,7 +301,7 @@ void main() {
             float muA = dot(upA, uKeyDir);
             vec3 Ek = keyLight(BOTTOM + am, upA);
             // 从下往上看到的是砧底（高太阳时在砧自己的影子里，低太阳时被侧光照亮）；看到砧顶 / 侧面时是受光的亮白
-            float underLit = mix(0.85, 0.25, smoothstep(0.1, 0.5, muA));
+            float underLit = mix(0.85, 0.5, smoothstep(0.1, 0.6, muA));
             // 侧面（朝相机的竖直边）整片受光，按太阳在它前后分受光 / 背光；只有视线贴着砧底进去的那一薄层才是暗的砧底——
             // 按高度连续渐变会把整张砧染成上亮下暗的「圆管」
             float face = mix(0.4, 1.0, clamp(0.5 - 0.5 * dot(vec3(rh.x, 0.0, rh.y), uKeyDir), 0.0, 1.0));
