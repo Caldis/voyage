@@ -1,0 +1,20 @@
+[
+  {
+    "name": "jianmu-noon",
+    "scene": { "name": "ws-jianmu-noon", "p": { "preset": "wpac", "seat": "left", "date": "2026-09-27", "time": 780, "cabin-light": false, "wing-pos": "-4" }, "head": [0, 0.02, -0.3], "js": "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.37 }); return v.wonders.describe();" },
+    "variants": [
+      { "name": "on", "js": "v.wonders.enabled = true; v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.37 });" },
+      { "name": "off", "js": "v.wonders.clear(); v.wonders.enabled = false;" },
+      { "name": "on2", "js": "v.wonders.enabled = true; v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.37 });" }
+    ]
+  },
+  {
+    "name": "jianmu-dusk-up",
+    "scene": { "name": "ws-jianmu-dusk-up", "p": { "preset": "wpac", "seat": "left", "date": "2026-09-27", "time": 1070, "coverage": 0.3, "cabin-light": false, "wing-pos": "-4" }, "head": [0, -0.12, -0.3], "js": "v.wonders.enabled = true; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 250, reveal: 1, seed: 0.83 }); return v.wonders.describe();" },
+    "variants": [
+      { "name": "on", "js": "v.wonders.enabled = true; v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 250, reveal: 1, seed: 0.83 });" },
+      { "name": "off", "js": "v.wonders.clear(); v.wonders.enabled = false;" },
+      { "name": "on2", "js": "v.wonders.enabled = true; v.wonders.trigger(\"jianmu\", { forwardOffsetDeg: 0, distKm: 250, reveal: 1, seed: 0.83 });" }
+    ]
+  }
+]

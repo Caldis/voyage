@@ -477,7 +477,7 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
         float qn = 0.8 + 0.35 * nq;
         float gq = length(vec2(el.x / Rp, el.y / Bv)) / max(q, 1e-3);
         // 透天的空当只在外圈（中间是实的一团）：否则满盘圆洞，像一块奶酪
-        float cf = wonderTentCdf((qn - q) / max(gq * wPix, 1e-4)) * smoothstep(0.1, 0.4, nq + 0.8 * (0.75 - q));
+        float cf = wonderTentCdf((qn - q) / max(gq * wPix, 1e-4)) * smoothstep(0.1, 0.4, nq + 1.3 * (0.8 - q));
         if (cf > folN.w) {
           float ez = sqrt(max(1.0 - dot(el, el), 0.0));
           vec3 nb = el.x * nh + el.y * uph - ez * rd;
