@@ -369,7 +369,7 @@ export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo"> & {
   waterMips: Uint8Array | null;
   /** G07b：各阶段耗时（毫秒），归因帧尖峰用：read = 位图读回像素（影像 + 细节），mips = 两张 mip 链；
    * marks = 各阶段结束时刻（离开始多少毫秒）：read / water（水体栅格化）/ waterRead（水体 getImageData）/ detail / night / roads / mips */
-  phases?: { readMs: number; mipMs: number; marks: [string, number][]; decoded?: number; hits?: number };
+  phases?: { readMs: number; mipMs: number; marks: [string, number][]; decoded?: number; hits?: number; aa?: boolean };
 };
 
 /**
@@ -381,12 +381,15 @@ export type GroundLevelResult = Pick<LevelPixels, "water" | "albedo"> & {
  * （`albedo`、`nightRaw`，两个都走 Transferable）和瓦片的几何数据（水体/河道顶点，仍然是复制——它们缓存在
  * `tiles.ts` 的 LRU 里给下次重建复用，不能转移/detach，见类头 `RoadJob.water` 注释）。
  */
-/** 影像 / 高清细节的来源：G08 起是瓦片拼接任务（Blob，在这里解码拼接）；`ground.imageryInWorker = false` 时是主线程拼好的位图（G07b 的做法，对照用） */
-export type ImagerySrc = ComposeSpec | ImageBitmap;
+/**
+ * 影像 / 高清细节的来源（G08）：拼接 Worker 拼好的 RES² RGBA 像素（默认）；拼接 Worker 停用时是瓦片拼接任务（Blob，在这里解码拼接）；
+ * `ground.imageryInWorker = false` 时是主线程拼好的位图（G07b 的做法，对照用）
+ */
+export type ImagerySrc = Uint8ClampedArray | ComposeSpec | ImageBitmap;
 
 /**
- * 一级的完整合成（Worker 与主线程兜底共用）：先把影像 / 高清细节拼成像素（tile-compose.ts），再走 buildGroundLevel。
- * 阶段时刻（phases.marks，离开始多少毫秒）：decode（瓦片解码完）/ read（拼接 + 读回完）/ water / waterRead / detail / night / roads / mips。
+ * 一级的完整合成（Worker 与主线程兜底共用）：影像 / 高清细节还不是像素时先拼成像素（tile-compose.ts），再走 buildGroundLevel。
+ * 阶段时刻（phases.marks，离开始多少毫秒）：[eoxDecode / eoxStitch / gsiDecode / gsiStitch（自己拼时）] / read / water / waterRead / detail / night / roads / mips。
  * bad = 解码失败的瓦片地址（主线程从 Blob 缓存里删掉）
  */
 export async function buildGroundLevelFrom(
@@ -400,8 +403,9 @@ export async function buildGroundLevelFrom(
   const RES = job.res;
   const bad: string[] = [];
   const marks: [string, number][] = [];
-  let decoded = 0, hits = 0;
+  let decoded = 0, hits = 0, aa = false;
   const read = async (src: ImagerySrc, tag: string) => {
+    if (src instanceof Uint8ClampedArray) return src;
     if (!("kind" in src)) return readBitmap(src, RES);
     const ts = performance.now() - t0;
     const r = await composeTiles(src, cache);
@@ -410,6 +414,7 @@ export async function buildGroundLevelFrom(
     bad.push(...r.bad);
     decoded += r.decoded;
     hits += r.hits;
+    aa ||= r.aa;
     return r.px;
   };
   const albedo = await read(albedoSrc, "eox");
@@ -419,6 +424,7 @@ export async function buildGroundLevelFrom(
   r.phases!.readMs = readMs;
   r.phases!.decoded = decoded;
   r.phases!.hits = hits;
+  r.phases!.aa = aa;
   return { ...r, bad };
 }
 

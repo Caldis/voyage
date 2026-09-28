@@ -30,6 +30,8 @@ try {
       inWorker: g.imageryInWorker, res: st.res, warmup: st.warmup, pending: g.pending,
       worker: { count: st.worker.count, maxMs: Math.round(st.worker.maxMs), decodedCached: st.worker.decodedCached,
         last: st.worker.recent.slice(-4).map((t) => ({ ms: Math.round(t.ms), read: Math.round(t.readMs), decoded: t.decoded, hits: t.hits, marks: t.marks.map(([n, e]) => `${n}:${Math.round(e)}`).join(" ") })) },
+      stitch: st.stitch && { count: st.stitch.count, maxMs: Math.round(st.stitch.maxMs), decodedCached: st.stitch.decodedCached, aa: st.stitch.aa,
+        last: st.stitch.recent.slice(-4).map((t) => ({ ms: Math.round(t.ms), decoded: t.decoded, hits: t.hits, marks: t.marks.map(([n, e]) => `${n}:${Math.round(e)}`).join(" ") })) },
       draw: st.draw,
       hosts: Object.fromEntries(Object.entries(st.hosts).map(([h, x]) => [h, { req: x.requests, ok: x.ok, failed: x.failed, thr: x.throttled, miss: x.missing }])),
     };

@@ -40,6 +40,8 @@ export interface ComposeResult {
   /** 解码完成（离开始多少毫秒）、画完并读回（离开始多少毫秒） */
   decodeMs: number;
   readMs: number;
+  /** 这个线程的 CPU 画布画位图带边缘抗锯齿（走了裁剪 + 垫底的慢路径，见 drawTileCrisp）；Chrome 为 false */
+  aa: boolean;
 }
 
 /** 解码缓存（按瓦片地址，LRU）：换出时 close() 释放位图内存。只在一个任务内使用时安全——调用方保证任务串行、
@@ -135,12 +137,62 @@ export async function composeTiles(spec: ComposeSpec, cache: DecodedCache | null
   }
   spec.tiles.forEach((t, i) => {
     const b = bmps[i];
-    if (b) ctx.drawImage(b, t.x, t.y, t.w, t.h);
+    if (b) drawTileCrisp(ctx, b, t);
   });
   // 没有缓存（主线程兜底）时画完就释放
   if (!cache) for (const b of bmps) b?.close();
   const px = ctx.getImageData(0, 0, res, res).data;
-  return { px, bad, decoded, hits, decodeMs, readMs: performance.now() - t0 };
+  return { px, bad, decoded, hits, decodeMs, readMs: performance.now() - t0, aa: aaProbe === true };
+}
+
+/**
+ * 按「像素中心落在矩形里」画一张瓦片，边上不做覆盖率抗锯齿（G08 发现）。
+ * 瓦片矩形的边是小数：CPU 画布的 drawImage 对边上像素按覆盖率混合，相邻两张瓦片在接缝像素上各盖一部分，
+ * 叠出来 A < 1——影像 A 通道 < 0.5 是「缺影像比例」，着色器在这条缝上回退到粗一级，画面上就是一条沿瓦片边的暗细线
+ * （fuji-day 同页 A/B 最大差 26，肉眼可见）。GPU 画布（G07b 以前）画位图不做边缘抗锯齿，没有这个问题。
+ * 做法：先按像素中心规则裁一个整像素的矩形（整数边的裁剪没有部分覆盖），在里面先画一张四边各外扩 1 像素的垫底，
+ * 再在原矩形上画正片——内部像素完全被正片盖住，边上像素是「正片 × 覆盖率 + 垫底 × 余下」，颜色就是瓦片边缘的颜色，A = 1。
+ * 相邻瓦片的矩形不严格对接（本地坐标按各自纬度的 cos 换算经度，东西向相邻的两张边上差零点几到几个像素），
+ * 重叠处后画的赢（spec 顺序），缝隙处照旧透明，和 GPU 画布一致
+ */
+function drawTileCrisp(ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D, b: ImageBitmap, t: ComposeTile) {
+  // Chrome 的 CPU 画布对轴对齐的 drawImage 本来就不做边缘抗锯齿（实测 handoff/G08-seam.mjs：与这里的裁剪画法逐字节相同），
+  // 省掉裁剪和垫底（一级 100 多张瓦片，垫底让拼接耗时翻倍）；别的浏览器探测到做了抗锯齿时才走下面
+  if (!drawAntialiased(ctx)) {
+    ctx.drawImage(b, t.x, t.y, t.w, t.h);
+    return;
+  }
+  const x0 = Math.ceil(t.x - 0.5), x1 = Math.ceil(t.x + t.w - 0.5);
+  const y0 = Math.ceil(t.y - 0.5), y1 = Math.ceil(t.y + t.h - 0.5);
+  if (x1 <= x0 || y1 <= y0) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x0, y0, x1 - x0, y1 - y0);
+  ctx.clip();
+  ctx.drawImage(b, t.x - 1, t.y - 1, t.w + 2, t.h + 2);
+  ctx.drawImage(b, t.x, t.y, t.w, t.h);
+  ctx.restore();
+}
+
+/** 这个线程的 CPU 画布画位图时边缘做不做抗锯齿（只探测一次）：把一张 2×2 不透明位图画到 (0.5, 0.5) 起的 2×2 矩形，看边上像素的 A */
+let aaProbe: boolean | undefined;
+function drawAntialiased(ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D) {
+  if (aaProbe !== undefined) return aaProbe;
+  try {
+    const src = make2d(2, true);
+    src.fillStyle = "#fff";
+    src.fillRect(0, 0, 2, 2);
+    const probe = make2d(4, true);
+    probe.imageSmoothingQuality = ctx.imageSmoothingQuality;
+    const c = src.canvas;
+    probe.drawImage("transferToImageBitmap" in c ? c.transferToImageBitmap() : c, 0.5, 0.5, 2, 2);
+    const a = probe.getImageData(0, 0, 4, 4).data;
+    aaProbe = false;
+    for (let k = 3; k < a.length; k += 4) if (a[k] > 0 && a[k] < 255) aaProbe = true;
+  } catch {
+    aaProbe = true;
+  }
+  return aaProbe;
 }
 
 /** G07b 及以前的做法（`ground.imageryInWorker = false` 对照用）：主线程拼好的位图在这里读回像素（非预乘，getImageData 的约定），读完关掉位图 */

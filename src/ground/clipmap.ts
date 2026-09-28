@@ -375,6 +375,7 @@ export class GroundClipmap {
       warm: this.warm,
       warmup: { ...this.warmMs },
       worker: { ...workerStats, recent: workerStats.recent.slice() },
+      stitch: { ...stitchStats, recent: stitchStats.recent.slice() },
       draw: { ...drawStats },
       hosts: imageryStats(),
     };
@@ -554,7 +555,10 @@ export class GroundClipmap {
       vec.job.mips = this.gl !== null && !this.gpuMips;
       vec.job.mipScratch = this.mipScratchReuse;
       vec.job.waterCpu = this.waterCanvasCpu;
-      const { water, albedo, detailCoverage, albedoMips, waterMips } = await buildGroundLevelAsync(vec.job, albedo0, nightRaw, detailDone ? detailPx.px : null);
+      // G08：影像 / 高清细节先在拼接 Worker 里拼成像素（和合成 Worker 上一级的活并行），再交给合成 Worker
+      const [albedoSrc, detailSrc] = await stitchAsync(albedo0, detailDone ? detailPx.px : null);
+      if (gen !== this.generation || i < this.minLevel) return;
+      const { water, albedo, detailCoverage, albedoMips, waterMips } = await buildGroundLevelAsync(vec.job, albedoSrc, nightRaw, detailSrc);
       if (gen !== this.generation || i < this.minLevel) return;
       queued = true;
       this.queueUpload(
@@ -624,6 +628,8 @@ export class GroundClipmap {
    * false = G07b 的做法（主线程 GPU 画布拼好、交位图），同页 A/B 用（改后 `rebuildAll()`）
    */
   imageryInWorker = true;
+  /** G08：影像 / 高清细节瓦片的矩形按同一行的中间纬度算左右边，东西相邻的瓦片严格对接（见 tileRect）；false = G07b 的矩形（同页 A/B 用，改后 `rebuildAll()`） */
+  tileEdgeShared = true;
   attachGl(renderer: THREE.WebGLRenderer) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
     this.gl = gl;
@@ -856,7 +862,7 @@ export class GroundClipmap {
         cover.tiles.map(async (t, k) => {
           const blob = await loadImageryBlob(EOX_S2, zoom, t.x, t.y);
           this.pending--;
-          if (blob) got[k] = composeTile(EOX_S2, cover.toPx, zoom, t, blob);
+          if (blob) got[k] = composeTile(EOX_S2, cover.toPx, zoom, t, blob, this.tileEdgeShared);
         }),
       );
       return composeSpec(coarsest ? "rgb(8, 22, 40)" : null, got);
@@ -876,9 +882,8 @@ export class GroundClipmap {
         const bmp = await loadImageryTile(EOX_S2, zoom, t.x, t.y);
         this.pending--;
         if (!bmp) return;
-        const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
-        const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        drawTimed(ctx, bmp, ax, ay, bx - ax, by - ay);
+        const r = tileRect(cover.toPx, zoom, t, this.tileEdgeShared);
+        drawTimed(ctx, bmp, r.x, r.y, r.w, r.h);
       }),
     );
     return canvas.transferToImageBitmap();
@@ -905,7 +910,7 @@ export class GroundClipmap {
           settledN++;
           if (!blob || performance.now() > deadline) return;
           n++;
-          got[k] = composeTile(GSI_PHOTO, cover.toPx, zoom, t, blob);
+          got[k] = composeTile(GSI_PHOTO, cover.toPx, zoom, t, blob, this.tileEdgeShared);
         }),
       );
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -930,9 +935,8 @@ export class GroundClipmap {
         settled++;
         if (!bmp || performance.now() > deadline) return;
         got++;
-        const [ax, ay] = cover.toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
-        const [bx, by] = cover.toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-        drawTimed(ctx, bmp, ax, ay, bx - ax, by - ay);
+        const r = tileRect(cover.toPx, zoom, t, this.tileEdgeShared);
+        drawTimed(ctx, bmp, r.x, r.y, r.w, r.h);
       }),
     );
     // 限时：到点还没齐就不等了（在途的请求照常完成、进缓存，给下一次重建用）
@@ -1050,11 +1054,34 @@ export class GroundClipmap {
   }
 }
 
-/** G08：一张瓦片在这一级画布上的矩形（和 G07b 以前主线程 drawImage 的参数相同） */
-function composeTile(src: ImagerySource, toPx: (lat: number, lon: number) => [number, number], zoom: number, t: { x: number; y: number }, blob: Blob): ComposeTile {
-  const [ax, ay] = toPx(tileYToLat(t.y, zoom), tileXToLon(t.x, zoom));
-  const [bx, by] = toPx(tileYToLat(t.y + 1, zoom), tileXToLon(t.x + 1, zoom));
-  return { key: src.url(zoom, t.x, t.y), blob, x: ax, y: ay, w: bx - ax, h: by - ay };
+/**
+ * 一张影像瓦片在这一级画布上的矩形（轴对齐，近似）。
+ * shared = true（G08，默认）：左右边都按这一行瓦片的中间纬度换算。本地坐标按各自纬度的 cos 换算经度（geo.ts），
+ * G07b 以前左边按上沿纬度、右边按下沿纬度算，东西相邻的两张在共用的那条经线上差 |x|·sinφ·Δφ（离原点越远越大，
+ * 第 3 级离原点 30 km 处约 0.7 像素，航线上离原点几百公里时到几个像素）：原点以西是缝、以东是重叠。
+ * 缝在 GPU 画布上被边缘抗锯齿半透明地糊住（影像 A < 1，着色器在缝上部分回退到粗一级），
+ * 挪到 CPU 画布后（边上不做抗锯齿）缝里的像素整个透明，画面上是一条沿经线的暗细线（fuji-day 同页 A/B 最大差 26，G08 发现）。
+ * 按同一纬度算两边后同一行的瓦片严格对接；上下相邻的两行本来就共用同一条纬线（y 只和纬度有关）。
+ * 顺带：矩形角点的最大位置误差从 1 倍缩到 0.5 倍上述差值（原来右上 / 左下角是整个差值）。
+ * shared = false：G07b 的矩形（同页 A/B 用，`ground.tileEdgeShared = false`）
+ */
+function tileRect(toPx: (lat: number, lon: number) => [number, number], zoom: number, t: { x: number; y: number }, shared: boolean) {
+  const latT = tileYToLat(t.y, zoom), latB = tileYToLat(t.y + 1, zoom);
+  const lonL = tileXToLon(t.x, zoom), lonR = tileXToLon(t.x + 1, zoom);
+  if (!shared) {
+    const [ax, ay] = toPx(latT, lonL);
+    const [bx, by] = toPx(latB, lonR);
+    return { x: ax, y: ay, w: bx - ax, h: by - ay };
+  }
+  const latM = tileYToLat(t.y + 0.5, zoom);
+  const ax = toPx(latM, lonL)[0], bx = toPx(latM, lonR)[0];
+  const ay = toPx(latT, lonL)[1], by = toPx(latB, lonL)[1];
+  return { x: ax, y: ay, w: bx - ax, h: by - ay };
+}
+
+/** G08：一张瓦片的拼接条目（矩形见 tileRect） */
+function composeTile(src: ImagerySource, toPx: (lat: number, lon: number) => [number, number], zoom: number, t: { x: number; y: number }, blob: Blob, shared: boolean): ComposeTile {
+  return { key: src.url(zoom, t.x, t.y), blob, ...tileRect(toPx, zoom, t, shared) };
 }
 
 function composeSpec(fill: string | null, got: (ComposeTile | null)[]): ComposeSpec {
@@ -1063,7 +1090,74 @@ function composeSpec(fill: string | null, got: (ComposeTile | null)[]): ComposeS
 
 /** 丢弃一份影像来源：位图（G07b 做法）要 close，拼接任务只是几个 Blob 引用，不用管 */
 function closeSrc(s: ImagerySrc | null | undefined) {
-  if (s && !("kind" in s)) s.close();
+  if (isBitmap(s)) s.close();
+}
+function isBitmap(s: unknown): s is ImageBitmap {
+  return typeof ImageBitmap !== "undefined" && s instanceof ImageBitmap;
+}
+
+// ---- 影像瓦片拼接 Worker（G08-STITCH，tile-compose.worker.ts）：主线程只把 Blob 与矩形发过去，收回 RES² 像素再转给合成 Worker。
+// 起不来或回报出错时停用，拼接任务原样交给合成 Worker 自己拼（同一份代码，只是串在它的关键路径上）----
+let stitchWorker: Worker | null | undefined;
+let stitchReq = 0;
+const stitchPending = new Map<number, (r: [ImagerySrc, ImagerySrc | null] | null) => void>();
+/** 拼接 Worker 每次任务的起止与分阶段时刻（主线程时间轴，`imageryStats.stitch.recent`）：归因帧尖峰用 */
+type StitchTask = { start: number; end: number; ms: number; marks: [string, number][]; decoded: number; hits: number };
+const stitchStats = { count: 0, totalMs: 0, maxMs: 0, decodedCached: 0, aa: false, recent: [] as StitchTask[] };
+
+function disableStitch(msg: string) {
+  if (!stitchWorker) return;
+  console.warn(msg);
+  stitchWorker.terminate();
+  stitchWorker = null;
+  for (const r of stitchPending.values()) r(null);
+  stitchPending.clear();
+}
+
+type StitchReply =
+  | { id: number; albedo: Uint8ClampedArray; detail: Uint8ClampedArray | null; bad: string[]; ms: number; t0Abs: number; marks: [string, number][]; decoded: number; hits: number; aa: boolean; cached: number }
+  | { id: number; error: string };
+
+/** 拼接任务 → 像素（拼接 Worker）；不是拼接任务（G07b 的位图对照）或 Worker 不可用时原样返回，由合成 Worker 处理 */
+async function stitchAsync(albedo: ImagerySrc, detail: ImagerySrc | null): Promise<[ImagerySrc, ImagerySrc | null]> {
+  if (!("kind" in albedo) || (detail && !("kind" in detail))) return [albedo, detail];
+  if (stitchWorker === undefined) {
+    try {
+      stitchWorker = new Worker(new URL("./tile-compose.worker.ts", import.meta.url), { type: "module" });
+      stitchWorker.onmessage = (e: MessageEvent<StitchReply>) => {
+        const d = e.data;
+        const done = stitchPending.get(d.id);
+        stitchPending.delete(d.id);
+        if ("error" in d) {
+          disableStitch(`影像拼接 Worker 出错（${d.error}），改由地面合成 Worker 拼接`);
+          done?.(null);
+          return;
+        }
+        stitchStats.count++;
+        stitchStats.totalMs += d.ms;
+        stitchStats.maxMs = Math.max(stitchStats.maxMs, d.ms);
+        stitchStats.decodedCached = d.cached;
+        stitchStats.aa = d.aa;
+        const start = d.t0Abs - performance.timeOrigin;
+        stitchStats.recent.push({ start, end: start + d.ms, ms: d.ms, marks: d.marks, decoded: d.decoded, hits: d.hits });
+        if (stitchStats.recent.length > WORKER_RECENT) stitchStats.recent.shift();
+        for (const k of d.bad) forgetImageryBlob(k);
+        done?.([d.albedo, d.detail]);
+      };
+      stitchWorker.onerror = (e) => disableStitch(`影像拼接 Worker 出错（${e.message}），改由地面合成 Worker 拼接`);
+    } catch {
+      stitchWorker = null;
+    }
+  }
+  const w = stitchWorker;
+  if (!w) return [albedo, detail];
+  const id = ++stitchReq;
+  const r = await new Promise<[ImagerySrc, ImagerySrc | null] | null>((resolve) => {
+    stitchPending.set(id, resolve);
+    // Blob 是引用复制（不拷字节），主线程的 Blob 缓存照常留着给下次重建用
+    w.postMessage({ id, albedo, detail });
+  });
+  return r ?? [albedo, detail];
 }
 
 /** G07b：主线程拼瓦片 drawImage 的耗时（imageryStats.draw），画布换 CPU 栅格时看主线程代价 */
@@ -1148,10 +1242,13 @@ function buildGroundLevelAsync(
   const worker = roadWorker;
   return new Promise((resolve, reject) => {
     roadPending.set(id, { resolve, reject });
-    // 瓦片水体/道路几何数据、影像 Blob 复制过去（Blob 只复制引用；都还留在 LRU 缓存里给下次重建用），
-    // 夜光像素缓冲区与（G07b 做法的）ImageBitmap 转移（不复制）
+    // 瓦片水体/道路几何数据、影像 Blob（拼接 Worker 停用时）复制过去（Blob 只复制引用；都还留在 LRU 缓存里给下次重建用），
+    // 夜光与拼好的影像像素缓冲区、（G07b 做法的）ImageBitmap 转移（不复制）
     const transfer: Transferable[] = [nightRaw.buffer];
-    for (const s of [albedo, detail]) if (s && !("kind" in s)) transfer.push(s);
+    for (const s of [albedo, detail]) {
+      if (s instanceof Uint8ClampedArray) transfer.push(s.buffer);
+      else if (isBitmap(s)) transfer.push(s);
+    }
     worker.postMessage({ id, job, albedo, nightRaw, detail }, transfer);
   });
 }
