@@ -257,7 +257,9 @@ export class Director {
       this.markVisit(from);
     } else {
       this.leg = null;
-      if (this.active) this.joinNetwork();
+      // 换地点本来就是一次跳变（下面 weather.onJump 同理）：接入航线网时机头直接对准新航段，
+      // 不要留着旧航向借自动驾驶去转（VOY-HKG：南海预设这么触发过一次一直 25° 坡度的大弯）
+      if (this.active) this.joinNetwork(true);
     }
     // 换预设是用户的跳变：天气直接对齐到天气场（本地坐标原点也换了，已摆放的雷暴 / 台风作废）
     if (this.active) this.weather.onJump();
@@ -277,7 +279,7 @@ export class Director {
       this.weather.stop();
       return;
     }
-    if (!this.leg) this.joinNetwork();
+    if (!this.leg) this.joinNetwork(jump);
     this.phase = this.host.state.altitudeKm < (this.leg?.cruiseKm ?? 10) - 0.2 ? "climb" : "cruise";
     if (!jump) return;
     this.weather.onJump();
@@ -290,17 +292,30 @@ export class Director {
     }
   }
 
-  /** 从当前位置（非航线预设）接入航线网：朝机头前方的机场飞 */
-  private joinNetwork() {
+  /** 从当前位置（非航线预设）接入航线网：朝机头前方的机场飞。
+   *  排除 here（VOY-HKG）：起点本来就是「当前位置」不是某个机场，here 只用来当 makeLeg 的占位 from——
+   *  前方没有真正在航线网覆盖范围内的机场时（例如南海预设朝西南飞出航线网覆盖的东亚范围），airportAhead
+   *  在不排除的情况下会退化成跟 nearestAirport 选到同一个机场，变成一段起点终点相同、距离却非零的自相矛盾
+   *  航段（现象：南海预设首段是「HKG→HKG」，自动驾驶一直压 25° 坡度、窗外只有海，见 README 坑点）。
+   *  jump 为 true 时机头直接对准新航段（同 VOY-DEFAULT 首帧对准的处理）：接入航线网挑出来的目的地不一定
+   *  真在机头前方，留给自动驾驶去转往往是一次远超 90° 的大弯，要转好几分钟；jump 为 false（用户中途勾选
+   *  开启连续航程）时保留旧行为，照常转、不跳。 */
+  private joinNetwork(jump = false) {
     const s = this.host.state;
     const [lat, lon] = this.host.geo();
-    const to = airportAhead(lat, lon, s.heading);
     const here: Airport = { ...nearestAirport(lat, lon).airport };
+    const to = airportAhead(lat, lon, s.heading, here.code);
     const leg = makeLeg(here, to);
-    // 起点是「当前位置」而不是机场：距离、方位按当前位置算，巡航高度保持现在的
+    // 起点是「当前位置」而不是机场：距离、方位都按当前位置算（不是 here→to 的机场对机场直线），巡航高度保持现在的
     leg.distKm = haversineKm(lat, lon, to.lat, to.lon);
+    leg.bearing = greatCircleBearing(lat, lon, to.lat, to.lon);
     leg.cruiseKm = Math.max(s.targetAltKm, 7.6);
     this.beginLeg(leg, { lat, lon, name: `当前位置 → ${to.name}` });
+    if (jump) {
+      s.heading = leg.bearing;
+      s.bankDeg = 0;
+      this.prevHeading = s.heading; // 跳变不算进转弯率遥测
+    }
   }
 
   /** 到达终点上空（flight.ts 的 onReachDest）：接下一段。不管连续航程开没开都接力，不再瞬移回起点。
@@ -431,7 +446,8 @@ export class Director {
     const s = this.host.state;
     if (this.leg && s.preset.dest) {
       this.phase = s.altitudeKm < this.leg.cruiseKm - 0.2 ? "climb" : "cruise";
-    } else if (this.active) this.joinNetwork();
+      // 有航段：继续飞它的终点，可能要转一个大弯——这是用户点「回到自动航线」的指令，照常转，不跳
+    } else if (this.active) this.joinNetwork(true); // 没有航段：凭空接入航线网，同 VOY-HKG 的处理，机头直接对准
   }
 
   /** 离终点 PREVIEW_KM 内预先挑好下一段（给提前转弯用）：按到达时的航向优先挑继续向前的 */

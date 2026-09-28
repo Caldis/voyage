@@ -221,17 +221,26 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
 #ifdef OUTSIDE_WONDER
 #ifdef WONDER_PILLARS
   L = wonderPillars(L, rd, hitGround ? tGround : 1e9);
-  gStarVis *= 1.0 - gWonderCov; // 柱子挡住它身后的点星（点星在舱内程序画，只认这个标记）
 #elif defined(ORBIT_RING)
   // 天环（WS08，wonders/ring.glsl.ts）：在大气层外，比所有云都远；盖住的地方不画点星（天环在场时 uWonderOn = 0，不调天梯 / 建木）
   L = orbitRing(L, rd, hitGround);
   gStarVis *= 1.0 - gRingCov;
+  // 月亮在上面已加进背景，orbitRing 只往上叠——盖住的部分把月盘连光晕减掉（WS08 审查：否则环读成透明玻璃带）
+  if (!hitGround) L -= gRingCov * moonDisk(rd) * sunTransmittance(uCamR, rd.y);
 #else
   L = wonderSky(L, rd, hitGround ? tGround : 1e9);
 #endif
+  // WS-STAR：天梯 / 建木（wonderSky）此前漏了这一行，实体挡住的天空仍标成「看得到点星」，夜里点星整根穿柱而出
+  // （多角度 / 多种子 on-off 对照 + 回退代码复测核实，见 handoff/WS-STAR.md）。巨柱群 / 天梯 / 建木共用同一个
+  // gWonderCov，挪到分支外统一乘一次即可，OWP 预处理后逐字不变
+  gStarVis *= 1.0 - gWonderCov; // 奇观实体挡住它身后的点星（点星在舱内程序画，只认这个标记）
 #endif
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
+#ifdef ORBIT_RING
+  L += opticsSunDisk(rd, hitGround) * (1.0 - gRingCov); // 天环挡住身后的太阳圆盘（WS08 审查）
+#else
   L += opticsSunDisk(rd, hitGround);
+#endif
   // 地形挡住它后面的云（T38，clouds.glsl.ts 的 cloudBeforeGround）：云步进不知道地形，只去掉地面之后那一段的云
 #ifdef RAIL
   // 火车远景（TR03）：轮廓上只盖住一部分像素的地形，身后的云也只挡掉那一部分（否则云在山脊处被一刀切成台阶）
