@@ -8,7 +8,7 @@ import { HazeModel } from "./atmosphere/haze";
 import { CLOUD_PRESETS, Clouds, createCloudUniforms } from "./clouds/clouds";
 import { generateCloudNoise } from "./clouds/noise";
 import { Bloom } from "./render/bloom";
-import { Exposure } from "./render/exposure";
+import { EXPOSURE_WHITEOUT, Exposure } from "./render/exposure";
 import { FullscreenPass } from "./render/pass";
 import { CabinClassVariant, createSceneMaterial } from "./render/scene";
 import { GroundDetailVariant, createOutsideMaterial, createOutsideTarget } from "./render/outside-pass";
@@ -197,6 +197,10 @@ const state: VoyageState = {
 
 /** 机翼调试：strobe 设成数字时频闪固定在这个亮度（截「闪亮瞬间」用，例如 1），null 按正常节奏闪 */
 const wingDebug: { strobe: number | null } = { strobe: null };
+
+/** STROBE-CLOUD：夜间云中自动关频闪的迟滞状态（见 handoff/STROBE-CLOUD.md）。offDwell / onDwell 是连续满足
+ * 「关闭条件」/「不满足关闭条件」的秒数，off 是当前是否已按迟滞判定关闭；暴露在 __voyage.strobeCloud 供面板状态文字与测量脚本读。 */
+const strobeCloud = { off: false, offDwell: 0, onDwell: 0 };
 
 /** 默认时刻：当天下午太阳高度角降到 8° 的时候，日落前的光最好看 */
 function defaultTime(preset: Preset) {
@@ -565,7 +569,18 @@ function renderFrame(now: number) {
   u.uWingFlex.value = 0.5 + flexAmp * (0.03 * Math.sin(ts * 2.3) + 0.02 * Math.sin(ts * 5.1 + 1.3)) + 0.015 * Math.sin(ts * 0.7);
   // 翼尖频闪：每秒双闪
   const ph = ts % 1.1;
-  u.uStrobe.value = wingDebug.strobe ?? (ph < 0.05 || (ph > 0.14 && ph < 0.19) ? 1 : 0);
+  // STROBE-CLOUD：真实航班夜航按 SOP 在云中关闭防撞频闪，避免云雾反射把整窗照亮（见 handoff/STROBE-CLOUD.md，
+  // 源于 STROBE-FLASH-review.md §3 的建议）。航行灯 / 尾灯不受影响（uStrobe 只喂频闪那一支，见 wing-shading.glsl.ts）。
+  // 夜：太阳高度角 < −6°——FAA 14 CFR 1.1 对「夜」的定义（晚间民用暮光结束到早晨民用暮光开始之间）；
+  // 这条与 wing-shading.glsl.ts 里灯芯软上限用的 −3°→−12° 平滑「night」是两码事（那条是纯显示取舍，不代表真的入夜），有意不复用。
+  // 云：EXPOSURE_WHITEOUT（clouds.ts keyVisibility 按密度探针写、已按 0.5 s 平滑的「在云里」程度，C02）> 0.5。
+  // 迟滞：连续满足关闭条件 ≥2.5 s 才关、连续不满足 ≥4 s 才恢复，避免贴着云边飞时频闪跟着云的疏密开开关关。
+  const strobeCloudGate = sun.altitude < -6 && EXPOSURE_WHITEOUT.value > 0.5;
+  if (strobeCloudGate) { strobeCloud.offDwell += dt; strobeCloud.onDwell = 0; }
+  else { strobeCloud.onDwell += dt; strobeCloud.offDwell = 0; }
+  if (!strobeCloud.off && strobeCloud.offDwell >= 2.5) strobeCloud.off = true;
+  if (strobeCloud.off && strobeCloud.onDwell >= 4) strobeCloud.off = false;
+  u.uStrobe.value = wingDebug.strobe ?? (strobeCloud.off ? 0 : ph < 0.05 || (ph > 0.14 && ph < 0.19) ? 1 : 0);
   u.uSlat.value = THREE.MathUtils.degToRad(state.slatDeg);
   u.uFlap.value = THREE.MathUtils.degToRad(state.flapDeg);
   u.uSpoiler.value = THREE.MathUtils.degToRad(state.spoilerDeg);
@@ -604,7 +619,7 @@ function renderFrame(now: number) {
   const qualityText = quality.describe();
   if (qualityText !== qualityUi) $("quality-status").textContent = qualityUi = qualityText;
 
-  updateInfo(now, sun, moon, state, curLat, curLon, ground.pending, rail.active ? rail.describe() : director.describe());
+  updateInfo(now, sun, moon, state, curLat, curLon, ground.pending, rail.active ? rail.describe() : director.describe(), strobeCloud.off);
 
   // 调试小地图（DX-06）：关着时 update() 第一行就返回。天气用当前实际渲染中的 storms / hurricane（而不是
   // 只查天气场），这样不论天气是导演按天气场摆的、还是面板手选的，雷达图都和窗外看到的一致
@@ -793,4 +808,4 @@ function benchFrame(n = 10) {
 // （README「着色器编译」坑点，PERF-1）。以前 dev-browser.mjs 只能退而求其次统一绑到 hdrOutside。
 // PERF-14 合并（座椅拆成单独 pass）带来 seatMat / hdrSeat（座椅材质与目标）、wingVariant（机翼湿窗变体，
 // WingWetVariant 实例，--material 用它的 pick() 结果当「当前实际画的变体」，同 clouds.marchMat 的做法）。
-(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, softwareRenderer, atmosphere, rays, focus, headLimits, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };
+(window as unknown as { __voyage: unknown }).__voyage = { state, head, cloudUniforms, snapAll, clouds, resize, sceneMat, seatMat, hdrSeat, cabinClass, outsideMat, hdrOutside, hdrWing, exposure, traffic, ground, weather, ocean, groundDetail, haze, wingDebug, strobeCloud, wingMat, wingVariant, benchScene, benchWing, benchFrame, boot, director, setPreset, wonders, quality, audio, minimap, optics, freeze, rail, softwareRenderer, atmosphere, rays, focus, headLimits, sunAltDeg: () => lastSunAlt, moonAltDeg: () => lastMoonAlt };

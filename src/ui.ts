@@ -113,8 +113,8 @@ function syncFloorUi(state: VoyageState) {
 }
 
 let lastInfo = 0;
-/** 信息栏文字：太阳 / 月亮方位、航向、位置，每 250 ms 刷新一次 */
-export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number, legLine = "") {
+/** 信息栏文字：太阳 / 月亮方位、航向、位置，每 250 ms 刷新一次。strobeCloudOff：STROBE-CLOUD 按夜间云中迟滞判定关闭频闪时追加一行状态（不对用户静默，见 handoff/STROBE-CLOUD.md） */
+export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state: VoyageState, curLat: number, curLon: number, groundPending: number, legLine = "", strobeCloudOff = false) {
   if (now - lastInfo <= 250) return;
   lastInfo = now;
   syncFloorUi(state);
@@ -131,7 +131,9 @@ export function updateInfo(now: number, sun: SunPosition, moon: MoonState, state
     (state.spoilerDeg > 0.5 ? `，减速板 ${state.spoilerDeg.toFixed(0)}°` : "") + "\n" +
     `位置 ${curLat.toFixed(3)}°N ${curLon.toFixed(3)}°E` + (state.groundOn && groundPending > 0 ? `，地面瓦片加载中（${groundPending}）` : "") +
     (legLine ? `
-${legLine}` : "");
+${legLine}` : "") +
+    (strobeCloudOff ? `
+频闪：夜间云中自动关闭（按惯例避免反光晃眼，出云后恢复）` : "");
 }
 
 export interface UiDeps {
