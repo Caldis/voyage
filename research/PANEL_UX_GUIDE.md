@@ -188,6 +188,8 @@ URL 参数压过面板时，在 hint 末尾加「（URL 参数 `groundres` 优�
 
 **规则五：一行不同时出现两组互斥控件。** 现状「时间流速」（连续航程开着时整行禁用）与「航程流速」是两行；改为**一行「流速」**，选项随模式变（关：暂停 / 1× / 60× / 600×；开：1× / 10× / 60×）。
 
+**规则六：显示 / 隐藏只用 `hidden` 属性，且全局保证它生效。** `style.css` 必须有 `[hidden] { display: none !important; }`。任何给元素设了 `display` 的选择器（`#panel label { display: flex }`、`.row { display: flex }`）都会盖住浏览器自带的 `[hidden]`，已经踩过两次（T49 的 `.row[hidden]`、UX-1 审计发现的 `#manual-row`）。
+
 ### 5.4 状态行
 
 - 状态文字（`.hint`）只写当前有意义的事；没事可说时隐藏整行，不留空行。
@@ -372,6 +374,19 @@ interface Panel {
 - [ ] 快捷键登记在 8.1 表、用统一守卫；有焦点环与 aria。
 - [ ] 1600×1200 与 1280×720、390×844 各截一张面板展开图，面板面积与遮挡符合第 9 节。
 - [ ] 控件 id / 选项 value 未改；若改了，场景表同步改。
+- [ ] 显示 / 隐藏用 `hidden` 属性，并在截图里确认真的隐藏了（5.3 规则六）。
+- [ ] 系统（导演、脚本）改了状态以后，面板显示跟得上（不只在用户拖动时才写控件）。
+
+## 12. 验收截图的做法
+
+面板默认被截图工具隐藏（`applyScene` 给 `#panel` 加 `hidden` 类）。要截面板，用场景的 `js` 字段去掉它并滚动：
+
+```
+node apps/voyage/scripts/dev-browser.mjs shots --port <端口> --angle d3d11 --respect-lock \
+  [--viewport 1280x720] --out tmp/screenshot/<任务> --scenes-file <场景文件.json>
+```
+
+场景 `js` 示例：`const p=document.getElementById('panel');p.classList.remove('hidden');p.scrollTop=0;` 之后返回 `p.scrollHeight`、`p.getBoundingClientRect()` 等尺寸，写进截图 JSON 的 `info`。UX-1 用的场景文件在 `tmp/screenshot/ux1/scenes-desktop.json`、`scenes-small.json`（临时目录，需要时照着写）。截图工具默认把画质档固定成「高」，状态行会显示「高（固定）」，属正常。
 
 ## 已推翻
 
