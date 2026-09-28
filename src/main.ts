@@ -497,7 +497,9 @@ function renderFrame(now: number) {
   weather.update(dt);
   const cu17 = cloudUniforms;
   optics.update({ state, sunAltDeg: sun.altitude, lat: curLat, lon: curLon, inCloud, stormy: weather.storms.length > 0 || weather.hurricane !== null,
-    cloud: { bottom: cu17.uCloudBottom.value, top: cu17.uCloudTop.value, coverage: cu17.uCoverage.value, type: cu17.uCloudType.value, density: cu17.uCloudDensity.value } });
+    cloud: { bottom: cu17.uCloudBottom.value, top: cu17.uCloudTop.value, coverage: cu17.uCoverage.value, type: cu17.uCloudType.value, density: cu17.uCloudDensity.value },
+    // SPEC-BOW：雨区（雷暴雨幡 / 阵雨）与雨虹要的几何
+    sunDir, storms: weather.storms, upperWind: cu17.uUpperWind.value, cloudOffset: cu17.uCloudOffset.value, outward: flightResult.outwardW });
   audio.update(audioInputFrom(state, inCloud, flightResult.speedKms, flightResult.climbing)); // 声音（T11），内部节流到 10 Hz
   const off = cloudUniforms.uCloudOffset.value;
   for (let i = 0; i < 16; i++) {

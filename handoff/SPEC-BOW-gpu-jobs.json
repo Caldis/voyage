@@ -1,0 +1,15 @@
+[
+  { "name": "bow-rain-gpu",
+    "scene": { "name": "bow-rain", "p": { "preset": "wpac", "date": "2026-06-21", "time": 560, "seat": "right", "cloud-preset": "towering", "coverage": 0.3, "wing-pos": "-4" } },
+    "variants": [
+      { "name": "bow", "js": "v.optics.disabled=false; v.optics.force={bow:true}" },
+      { "name": "bow2", "js": "v.optics.disabled=false; v.optics.force={bow:true}" },
+      { "name": "glory", "js": "v.optics.disabled=false; v.optics.force={glory:true}; v.optics.uniforms.uBowOn.value.set(0,0,0,0)" },
+      { "name": "off", "js": "v.optics.disabled=true; v.optics.force={}" } ] },
+  { "name": "bow-cloud-gpu",
+    "scene": { "name": "bow-cloud", "p": { "preset": "wpac", "date": "2026-06-21", "time": 360, "seat": "right", "cloud-preset": "stratocumulus", "coverage": 0.85, "view-preset": "close", "wing-pos": "-4" } },
+    "variants": [
+      { "name": "bow", "js": "v.optics.disabled=false; v.optics.force={bow:true}" },
+      { "name": "bow2", "js": "v.optics.disabled=false; v.optics.force={bow:true}" },
+      { "name": "off", "js": "v.optics.disabled=true; v.optics.force={}" } ] }
+]

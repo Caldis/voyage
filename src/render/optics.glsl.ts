@@ -13,9 +13,18 @@
  * - opticsHaloRadiance：卷云里的冰晶：水平取向的六角片状冰晶产生的幻日（与太阳同高、方位差 = Bravais 等效折射率下的
  *   最小偏向角，红色在内缘），随机取向的冰晶产生 22° 晕。按「这一像素里卷云的光学厚度 × 单次散射」算辐亮度。
  *
+ * SPEC-BOW 加了四项（都在 OUTSIDE_OPTICS 里，各一个调用点，都经过 opticsComposite / opticsCloudFactor）：
+ * - opticsRain：雨区（CPU 给的 ≤ 4 个高斯雨柱：雷暴雨幡 / 阵雨雨区 / 演示雨区）沿视线的解析光学厚度，雨虹（10 个代表波长的
+ *   几何光学主 / 副虹 + 亚历山大暗带）与阵雨雨幕（消光 + 漫散射）；
+ * - opticsCloudBow：云虹 / 雾虹（Mie 拟合的宽白环，乘在云海辐亮度上，与宝光同一群云滴）；
+ * - opticsArcRadiance：环地平弧与日柱（卷云里的水平片状冰晶）。
+ * 参数出处与拟合脚本见 handoff/SPEC-BOW.md、handoff/SPEC-BOW-optics.py。
+ *
  * PERF-13：宝光 / 本机影子 / 幻日 / 晕只编进 `#ifdef OUTSIDE_OPTICS` 变体（窗外程序的按需变体，启动后后台预编），
  * 默认程序只有太阳圆盘 + 绿闪。新加的「平时不出现」的光学现象一律写进这个宏里，并让 render/optics.ts 的 opticsWanted 认得它。
  */
+import { CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES } from "../clouds/clouds.glsl";
+
 export const OPTICS_COMMON = /* glsl */ `
 #ifdef OUTSIDE_OPTICS
 // ---- 各 #ifdef OUTSIDE_OPTICS 段：宝光 / 本机影子 / 幻日 / 22° 晕，只编进 OUTSIDE_OPTICS 变体（PERF-13；选变体见 outside-pass.ts 的 wantedOutsideKey，
@@ -33,6 +42,15 @@ uniform float uSeatSign;     // 右侧 +1，左侧 −1（wing.glsl.ts 在机翼
 const vec3 OPTICS_LAMBDA_UM = vec3(0.65, 0.55, 0.45);
 // 冰的折射率（同上三个波长；Warren 1984 的实部，取两位有效数字以后的量级）
 const vec3 OPTICS_ICE_N = vec3(1.3075, 1.3110, 1.3165);
+
+// ---- SPEC-BOW：虹 / 云虹 / 环地平弧 / 日柱（也只在 OUTSIDE_OPTICS 变体里；CPU 端在 render/optics.ts） ----
+uniform vec4 uBowRain[4];    // 雨区（高斯雨柱）：(云坐标 x, z km, 高斯半径 km, 中心消光 /km)；w = 0 这一格空着
+uniform vec4 uBowRainB[4];   // 同上：(雨顶高度 km, 1 = 阵雨雨区、雨幕由这里画 / 0 = 雷暴雨幡、云步进已画, 雨丝噪声的种子, 未用)
+uniform vec4 uBowOn;         // x 雨虹（雨区的光学）总开关（0 = 不算）, y 云虹强度（0 = 不出现）, z 未用, w 未用
+uniform vec4 uBowCloudC;     // 云虹：xyz 各通道的角半径（弧度，相对对日点）, w 虹内平台 b_in − p_ref（/sr）
+uniform vec4 uBowCloudS;     // 云虹：xyz 各通道的宽度（弧度）, w 虹外平台 b_out − p_ref（/sr）
+uniform vec4 uBowCloudP;     // 云虹：xyz 各通道的峰值（/sr）, w 未用
+uniform vec4 uOpticsArc;     // x 环地平弧份额, y 日柱份额, z 日柱的片状冰晶倾斜标准差（弧度）, w 未用
 #endif
 // 空气色散：各通道的折射量相对红光多出的比例 (n_λ − n_red)/(n − 1)，Edlén 1966 公式算出（绿 0.55%、蓝 1.52%）
 const vec3 OPTICS_AIR_DISPERSION = vec3(0.0, 0.00549, 0.0152);
@@ -129,12 +147,35 @@ float opticsPlaneShadow(vec3 rd) {
   return 1.0 - keep;
 }
 
+// ---- 云虹 / 雾虹（SPEC-BOW）----
+// 云滴（半径 5–20 µm）的 Mie 相函数在对日点外约 36–40° 有一圈宽的亮带：粒子小，Airy 衍射把各色的虹抹宽、叠在一起，
+// 几乎是白的，只剩外缘一点红、内缘一点蓝（handoff/SPEC-BOW-optics.py 用 BHMIE 算伽马分布云滴谱后拟合：
+// 每个通道 p(θ) = b_out + (b_in − b_out)·σ((θc − θ)/s) + P·exp(−((θ − θc)/s)²)，CPU 按宝光同一次的云滴半径插值给 uBowCloud*）。
+// 厚云顶的辐亮度大部分是多次散射，单次散射只占一小份：L_ss / L ≈ π·(p − p_ref) / (R·(μ0 + μ))（R ≈ 0.75 的云顶反照率，
+// μ0、μ 是太阳、视线与竖直的夹角余弦），乘到云的辐亮度上就是亮带只比周围亮百分之几到十几——真实照片里云虹也是一道淡淡的白弧。
+// p_ref 取虹内外两个平台的平均，所以整体不改变云海的平均亮度，只是虹内略亮、虹外略暗、虹上一道亮弧
+vec3 opticsCloudBow(vec3 rd, float c, float cloudOpacity) {
+  float sinH = BOTTOM / uCamR;
+  float below = smoothstep(-sqrt(1.0 - sinH * sinH) + 0.01, -sqrt(1.0 - sinH * sinH) - 0.02, rd.y);
+  float theta = acos(c);
+  // 在 25° / 53° 的取值窗边缘淡出（平台项在那里还不为 0）
+  float win = smoothstep(0.4363, 0.5236, theta) * (1.0 - smoothstep(0.8378, 0.9250, theta));
+  vec3 x = (theta - uBowCloudC.xyz) / uBowCloudS.xyz;
+  vec3 inner = 1.0 / (1.0 + exp(x));
+  vec3 m = uBowCloudP.xyz * exp(-x * x) + uBowCloudC.w * inner + uBowCloudS.w * (1.0 - inner);
+  // 掠射（太阳低、视线平）时单次散射份额更大，封顶 8（估算：此时云顶起伏的阴影也会冲淡它）
+  float k = min(3.1416 / (0.75 * (max(uSunDir.y, 0.05) + max(-rd.y, 0.05))), 8.0);
+  return 1.0 + uBowOn.y * k * m * win * below * smoothstep(0.3, 0.85, cloudOpacity);
+}
+
 // 乘在云辐亮度上的因子（宝光 + 本机影子）。cloudOpacity = 1 − 云的透射率。只在反日点 12° 以内算
 vec3 opticsCloudFactor(vec3 rd, float cloudOpacity) {
   vec3 f = vec3(1.0);
-  if (cloudOpacity < 0.02 || (uOpticsGlory.x <= 0.0 && uOpticsShadow.x <= 0.0)) return f;
+  if (cloudOpacity < 0.02 || (uOpticsGlory.x <= 0.0 && uOpticsShadow.x <= 0.0 && uBowOn.y <= 0.0)) return f;
   vec3 anti = -uSunDir;
   float c = dot(rd, anti);
+  // 云虹 / 雾虹（SPEC-BOW）：对日点外 25°–53° 的一圈，只画在海平线以下的云上（反日点那一侧的云海）
+  if (uBowOn.y > 0.0 && c < 0.9063 && c > 0.6018) f *= opticsCloudBow(rd, c, cloudOpacity);
   if (c < 0.978) return f;
   // 小角度用 asin(|叉积|)，acos 在 1 附近精度不够
   float theta = asin(min(length(cross(rd, anti)), 1.0));
@@ -264,14 +305,189 @@ vec3 opticsHaloRadiance(vec3 rd, float cloudT) {
   }
   return uSunIlluminance * sunT * tau * L;
 }
+
+// ---- 雨虹（SPEC-BOW）----
+// 雨滴（半径约 0.5 mm，几何光学）的相函数：10 个代表波长（400–700 nm 等分），每个波长两族光线——
+// 一次内反射（主虹，Descartes 角 40.76°–42.39°，亮侧在内）、两次内反射（副虹，50.32°–53.28°，亮侧在外，色序相反）。
+// 焦散用 Re[(x − i·w)^(−1/2)]（1/√x 被洛伦兹抹开；w = 0.26° 是太阳圆盘 + Airy 展宽 + 雨滴谱的综合，拟合值），
+// 亮侧再加一段填充（主虹里面是亮的，副虹外面较亮；两者之间只有外反射——亚历山大暗带）。
+// 参数由 handoff/SPEC-BOW-optics.py 对几何光学数值解拟合（折射率 Daimon & Masumura 2007，Fresnel 分偏振），
+// 5°–70° 内 RGB 相对误差约 6%；各波长的 RGB 权重是 CIE 1931 色匹配函数（Wyman 2013 解析近似）→ 线性 sRGB 按段积分、等能白归一。
+// 单位：/sr（∫p dΩ = 1，含衍射峰那一半）
+const float BOW_A1 = 0.00511;
+const vec3 BOW_F1 = vec3(-0.00030, -0.01188, 0.01064);
+const float BOW_A2 = 0.00093;
+const vec3 BOW_F2 = vec3(-0.00099, -0.00390, 0.00580);
+const float BOW_W = 0.004538; // 0.26°
+// 各代表波长（415, 445, … 685 nm）的主虹 / 副虹 Descartes 角（度）
+const vec2 BOW_ANG[10] = vec2[10](vec2(40.757, 53.277), vec2(41.079, 52.694), vec2(41.343, 52.217), vec2(41.563, 51.819), vec2(41.750, 51.482),
+                                  vec2(41.912, 51.191), vec2(42.053, 50.936), vec2(42.178, 50.711), vec2(42.290, 50.508), vec2(42.393, 50.324));
+// 各代表波长的 RGB 权重（负值是 sRGB 色域外的光谱色，合起来再截到 ≥ 0）
+const vec3 BOW_RGB[10] = vec3[10](vec3(0.0199, -0.0221, 0.1726), vec3(0.0426, -0.0588, 0.5619), vec3(-0.0534, 0.0362, 0.3418), vec3(-0.1645, 0.2327, 0.0486),
+                                  vec3(-0.1528, 0.4313, -0.0409), vec3(0.1727, 0.3370, -0.0479), vec3(0.5215, 0.0942, -0.0263), vec3(0.4512, -0.0348, -0.0075),
+                                  vec3(0.1445, -0.0159, -0.0018), vec3(0.0182, 0.0003, -0.0005));
+
+float opticsCaustic(float x) {
+  float m = sqrt(x * x + BOW_W * BOW_W);
+  float c = sqrt(max(m + x, 0.0) * 0.5) / m;
+  return x < 0.0 ? c * exp(-x * x / (4.84 * BOW_W * BOW_W)) : c;
+}
+
+// 相对对日点的角距 theta（弧度）上雨滴的相函数（主虹 + 副虹两族，RGB，/sr；外反射的常数底 0.0008 不在这里）
+vec3 opticsBowPhase(float theta) {
+  vec3 p = vec3(0.0);
+  for (int i = 0; i < 10 + uLoopGuard; i++) {
+    vec2 a = BOW_ANG[i] * 0.01745329;
+    float x1 = min(a.x - theta, 0.70);        // 主虹：亮侧在内（拟合区间到里面 40°）
+    float x2 = min(theta - a.y, 0.35);        // 副虹：亮侧在外（到外面 20°）
+    float p1 = BOW_A1 * opticsCaustic(x1) + (x1 > 0.0 ? BOW_F1.x + x1 * (BOW_F1.y + x1 * BOW_F1.z) : 0.0);
+    float p2 = BOW_A2 * opticsCaustic(x2) + (x2 > 0.0 ? BOW_F2.x + x2 * (BOW_F2.y + x2 * BOW_F2.z) : 0.0);
+    p += BOW_RGB[i] * (max(p1, 0.0) + max(p2, 0.0));
+  }
+  // 副虹外 20° 以后（θ > 70°）缓慢归零，免得截断成一道边
+  return max(p, vec3(0.0)) * (1.0 - smoothstep(1.22, 1.57, theta));
+}
+
+// 误差函数（Winitzki 近似，误差 < 2e-4）
+float opticsErf(float x) {
+  float x2 = x * x;
+  return sign(x) * sqrt(1.0 - exp(-x2 * (1.2732395 + 0.147 * x2) / (1.0 + 0.147 * x2)));
+}
+
+// 雨里的阳光被云挡掉多少：查云影图（clouds.glsl.ts 的 cloudShadow 同一张图、同一套坐标），但只取中间一级（±${CLOUD_SHADOW_EXT[1]} km）
+// 的一次双线性——完整的 cloudShadow 是三级 × B 样条 4 次取样，在窗外程序里多一个调用点就整份再内联一次（离线 FXC 约 +6%）；
+// 雨的受光本来只取一个代表点，要的是「雨在不在云影里」的大概
+float opticsRainLit(vec3 P) {
+  if (uCloudShadowCenter.z < 0.5) return 1.0;
+  float h = max(length(P) - BOTTOM, 0.0);
+  vec3 s = uCloudShadowSun;
+  vec2 rel = P.xz + uCloudOffset - s.xz * (h / max(s.y, 0.05)) - uCloudShadowCenter.xy;
+  vec2 st = clamp(rel / ${CLOUD_SHADOW_EXT[1].toFixed(1)} * 0.5 + 0.5, vec2(${(2 / CLOUD_SHADOW_RES).toFixed(6)}), vec2(${(1 - 2 / CLOUD_SHADOW_RES).toFixed(6)}));
+  vec4 T = textureLod(uCloudShadowMap, vec2((st.x + 1.0) / 3.0, st.y), 0.0);
+  return dot(T, max(1.0 - abs(vec4(0.0, 1.0, 2.0, 3.0) - min(h, 3.0)), 0.0));
+}
+
+// 雨区：一组高斯雨柱（CPU 给 uBowRain*）。雷暴雨幡与 clouds.glsl.ts 的 rainDensity 同形（中心、半径、消光按那边的式子折算），
+// 云步进已经画了它的雨幕，这里只加虹；阵雨雨区（浓积云下的一片阵雨）云步进不画，这里连雨幕（消光 + 漫散射）一起画。
+// 每个雨柱沿视线的光学厚度解析地积：视线在 [地面, 雨顶] 这一段里，水平投影上的高斯积分 = σ0·e^(−q²/R²)·R/h·(√π/2)·[erf]。
+// 返回 rgb = 雨自身的光（要乘云的透射率：雨在云后面）、a = 阵雨雨幕的透射率
+vec4 opticsRain(vec3 rd) {
+  if (uBowOn.x <= 0.0) return vec4(0.0, 0.0, 0.0, 1.0);
+  vec3 ro = vec3(0.0, uCamR, 0.0);
+  float tb = raySphere(ro, rd, BOTTOM);
+  if (tb < 0.0) return vec4(0.0, 0.0, 0.0, 1.0); // 打不到地面的视线（地平线以上）不穿过雨区
+  vec2 hd = rd.xz;
+  float hs = max(length(hd), 1e-4);
+  float tauV = 0.0;   // 阵雨雨幕（这里画）
+  float tauS = 0.0;   // 雷暴雨幡（云步进已画）
+  float best = 0.0;
+  float tLit = tb;
+  float streak = 1.0;
+  for (int i = 0; i < 4 + uLoopGuard; i++) {
+    vec4 c = uBowRain[i];
+    if (c.w <= 0.0) continue;
+    vec4 cb = uBowRainB[i];
+    float ta = uCamR - BOTTOM > cb.x ? raySphere(ro, rd, BOTTOM + cb.x) : 0.0;
+    if (ta < 0.0 || ta >= tb) continue;
+    vec2 dxz = c.xy - uCloudOffset;
+    float tc = dot(dxz, hd) / (hs * hs);
+    vec2 q = dxz - hd * tc;
+    float g = exp(-dot(q, q) / (c.z * c.z));
+    if (g < 1e-4) continue;
+    float k = hs / c.z;
+    float ti = c.w * g * 0.8862269 / k * (opticsErf(k * (tb - tc)) - opticsErf(k * (ta - tc)));
+    float tm = clamp(tc, ta, tb);
+    if (cb.y > 0.5) {
+      // 雨丝：雨是一道道竖直的雨线，按视线最接近雨柱轴线那一点的水平位置取一个平滑噪声（约 0.7 km 一条），不随高度变
+      vec2 pw = (ro.xz + hd * tm) + uCloudOffset;
+      float n = vnoise(pw / 0.7 + cb.z) * 0.6 + vnoise(pw / 2.3 - cb.z) * 0.4;
+      ti *= 0.35 + 1.3 * n;
+      tauV += ti;
+    } else tauS += ti;
+    if (ti > best) { best = ti; tLit = tm; }
+  }
+  float tau = tauV + tauS;
+  if (tau < 1e-3) return vec4(0.0, 0.0, 0.0, 1.0);
+  // 雨里的受光：取光学厚度最大的那个雨柱里、视线离轴线最近的一点。太阳透射率 × 云影（雨在云底下，常被自己的云挡住）
+  vec3 P = ro + rd * tLit;
+  float rP = length(P);
+  vec3 nP = P / rP;
+  vec3 sunT = sunTransmittance(rP, dot(nP, uSunDir)) * opticsRainLit(P);
+  // 相机到雨之间的空气（空气透视 LUT）：雨的光要乘这段透射率；雨幕只挡它后面的东西，前面这段空气的内散射不能被雨挡掉——
+  // 背景 L 里已经含着它，所以雨幕的合成是 L·Tv + (1 − Tv)·airL（不这样做，雨幕会把前面几公里的蓝色空气光一起吃掉，成一块黑斑）
+  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tLit);
+  vec3 airL = textureLod(uAerialInscatterS, uvw, 0.0).rgb * uSunIlluminance;
+  vec3 viewT = textureLod(uAerialTransmittanceS, uvw, 0.0).rgb;
+  float cosA = dot(rd, -uSunDir);
+  float theta = acos(clamp(cosA, -1.0, 1.0));
+  vec3 bow = theta < 1.57 ? opticsBowPhase(theta) : vec3(0.0);
+  // 单次散射 + 自遮挡：阳光进雨、散射出来各走一段，约 (1 − e^(−2τ)) / 2（太阳在背后时两段差不多长）
+  vec3 eSun = uSunIlluminance * sunT * viewT;
+  // 雷暴雨幡：只加虹（它的雨幕由云步进画，云缓冲的透射率里已含它自己的消光，乘回来，免得虹被它自己挡两次）
+  vec3 rgb = eSun * (0.5 - 0.5 * exp(-2.0 * tauS)) * bow * exp(min(tauS, 3.0));
+  float Tv = 1.0;
+  if (tauV > 0.0) {
+    // 阵雨雨幕：除了虹，还有雨滴的其余散射——外反射的常数底（0.0008 /sr）+ 前向的透射 / 衍射（HG g = 0.88，约占 43%，估算）；
+    // 天空光按各向同性的一半漫射（估算）
+    float g = 0.88;
+    float hg = (1.0 - g * g) / (12.566 * pow(1.0 + g * g + 2.0 * g * cosA, 1.5));
+    vec3 pV = bow + 0.0008 + 0.43 * hg;
+    Tv = exp(-tauV);
+    rgb += eSun * (0.5 - 0.5 * exp(-2.0 * tauV)) * pV + (1.0 - Tv) * (viewT * skyIrradiance(rP, nP) * 0.08 + airL);
+  }
+  return vec4(uBowOn.x * rgb, Tv);
+}
+
+// ---- 环地平弧与日柱（SPEC-BOW，卷云里水平取向的片状冰晶；和幻日同一群冰晶，份额 CPU 给）----
+// 环地平弧：光从竖直的侧面进、从水平的底面出（90° 棱镜）。按矢量折射：侧面保持竖直分量、底面保持水平分量，
+// 出射光线的水平分量平方 = cos²h + n² − 1，所以弧的仰角 e = acos(√(cos²h + n² − 1))，与方位无关——一道与地平线平行的彩带，
+// 红在上。n = 1.31 时太阳高于 57.8° 才有（cos²h + n² − 1 < 1），弧在太阳下方 46° 以上。方位上以太阳方位为中心、两侧各伸几十度（估算宽 0.6 rad）。
+// 日柱：片状冰晶的上下底面像一面面微微倾斜的镜子，把低太阳的光反射成太阳上下的一道竖直光柱，倾斜越大柱越长（估算：长度尺度 2.5 × 倾斜）。
+vec3 opticsArcRadiance(vec3 rd, float cloudT) {
+  if (uOpticsArc.x + uOpticsArc.y <= 0.0) return vec3(0.0);
+  float tau = min(-log(max(cloudT, 0.05)), 1.5);
+  if (tau < 1e-3) return vec3(0.0);
+  float sinH = BOTTOM / uCamR;
+  if (rd.y < -sqrt(1.0 - sinH * sinH) + 0.002) return vec3(0.0);
+  vec3 s = uSunDir;
+  float h = asin(clamp(s.y, -1.0, 1.0));
+  float e = asin(clamp(rd.y, -1.0, 1.0));
+  vec2 sd = normalize(s.xz + vec2(1e-9, 0.0));
+  vec2 rh = normalize(rd.xz + vec2(1e-9, 0.0));
+  float dAz = atan(sd.x * rh.y - sd.y * rh.x, dot(sd, rh));
+  float pix = 2.0 * uTanHalfFov / uResolution.y;
+  vec3 L = vec3(0.0);
+  if (uOpticsArc.x > 0.0) {
+    float ch = cos(h);
+    vec3 q = ch * ch + OPTICS_ICE_N * OPTICS_ICE_N - 1.0;
+    // 太阳刚过门槛时弧贴着地平线、很暗（出射光线掠过底面，Fresnel 透射很小），按离门槛的余量淡入（估算）
+    vec3 ok = smoothstep(vec3(0.0), vec3(0.06), 1.0 - q);
+    vec3 eA = acos(sqrt(min(q, vec3(1.0))));
+    eA = mix(vec3(eA.y), eA, 0.8); // 三通道色阶比连续光谱纯，往中间收一点（同幻日）
+    float sig = sqrt(1.4 * uOpticsHalo.w * 1.4 * uOpticsHalo.w + SUN_ANGULAR_RADIUS * SUN_ANGULAR_RADIUS) + pix;
+    vec3 v = (e - eA) / sig;
+    float az = exp(-0.5 * dAz * dAz / 0.36);
+    L += uOpticsArc.x * ok * exp(-0.5 * v * v) * az / (6.2832 * sig * 0.6 * max(cos(e), 0.2));
+  }
+  if (uOpticsArc.y > 0.0) {
+    float sigA = SUN_ANGULAR_RADIUS + 0.003 + pix;
+    float lv = max(2.5 * uOpticsArc.z, 0.01);
+    float xa = dAz * cos(e) / sigA;
+    L += uOpticsArc.y * exp(-abs(e - h) / lv) * exp(-0.5 * xa * xa) / (2.5066 * sigA * 2.0 * lv);
+  }
+  return uSunIlluminance * sunTransmittance(uCamR, s.y) * tau * L;
+}
 #endif
 
 // 窗外最后的合成：背景 × 云透射率 + 云自身的光（乘宝光 / 影子）+ 卷云里的晕。
 // 默认程序没有后两项：宝光 / 影子因子为 1、晕为 0 时 OUTSIDE_OPTICS 变体算出的也正好是 L·a + rgb（×1、+0 在浮点上精确），
 // 所以「罕见光学没有贡献」时两个程序逐像素相同。在函数体里分 #ifdef（check:glsl 的重名检查不展开条件编译，见 README 坑点）
+// SPEC-BOW：雨区（阵雨雨幕 + 雨虹）在云后面：背景先过雨幕（× rain.a、+ rain.rgb）再被云挡；环地平弧 / 日柱和晕一样加在最后。
+// 这些都没有时 rain = (0, 0, 0, 1)、弧 = 0，(L·1 + 0)·a 与 L·a 逐位相同，OUTSIDE_OPTICS 变体的输出与改动前一样
 vec3 opticsComposite(vec3 L, vec4 cloud, vec3 rd) {
 #ifdef OUTSIDE_OPTICS
-  return L * cloud.a + cloud.rgb * opticsCloudFactor(rd, 1.0 - cloud.a) + opticsHaloRadiance(rd, cloud.a);
+  vec4 rain = opticsRain(rd);
+  return (L * rain.a + rain.rgb) * cloud.a + cloud.rgb * opticsCloudFactor(rd, 1.0 - cloud.a) + opticsHaloRadiance(rd, cloud.a) + opticsArcRadiance(rd, cloud.a);
 #else
   return L * cloud.a + cloud.rgb;
 #endif
