@@ -1,0 +1,44 @@
+[
+ {
+  "name": "storm-sc-low",
+  "scene": "storm-sc-low",
+  "offset": [
+   0,
+   0
+  ],
+  "crop": [
+   520,
+   560,
+   560,
+   360
+  ]
+ },
+ {
+  "name": "storm-sc-low-anvil",
+  "scene": "storm-sc-low",
+  "offset": [
+   0,
+   0
+  ],
+  "crop": [
+   320,
+   380,
+   640,
+   200
+  ]
+ },
+ {
+  "name": "storm-day",
+  "scene": "storm-day",
+  "offset": [
+   0,
+   0
+  ],
+  "crop": [
+   520,
+   420,
+   560,
+   440
+  ]
+ }
+]

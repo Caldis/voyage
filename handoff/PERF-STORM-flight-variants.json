@@ -1,0 +1,14 @@
+[
+ {
+  "name": "old",
+  "materials": {
+   "clouds.marchMat": "base"
+  }
+ },
+ {
+  "name": "cur"
+ },
+ {
+  "name": "cur2"
+ }
+]

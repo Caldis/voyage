@@ -1,0 +1,67 @@
+[
+ {
+  "name": "c9-typhoon-bands",
+  "scene": "typhoon-bands",
+  "variants": [
+   {
+    "name": "cur"
+   },
+   {
+    "name": "cur2"
+   },
+   {
+    "name": "early",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "        vec2 h2 = stormHash22(id * 1.7 + 3.1);\n        vec2 hc = c - uHurricane.xy;\n        float rcc = length(hc);\n",
+       "        vec2 h2 = stormHash22(id * 1.7 + 3.1);\n        if (h2.x < 0.25) continue;\n        vec2 hc = c - uHurricane.xy;\n        float rcc = length(hc);\n        if (rcc <= Re * 3.0 || rcc >= Re * 16.0) continue;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "cellG",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "vec3 gHurCell = vec3(0.0);\n",
+       "vec3 gHurCell = vec3(0.0);\nvec4 gHurCellP = vec4(0.0);   // 记录那座塔的 (塔心 xy, Ht, Rt)\nvec2 gHurCellH3 = vec2(0.0);\n"
+      ],
+      [
+       "        if (sd < sdf) gHurCell = vec3(id, coreC);\n",
+       "        if (sd < sdf) { gHurCell = vec3(id, coreC); gHurCellP = vec4(c, Ht, Rt); gHurCellH3 = h3; }\n"
+      ],
+      [
+       "        vec2 h1 = stormHash22(bc.xy + 17.3);\n        vec2 h2 = stormHash22(bc.xy * 1.7 + 3.1);\n        vec2 h3 = stormHash22(bc.xy * 2.3 + 7.9);\n        vec2 c = (bc.xy + 0.2 + 0.6 * h1) * CELL;\n        float rcc = length(c - uHurricane.xy);\n        float coreC = bc.z;\n        float topMax = mix(13.0, 8.5, smoothstep(Re * 3.5, Re * 15.0, rcc));\n        float Ht = 2.0 + (mix(5.0, topMax, h2.y * (1.3 - 0.3 * h2.y)) - 2.0) * mix(0.55, 1.0, coreC);\n        float Rt = CELL * (0.22 + 0.24 * h1.x) * mix(0.75, 1.0, coreC);\n",
+       "        vec2 h3 = gHurCellH3;\n        vec2 c = gHurCellP.xy;\n        float Ht = gHurCellP.z;\n        float Rt = gHurCellP.w;\n"
+      ]
+     ]
+    }
+   },
+   {
+    "name": "both",
+    "patch": {
+     "clouds.marchMat": [
+      [
+       "        vec2 h2 = stormHash22(id * 1.7 + 3.1);\n        vec2 hc = c - uHurricane.xy;\n        float rcc = length(hc);\n",
+       "        vec2 h2 = stormHash22(id * 1.7 + 3.1);\n        if (h2.x < 0.25) continue;\n        vec2 hc = c - uHurricane.xy;\n        float rcc = length(hc);\n        if (rcc <= Re * 3.0 || rcc >= Re * 16.0) continue;\n"
+      ],
+      [
+       "vec3 gHurCell = vec3(0.0);\n",
+       "vec3 gHurCell = vec3(0.0);\nvec4 gHurCellP = vec4(0.0);   // 记录那座塔的 (塔心 xy, Ht, Rt)\nvec2 gHurCellH3 = vec2(0.0);\n"
+      ],
+      [
+       "        if (sd < sdf) gHurCell = vec3(id, coreC);\n",
+       "        if (sd < sdf) { gHurCell = vec3(id, coreC); gHurCellP = vec4(c, Ht, Rt); gHurCellH3 = h3; }\n"
+      ],
+      [
+       "        vec2 h1 = stormHash22(bc.xy + 17.3);\n        vec2 h2 = stormHash22(bc.xy * 1.7 + 3.1);\n        vec2 h3 = stormHash22(bc.xy * 2.3 + 7.9);\n        vec2 c = (bc.xy + 0.2 + 0.6 * h1) * CELL;\n        float rcc = length(c - uHurricane.xy);\n        float coreC = bc.z;\n        float topMax = mix(13.0, 8.5, smoothstep(Re * 3.5, Re * 15.0, rcc));\n        float Ht = 2.0 + (mix(5.0, topMax, h2.y * (1.3 - 0.3 * h2.y)) - 2.0) * mix(0.55, 1.0, coreC);\n        float Rt = CELL * (0.22 + 0.24 * h1.x) * mix(0.75, 1.0, coreC);\n",
+       "        vec2 h3 = gHurCellH3;\n        vec2 c = gHurCellP.xy;\n        float Ht = gHurCellP.z;\n        float Rt = gHurCellP.w;\n"
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]
