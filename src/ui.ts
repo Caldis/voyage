@@ -754,7 +754,10 @@ function setupDevSection() {
   } catch {
     // 拿不到 localStorage：按默认（隐藏）
   }
-  sec.hidden = !(new URLSearchParams(location.search).has("dev") || stored);
+  // 只认 ?dev、?dev=1 / true / on：dev-browser.mjs 等测量工具用 ?dev=<时间戳> 防缓存，不能被当成「打开开发者区」
+  const devParam = new URLSearchParams(location.search).getAll("dev").pop();
+  const devUrl = devParam !== undefined && ["", "1", "true", "on"].includes(devParam.toLowerCase());
+  sec.hidden = !(devUrl || stored);
   window.addEventListener("keydown", (e) => {
     if (!e.shiftKey || !isLetterShortcut(e, "d")) return;
     sec.hidden = !sec.hidden;

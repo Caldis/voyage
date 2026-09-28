@@ -1,0 +1,6 @@
+[
+  { "name": "1x", "js": "v.focus.hold('script', false); v.focus.progress = 0; v.sceneMat.uniforms.uTanHalfFov.value = Math.tan(25 * Math.PI / 180) / v.focus.update(0); return v.focus.factor;" },
+  { "name": "1x-aa", "js": "v.focus.hold('script', false); v.focus.progress = 0; v.sceneMat.uniforms.uTanHalfFov.value = Math.tan(25 * Math.PI / 180) / v.focus.update(0); return v.focus.factor;" },
+  { "name": "4x", "js": "v.focus.mag = 4; v.focus.hold('script', true); v.focus.progress = 1; v.sceneMat.uniforms.uTanHalfFov.value = Math.tan(25 * Math.PI / 180) / v.focus.update(0); return v.focus.factor;" },
+  { "name": "8x", "js": "v.focus.mag = 8; v.focus.hold('script', true); v.focus.progress = 1; v.sceneMat.uniforms.uTanHalfFov.value = Math.tan(25 * Math.PI / 180) / v.focus.update(0); return v.focus.factor;" }
+]
