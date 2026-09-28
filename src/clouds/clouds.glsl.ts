@@ -675,10 +675,15 @@ float pouchField(vec2 p) {
   for (int y = -1; y <= 1; y++) {
     vec2 o = vec2(float(x), float(y));
     vec2 h = stormHash22(id + o);
-    vec2 h2 = stormHash22(id + o + 41.7);
     vec2 fp = o + 0.05 + 0.9 * h - f;
+    float d2 = dot(fp, fp);
+    // PERF-STORM：口袋半径 ≤ 0.75 格，中心离采样点 ≥ 0.75 格的格子一定够不着（s ≤ 0），不必算第二个哈希。
+    // 结果逐位不变；9 个格子里平均只有约 2 个过这一关。乳状云带里这段是雷暴云步进最贵的一处（去掉整个口袋场 ×0.68–0.75，
+    // 这一条 + mammatusDensity 的深度剪枝 ×0.72，handoff/PERF-STORM.md）
+    if (d2 >= 0.5625) continue;
+    vec2 h2 = stormHash22(id + o + 41.7);
     float rad = 0.3 + 0.45 * h2.x;
-    float s = 1.0 - dot(fp, fp) / (rad * rad);
+    float s = 1.0 - d2 / (rad * rad);
     if (s > 0.0 && h2.y > 0.25) best = max(best, (0.4 + 1.2 * h2.y * h2.y) * rad * sqrt(s));
   }
   return best;
@@ -778,7 +783,9 @@ float mammatusDensity(vec2 xz, float alt, vec3 geo) {
   if (zone <= 0.0 || alt > aBot + 0.3 || alt < aBot - 1.0) return 0.0;
   // 成簇：一片片口袋群（约 5–10 km），群与群之间的砧底是平的或只有零星几个；群里的口袋有大有小（两级格子：1.4 km、0.6 km）
   float cl = smoothstep(0.38, 0.62, textureLod(uShapeNoise, vec3(xz / 11.0, 0.21), 0.0).r);
-  if (cl <= 0.0) return 0.0;
+  // PERF-STORM 深度剪枝（结果逐位不变）：pouchField ≤ 1.6·0.75 = 1.2，两级合起来 pd ≤ 1.2·1.4 = 1.68，下垂深度 ≤ 0.75·1.68·cl·zone；
+  // 采样点在砧底下比这还深时 pb ≥ alt，下面的 smoothstep(pb, …, alt) 必为 0。乳状云带（砧底下 1 km）里大半的采样点在这一关就退出
+  if (cl <= 0.0 || aBot + 0.1 - alt >= 1.26 * cl * zone) return 0.0;
   float pd = max(pouchField(xz / 1.4) * 1.4, pouchField(xz / 0.6 + 7.3) * 0.6 * 0.8);
   float depth = 0.75 * pd * cl * zone;
   if (depth <= 0.01) return 0.0;
