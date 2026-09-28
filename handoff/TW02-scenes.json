@@ -1,0 +1,54 @@
+[
+ {
+  "name": "tw02-scs-0804-1500",
+  "p": {
+   "preset": "scs",
+   "date": "2026-08-04",
+   "time": 900,
+   "wing-pos": "-4",
+   "quality": "high"
+  },
+  "continuousJourney": true,
+  "wait": 4000,
+  "js": "const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const w = v.director.weather; let H = v.state.heading; const lvl = () => { v.director.setHeading(H); v.state.heading = H; v.state.bankDeg = 0; }; lvl(); w.onJump(); await sleep(15000); lvl(); w.onJump(); await sleep(3000); const f = v.farTowers; const off = v.cloudUniforms.uCloudOffset.value; const all = w.farTowerCells(...v.ground.localFrame.toGeo(off.x, off.y)); const pts = all.map((c) => { const [x, z] = v.ground.localFrame.toLocal(c.lat, c.lon); return [x - off.x, z - off.y]; }).filter(([x, z]) => Math.hypot(x, z) > 180 && Math.hypot(x, z) < 480); let best = null, bn = -1; for (const p of pts) { const b = Math.atan2(p[0], -p[1]); const n = pts.filter((q) => Math.abs(Math.atan2(Math.sin(Math.atan2(q[0], -q[1]) - b), Math.cos(Math.atan2(q[0], -q[1]) - b))) < 0.35).length; if (n > bn) { bn = n; best = b; } } if (best !== null) H = ((best * 180 / Math.PI - (v.state.seat === 'right' ? 90 : -90)) % 360 + 360) % 360; lvl(); await sleep(4000); lvl(); await sleep(1500); return w.describe() + ' | 朝向 ' + Math.round(H) + '（窗外 ' + bn + ' 座） | 远塔 ' + f.towers.length + ' 座 ' + f.state + ' 距离/顶/砧 ' + f.towers.map((t) => Math.round(t.dist) + '/' + t.top.toFixed(1) + '/' + t.anvil.toFixed(2)).join(',');"
+ },
+ {
+  "name": "tw02-scs-0719-1500",
+  "p": {
+   "preset": "scs",
+   "date": "2026-07-19",
+   "time": 900,
+   "wing-pos": "-4",
+   "quality": "high"
+  },
+  "continuousJourney": true,
+  "wait": 4000,
+  "js": "const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const w = v.director.weather; let H = v.state.heading; const lvl = () => { v.director.setHeading(H); v.state.heading = H; v.state.bankDeg = 0; }; lvl(); w.onJump(); await sleep(15000); lvl(); w.onJump(); await sleep(3000); const f = v.farTowers; const off = v.cloudUniforms.uCloudOffset.value; const all = w.farTowerCells(...v.ground.localFrame.toGeo(off.x, off.y)); const pts = all.map((c) => { const [x, z] = v.ground.localFrame.toLocal(c.lat, c.lon); return [x - off.x, z - off.y]; }).filter(([x, z]) => Math.hypot(x, z) > 180 && Math.hypot(x, z) < 480); let best = null, bn = -1; for (const p of pts) { const b = Math.atan2(p[0], -p[1]); const n = pts.filter((q) => Math.abs(Math.atan2(Math.sin(Math.atan2(q[0], -q[1]) - b), Math.cos(Math.atan2(q[0], -q[1]) - b))) < 0.35).length; if (n > bn) { bn = n; best = b; } } if (best !== null) H = ((best * 180 / Math.PI - (v.state.seat === 'right' ? 90 : -90)) % 360 + 360) % 360; lvl(); await sleep(4000); lvl(); await sleep(1500); return w.describe() + ' | 朝向 ' + Math.round(H) + '（窗外 ' + bn + ' 座） | 远塔 ' + f.towers.length + ' 座 ' + f.state + ' 距离/顶/砧 ' + f.towers.map((t) => Math.round(t.dist) + '/' + t.top.toFixed(1) + '/' + t.anvil.toFixed(2)).join(',');"
+ },
+ {
+  "name": "tw02-scs-0826-1500",
+  "p": {
+   "preset": "scs",
+   "date": "2026-08-26",
+   "time": 900,
+   "wing-pos": "-4",
+   "quality": "high"
+  },
+  "continuousJourney": true,
+  "wait": 4000,
+  "js": "const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const w = v.director.weather; let H = v.state.heading; const lvl = () => { v.director.setHeading(H); v.state.heading = H; v.state.bankDeg = 0; }; lvl(); w.onJump(); await sleep(15000); lvl(); w.onJump(); await sleep(3000); const f = v.farTowers; const off = v.cloudUniforms.uCloudOffset.value; const all = w.farTowerCells(...v.ground.localFrame.toGeo(off.x, off.y)); const pts = all.map((c) => { const [x, z] = v.ground.localFrame.toLocal(c.lat, c.lon); return [x - off.x, z - off.y]; }).filter(([x, z]) => Math.hypot(x, z) > 180 && Math.hypot(x, z) < 480); let best = null, bn = -1; for (const p of pts) { const b = Math.atan2(p[0], -p[1]); const n = pts.filter((q) => Math.abs(Math.atan2(Math.sin(Math.atan2(q[0], -q[1]) - b), Math.cos(Math.atan2(q[0], -q[1]) - b))) < 0.35).length; if (n > bn) { bn = n; best = b; } } if (best !== null) H = ((best * 180 / Math.PI - (v.state.seat === 'right' ? 90 : -90)) % 360 + 360) % 360; lvl(); await sleep(4000); lvl(); await sleep(1500); return w.describe() + ' | 朝向 ' + Math.round(H) + '（窗外 ' + bn + ' 座） | 远塔 ' + f.towers.length + ' 座 ' + f.state + ' 距离/顶/砧 ' + f.towers.map((t) => Math.round(t.dist) + '/' + t.top.toFixed(1) + '/' + t.anvil.toFixed(2)).join(',');"
+ },
+ {
+  "name": "tw02-scs-0708-1500",
+  "p": {
+   "preset": "scs",
+   "date": "2026-07-08",
+   "time": 900,
+   "wing-pos": "-4",
+   "quality": "high"
+  },
+  "continuousJourney": true,
+  "wait": 4000,
+  "js": "const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const w = v.director.weather; let H = v.state.heading; const lvl = () => { v.director.setHeading(H); v.state.heading = H; v.state.bankDeg = 0; }; lvl(); w.onJump(); await sleep(15000); lvl(); w.onJump(); await sleep(3000); const f = v.farTowers; const off = v.cloudUniforms.uCloudOffset.value; const all = w.farTowerCells(...v.ground.localFrame.toGeo(off.x, off.y)); const pts = all.map((c) => { const [x, z] = v.ground.localFrame.toLocal(c.lat, c.lon); return [x - off.x, z - off.y]; }).filter(([x, z]) => Math.hypot(x, z) > 180 && Math.hypot(x, z) < 480); let best = null, bn = -1; for (const p of pts) { const b = Math.atan2(p[0], -p[1]); const n = pts.filter((q) => Math.abs(Math.atan2(Math.sin(Math.atan2(q[0], -q[1]) - b), Math.cos(Math.atan2(q[0], -q[1]) - b))) < 0.35).length; if (n > bn) { bn = n; best = b; } } if (best !== null) H = ((best * 180 / Math.PI - (v.state.seat === 'right' ? 90 : -90)) % 360 + 360) % 360; lvl(); await sleep(4000); lvl(); await sleep(1500); return w.describe() + ' | 朝向 ' + Math.round(H) + '（窗外 ' + bn + ' 座） | 远塔 ' + f.towers.length + ' 座 ' + f.state + ' 距离/顶/砧 ' + f.towers.map((t) => Math.round(t.dist) + '/' + t.top.toFixed(1) + '/' + t.anvil.toFixed(2)).join(',');"
+ }
+]
