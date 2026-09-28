@@ -8,4 +8,7 @@
 - 性能（复测，比交接自报更差）：gpu-ab 云 pass noon ×1.156、variety ×1.173、cu-6000 ×1.174、cu-side ×1.230；sea-sc / storm-sc / storm-cu 在离散度内。mip 不封顶（lod6）：noon ×1.051、variety ×1.154、cu-6000 ×1.099、cu-side ×1.186。步数几乎不变（noon +1%、variety +5%、cu-6000 +2.6%），代价是每个有云样本变贵 / 有云样本变多 + mip 封顶的纹理带宽，不是步数。
 - 冷编译：cloud-march +1.0%、storm +2.5%、probe +8.6%（噪声大）、cirrus +6.7%，都在门槛内。
 - PERF-STORM 无文本冲突，但它只动天气程序，抵消不了默认程序的增量。
-- 待补：时间噪声（flight）、「只在主步进封顶 mip」变体的 GPU。
+- 时间噪声（flight，复测与交接一致）：cu-6000 远排静止 relStd ×1.26、tow-a8 ×1.39、variety ×1.09、noon ×1.00；live ×1.03–1.09（不闪）。lod6：×1.20 / ×1.26。
+- 新形状问题（美术）：6 km 机位中距离的「蘑菇 / 飞碟」——云底比腰细、腰上一圈外挑的唇、细长横架（`z/cu6000-mid-b.png`、`z/cu-6000-hook.png`）。
+- 「只在主步进封顶 mip、受光不封」（lightcap）：tow-a8 亮 +6 级（受光 mip 影响明暗），不是免费选项，放弃。
+- 进行中：taper（积云族 d 随高度线性收）实验，看能否同时治蘑菇和省 GPU。
