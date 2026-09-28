@@ -1,0 +1,11 @@
+[
+  {
+    "name": "night-city",
+    "scene": "night-city",
+    "variants": [
+      { "name": "new", "shot": true },
+      { "name": "C15", "shot": true, "js": "patch(v.wingMat, [['#define STROBE_CORE_CD 30.0', '#define STROBE_CORE_CD 15.0']]);" },
+      { "name": "C60", "shot": true, "js": "patch(v.wingMat, [['#define STROBE_CORE_CD 30.0', '#define STROBE_CORE_CD 60.0']]);" }
+    ]
+  }
+]

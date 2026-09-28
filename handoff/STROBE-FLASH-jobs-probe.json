@@ -1,0 +1,9 @@
+[
+  {
+    "name": "night-city",
+    "scene": "night-city",
+    "variants": [
+      { "name": "localT", "probe": true, "js": "const raf = (n) => new Promise((r) => { let k = 0; const f = () => (++k >= n ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }); const E = v.exposure, R = v.clouds.pass.renderer; v.freeze(true); E.localDt = 0; v.wingDebug.strobe = 0; await raf(6); v.wingDebug.strobe = 1; await raf(1); const t = E.local[0]; const w = t.width, h = t.height; const buf = new Float32Array(w * h * 4); R.readRenderTargetPixels(t, 0, 0, w, h, buf); const er = new Float32Array(w * h * 4); const out = { w, h, type: t.texture.type, cells: [] }; let best = 0, bi = 0; for (let k = 0; k < w * h; k++) if (buf[4 * k + 1] > best) { best = buf[4 * k + 1]; bi = k; } const bx = bi % w, by = Math.floor(bi / w); out.lampCell = [bx, by]; for (const d of [0, 1, 2, 4, 8, 16, 24, 32]) { const x = Math.min(w - 1, bx + d), y = by; const k = y * w + x; out.cells.push({ d, S: buf[4 * k], T: buf[4 * k + 1], frac: buf[4 * k + 1] / (buf[4 * k] + buf[4 * k + 1]) }); } v.wingDebug.strobe = null; E.localDt = null; v.freeze(false); return out;" }
+    ]
+  }
+]
