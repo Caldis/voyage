@@ -977,7 +977,8 @@ async function main() {
   // 满月夜远处的东西会少掉月光这一路（变暗、发红褐，README 坑点「大气与曝光」NIGHT-AP-1）
   console.log("\n-- 空气透视 LUT 的查法（uApDir / uApIlluminance） --");
   let apBad = false;
-  const AP_BAD = [/aerialPerspectiveUvw\s*\([^;]*?\buSunDir\b/, /uAerialInscatterS?\b[^;]*?\buSunIlluminance\b/];
+  // 后两条：采样与乘照度分两行写的（clouds.ts、far-towers.ts；NIGHT-AP-1 审查发现单行正则漏拦）
+  const AP_BAD = [/aerialPerspectiveUvw\s*\([^;]*?\buSunDir\b/, /uAerialInscatterS?\b[^;]*?\buSunIlluminance\b/, /\bapL\s*\*=\s*uSunIlluminance\b/, /\bI\s*\*\s*uSunIlluminance\b/];
   for (const prog of programs) {
     const lines = prog.fragmentShader.split("\n");
     lines.forEach((l, i) => {
