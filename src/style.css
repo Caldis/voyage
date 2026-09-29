@@ -88,6 +88,16 @@ body { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; c
 .row { display: flex; gap: 8px; align-items: flex-end; }
 .row label { flex: 1; }
 .rates { align-items: center; color: var(--muted); flex-wrap: wrap; }
+/* 分段按钮（UX-5，PANEL_UX_GUIDE §4.1）：座位 / 舱等 / 舱内灯光 / 稀有度从下拉 / 滑条换皮；
+   真正的数据源是紧跟着的隐藏 select / range（见 index.html 注释、ui.ts bindSegmented），按钮外观复用
+   下面 #panel button 与 button.on 已有的样式，这里只管布局。 */
+.seg-field { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 4px; color: var(--muted); }
+.seg-label { flex: none; }
+.segmented { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.segmented button { padding: 3px 10px; font-size: 12px; }
+/* 「流速」一行内两组按钮共用一行（UX-5，PANEL_UX_GUIDE §5.3 规则五）：连续航程开 / 关时只显示其中一组
+   （ui.ts setupVoyageUi 的 sync() 切 hidden），不再是另一组整行变灰 */
+.segmented-inline { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 #info { margin: 0; white-space: pre-wrap; font: 12px/1.6 ui-monospace, Consolas, monospace; color: var(--text); }
 .hint { margin: 0; color: var(--muted); font-size: 12px; }
 /* 被连续航程 / 天气场接管的控件旁标（UX-2，PANEL_UX_GUIDE §5.3 规则二）：显示 / 隐藏走 [hidden]，不占布局宽度之外的空间 */

@@ -66,6 +66,52 @@ function setPressed(btn: HTMLButtonElement, on: boolean) {
   btn.setAttribute("aria-pressed", String(on));
 }
 
+/** 分段按钮组内的方向键（UX-5，PANEL_UX_GUIDE §8.2）：左 / 右（或上 / 下）移动焦点并像点击一样选中，
+ *  与原生 radiogroup 的方向键习惯一致；Tab 停留、Enter / Space 选中是原生 <button> 自带的行为，不用另写。 */
+function addSegmentedArrowNav(btns: HTMLButtonElement[] | NodeListOf<HTMLButtonElement>) {
+  const list = Array.from(btns);
+  list.forEach((b, i) => {
+    b.addEventListener("keydown", (e) => {
+      if (!["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"].includes(e.key)) return;
+      e.preventDefault();
+      // 方向键在飞机模式下是全局的转向快捷键（window 的 keydown 监听，ownsArrowKeys() 不认按钮）；
+      // 分段按钮组内的方向键是「换选中项」，不该顺带把飞机转了，这里挡住冒泡
+      e.stopPropagation();
+      const dir = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+      const next = list[(i + dir + list.length) % list.length];
+      next.focus();
+      next.click();
+    });
+  });
+}
+
+/**
+ * 分段按钮组：外观由紧跟着的隐藏原生控件（select 或 range）驱动，双向同步（UX-5，简化版 PANEL_UX_GUIDE §10
+ * 「一条声明」）。真正的数据源、id、选项 value 都不变——scripts/scenarios.mjs 的 applyScene、
+ * regression.playwright.js 仍按 id 设 `.value` 并派发 `change` / `input`，这里只是给它加一层可视化外壳；
+ * 点击分段按钮反过来也去改隐藏控件的值再派发事件，业务逻辑（main.ts / ui.ts 里已有的 change/input 监听）完全不用改。
+ */
+function bindSegmented(groupEl: HTMLElement, source: HTMLSelectElement | HTMLInputElement) {
+  const btns = Array.from(groupEl.querySelectorAll<HTMLButtonElement>("button[data-value]"));
+  const isRange = source instanceof HTMLInputElement && source.type === "range";
+  const sync = () => btns.forEach((b) => setPressed(b, b.dataset.value === source.value));
+  btns.forEach((b) => {
+    b.addEventListener("click", () => {
+      if (source.value === b.dataset.value) return;
+      source.value = b.dataset.value!;
+      // 滑条按 input 生效（与拖动一致）；分段按钮的一次点击是完整动作，等价于「松手」，一并派发 change
+      source.dispatchEvent(new Event(isRange ? "input" : "change", { bubbles: true }));
+      if (isRange) source.dispatchEvent(new Event("change", { bubbles: true }));
+      sync();
+    });
+  });
+  addSegmentedArrowNav(btns);
+  // 脚本 / 场景表直接改隐藏控件的值时（不经过按钮），按钮的选中态跟着刷新
+  source.addEventListener("change", sync);
+  source.addEventListener("input", sync);
+  sync();
+}
+
 /** 火车模式下飞机专用控件的禁用原因（写进 title；面板上「交通工具」下方另有一行说明） */
 const TRAIN_DISABLED_REASON = "火车模式下不可用（飞机专用）；把「交通工具」切回「飞机」即可使用";
 
@@ -243,6 +289,7 @@ export function setupUi(deps: UiDeps) {
       timeRateBtns.forEach((b) => setPressed(b, b === btn));
     });
   });
+  addSegmentedArrowNav(timeRateBtns);
   $<HTMLInputElement>("ground-on").addEventListener("change", (e) => {
     state.groundOn = (e.target as HTMLInputElement).checked;
     resetAltitudeFloor(state);
@@ -262,6 +309,7 @@ export function setupUi(deps: UiDeps) {
     setView(currentView()); // 预设里的「朝机头 / 朝机尾」换到新座位的坐标
     snapAll();
   });
+  bindSegmented($("seat-seg"), $<HTMLSelectElement>("seat")); // UX-5：座位换成分段按钮，#seat 仍是数据源
   const viewSel = $<HTMLSelectElement>("view-preset");
   viewSel.innerHTML = VIEW_PRESETS.map((v) => `<option value="${v.id}">${v.name}</option>`).join("");
   viewSel.addEventListener("change", () => setView(viewSel.value));
@@ -362,11 +410,13 @@ export function setupUi(deps: UiDeps) {
     state.cabinLight = v === "true";
     state.moodLight = v !== "off";
   });
+  bindSegmented($("cabin-light-seg"), $<HTMLSelectElement>("cabin-light")); // UX-5
   setupReflectUi();
   // 舱等（T25）：只改状态，main.ts 每帧按它挑舱内合成的着色器变体（没编过的先后台编译，编好才切）
   $<HTMLSelectElement>("cabin-class").addEventListener("change", (e) => {
     state.cabinClass = (e.target as HTMLSelectElement).value === "economy" ? "economy" : "business";
   });
+  bindSegmented($("cabin-class-seg"), $<HTMLSelectElement>("cabin-class")); // UX-5
   window.addEventListener("keydown", (e) => {
     if (isLetterShortcut(e, "h")) $("panel").classList.toggle("hidden");
   });
@@ -480,20 +530,17 @@ const BACKDROP_IDLE_MS = 2500;
 function setupVoyageUi(director: Director) {
   const voyageBox = $<HTMLInputElement>("voyage-on");
   const rateBtns = document.querySelectorAll<HTMLButtonElement>("[data-voyage-rate]");
-  const timeRateBtns = document.querySelectorAll<HTMLButtonElement>("[data-rate]");
+  addSegmentedArrowNav(rateBtns);
   const hint = $("backdrop-hint");
   const body = document.body;
 
-  /** 面板控件与导演状态对齐：连续航程开着时，「时间流速」按钮让位给航程流速（两者都推时间，避免叠加） */
+  /** 面板控件与导演状态对齐（UX-5，PANEL_UX_GUIDE §5.3 规则五）：「时间流速」「航程流速」合并成一行「流速」，
+   *  连续航程开 / 关时只显示其中一组按钮（#rate-time / #rate-voyage 切 hidden），不再是另一组整行变灰 */
   function sync() {
     voyageBox.checked = director.active;
     rateBtns.forEach((b) => setPressed(b, director.active && Number(b.dataset.voyageRate) === director.rate));
-    timeRateBtns.forEach((b) => {
-      b.disabled = director.active;
-      // 禁用要说明原因（§5.3 规则四）
-      b.title = director.active ? "连续航程开着时，时间按下面的「航程流速」走；取消勾选「连续航程」后可用" : "";
-    });
-    $("voyage-rates").hidden = !director.active;
+    $("rate-time").hidden = director.active;
+    $("rate-voyage").hidden = !director.active;
     body.classList.toggle("backdrop", director.backdrop);
     if (!director.backdrop) body.classList.remove("backdrop-idle");
   }
@@ -859,6 +906,7 @@ function setupWonderUi(wonders: WonderSystem) {
   };
   rarity.addEventListener("input", applyRarity);
   applyRarity();
+  bindSegmented($("wonder-rarity-seg"), rarity); // UX-5：稀有度从滑条换成分段按钮（离散 4 档不该用滑条）
   // 立即召唤：放在窗外略偏机头处，用 20 秒浮现（自动出现时是 1.5–2 分钟）
   $("wonder-summon").addEventListener("click", () => {
     wonders.enabled = true;
