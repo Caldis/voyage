@@ -33,7 +33,7 @@ export const VERTICAL_CONTINENT_COMMON = /* glsl */ `
 ${wonderPenumbraCommon("cont")}
 uniform float uContOn;                  // 1 = 垂直大陆在场
 uniform vec4 uContP[${CONT_ARRAY}];     // 所有块的顶点（每块前补一个、后补两个）：x 东、z 南（km）、顶沿高（km）、周长坐标 u（km）
-uniform vec4 uContB[${CONT_BLOCKS * 2}]; // 每块两格：[起始下标, 顶点数, 后仰斜率, 包围半径]、[中心 x, z, 0, 0]
+uniform vec4 uContB[${CONT_BLOCKS * 2}]; // 每块两格：[起始下标, 顶点数, 后仰斜率, 包围半径]、[中心 x, z, 最高顶沿（km）, 0]
 uniform vec4 uContE;                    // xyz 锚点处「东」（窗外坐标），w 块数
 uniform vec4 uContS;                    // xyz 锚点处「南」，w 整体包围半径（km）
 uniform vec4 uContC;                    // xyz 相机的局部坐标（km），w 种子
@@ -43,6 +43,13 @@ uniform vec4 uContG;                    // 冲沟间距（km）、法线摆幅�
 uniform vec4 uContW;                    // 冰盖比例、脚下云墙高（km）、贴壁云带高（km，0 = 没有）、风向
 uniform vec4 uContK;                    // 航迹云：航向（弧度，东起往南）、过点 x、z（km）、高度（km）
 uniform vec4 uContR;                    // 岩石反照率 rgb，w 航迹云相位
+
+// 一维值噪声（row 区分不同的量）：只沿一个方向变的噪声用它，hash 次数是 vnoise 的一半（OWV 冷编译按代码总量涨）
+float contN1(float x, float row) {
+  float i = floor(x);
+  float f = x - i;
+  return mix(hash12(vec2(i, row)), hash12(vec2(i + 1.0, row)), f * f * (3.0 - 2.0 * f));
+}
 
 // 瀑布格（沿周长每 uContG.z km 一格，按概率有一道瀑布）：x 瀑布中心的 u，y 顶沿缺口深（km），z 缺口半宽（km），w 有 = 1
 vec4 contFallCell(float u) {
@@ -56,10 +63,10 @@ vec4 contFallCell(float u) {
 // 约三成的 18 km 格里立一座孤峰（高出 1.5–6 km）、瀑布口的 V 形缺口。fu：像素足迹（沿 u，km）
 float contBrink(float u, float Hl, float fu) {
   float sd = uContC.w * 97.0;
-  float h = Hl + 3.2 * (vnoise(vec2(u / 40.0, sd)) - 0.5)
-          + 1.4 * (vnoise(vec2(u / 13.0, sd + 5.0)) - 0.5) * (1.0 - smoothstep(2.2, 4.4, fu))
-          + 0.6 * (vnoise(vec2(u / 4.5, sd + 9.0)) - 0.5) * (1.0 - smoothstep(0.75, 1.5, fu))
-          + 0.25 * (vnoise(vec2(u / 1.6, sd + 13.0)) - 0.5) * (1.0 - smoothstep(0.27, 0.53, fu));
+  float h = Hl + 3.2 * (contN1(u / 40.0, sd) - 0.5)
+          + 1.4 * (contN1(u / 13.0, sd + 5.0) - 0.5) * (1.0 - smoothstep(2.2, 4.4, fu))
+          + 0.6 * (contN1(u / 4.5, sd + 9.0) - 0.5) * (1.0 - smoothstep(0.75, 1.5, fu))
+          + 0.25 * (contN1(u / 1.6, sd + 13.0) - 0.5) * (1.0 - smoothstep(0.27, 0.53, fu));
   float ci = floor(u / 18.0);
   float hs = hash12(vec2(ci, sd + 11.0));
   if (hs > 0.7) {
@@ -150,14 +157,14 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
       float tcb = max(dot(BC.xy - o.xz, dh) / dl2, 0.0);
       vec2 qb = o.xz + dh * tcb - BC.xy;
       if (dot(qb, qb) > BI.w * BI.w) continue;
+      // 往上走的视线在进入这一块的包围圆时已经高过它最高的顶沿（+ 孤峰余量）：窗里上半部分的天空都在这里早退
+      if (d.y > 0.0 && o.y + d.y * max(tcb - BI.w / dl, 0.0) > BC.z + 8.0) continue;
       int i0 = int(BI.x + 0.5);
       float lean = BI.z;
-      float tIn = -1e9, tOut = 1e9;
-      vec4 hA = vec4(0.0), hB = vec4(0.0);   // 命中的崖面两端顶点
-      vec4 hM = vec4(0.0);                   // xy 命中崖面的外法线，zw 前一个崖面的
-      vec2 hN = vec2(0.0);                   // 后一个崖面的外法线
-      float xMin = 1e9, xMax = -1e9, wMin = 1.0, wMax = 1.0, tvMin = 0.0, tvMax = 0.0;
-      vec4 sMin = vec4(0.0), sMax = vec4(0.0), mMin = vec4(0.0), mMax = vec4(0.0);
+      // 循环里只记下标（命中的崖面、两端的竖棱），循环后再按下标取一次顶点：少存一堆 vec4，OWV 冷编译少一截
+      float tIn = -1e9, tOut = 1e9, jHit = 1.0;
+      float xMin = 1e9, xMax = -1e9, wMin = 1.0, wMax = 1.0, tvMin = 0.0, tvMax = 0.0, jMin = 1.0, jMax = 1.0;
+      vec2 uMin = vec2(0.0), uMax = vec2(0.0);  // 两端竖棱的周长坐标与视线在那里的高度
       vec4 P0 = uContP[i0];
       vec4 P1 = uContP[i0 + 1];
       vec2 mPrev = normalize(vec2(P1.y - P0.y, P0.x - P1.x));
@@ -173,11 +180,7 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
           float tk = num / dn;
           if (tk > tIn) {
             tIn = tk;
-            hA = Pa;
-            hB = Pb;
-            hM = vec4(m, mPrev);
-            vec4 Pc = uContP[i0 + j + 2];
-            hN = normalize(vec2(Pc.y - Pb.y, Pb.x - Pc.x));
+            jHit = float(j);
           }
         } else if (dn > 0.0) tOut = min(tOut, num / dn);
         else if (num < 0.0) tOut = -1.0;
@@ -186,30 +189,39 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
         float tv = max(dot(rv, dh) / dl2, 1.0);
         float yv = max(o.y + d.y * tv, 0.0);
         float xv = dot(rv - lean * yv * (mPrev + m) / max(1.0 + dot(mPrev, m), 0.05), nh2);
-        // 竖棱不是一刀切的直线：按高度抖 ±1.2 km（+ 看得清时再加 ±0.35 km 的细碎），轮廓成了风化的岩脊
         float wv = tv * pixelAngle;
-        xv += 2.4 * (vnoise(vec2(yv / 4.0, Pa.w * 0.37 + sd)) - 0.5) + 0.7 * (vnoise(vec2(yv / 1.2, Pa.w * 0.53 + sd)) - 0.5) * (1.0 - smoothstep(0.2, 0.4, wv));
-        if (xv < xMin) { xMin = xv; wMin = wv; sMin = Pa; mMin = vec4(mPrev, m); tvMin = tv; }
-        if (xv > xMax) { xMax = xv; wMax = wv; sMax = Pa; mMax = vec4(mPrev, m); tvMax = tv; }
+        if (xv < xMin) { xMin = xv; wMin = wv; tvMin = tv; jMin = float(j); uMin = vec2(Pa.w, yv); }
+        if (xv > xMax) { xMax = xv; wMax = wv; tvMax = tv; jMax = float(j); uMax = vec2(Pa.w, yv); }
         mPrev = m;
+      }
+      // 两端的竖棱不是一刀切的直线：按高度抖 ±1.2 km（+ 看得清时再加 ±0.35 km 的细碎），轮廓成了风化的岩脊
+      // （只给最后选出的两条端棱加：逐顶点算噪声，每个像素要多算几十次）
+      for (int q = 0; q < 2 + uLoopGuard; q++) {
+        if (q > 1) break;
+        vec2 uv = q == 0 ? uMin : uMax;
+        float jag = 2.4 * (contN1(uv.y / 4.0, uv.x * 0.37 + sd) - 0.5) + 0.7 * (contN1(uv.y / 1.2, uv.x * 0.53 + sd) - 0.5) * (1.0 - smoothstep(0.2, 0.4, q == 0 ? wMin : wMax));
+        if (q == 0) xMin += jag;
+        else xMax += jag;
       }
       // 左右轮廓的覆盖率：像素（三角核）落在区间 [xMin, xMax] 里的比例
       float covLat = clamp(wonderTentCdf(-xMin / wMin) + wonderTentCdf(xMax / wMax) - 1.0, 0.0, 1.0);
       bool hit = tIn > 0.0 && tIn < tOut;
       if (!hit && covLat <= 0.0) continue;
-      float tW = tIn;
-      vec2 fm = hM.xy;
-      vec4 pA = hA, pB = hB;
+      // 中心视线从轮廓外擦过：按离它最近的那条端棱着色（深度 = 棱的距离，崖面取朝着相机的那一侧）
+      bool useMin = -xMin / wMin < xMax / wMax;
+      float tW = hit ? tIn : (useMin ? tvMin : tvMax);
+      int kb = i0 + int((hit ? jHit : (useMin ? jMin : jMax)) + 0.5);
+      vec4 Pp = uContP[kb - 1];
+      vec4 pA = uContP[kb];
+      vec4 pB = uContP[kb + 1];
+      vec4 Pn = uContP[kb + 2];
+      vec2 mA = normalize(vec2(pA.y - Pp.y, Pp.x - pA.x));   // 前一个崖面
+      vec2 fm = normalize(vec2(pB.y - pA.y, pA.x - pB.x));   // 这一格
+      vec2 mB = normalize(vec2(Pn.y - pB.y, pB.x - Pn.x));   // 后一个崖面
       if (!hit) {
-        // 中心视线从轮廓外擦过：按离它最近的那条端棱着色（深度 = 棱的距离，崖面取朝着相机的那一侧）
-        bool useMin = -xMin / wMin < xMax / wMax;
-        vec4 sv = useMin ? sMin : sMax;
-        vec4 mv = useMin ? mMin : mMax;
-        tW = useMin ? tvMin : tvMax;
-        vec2 toCam = o.xz - sv.xy;
-        fm = dot(mv.xy, toCam) > dot(mv.zw, toCam) ? mv.xy : mv.zw;
-        pA = sv;
-        pB = sv + vec4(-fm.y, fm.x, 0.0, 1.0);   // 退化成一个点：u、顶沿取顶点处的
+        vec2 toCam = o.xz - pA.xy;
+        fm = dot(mA, toCam) > dot(fm, toCam) ? mA : fm;
+        pB = pA + vec4(-fm.y, fm.x, 0.0, 1.0);   // 退化成一个点：u、顶沿取顶点处的
       }
       if (tW <= 0.0 || tW > tLimit || tW > tA) continue;   // 被海面挡住（地平线以下），或比已有的两块都远
       vec3 Pl = o + d * tW;
@@ -238,7 +250,6 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
       // 相邻崖面之间的竖棱：离棱不到一个像素时按横向距离把两侧的法线混合（棱另一侧是背面 = 轮廓，已由 covLat 管）
       vec2 mh = fm;
       if (hit) {
-        vec2 mA = hM.zw, mB = hN;
         vec2 rA = pA.xy - o.xz, rB = pB.xy - o.xz;
         float xA = dot(rA - lean * y * (mA + fm) / max(1.0 + dot(mA, fm), 0.05), nh2);
         float xB = dot(rB - lean * y * (fm + mB) / max(1.0 + dot(fm, mB), 0.05), nh2);
@@ -289,7 +300,8 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
     vec4 g3 = k == 0 ? gA3 : gB3;
     float tauAll = tauS + tauC;
     float covk = isCloud ? 1.0 - exp(-tauAll) : g1.w;
-    if (covk < 1e-4) continue;
+    // 远的一块被近的一块整个盖住时不用算（岬角挡在主壁前面的大片像素）
+    if (covk < 1e-4 || (k == 0 && covB > 0.999)) continue;
     float tk = isCloud ? max(((tB - 1.5) * tauS + ct.y * tauC) / max(tauAll, 1e-6), 1.0) : g3.z;
     vec3 Pw = O + rd * tk;
     float rr = length(Pw);
@@ -304,7 +316,7 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
       vec2 mh = vec2(cos(g2.x), sin(g2.x));
       // 冲沟与山脊：间距 3–7 km、不均匀（单调扭曲），随高度略弯；山脊两侧的法线往左右摆（三角波的坡面，按足迹积分成方波的平均）
       float gP = uContG.x;
-      float gx = u + gP * (vnoise(vec2(u / (2.7 * gP), sd + 2.0)) - 0.5) + 0.25 * gP * sin(y / 13.0 + sd * 3.0);
+      float gx = u + gP * (contN1(u / (2.7 * gP), sd + 2.0) - 0.5) + 0.25 * gP * sin(y / 13.0 + sd * 3.0);
       float gi = floor(gx / gP);
       float gFade = 1.0 - smoothstep(gP / 6.0, gP / 3.0, fu);
       // 扶壁与冲沟：法线方位按两级值噪声摆（不规则的脊与沟，随高度汇合 / 分叉）。周期性的正弦 / 方波远看是一幕幕冰帘 / 玻璃
@@ -321,7 +333,6 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
       float ll = y + dot(uContT.zw, g3.xy) + 0.6 * sin(u / 47.0 + sd);
       float fl = fy + length(uContT.zw) * fu;
       vec2 L1 = contLayers(ll, fl, uContT.x, sd + 1.0);
-      vec2 L2 = contLayers(ll, fl, uContT.y, sd + 7.0);
       // 层理不是满墙一样清楚：有的段是一层层的沉积岩，有的段是整块的岩体（层理淡到几乎没有），一片几十 km
       float sc = 0.25 + 0.75 * smoothstep(0.3, 0.7, vnoise(vec2(u / 60.0, ll / 35.0 + sd + 9.0)));
       // 崩塌锥：脚下每 14 km 一格、约一半的格里有一座 2–6 km 高的碎石锥（坡缓、颜色略浅而均匀，没有层理）
@@ -337,11 +348,10 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
       nW = normalize(E * nl.x + a * nl.y + S * nl.z);
       // 反照率：岩性底色 × 主层 × 细层 × 冲沟底 × 从台阶上挂下来的暗色水痕（「沙漠漆」，宽 2–6 km、往下拖几十 km）
       // × 几十 km 一片的色斑（略偏铁锈色）。细的竖纹只在看得清时才有：竖纹与层理交成方格，远看就是一栋玻璃幕墙
-      float streak = (vnoise(vec2(u / 0.9, ll / 9.0 + sd)) - 0.5) * (1.0 - smoothstep(0.15, 0.3, fu));
       float varnish = smoothstep(0.55, 0.85, vnoise(vec2(u / 3.2, y / 30.0 + sd + 17.0))) * (1.0 - smoothstep(0.55, 1.1, fu));
       float blot = vnoise(vec2(u / 45.0, y / 24.0 + sd));
       vec3 rock = uContR.rgb * mix(vec3(0.94, 1.0, 1.06), vec3(1.1, 0.97, 0.86), blot) * (0.7 + 0.6 * blot);
-      alb = rock * (1.0 + sc * 0.62 * (L1.x - 0.5)) * (1.0 + sc * 0.14 * (L2.x - 0.5)) * (1.0 - 0.25 * gully) * (1.0 + 0.12 * streak) * (1.0 - 0.35 * varnish);
+      alb = rock * (1.0 + sc * 0.62 * (L1.x - 0.5)) * (1.0 - 0.25 * gully) * (1.0 - 0.35 * varnish);
       // 岩面的斑驳（1.5 / 4 km 两级，按足迹淡出）：没有它，远看是一整块磨砂玻璃
       float mot = (vnoise(vec2(u / 4.0, y / 3.0 + sd + 21.0)) - 0.5) * (1.0 - smoothstep(0.7, 1.4, fu))
                 + 0.7 * (vnoise(vec2(u / 1.5, y / 1.1 + sd + 23.0)) - 0.5) * (1.0 - smoothstep(0.25, 0.5, max(fu, fy)));
@@ -362,22 +372,22 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
         if (k == 1) { tauS += mist; hS += mist * y; }
       }
       // 冰盖：顶沿上一道 0.35–1.45 km 厚的白边（约一半的大陆有，覆盖一部分顶沿）
-      float iceM = uContW.x > 0.0 ? smoothstep(1.0 - uContW.x - 0.08, 1.0 - uContW.x + 0.08, vnoise(vec2(u / 28.0, sd + 31.0))) : 0.0;
-      float ti = 0.35 + 1.1 * vnoise(vec2(u / 7.0, sd + 41.0));
+      float iceM = uContW.x > 0.0 ? smoothstep(1.0 - uContW.x - 0.08, 1.0 - uContW.x + 0.08, contN1(u / 28.0, sd + 31.0)) : 0.0;
+      float ti = 0.35 + 1.1 * contN1(u / 7.0, sd + 41.0);
       alb = mix(alb, vec3(0.7, 0.76, 0.84), iceM * wonderTentCdf((y - (Hc - ti)) / fy));
       if (k == 1) {
         // 脚下的云墙：岩壁挡住的湿空气堆起来（2–4.5 km，偶尔堆到 8 km），顶部是翻滚的云包
-        float hcw = uContW.y * (0.55 + 0.9 * vnoise(vec2(u / 22.0, sd + 51.0))) + 3.5 * smoothstep(0.72, 0.95, vnoise(vec2(u / 55.0, sd + 57.0)));
-        float ctop = hcw + 2.4 * (vnoise(vec2(u / 3.5 + T * 0.002, sd + 61.0)) - 0.5) + 1.2 * (vnoise(vec2(u / 9.0, sd + 63.0)) - 0.5);
-        float tw = 1.6 * smoothstep(ctop + 0.4, ctop - 1.2, y) * smoothstep(0.25, 0.75, vnoise(vec2(u / 6.0, sd + 67.0)) * 0.6 + 0.4 * vnoise(vec2(u / 1.6, y / 1.1)));
+        float hcw = uContW.y * (0.55 + 0.9 * contN1(u / 22.0, sd + 51.0)) + 3.5 * smoothstep(0.72, 0.95, contN1(u / 55.0, sd + 57.0));
+        float ctop = hcw + 2.4 * (contN1(u / 3.5 + T * 0.002, sd + 61.0) - 0.5) + 1.2 * (contN1(u / 9.0, sd + 63.0) - 0.5);
+        float tw = 1.6 * smoothstep(ctop + 0.4, ctop - 1.2, y) * smoothstep(0.25, 0.75, contN1(u / 6.0, sd + 67.0) * 0.6 + 0.4 * vnoise(vec2(u / 1.6, y / 1.1)));
         tauS += tw;
         hS += tw * min(y, ctop);
         // 贴壁的云带：和我们一样高（8.5–12.5 km），一段段挂在岩壁上——一眼看出岩壁比云高出多少倍
         if (uContW.z > 0.0) {
-          float hb = uContW.z + 1.2 * (vnoise(vec2(u / 40.0, sd + 71.0)) - 0.5);
-          float thb = 0.5 + 0.6 * vnoise(vec2(u / 15.0, sd + 73.0));
-          float msk = smoothstep(0.35, 0.65, vnoise(vec2(u / 18.0 + T * 0.0015, sd + 79.0)));
-          hb += 0.9 * (vnoise(vec2(u / 5.0 - T * 0.003, sd + 75.0)) - 0.5);
+          float hb = uContW.z + 1.2 * (contN1(u / 40.0, sd + 71.0) - 0.5);
+          float thb = 0.5 + 0.6 * contN1(u / 15.0, sd + 73.0);
+          float msk = smoothstep(0.35, 0.65, contN1(u / 18.0 + T * 0.0015, sd + 79.0));
+          hb += 0.9 * (contN1(u / 5.0 - T * 0.003, sd + 75.0) - 0.5);
           float tb = 1.8 * exp(-(y - hb) * (y - hb) / (thb * thb)) * msk * smoothstep(0.25, 0.7, vnoise(vec2(u / 2.2 - T * 0.004, (y - hb) / 0.7 + 3.0)));
           tauS += tb;
           hS += tb * y;
@@ -392,15 +402,14 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
     vec3 eMoon = uMoonIlluminance * contShadowT(Pw, uMoonDir, tMRef, visM);
     vec3 eSkyUp = skyIrradiance(min(rr, TOP), up) * (1.0 - smoothstep(40.0, 100.0, hq));
     vec3 eUp = 0.21 * (uSunIlluminance * max(dot(up, uSunDir), 0.0) + uMoonIlluminance * max(dot(up, uMoonDir), 0.0));
-    // 空气透视：400 km 以内查表；更远的一段（大陆的远端在地平线外）：透射率按透射率 LUT 的比值外推、内散射按「源函数不变」外推（同远塔）
+    // 空气透视：400 km 以内查表；更远的一段（大陆的远端在地平线外）：透射率按平均消光外推、内散射按「源函数不变」外推
     vec3 uvw = aerialPerspectiveUvw(rd, uApDir, min(tk, AERIAL_MAX_DISTANCE));
     vec3 apI = texture(uAerialInscatterS, uvw).rgb;
     vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;
     if (tk > AERIAL_MAX_DISTANCE) {
-      vec3 p1 = O + rd * AERIAL_MAX_DISTANCE;
-      float r1 = length(p1);
-      vec3 T12 = transmittanceToTop(r1, dot(p1, rd) / r1) / max(transmittanceToTop(rr, dot(Pw, rd) / rr), vec3(1e-6));
-      vec3 Tn = apT * min(T12, vec3(1.0));
+      // 按 400 km 处的平均消光外推（比远塔那样查两次透射率 LUT 便宜：OWV 冷编译逐项撤回里那一段占 15%）；
+      // 400 km 以外的视线在地平线以上、越走越高，平均消光只会更小，外推是偏浓的上限，远段本来就沉在霾里
+      vec3 Tn = pow(max(apT, vec3(1e-4)), vec3(tk / AERIAL_MAX_DISTANCE));
       apI = apI / max(vec3(1.0) - apT, vec3(1e-3)) * (vec3(1.0) - Tn);
       apT = Tn;
     }
@@ -409,7 +418,8 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
     vec3 frontFrac = 1.0 - apT;
     if (tLimit > 1e8) frontFrac = clamp(frontFrac / skyTop, 0.0, 1.0);
     vec3 lFront = max(apL, Lbg * frontFrac * moonW);
-    // （巨柱群黄昏在这里再压到背景的 0.78；整块岩壁不能按背景逐像素压——天空的渐变会透过岩壁，读成半透明的玻璃）
+    // 黄昏：地影里的岩壁画成比天空暗约两成的剪影（同巨柱群；查表的内散射在这里和整条视线的天空几乎一样亮，不压就看不见岩壁）
+    lFront = mix(lFront, min(lFront, Lbg * 0.78), duskW);
     // 亮度封顶（同巨柱群）：暮色里被照亮的顶沿不超过同方向天空的 1.3–2 倍；比例按半影的参考透射率定，「没有太阳」的一份按 visS 混
     float capLum = mix(4.0, mix(1.3, 2.0, smoothstep(10.0, 150.0, hq)), duskW) * wonderLum(Lbg);
     vec3 eRest = eMoon + eSkyUp + eUp;

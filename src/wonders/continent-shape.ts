@@ -271,7 +271,7 @@ export function createContinentUniforms() {
     uContOn: { value: 0 },
     /** 所有块的顶点：每块前补上一个、后补两个；x 东、z 南（km）、顶沿高、周长坐标 */
     uContP: { value: Array.from({ length: CONT_ARRAY }, () => new THREE.Vector4()) },
-    /** 每块两格：[起始下标, 顶点数, 后仰斜率, 包围半径]、[中心 x, z, 0, 0] */
+    /** 每块两格：[起始下标, 顶点数, 后仰斜率, 包围半径]、[中心 x, z, 最高顶沿（km）, 0] */
     uContB: { value: Array.from({ length: CONT_BLOCKS * 2 }, () => new THREE.Vector4()) },
     /** xyz 锚点处「东」（窗外坐标），w 块数 */
     uContE: { value: new THREE.Vector4(1, 0, 0, 0) },
@@ -340,7 +340,7 @@ export function applyContinentUniforms(
     }
     const n = b.verts.length;
     u.uContB.value[2 * bi].set(slot, n, b.lean, b.radius);
-    u.uContB.value[2 * bi + 1].set(b.center[0], b.center[1], 0, 0);
+    u.uContB.value[2 * bi + 1].set(b.center[0], b.center[1], Math.max(...b.verts.map((v) => v[2])), 0);
     // 下标 slot + i 对应第 (i − 1) mod n 个顶点（i = 0..n + 2）；补在后面的两个顶点周长坐标接着往上数（首尾那条边的 u 连续）
     for (let i = 0; i < n + 3; i++) {
       const v = b.verts[(i - 1 + n) % n];

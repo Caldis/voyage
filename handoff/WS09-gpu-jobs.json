@@ -1,0 +1,29 @@
+[
+  {
+    "name": "vcont-noon",
+    "scene": "ws-vcont-noon",
+    "variants": [
+      { "name": "on", "js": "v.wonders.enabled = true; v.wonders.trigger(\"vcontinent\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.83 });" },
+      { "name": "off", "js": "v.wonders.clear(); v.wonders.enabled = false;" },
+      { "name": "on2", "js": "v.wonders.enabled = true; v.wonders.trigger(\"vcontinent\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.83 });" }
+    ]
+  },
+  {
+    "name": "vcont-noon-up",
+    "scene": "ws-vcont-noon-up",
+    "variants": [
+      { "name": "on", "js": "v.wonders.enabled = true; v.wonders.trigger(\"vcontinent\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.83 });" },
+      { "name": "off", "js": "v.wonders.clear(); v.wonders.enabled = false;" },
+      { "name": "on2", "js": "v.wonders.enabled = true; v.wonders.trigger(\"vcontinent\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.83 });" }
+    ]
+  },
+  {
+    "name": "vcont-sea",
+    "scene": "ws-vcont-sea",
+    "variants": [
+      { "name": "on", "js": "v.wonders.enabled = true; v.wonders.trigger(\"vcontinent\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.61 });" },
+      { "name": "off", "js": "v.wonders.clear(); v.wonders.enabled = false;" },
+      { "name": "on2", "js": "v.wonders.enabled = true; v.wonders.trigger(\"vcontinent\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.61 });" }
+    ]
+  }
+]
