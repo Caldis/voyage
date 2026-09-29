@@ -2,7 +2,60 @@
 
 按时间顺序记录；最上面的「当前立足点」随时更新。
 
-## 当前立足点（交接，2026-09-28 01:10 更新；上下文压缩前写）
+## 当前立足点（交接，2026-09-29 晚更新）
+
+**先读顺序**：本节 → `DEV_SOP.md`（模型分档、看得见优先 / 细微与性能降级三档、美术需求先过性能预审、合并与记账不要并行、审查规则）→ `TASKS.md`（进行中表、待办表里未标【降级】的是第一档）→ 相关 `handoff/<任务>.md` 与 `-review.md`。
+
+### 阶段：用户 2026-09-29 晚提出「阶段性收尾」
+用户原话：「我觉得这个长程任务已经足够久了, 我觉得我们可以先进行一个阶段性收尾了, 当然并不是说项目就先不迭代了, 而是将项目先作为一个稳定态做好向外推出的准备」。
+→ **停止派发新功能**；在途任务收尾合并；接着做发布准备清单（见下）。发布方式 / 受众待用户定。
+
+### 在途（2026-09-29 晚）
+| 任务 | 状态 | 分支 | 下一步 |
+| --- | --- | --- | --- |
+| TW-LTG 远景塔夜间云内闪电（Sonnet） | 已交付 a39d3f1，Sonnet 审查中 | `worktree-agent-acabd099855b25ac9` | 审查通过 → 单独合并 |
+| PERF-TW04 雷暴天性能回收（Opus） | 实现中（① 精确足迹已提交，② 网格跳空步实测慢 ×1.17 已撤回，在试④） | `worktree-agent-ab549aa4e779753f5` | 交付 → Opus 审查 → 合并；发布前必须完成（用户屏上雷暴天会卡） |
+| WS09 垂直大陆奇观（Opus） | 实现中（OWV 变体） | `worktree-agent-a91d86c1d55d28f48` | 交付 → Opus 审查；收尾期是否合并待用户定（建议合并，奇观模式内、默认不出现在普通航程） |
+会话中断时：子代理不能跨会话续跑，但分支和 WIP 提交都在；新会话按上表分支名读 handoff / 提交记录，重派同一任务「从该分支继续」。
+
+### 本段（09-28 — 09-29）已合并的主要内容
+奇观巨构化（WS01 天梯、WS02 灯城、WS04 浮空城、WS05 建木、WS07 巨柱群、WS08 天环 + WS08-b、WS-STAR 挡星、WS-SCN 场景）；高耸云（TW01、TW02 远景塔层、TW04 积雨云重做——幞状云已关待重做）；夜景（NIGHT-AP-1 空气透视加月光、STROBE-FLASH / STROBE-CLOUD、REFLECT-OFF 舱内反光默认关）；交互（FOCUS-ZOOM 聚焦观察、头部限位、UX-1a / 2 / 3 / 4 面板与手机抽屉、VOY-DEFAULT 连续航程默认开、VOY-HKG 首段航线）；天象（SPEC-RAYS、SPEC-FUJI、SPEC-BOW）；以及云 / 地面 / 机翼 / 海面 / 性能多项。细节见 TASKS「已完成」表。
+
+### 收尾与发布准备清单（待用户确认范围后执行）
+1. 在途三项收尾（上表）。之后冻结新功能。
+2. 安静窗口全面复核（PERF-15 式）：用户分辨率各代表场景帧时间、冷启动（上次 9.1 s 是 09-27 数字，之后合并了大量改动）、自动画质档在中端 GPU 上是否可用（开发机是 RTX 5090）。
+3. 全量回归：`scripts/regression.playwright.js` 全场景控制台零 error；美术总监过一遍，只挑发布阻塞级（闪烁、露馅、明显伪影）。
+4. 默认体验：首屏（VOY-START 未定）、默认设置、调试区隐藏、奇观模式默认状态、WARP 软件渲染提示。
+5. 发布工程：静态构建与托管目标（待用户定）、base 路径；外部瓦片（EOX 等）在正式域名下的 CORS；署名与许可（EOX Sentinel-2 cloudless 为 CC BY-NC-SA，只能非商用；国土地理院航拍、月面 / 银河贴图署名已在页脚）；浏览器兼容（WebGL2、macOS Safari / Chrome、手机）。
+6. 仓库：**整个仓库不能公开**（netscope 含家庭内网信息）；若要公开源码，单独拆出 voyage。打版本标签。
+7. 文档：README「使用」、ROADMAP 标阶段、本节更新。
+
+### 待用户决定
+发布方式与受众（托管在哪、公开源码与否）；WS09 是否进本次发布；首屏 VOY-START（加关岛 / 塞班黄昏逆光）；天梯塔身灯格开 / 关；浮空城小岛版（默认保留低概率）；Esri 影像接入（未接）；商务舱侧边台（未做）。
+
+### 收尾后的积压（第一档，未降级）
+SPEC-PILEUS 幞状云重做、SPEC-ARCUS 弧状云、WS10 跨海巨门、NIGHT-AP-3 T48 保色门限、PERF-15、ART-8 余项；其余标【降级】的见 TASKS。
+
+### 协作注意
+- 合并一律单独跑，查 `git diff --name-only --diff-filter=U` 与 `^<<<<<<<` 后再记账（WS04 冲突标记误提交教训）。
+- 审查给出一行级修法的小问题，协调者可在合并时直接改并复测，不必再审一轮。
+- 每合并一个就清 worktree（`worktree remove -f -f` + 删分支；Windows 下目录残留用 PowerShell 删）。
+- 例行进度检查由会话内 cron 触发，只在当前会话有效；新会话需重建。
+
+### 如何复现当前立足点
+
+```bash
+pnpm install
+pnpm dev:voyage                      # http://127.0.0.1:5181
+pnpm --filter voyage typecheck && pnpm --filter voyage build
+```
+- 首次打开或改了着色器后约 45 秒冷编译（有加载遮罩），之后不到 1 秒。
+- 视觉回归：Playwright MCP 的 `browser_run_code_unsafe`，`filename` 填 `apps/voyage/scripts/regression.playwright.js`，
+  截图到 `tmp/screenshot/regression/`（2026-09-25 已生成第一套基线，11 个场景）。
+- 调试句柄 `window.__voyage`、`uDebug` 模式、截图前固定视角的做法见 `README.md`「调试与验证」。
+
+## 2026-09-28 01:10 · 旧立足点（存档，已被 09-29 晚的立足点取代）
+
 
 **先读顺序**：本节 → `DEV_SOP.md`（尤其第 3 节简报环境提醒、第 5 节「必须派独立审查」六条与冷编译门槛、测量约定、「机器是用户的」并发上限）→ `TASKS.md`（进行中 / 待办 / 已完成）→ `README.md` 顶部硬约束速查表与坑点 → `ROADMAP.md`。
 
@@ -52,17 +105,6 @@
 - 并行测试造成的卡顿用户说可以忽略，不限代理数；性能结论仍在安静窗口复测。
 - 交接是持续背景事项：每次合并 / 派发 / 用户定新方向时顺手更新本节，保证自动压缩随时触发都不丢。
 
-### 如何复现当前立足点
-
-```bash
-pnpm install
-pnpm dev:voyage                      # http://127.0.0.1:5181
-pnpm --filter voyage typecheck && pnpm --filter voyage build
-```
-- 首次打开或改了着色器后约 45 秒冷编译（有加载遮罩），之后不到 1 秒。
-- 视觉回归：Playwright MCP 的 `browser_run_code_unsafe`，`filename` 填 `apps/voyage/scripts/regression.playwright.js`，
-  截图到 `tmp/screenshot/regression/`（2026-09-25 已生成第一套基线，11 个场景）。
-- 调试句柄 `window.__voyage`、`uDebug` 模式、截图前固定视角的做法见 `README.md`「调试与验证」。
 
 ## 2026-09-25 · P0 完成
 
