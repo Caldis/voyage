@@ -1,0 +1,6 @@
+[
+ {"name": "storm-day", "scene": "storm-day", "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "old2", "materials": {"clouds.marchMat": "base"}}]},
+ {"name": "storm-sc-low", "scene": "storm-sc-low", "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "old2", "materials": {"clouds.marchMat": "base"}}]},
+ {"name": "tw-squall", "scene": {"name":"tw-squall","p":{"preset":"wpac","date":"2026-09-28","time":900,"coverage":0.3,"weather":"squall","wing-pos":"-4"},"js":"const R=[4.6,5.8,4.2,5.2],T=[12.4,13.9,11.8,13.1]; v.weather.storms.forEach((s,i)=>{s.radius=R[i];s.top=T[i];}); v.weather.syncUniforms(); return 1;"}, "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "old2", "materials": {"clouds.marchMat": "base"}}]},
+ {"name": "typhoon-outer", "scene": "typhoon-outer", "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "old2", "materials": {"clouds.marchMat": "base"}}]}
+]

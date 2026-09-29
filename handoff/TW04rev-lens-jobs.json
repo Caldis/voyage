@@ -1,0 +1,14 @@
+[
+ {"name": "lens-storm-day", "scene": "storm-day", "crop": [380, 360, 820, 500],
+  "variants": [
+   {"name": "cur"},
+   {"name": "noPileus", "patch": {"clouds.marchMat": [["fract(sd.x * 7.31 + sd.y * 3.17) < 0.6", "fract(sd.x * 7.31 + sd.y * 3.17) < -1.0"]]}},
+   {"name": "noShield", "patch": {"clouds.marchMat": [["float sh = anvilShield(xz, alt, lod, detail) * uCloudDensity;", "float sh = 0.0;"]]}}
+  ]},
+ {"name": "lens-storm-sc", "scene": "storm-sc", "crop": [380, 360, 820, 500],
+  "variants": [
+   {"name": "cur"},
+   {"name": "noPileus", "patch": {"clouds.marchMat": [["fract(sd.x * 7.31 + sd.y * 3.17) < 0.6", "fract(sd.x * 7.31 + sd.y * 3.17) < -1.0"]]}},
+   {"name": "noShield", "patch": {"clouds.marchMat": [["float sh = anvilShield(xz, alt, lod, detail) * uCloudDensity;", "float sh = 0.0;"]]}}
+  ]}
+]

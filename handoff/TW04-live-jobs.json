@@ -1,0 +1,11 @@
+[
+ {"name": "storm-day-live", "scene": "storm-day",
+  "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "cur2"}],
+  "live": {"crop": [420, 300, 760, 560], "frames": 240, "regions": {"砧": [0, 40, 760, 160], "塔身": [200, 180, 400, 260], "塔脚云": [0, 380, 760, 180]}, "thr": 16, "frac": 0.05, "variants": ["old", "cur", "cur2"]}},
+ {"name": "squall-live", "scene": {"name":"tw-squall","p":{"preset":"wpac","date":"2026-09-28","time":900,"coverage":0.3,"weather":"squall","wing-pos":"-4"},"js":"const R=[4.6,5.8,4.2,5.2],T=[12.4,13.9,11.8,13.1]; v.weather.storms.forEach((s,i)=>{s.radius=R[i];s.top=T[i];}); v.weather.syncUniforms(); return 1;"},
+  "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "cur2"}],
+  "live": {"crop": [420, 250, 760, 560], "frames": 240, "regions": {"砧盾": [0, 0, 760, 250], "塔": [0, 250, 760, 250]}, "thr": 16, "frac": 0.05, "variants": ["old", "cur", "cur2"]}},
+ {"name": "outer11-live", "scene": {"name":"typhoon-outer-11","p":{"preset":"wpac","date":"2026-09-28","time":900,"altitude":10.7,"weather":"typhoon-outer","wing-pos":"-4","cabin-class":"business"},"head":[0,0.02,-0.42]},
+  "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "cur2"}],
+  "live": {"crop": [500, 120, 600, 500], "frames": 240, "regions": {"卷云盖": [0, 0, 600, 320]}, "thr": 16, "frac": 0.05, "variants": ["old", "cur", "cur2"]}}
+]

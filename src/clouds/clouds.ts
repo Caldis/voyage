@@ -199,6 +199,10 @@ bvec2 cloudRayNearWeather(vec3 rd, vec2 seg) {
   for (int i = 0; i < uStormCount; i++) {
     vec4 c = uStorms[i];
     if (cloudRayDist2D(rd, seg, c.xy) < c.z * 7.5 + WEATHER_LIGHT_REACH) nearAny = true;
+    // 砧盾（TW04）向下风铺开上百公里：视线从它下面 / 里面穿过也算够得着（砧盾是软边、解析受光，
+    // 只让视线走到砧的高度，塔身的表面细化只在碰到塔时发生）
+    vec3 sc = shieldCircle(c);
+    if (cloudRayDist2D(rd, seg, sc.xy) < sc.z) nearAny = true;
   }
 #endif
   bool nearHur = cloudHurOn() && cloudRayDist2D(rd, seg, uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
@@ -232,6 +236,26 @@ vec2 cloudRayWeatherSpan(vec3 ro, vec3 rd) {
     if (h2 < 0.0) continue;
     float hw = sqrt(h2 / a);
     vec2 hs = cloudShellIntervalH(ro, rd, uShellBottom, c.w + 1.8);
+    vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
+    if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
+  }
+  return span;
+}
+// TW04：砧盾那一段（外接圆 × 砧顶附近的高度层 [砧顶 − SHIELD_BELOW, 砧顶 + SHIELD_ABOVE]）的包络。
+// 单独一段而不并进上面的包围柱：巡航高度常在砧的高度层里，往下看的视线出了这一层以后到层状云之间整段是空的，
+// 并成一段就跳不过去了
+vec2 cloudRayShieldSpan(vec3 ro, vec3 rd) {
+  vec2 span = vec2(1e9, -1e9);
+  float a = max(dot(rd.xz, rd.xz), 1e-8);
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 c = uStorms[i];
+    vec3 sc = shieldCircle(c);
+    vec2 rel = sc.xy - uCloudOffset;
+    float tc = dot(rel, rd.xz) / a;
+    float h2 = sc.z * sc.z - (dot(rel, rel) - tc * tc * a);
+    if (h2 < 0.0) continue;
+    float hw = sqrt(h2 / a);
+    vec2 hs = cloudShellIntervalH(ro, rd, c.w - SHIELD_BELOW, c.w + SHIELD_ABOVE);
     vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
     if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
   }
@@ -425,6 +449,7 @@ void main() {
 #ifdef CLOUD_STORM_SKIP
   vec2 laySeg = vec2(1e9, -1e9);
   vec2 wxSeg = vec2(1e9, -1e9);
+  vec2 anvSeg = vec2(1e9, -1e9);   // TW04 砧盾那一段（cloudRayShieldSpan）
   if (refineOn) {
     if (uCoverage > 0.0) {
       laySeg = cloudShellIntervalH(ro, rd, uCloudBottom, uCloudTop);
@@ -432,6 +457,7 @@ void main() {
       if (laySeg.y <= laySeg.x) laySeg = vec2(1e9, -1e9);
     }
     wxSeg = cloudRayWeatherSpan(ro, rd);
+    anvSeg = cloudRayShieldSpan(ro, rd);
   }
 #endif
   // 闪电放电通道（线段）：两端换到相机坐标
@@ -478,8 +504,8 @@ void main() {
     // 与默认程序从层顶起步（i == 0 半步）一致——远离雷暴的层状云在两个程序里是同一套采样，换程序不跳变
     bool jumped = false;
 #ifdef CLOUD_STORM_SKIP
-    if (refineOn && wasEmpty && fine == 0 && !(t >= laySeg.x && t < laySeg.y) && !(t >= wxSeg.x && t < wxSeg.y)) {
-      float tn = min(t < laySeg.x ? laySeg.x : 1e9, t < wxSeg.x ? wxSeg.x : 1e9);
+    if (refineOn && wasEmpty && fine == 0 && !(t >= laySeg.x && t < laySeg.y) && !(t >= wxSeg.x && t < wxSeg.y) && !(t >= anvSeg.x && t < anvSeg.y)) {
+      float tn = min(min(t < laySeg.x ? laySeg.x : 1e9, t < wxSeg.x ? wxSeg.x : 1e9), t < anvSeg.x ? anvSeg.x : 1e9);
       if (tn >= seg.y) break;
       t = tn;
       lastEmpty = tn;
@@ -519,6 +545,11 @@ void main() {
     if (refineOn) {
       float hT = length(ro + rd * t) - BOTTOM;
       if (hT < uCloudBottom - 0.3 || hT > uCloudTop + 0.3) emptyK = 2.0;
+#ifdef CLOUD_STORM_SKIP
+      // TW04：只落在砧盾那一段（不在塔的包围柱、也不在层状云包络里）的空白再放宽一倍：砧盾是软边的冰晶云，不做表面细化，
+      // 巡航高度常在砧的高度层里，近水平的视线要在层里空走上百公里（砧盾把「够得着雷暴」的视线变多，这一段是新增开销的大头）
+      if (!(t >= wxSeg.x && t < wxSeg.y) && !(t >= laySeg.x && t < laySeg.y)) emptyK = 4.0;
+#endif
     }
     float dt = fine > 0 ? fineDt : dtBase;
     float stepLen = (fine > 0 || (!wasEmpty && !wasThin)) ? dt : emptyK * dt;
@@ -549,6 +580,10 @@ void main() {
 #ifdef CLOUD_WEATHER
     float stormW = gStormW;
     float stormAO = gStormAO;
+#ifdef CLOUD_STORM
+    bool pileusHit = gStormPileus > 0.5 && gStormPileus < 1.5;   // 幞状云（TW04，受光加虹彩，见下）
+    bool rainHit = gStormPileus > 1.5;                           // 雨幡（TW04，见下）
+#endif
     bool soft = SOFT_SKIP && gStormSoft > 0.5;
     // 只在进入雷暴 / 台风时细化（层状云不必，保持原样）；这段会被小步重新采样，进云那一步的密度并没有丢
     if (dens > 0.002 && stormW > 0.5 && !soft && wasEmpty && fine == 0 && dtBase > 0.1 && t > seg.x) {
@@ -622,12 +657,23 @@ void main() {
       gDetailLight = true;
 #ifdef CLOUD_WEATHER
       float ls = 0.06;
-      int lightSteps = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset) ? 8 : 6;
+#ifdef CLOUD_STORM
+      // TW04：雷暴的样本（stormW）一律走天气受光——砧盾铺到上百公里外，离塔心 7.5R + 15 km 以外的砧盾样本
+      // 原来会落进下面「只有层状云」的 6 步受光，砧底被照得和砧顶一样白，还在那个半径上亮度一跳。
+      // 软边的雷暴样本（砧、砧盾、雨幡、幞状云）首步 240 m、6 步（同样走到 15 km）：它们不需要贴着表面的那几十米受光，
+      // 砧盾占了大片天空，每个有云样本省下 2 次精简密度
+      bool wxLight = nearW.x && (stormW > 0.5 || cloudPointNearWeather(p.xz + uCloudOffset));
+      int lightSteps = wxLight ? 8 : 6;
+      if (stormW > 0.5 && soft) { ls = 0.24; lightSteps = 6; }
+#else
+      bool wxLight = nearW.x && cloudPointNearWeather(p.xz + uCloudOffset);
+      int lightSteps = wxLight ? 8 : 6;
+#endif
       if (gStormSoft > 1.5) {
         // 台风卷云盖（T44）：外围变薄以后视线要在它里面走很长一段，每个采样点都走 8 步受光步进太贵（typhoon-bands 云步进 +2 ms）。
         // 它上面只有天，朝太阳的光学厚度 ≈ 本点消光 × 到卷云盖顶（约 15 km）的斜程的一半（密度往上变淡）
         od = dens * 0.5 * clamp(15.0 - (r - BOTTOM), 0.2, 3.0) / max(uKeyDir.y, 0.1);
-      } else if (lightSteps == 6)
+      } else if (!wxLight)
 #endif
       {
         // 普通云（没有雷暴、台风）：只有层状云，常量上界，编译器展开后最快（和改动前一致）。
@@ -725,6 +771,27 @@ void main() {
       // 所以晴天积云只取 0.2；飞机在云里（uCloudImmersion，看到的全是云体深处）取 2，雷暴 / 台风塔身（stormW，只在天气宏里）取 1
       sunScatter += (tailK / (4.0 * M_PI)) * (1.0 / (1.0 + 0.1125 * od) - exp(-od));
       vec3 sunLight = keyLight(r, up) * sunScatter;
+#ifdef CLOUD_STORM
+      // 砧盾投在层状云上的影子（TW04，见 clouds.glsl.ts 的 anvilShadowOD；云步进程序的受光步进里不算砧盾）
+      // 不看 gWeatherOn：够不着雷暴的视线也可能看到落在砧影里的云，按视线分路径的话影子在包围圆柱的边上断开（storm-graze 的一道直边）。
+      // 透过厚冰云的是漫射光，按二流近似的总透射 1 / (1 + 0.75(1 − g)·od)（g = 0.85，同扩散尾巴）而不是 e^−od：
+      // e^−od 把砧下的积云压成没有明暗的灰饼（飑线截图），漫射透射留住了一半上下的光和它的形状
+      if (stormW < 0.5 && uStormCount > 0) sunLight *= 1.0 / (1.0 + 0.1125 * anvilShadowOD(p.xz + uCloudOffset, r - BOTTOM, uKeyDir));
+      // 雨幡只吸收、几乎不散射直射光（TW04 / 飞碟，research/PERF_PREVIEW_wave8.md 的推荐做法）：雨滴大，单次散射几乎全在
+      // 几度以内的前向衍射峰里，而雨幡头顶是几公里厚的云——黄昏太阳贴着云底平射、逆光看时，这个前向峰把雨幡照成一块
+      // 边缘清楚的发光椭圆挂在云底下（T45 修过受光的自遮挡，逆光的「飞碟」仍在）。留两成，给雨幡边缘一点被照亮的灰
+      if (rainHit) sunLight *= 0.2;
+      // 幞状云的虹彩（TW04 / SPEC-PILEUS）：新生云滴小而均匀，太阳附近 10–30° 的衍射在薄云上分成淡淡的粉 / 绿色带（虹彩云）。
+      // 色带按离太阳的角度排，角度周期随这片云的云滴大小变（沿云面缓慢变化，带子不是同心圆的整齐一圈）；
+      // 只调制直射那一份的颜色（能量近似不变），离太阳远（> 35°）或正对太阳（< 6°，被日晕 / 眩光盖住）淡出
+      if (pileusHit) {
+        float ang = acos(clamp(cosT, -1.0, 1.0));
+        float per = 0.13 + 0.05 * sin(dot(p.xz + uCloudOffset, vec2(0.9, 0.7)));
+        vec3 irid = 0.5 + 0.5 * cos(6.2831853 * (ang / per + vec3(0.0, 0.33, 0.67)));
+        float wI = smoothstep(0.1, 0.2, ang) * (1.0 - smoothstep(0.45, 0.62, ang));
+        sunLight *= mix(vec3(1.0), 0.45 + 1.1 * irid, 0.55 * wI);
+      }
+#endif
 #ifdef WONDER_LAYER
       // 奇观的投影椭球挡住直射光（岛在云海上的影子）
       float tp = t + stepLen * jitter;
@@ -1110,6 +1177,8 @@ void main() {
       if (dot(dd, dd) > c.z * c.z * 56.0) continue;
       d = max(d, stormDensity(c, xz, alt, lod, false, ao));
     }
+    // 砧盾（TW04）：云步进先查网格，网格里没登记的话整片砧盾被当成空白跳过
+    if (uStormCount > 0) d = max(d, anvilShield(xz, alt, lod, false));
     if (uHurricane.w > 0.5) d = max(d, hurricaneDensity(xz, alt, lod, false, ao));
   }
   gl_FragColor = vec4(d > 0.0 ? 1.0 : 0.0, 0.0, 0.0, 1.0);
