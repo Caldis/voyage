@@ -1,0 +1,110 @@
+[
+ {
+  "name": "ring-dusk-up-gpu",
+  "scene": {
+   "name": "ws08-dusk-up",
+   "p": {
+    "preset": "wpac",
+    "seat": "left",
+    "date": "2026-09-27",
+    "time": 1090,
+    "coverage": 0.3,
+    "cabin-light": false,
+    "wing-pos": "-4",
+    "quality": "high"
+   },
+   "head": [
+    0,
+    -0.12,
+    -0.3
+   ],
+   "js": "v.wonders.enabled = true; v.wonders.rarityPerHour = 0; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"orbital-ring\", { forwardOffsetDeg: 0, distKm: 1000, reveal: 1, seed: 0.61 }); for (let i = 0; i < 200 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe();"
+  },
+  "variants": [
+   {
+    "name": "ring",
+    "js": "if (v.__ringSave) v.wonders.active = v.__ringSave; v.wonders.uniforms.uRingOn.value = 1;"
+   },
+   {
+    "name": "ring2",
+    "js": "if (v.__ringSave) v.wonders.active = v.__ringSave; v.wonders.uniforms.uRingOn.value = 1;"
+   },
+   {
+    "name": "off",
+    "js": "if (v.wonders.active) v.__ringSave = v.wonders.active; v.wonders.active = null; v.wonders.uniforms.uRingOn.value = 0;"
+   }
+  ]
+ },
+ {
+  "name": "ring-night-nm-gpu",
+  "scene": {
+   "name": "ws08-night-nm-up",
+   "p": {
+    "preset": "wpac",
+    "seat": "left",
+    "date": "2026-10-10",
+    "time": 1320,
+    "coverage": 0.3,
+    "cabin-light": false,
+    "wing-pos": "-4",
+    "quality": "high"
+   },
+   "head": [
+    0,
+    -0.06,
+    -0.3
+   ],
+   "js": "v.wonders.enabled = true; v.wonders.rarityPerHour = 0; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"orbital-ring\", { forwardOffsetDeg: 0, distKm: 1000, reveal: 1, seed: 0.61 }); for (let i = 0; i < 200 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe();"
+  },
+  "variants": [
+   {
+    "name": "ring",
+    "js": "if (v.__ringSave) v.wonders.active = v.__ringSave; v.wonders.uniforms.uRingOn.value = 1;"
+   },
+   {
+    "name": "ring2",
+    "js": "if (v.__ringSave) v.wonders.active = v.__ringSave; v.wonders.uniforms.uRingOn.value = 1;"
+   },
+   {
+    "name": "off",
+    "js": "if (v.wonders.active) v.__ringSave = v.wonders.active; v.wonders.active = null; v.wonders.uniforms.uRingOn.value = 0;"
+   }
+  ]
+ },
+ {
+  "name": "pillars-dusk-gpu",
+  "scene": {
+   "name": "ws-pillars-dusk",
+   "p": {
+    "preset": "wpac",
+    "seat": "left",
+    "date": "2026-09-27",
+    "time": 1068,
+    "coverage": 0.3,
+    "cabin-light": false,
+    "wing-pos": "-4",
+    "quality": "high"
+   },
+   "head": [
+    0,
+    0.02,
+    -0.3
+   ],
+   "js": "v.wonders.enabled = true; v.wonders.rarityPerHour = 0; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"pillars\", { forwardOffsetDeg: 0, distKm: 190, reveal: 1, seed: 0.83 }); for (let i = 0; i < 240 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe();"
+  },
+  "variants": [
+   {
+    "name": "pil",
+    "js": "if (v.__pilSave) v.wonders.active = v.__pilSave; v.wonders.uniforms.uWonderOn.value = 1;"
+   },
+   {
+    "name": "pil2",
+    "js": "if (v.__pilSave) v.wonders.active = v.__pilSave; v.wonders.uniforms.uWonderOn.value = 1;"
+   },
+   {
+    "name": "off",
+    "js": "if (v.wonders.active) v.__pilSave = v.wonders.active; v.wonders.active = null; v.wonders.uniforms.uWonderOn.value = 0;"
+   }
+  ]
+ }
+]

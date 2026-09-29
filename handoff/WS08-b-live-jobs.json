@@ -1,0 +1,189 @@
+[
+ {
+  "name": "ring-dusk-live",
+  "scene": {
+   "name": "ws08-dusk-up",
+   "p": {
+    "preset": "wpac",
+    "seat": "left",
+    "date": "2026-09-27",
+    "time": 1090,
+    "coverage": 0.3,
+    "cabin-light": false,
+    "wing-pos": "-4",
+    "quality": "high"
+   },
+   "head": [
+    0,
+    -0.12,
+    -0.3
+   ],
+   "js": "v.wonders.enabled = true; v.wonders.rarityPerHour = 0; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"orbital-ring\", { forwardOffsetDeg: 0, distKm: 1000, reveal: 1, seed: 0.61 }); for (let i = 0; i < 200 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe();"
+  },
+  "variants": [
+   {
+    "name": "on",
+    "js": "if (v.__ringSave) v.wonders.active = v.__ringSave;"
+   },
+   {
+    "name": "on2",
+    "js": "if (v.__ringSave) v.wonders.active = v.__ringSave;"
+   },
+   {
+    "name": "off",
+    "js": "v.__ringSave = v.wonders.active; v.wonders.active = null;"
+   }
+  ],
+  "live": {
+   "crop": [
+    700,
+    250,
+    560,
+    700
+   ],
+   "frames": 240,
+   "variants": [
+    "on",
+    "on2",
+    "off"
+   ],
+   "regions": {
+    "受光段": [
+     300,
+     0,
+     260,
+     350
+    ],
+    "交界与地影段": [
+     0,
+     300,
+     320,
+     400
+    ]
+   }
+  }
+ },
+ {
+  "name": "ring-night-live",
+  "scene": {
+   "name": "ws08-night-nm-up",
+   "p": {
+    "preset": "wpac",
+    "seat": "left",
+    "date": "2026-10-10",
+    "time": 1320,
+    "coverage": 0.3,
+    "cabin-light": false,
+    "wing-pos": "-4",
+    "quality": "high"
+   },
+   "head": [
+    0,
+    -0.06,
+    -0.3
+   ],
+   "js": "v.wonders.enabled = true; v.wonders.rarityPerHour = 0; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"orbital-ring\", { forwardOffsetDeg: 0, distKm: 1000, reveal: 1, seed: 0.61 }); for (let i = 0; i < 200 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe();"
+  },
+  "variants": [
+   {
+    "name": "on",
+    "js": "if (v.__ringSave) v.wonders.active = v.__ringSave;"
+   },
+   {
+    "name": "on2",
+    "js": "if (v.__ringSave) v.wonders.active = v.__ringSave;"
+   },
+   {
+    "name": "off",
+    "js": "v.__ringSave = v.wonders.active; v.wonders.active = null;"
+   }
+  ],
+  "live": {
+   "crop": [
+    700,
+    150,
+    560,
+    750
+   ],
+   "frames": 240,
+   "variants": [
+    "on",
+    "on2",
+    "off"
+   ],
+   "regions": {
+    "近段灯": [
+     300,
+     0,
+     260,
+     300
+    ],
+    "远段": [
+     0,
+     300,
+     330,
+     450
+    ]
+   }
+  }
+ },
+ {
+  "name": "pillars-dusk-live",
+  "scene": {
+   "name": "ws-pillars-dusk",
+   "p": {
+    "preset": "wpac",
+    "seat": "left",
+    "date": "2026-09-27",
+    "time": 1068,
+    "coverage": 0.3,
+    "cabin-light": false,
+    "wing-pos": "-4",
+    "quality": "high"
+   },
+   "head": [
+    0,
+    0.02,
+    -0.3
+   ],
+   "js": "v.wonders.enabled = true; v.wonders.rarityPerHour = 0; for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.trigger(\"pillars\", { forwardOffsetDeg: 0, distKm: 190, reveal: 1, seed: 0.83 }); for (let i = 0; i < 240 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); return v.wonders.describe();"
+  },
+  "variants": [
+   {
+    "name": "on",
+    "js": ""
+   },
+   {
+    "name": "on2",
+    "js": ""
+   }
+  ],
+  "live": {
+   "crop": [
+    380,
+    0,
+    520,
+    620
+   ],
+   "frames": 240,
+   "variants": [
+    "on",
+    "on2"
+   ],
+   "regions": {
+    "交界带": [
+     0,
+     150,
+     520,
+     250
+    ],
+    "柱身": [
+     0,
+     0,
+     520,
+     620
+    ]
+   }
+  }
+ }
+]
