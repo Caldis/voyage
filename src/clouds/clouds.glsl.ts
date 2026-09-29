@@ -602,7 +602,7 @@ vec2 rot2(vec2 p, float a) {
 // 「坐」在海面上（research/TOWERING.md §2.2 第 5 条）。不另写一套裙边密度（试过：高度场做的裙边是一块边缘整齐的圆盘 / 一排蛋托），
 // 而是让普通云层在塔的 1–3.5 倍半径内云量变大——裙边和远处的积云是同一种云、同一套受光。返回要加到覆盖率上的量（0..0.5）
 // layerDensity 不自己算（它被内联进展开的 6 步受光等多处，循环写在里面 cloud-march-storm 离线 FXC +3%）：
-// cloudDensity 按采样点算一次放进 gCovBoost，同一样本的受光步进（几公里内）沿用；云影 / 探针程序不算（0）
+// cloudDensity 按采样点算一次放进 gCovBoost，同一样本的受光步进（几公里内）沿用；云影图程序走 cloudDensity，海面影子里也有塔脚加的云；探针只用精简密度，沿用 0
 float gCovBoost = 0.0;
 float stormLayerBoost(vec2 xz) {
   float b = 0.0;
@@ -984,8 +984,11 @@ float anvilShield(vec2 xz, float alt, float lod, bool detail) {
   // 大起伏（整片上下挪，不改厚度）+ 顶面鼓包（只在厚的砧根一带）
   // 起伏都只在砧根一段（× (1 − fa)²）：下风的薄段只有几百米厚，巡航高度就在它下面不远，整片按 24 km 的光滑噪声上下挪
   // 零点几公里，仰看是一条条光滑的等值线波纹（ab 开关对照：去掉这张噪声波纹就没了）；那一段的纹理交给顺风的纤维
-  float und = (1.0 - fa) * (1.0 - fa);
-  float aTop = topA + (0.4 * (nH.r - 0.5) + (0.12 + 0.55 * (1.0 - fa)) * (capG + 0.6 * capB)) * und;
+  // 足迹边缘（F 小）起伏收掉、顶面降低（审查 B2）：旧版边缘仍按砧根的顶高和鼓包成形，纤维 / 噪声在边上切出的孤岛
+  // 那一带已经没有砧根，成了悬在砧面之上、隔着一条天空的光滑扁透镜（storm-day / storm-sc 左上）
+  float eF = smoothstep(0.08, 0.45, F);
+  float und = (1.0 - fa) * (1.0 - fa) * eF;
+  float aTop = topA - 0.6 * (1.0 - eF) + (0.4 * (nH.r - 0.5) + (0.12 + 0.55 * (1.0 - fa)) * (capG + 0.6 * capB)) * und;
   // 底面：厚度按足迹平滑变化，起伏与下垂的絮团只在厚的一段。
   // 试过顶面、底面各自按噪声起伏：下风端只有几百米厚，两面的起伏和厚度同量级，整片被一条条等值线掐断，
   // 从下面仰看是一层层发亮的波纹（像水面的焦散）
@@ -1055,19 +1058,25 @@ float gStormPileus = 0.0;   // cloudDensity 的副产物：1 = 这一点属于�
 // 幞状云的密度：stormTowersSdf 顺手算出（伴生塔 k = 0 的轴线、塔顶、半径都已在手，不再重复求哈希 / 三角函数；
 // 单独写成一个函数、在完整密度与精简密度里各求一次时，雷暴云步进 gpu-ab ×1.2——FXC 的寄存器 / 分档翻到慢的一档）
 float gPileusD = 0.0;
+float gPileusEdge = 0.0;   // 这一点离帽子外缘多近（0 = 中心，1 = 外缘），完整密度按它侵蚀
 float pileusShape(vec2 xz, float alt, vec2 ax, float tk, float Rk, vec2 hk, float sdy) {
-  float gap = 0.2 + 0.25 * hk.y;
-  if (alt < tk - 0.8 || alt > tk + gap + 0.4) return 0.0;
+  float gap = 0.15 + 0.15 * hk.y;   // 帽底离塔顶 0.15–0.3 km（塔顶的隆起会顶到帽子底下，看得出是塔顶托着它）
+  if (alt < tk - 0.3 || alt > tk + gap + 0.5) return 0.0;
   // 与 towerSdf 同一条轴线（摆动 + 被高空风吹歪），取塔顶处
   float ph = hk.x * 6.2831853;
   vec2 axT = ax + vec2(sin(tk * 0.45 + ph), sin(tk * 0.33 + ph * 1.7 + 1.3)) * Rk * 0.12 + uUpperWind * (Rk * (0.4 + 0.7 * hk.y) + 0.3);
   float Rh = Rk * (0.95 + 0.3 * sdy);
   float rr = length(xz - axT) / Rh;
   if (rr > 1.0) return 0.0;
-  float mid = tk + gap - 0.7 * rr * rr;          // 往外下垂
-  float th = mix(0.28, 0.1, rr);
-  float v = 1.0 - smoothstep(0.0, 1.0, abs(alt - mid) / th);
-  return v * smoothstep(1.0, 0.7, rr) * 0.1;
+  // TW04 审查 B1：旧版是一层下垂 0.7·rr² km、厚 0.1–0.28 km、消光约 6 /km 的弯壳——法向光学厚度只有 1 左右，
+  // 掠射看边缘成倍加厚：中间透明、边上一圈亮线，读成玻璃罩 / 肥皂泡，黄昏读成亮碟（「飞碟」）。
+  // 现在是近乎平的一顶厚帽子：下垂只有 0.2·rr² km，中心厚约 0.35 km、消光约 15 /km（法向光学厚度约 5，白色实心），
+  // 外缘由 stormDensity 用细节噪声侵蚀（gPileusEdge），不留整齐的亮边
+  float mid = tk + gap + 0.18 - 0.2 * rr * rr;
+  float th = mix(0.36, 0.14, rr * rr);
+  float v = 1.0 - smoothstep(0.35, 1.0, abs(alt - mid) / (0.5 * th));
+  gPileusEdge = smoothstep(0.45, 1.0, rr);
+  return v * smoothstep(1.0, 0.8, rr) * 0.25;
 }
 
 // 主塔 + 伴生塔（TW04）：完整版与精简版共用（形状必须一致，T12 教训），各内联一处。ao：取胜那座塔的凹处遮蔽。
@@ -1090,8 +1099,11 @@ float stormTowersSdf(vec4 c, vec2 xz, float alt, float lod, out float ao) {
     vec2 ax = c.xy + vec2(cos(ang), sin(ang)) * R * (1.25 + 1.1 * hk.y);
     float tk = STORM_BASE + (top - STORM_BASE) * (0.28 + 0.42 * hk.y * hk.y);
     float Rk = R * (0.3 + 0.28 * hk.x);
-    // 幞状云（约六成的雷暴有）挂在 k = 0 这座塔上
-    if (k == 0 && fract(sd.x * 7.31 + sd.y * 3.17) < 0.6) gPileusD = pileusShape(xz, alt, ax, tk, Rk, hk, sd.y);
+    // 幞状云挂在 k = 0 这座塔上。**暂时关掉（门槛 < 0.0，审查 B1）**：弯壳版读成玻璃罩 / 水母，改成近乎平的厚帽子后
+    // 在 storm-sc / storm-sc-low / tw-storm-sc-dusk / tw-storm-near 仍读成悬在塔顶上的碟子（和塔顶隔着一条缝、轮廓是整齐的椭圆），
+    // 另立任务重做（思路：帽子贴着塔顶长出来、与塔顶用 smin 连成一体，只露出顶上一层光滑的面；或只在塔正在穿透时出现半截）。
+    // 代码留着（已并进伴生塔循环，关掉不改冷编译），原来的比例是 < 0.6（约六成的雷暴有）
+    if (k == 0 && fract(sd.x * 7.31 + sd.y * 3.17) < 0.0) gPileusD = pileusShape(xz, alt, ax, tk, Rk, hk, sd.y);
     if (alt > tk + 0.8) continue;
     float a2;
     float s2 = towerSdf(xz, alt, ax, Rk, tk, 0.45 + 0.2 * hk.x, lod, hk, 0.0, a2);
@@ -1136,6 +1148,8 @@ float stormDensity(vec4 c, vec2 xz, float alt, float lod, bool detail, out float
     // 塔身：表面附近侵蚀成小的圆团（反相 Worley）；砧：按比例变稀疏，保留半透明的外缘
     tower = remapc(tower, (1.0 - dfbm) * 0.45, 1.0, 0.0, 1.0);
     if (gStormPileus < 0.5) anvil *= clamp(0.35 + 1.3 * (dfbm - 0.3), 0.25, 1.1);
+    // 幞状云：中心光滑，外缘按细节噪声啃成不规则的边（审查 B1：光滑的圆边正是「亮边碟」的来源）
+    else anvil *= mix(1.0, clamp(1.8 * (dfbm - 0.3), 0.0, 1.0), gPileusEdge);
   }
   if (tower >= anvil) {
     ao = aoT;
