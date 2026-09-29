@@ -8,6 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| PUB-5 | 稳定版之后第一位（PUB-3b B2） | 5305 | worktree | Opus（襟翼滑轨整流罩下沿 / 尾端 1 px 台阶：截面补解析覆盖率抗锯齿或尾端收尖，爬行降到主翼后缘同量级，非机翼像素逐位不变） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -20,7 +21,6 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
-| PUB-5 | 发布后第一位：襟翼滑轨整流罩下沿 / 尾端 1 px 硬台阶（爬行 0.0012，约主翼后缘 2.4 倍；ART-8 遗留、W-EDGE 未覆盖）→ 整流罩截面补覆盖率抗锯齿或尾端收尖 | 高（锯齿是最高优先级缺陷） | wing | wing | PUB-3b B2 |
 | PUB-3c | 【降级：细微 / 性能，晚做】PUB-3b 遗留：台风眼壁像石膏、有墨斑暗块；逆光近云亮面白色椒盐点；火车近景地面糊（面板标「实验 / 示例」）；天环白天偏透明；灯城雾盘近侧硬边；窗板透气孔在视觉中心；手机竖屏构图偏窄 | 低 | 多处 | — | PUB-3b |
 | PERF-17 | 【降级：细微 / 性能，晚做】PERF-16b 遗留：机翼程序冷编译稳定 +19%（疑 STROBE-FLASH，用 shader-budget --chain 坐实）；noon-cumulus +11–15% 为 SPEC-RAYS 等已审功能代价叠加；typhoon-bands 约 +12% 未细分（疑 TW02 / TW04） | 低 | 全局 | — | — |
 | DX-32 | dev-browser `--wait-quiet` 同时检查 GPU 利用率（nvidia-smi，空闲 < 10% 再测），并在测量结果里记录 GPU 利用率 | 中高（测量可信度） | scripts | — | PERF-16 教训 |
