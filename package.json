@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@10.32.1",
   "description": "航行伴侣：模拟从交通工具窗口看出去的风景，物理大气 + 真实太阳位置",
   "scripts": {
     "dev": "vite",

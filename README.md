@@ -9,6 +9,20 @@
 - 进展与交接：[WORKLOG.md](WORKLOG.md)
 - 关键参数（视场 / 分辨率 / clipmap / LUT / 相机高度 / 云缓冲 / 奇观距离……，附出处文件与行号）：[research/PARAMS.md](research/PARAMS.md)
 
+## 独立仓库使用
+
+本节只对「从 `opus-test` monorepo 用 `git subtree split` 拆出的独立 voyage 仓库」成立；在 monorepo 里开发请继续用仓库根的 `pnpm dev:voyage` 等命令（见「使用」一节）。
+
+```bash
+pnpm install
+pnpm dev        # http://127.0.0.1:5181
+pnpm build      # 本地构建走根路径 "/"；GitHub Pages 部署走 VOYAGE_BASE=/voyage/ pnpm build（见 .github/workflows/pages.yml）
+```
+
+在线地址：<https://caldis.github.io/voyage/>（GitHub Pages，推送到 `main` 自动部署）。
+
+**许可与署名提示**：本项目运行时会拉取 EOX Sentinel-2 cloudless 卫星影像，许可是 **CC BY-NC-SA 4.0，仅限非商业用途**；其余数据来源与许可见下方「[数据来源与许可](#数据来源与许可)」，署名信息也会展示在应用内的面板署名区。
+
 ## 硬约束速查表
 
 开工前先扫一眼这张表，每条链接到「坑点」里对应主题节。数字类条目由工具自动生成 / 校验（见各条说明），改代码后重新生成，不要手改数字。
