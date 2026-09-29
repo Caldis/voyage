@@ -15,8 +15,8 @@
 //                                       [--pair '<js1>' --pair '<js2>' | --pair '<预设置js>' --base-shader <端口|目录|提交>
 //                                         [--material sceneMat] [--define KEY[=VALUE] ...]]
 //                                       [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
-//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--baseline 5181] [--query "&voyage=1"] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
-//   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N]
+//   node scripts/dev-browser.mjs cold  --port 5230 [--repeat 2] [--baseline 5181] [--query "&voyage=1"] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--wait-quiet]
+//   node scripts/dev-browser.mjs bench --port 5230 [--baseline 5181] [--only noon-cumulus] [--frames 30] [--rounds 5] [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--wait-quiet]
 //   node scripts/dev-browser.mjs flicker --port 5230 --only <场景> [--step 0.06] [--frames 20] [--cloud-live] [--crop x,y,w,h] [--debug N]
 // 也可以用 apps/voyage/package.json 里的 shots / cold / bench 三个 pnpm 脚本（见 README）。
 //
@@ -100,7 +100,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { DEFAULTS, applyScene, pickScenes, pinGeometry } from "./scenarios.mjs";
 import { launchBrowser as launchBrowserAngle, closeBrowserSafely, resolveRepoPath } from "./lib/chrome.mjs";
-import { sampleAndWarn, waitForQuiet } from "./lib/cpu-load.mjs";
+import { sampleAndWarn, sampleAndWarnGpu, waitForQuiet } from "./lib/cpu-load.mjs";
 import { tryAcquire, readLock, noticeIfLocked, waitForRelease } from "./lib/measure-lock.mjs";
 import { resolveExistingDirRoot, resolveCommitRoot } from "./lib/baseline-root.mjs";
 import { collectPrograms } from "./lint-shaders.mjs";
@@ -872,7 +872,8 @@ async function cmdShots(args) {
 }
 
 // ---------- cold：真冷启动（nonce 破缓存 + 每次独立浏览器上下文） ----------
-// DX-10：真冷启动对机器负载敏感（编译在 CPU 上做），持测量锁 + 每轮前采样 CPU 占用；--wait-quiet 先等安静再测。
+// DX-10：真冷启动对机器负载敏感（编译在 CPU 上做），持测量锁 + 每轮前采样 CPU 占用；--wait-quiet 先等安静再测
+// （DX-32：等安静现在也包含 GPU，见 lib/cpu-load.mjs 的 waitForQuiet）。
 // DX-12（PERF-13 反馈）：--baseline <端口> 时 --repeat 轮交替测 port / baseline 两侧（同一轮先测当前端口
 // 再测基线，和 bench 的交替顺序一致），不用每个代理各自手写一份 PowerShell 交替脚本；不传 --baseline
 // 就是原来的行为（只测 port，重复 repeat 次）。
@@ -990,16 +991,17 @@ async function cmdCold(args) {
   try {
     for (let i = 0; i < repeat; i++) {
       const cpuLoad = sampleAndWarn(`cold 第 ${i + 1}/${repeat} 轮之前`);
-      const entry = { ...(await coldOnce(browser, origin, angle, viewport, dpr, parseExtraQuery(args))), side: baseline ? "current" : undefined, cpuLoadPercent: cpuLoad };
+      const gpuLoad = sampleAndWarnGpu(`cold 第 ${i + 1}/${repeat} 轮之前`); // DX-32
+      const entry = { ...(await coldOnce(browser, origin, angle, viewport, dpr, parseExtraQuery(args))), side: baseline ? "current" : undefined, cpuLoadPercent: cpuLoad, gpuLoadPercent: gpuLoad };
       results.push(entry);
-      console.log(`[dev-browser] cold #${i + 1}/${repeat}${baseline ? ` [当前 ${port}]` : ""}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  totalMs=${entry.totalMs}  renderer=${entry.renderer}`);
+      console.log(`[dev-browser] cold #${i + 1}/${repeat}${baseline ? ` [当前 ${port}]` : ""}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  totalMs=${entry.totalMs}  renderer=${entry.renderer}${gpuLoad != null ? `  GPU=${gpuLoad.toFixed(0)}%` : ""}`);
       console.log(
         Object.entries(entry.startup)
           .map(([k, v]) => `    ${k}: ${v}`)
           .join("\n"),
       );
       if (baseOrigin) {
-        const baseEntry = { ...(await coldOnce(browser, baseOrigin, angle, viewport, dpr, parseExtraQuery(args))), side: "baseline", cpuLoadPercent: cpuLoad };
+        const baseEntry = { ...(await coldOnce(browser, baseOrigin, angle, viewport, dpr, parseExtraQuery(args))), side: "baseline", cpuLoadPercent: cpuLoad, gpuLoadPercent: gpuLoad };
         results.push(baseEntry);
         const delta = baseEntry.totalMs ? (((entry.totalMs - baseEntry.totalMs) / baseEntry.totalMs) * 100).toFixed(1) : null;
         console.log(`[dev-browser] cold #${i + 1}/${repeat} [基线 ${baseline}]: totalMs=${baseEntry.totalMs}  renderer=${baseEntry.renderer}${delta !== null ? `  Δ=${delta}%` : ""}`);
@@ -1258,6 +1260,10 @@ async function cmdBench(args) {
   const viewport = parseViewport(args);
   const dpr = parseDpr(args);
 
+  // DX-32：bench 以前完全不认 --wait-quiet（只有 cold 认），但帧时间同样对 GPU 负载敏感——见文件头 DX-32 注释。
+  if (args["wait-quiet"]) await waitForQuiet({ log: (s) => console.log(`[dev-browser] ${s}`) });
+  const gpuLoadStart = sampleAndWarnGpu("bench 开始");
+
   const browser = await launchBrowser(angle);
   try {
     const pages = {};
@@ -1266,7 +1272,7 @@ async function cmdBench(args) {
       const { page, renderer } = await openPage(browser, p, angle, viewport, dpr);
       pages[p] = page;
       renderers[p] = renderer;
-      console.log(`[dev-browser] ${p}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}`);
+      console.log(`[dev-browser] ${p}: --angle=${angle}  viewport=${viewport.width}x${viewport.height}  dpr=${dpr}  GL_RENDERER = ${renderer}${gpuLoadStart != null ? `  GPU=${gpuLoadStart.toFixed(0)}%` : ""}`);
     }
 
     const scenes = pickScenes(only);
@@ -1276,6 +1282,7 @@ async function cmdBench(args) {
       // 预热一轮，消掉首次调用（着色器变体切换、GC）的抖动
       for (const p of ports) await pages[p].evaluate((n) => window.__voyage.benchFrame(n), Math.min(frames, 10));
 
+      const gpuLoad = sampleAndWarnGpu(`bench ${sc.name} 开始`); // DX-32：每个场景采一次，跟 cpuLoadPercent 同口径
       const samples = Object.fromEntries(ports.map((p) => [p, []]));
       // 交替测两端口：同一轮里先测 A 再测 B，避免「一端口连续测」把某一侧偶发的系统抖动全吃掉
       for (let r = 0; r < rounds; r++) {
@@ -1289,7 +1296,7 @@ async function cmdBench(args) {
         const trimmed = sorted.length >= 5 ? sorted.slice(1, -1) : sorted; // 掐头去尾剔除离群
         return trimmed.reduce((a, b) => a + b, 0) / trimmed.length;
       };
-      const row = { scene: sc.name, samples };
+      const row = { scene: sc.name, samples, gpuLoadPercent: gpuLoad };
       for (const p of ports) row[p] = +trimmedMean(samples[p]).toFixed(3);
       if (baseline) {
         const base = row[baseline];
@@ -1311,7 +1318,8 @@ async function cmdBench(args) {
       const gpuNote = ports.some((p) => row.gpuMsPerFrame[p] != null)
         ? "  gpu=" + ports.map((p) => `${p}:${row.gpuMsPerFrame[p]?.toFixed(3) ?? "-"}`).join(",")
         : "";
-      console.log(`  ${sc.name}: ` + ports.map((p) => `${p}=${row[p]}ms`).join("  ") + (baseline ? `  Δ=${row.deltaPct}%` : "") + gpuNote);
+      const gpuLoadNote = gpuLoad != null ? `  GPU占用=${gpuLoad.toFixed(0)}%` : "";
+      console.log(`  ${sc.name}: ` + ports.map((p) => `${p}=${row[p]}ms`).join("  ") + (baseline ? `  Δ=${row.deltaPct}%` : "") + gpuNote + gpuLoadNote);
     }
     console.log(`[dev-browser] renderer: ${JSON.stringify(renderers)}`);
     if (args.out) fs.writeFileSync(resolveRepoPath(REPO_ROOT, args.out), JSON.stringify({ angle, viewport, dpr, renderers, table }, null, 2));
@@ -1352,7 +1360,7 @@ async function main() {
       "用法：node scripts/dev-browser.mjs <check|shots|cold|bench|flicker|ab|flight|gpu-ab> --port <端口> [--angle d3d11|vulkan] [--viewport WxH] [--dpr N] [--only a,b] [--scene '<JSON>' ...] [--scenes-file 路径.json] [--query '<url参数>'] [--out 路径] [--allow-flash] [--freeze] [--settle] [--pair '<js1>' --pair '<js2>' | --base-shader <端口|目录|提交>] [--baseline 端口] [--frames N] [--rounds N] [--repeat N] [--wait-quiet] [--respect-lock]",
     );
     console.error("  check           只开页面、等启动完成、收集 console error / pageerror，有错误就非 0 退出");
-    console.error("  --wait-quiet    仅 cold（DX-10）：测量前先等 CPU 占用降到 50% 以下再开始");
+    console.error("  --wait-quiet    cold / bench（DX-10，DX-32 补 GPU）：测量前先等 CPU 占用降到 50% 以下，再等 GPU 利用率连续两次 <= 10%（没有 nvidia-smi 时跳过 GPU 这段），都有超时上限，超时打印警告继续");
     console.error("  --respect-lock  仅 check / shots（DX-10）：发现测量锁（tmp/measure.lock）时先等它释放，而不只是打印提示");
     console.error("  --viewport WxH  浏览器视口尺寸，默认 1600x1200（如 --viewport 2400x1800）");
     console.error("  --dpr N         deviceScaleFactor，默认 1（和 --viewport 组合模拟高分屏 / 弱 GPU）");
@@ -1372,8 +1380,9 @@ async function main() {
     console.error("                  job.cloudDump（读回云缓冲，有 cloud-ref 变体时自动出「按距离分带的边宽 / 对真值 α 分档」）；");
     console.error("                  job.live {crop, frames, record:{名:uniform 路径}, skip:'uStrobe>=0.5', regions:{名:[x,y,w,h]}, thr, frac}（解冻逐帧录全部帧 + 时间二阶差分区统计）；");
     console.error("                  patch 可写 {re, to, flags?, optional?}（正则）");
-    console.error("  gpu-ab --jobs 路径.json [--variants 路径.json] [--base 对照端口] [--rounds 8] [--n 20] [--time clouds|frame|wing|scene]（DX-26）");
+    console.error("  gpu-ab --jobs 路径.json [--variants 路径.json] [--base 对照端口] [--rounds 8] [--n 20] [--time clouds|frame|wing|scene] [--wait-quiet]（DX-26）");
     console.error("                  同页 GPU 计时查询、多轮 ABBA 配对：报中位 / 最小 / 离散度与对第一个变体的配对比（四分位不跨 1 才算显著）；");
+    console.error("                  DX-32：默认打印一次 GPU 空闲检查（不阻塞），--wait-quiet 改成先等 CPU/GPU 都空闲再测（同 bench/cold）");
     console.error("                  核对程序真的切换了、计时区间里真的画到了被改的材质，否则直接报错（替代 passes.mjs 在负载下的变体比较）");
     console.error("  flight --jobs 路径.json [--variants 路径.json] [--modes static,reset,cruise,turn,exit,live]（DX-23）");
     console.error("                  确定性航迹重放（云的时间行为）：全冻结后手动推进云，航迹逐位可复现；对静止真值（raw 等权平均 --truth 帧）");

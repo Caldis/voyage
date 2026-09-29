@@ -237,4 +237,4 @@
 
 **结束进程只按自己启动时拿到的 PID，不按端口反查批量杀**（2026-09-29 PUB-1 事故：按 5181 端口查杀误关了主仓库的常驻 dev server）。对照 / 审查用的临时 worktree 一律建在主仓库 `tmp/` 下，不要建在另一个 worktree 里（嵌套 worktree 疑似导致隔离 worktree 创建被拒），用完即删。
 
-**测量前查 GPU，不只查 CPU；浏览器页面用完立刻关**（2026-09-29 教训）：协调者线上验收开的 Playwright MCP 页面没关，持续渲染占 GPU 约 51%，PUB-3 与 PERF-16 的帧时间全部被抬高、一度误判为「晴天场景回退 50–90%」和「并发代理占 GPU」。测量前跑 `nvidia-smi --query-gpu=utilization.gpu --format=csv`，空闲应 < 10%；`--wait-quiet` 目前只看 CPU（DX-32 待补 GPU）。任何人用 Playwright MCP / 浏览器看完页面后都要 `browser_close`。
+**测量前查 GPU，不只查 CPU；浏览器页面用完立刻关**（2026-09-29 教训）：协调者线上验收开的 Playwright MCP 页面没关，持续渲染占 GPU 约 51%，PUB-3 与 PERF-16 的帧时间全部被抬高、一度误判为「晴天场景回退 50–90%」和「并发代理占 GPU」。测量前跑 `nvidia-smi --query-gpu=utilization.gpu --format=csv`，空闲应 < 10%；`--wait-quiet`（`cold`/`bench`/`gpu-ab`）现在等完 CPU 会接着等 GPU 连续两次 <= 10%，DX-32 已补，见 README「调试与验证」。任何人用 Playwright MCP / 浏览器看完页面后都要 `browser_close`。

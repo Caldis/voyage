@@ -26,6 +26,7 @@ import { resolveRepoPath } from "./chrome.mjs";
 import { acquireOrWait } from "./measure-lock.mjs";
 import { groundSettle, groundUploads, readGround, setGround, dumpClouds, saveCloudDump, runLive, printLive } from "./ab-live.mjs";
 import { cloudMetrics, printCloudMetrics } from "./cloud-metrics.mjs";
+import { sampleAndWarnGpu } from "./cpu-load.mjs"; // DX-32：job 开始时记一次 GPU 利用率，见 dev-browser.mjs 文件头 DX-32 注释
 
 // ---------- 小工具 ----------
 export const raf = (page, n = 2) => page.evaluate((n) => new Promise((r) => { let k = 0; const f = () => (++k >= n ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }), n);
@@ -386,6 +387,7 @@ export async function cmdAb(args, h) {
       const sc = sceneOf(job);
       const resolved = await resolveSources(variants, { baseSource, repoRoot: REPO_ROOT });
       const t0 = Date.now();
+      const gpuLoadStart = sampleAndWarnGpu(`ab ${job.name} 开始`); // DX-32
       await page.evaluate(applyScene, { sc, defaults: DEFAULTS, settle: true });
       await page.evaluate(pinGeometry, sc);
       if (job.pre) await page.evaluate((code) => new (async () => {}).constructor("v", code)(window.__voyage), job.pre);
@@ -562,7 +564,7 @@ export async function cmdAb(args, h) {
         for (const [l, r] of Object.entries(hdrCmp)) console.log(`    ${l}: 不同像素 ${r.diffPx}，最大差 ${r.maxAbs.toExponential(3)}${r.nonMaskPx !== undefined ? `；非遮罩区 ${r.nonMaskPx} 像素中不同 ${r.nonMaskDiffPx}，最大 ${r.nonMaskMax.toExponential(3)}` : ""}`);
       }
       for (const s of shots) if (s.bench) console.log(`  ${s.label}: ${s.bench.fn}(30) 中位 ${s.bench.median} ms / 最小 ${s.bench.min} ms`);
-      summary.push({ job: job.name, scene: sc.name, crop: job.crop || null, ref: refLabel, shots, metrics, noise, hdr: hdrCmp, cloud: cloudRes, live });
+      summary.push({ job: job.name, scene: sc.name, crop: job.crop || null, ref: refLabel, gpuLoadPercent: gpuLoadStart, shots, metrics, noise, hdr: hdrCmp, cloud: cloudRes, live });
       fs.writeFileSync(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
     }
     const tileNote = tileErrors.n ? `；EOX 瓦片跨域 / 加载失败共 ${tileErrors.n} 条（已聚合，每张图的 corsErrors 见 json）` : "";
@@ -830,7 +832,8 @@ export async function cmdFlight(args, h) {
       const { mats, unis } = collectPaths(variants);
       await page.evaluate(({ mats, unis }) => window.__dx.prepare(mats, unis), { mats, unis });
       const key = await page.evaluate(() => window.__voyage.clouds.marchShown);
-      const row = { job: job.name, marchKey: key, crop: job.crop, variants: {} };
+      const gpuLoadStart = sampleAndWarnGpu(`flight ${job.name} 开始`); // DX-32
+      const row = { job: job.name, marchKey: key, crop: job.crop, gpuLoadPercent: gpuLoadStart, variants: {} };
       const jdir = path.join(outDir, job.name);
       fs.mkdirSync(jdir, { recursive: true });
       for (const va of resolved) {
