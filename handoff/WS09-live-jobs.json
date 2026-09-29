@@ -2,26 +2,42 @@
   {
     "name": "vcont-noon-live",
     "scene": "ws-vcont-noon",
-    "variants": [{ "name": "cur" }, { "name": "cur2" }],
-    "live": {
-      "crop": [390, 60, 820, 540],
-      "frames": 240,
-      "regions": { "顶沿": [0, 0, 820, 180], "岩壁": [0, 180, 820, 250], "脚下与云": [0, 430, 820, 110] },
-      "thr": 16,
-      "frac": 0.05
-    }
-  },
-  {
-    "name": "vcont-noon-turn-live",
-    "scene": "ws-vcont-noon",
     "variants": [
-      { "name": "turn", "js": "v.director.turnBy(-25); return v.director.describeNav ? v.director.describeNav() : '';" },
-      { "name": "turn2", "js": "v.director.turnBy(-25); return '';" }
+      {
+        "name": "cur"
+      },
+      {
+        "name": "cur2"
+      }
     ],
     "live": {
-      "crop": [390, 60, 820, 540],
+      "crop": [
+        390,
+        60,
+        820,
+        540
+      ],
       "frames": 240,
-      "regions": { "顶沿": [0, 0, 820, 180], "岩壁": [0, 180, 820, 250], "脚下与云": [0, 430, 820, 110] },
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          180
+        ],
+        "岩壁": [
+          0,
+          180,
+          820,
+          250
+        ],
+        "脚下与云": [
+          0,
+          430,
+          820,
+          110
+        ]
+      },
       "thr": 16,
       "frac": 0.05
     }
@@ -29,11 +45,42 @@
   {
     "name": "vcont-dusk-live",
     "scene": "ws-vcont-dusk",
-    "variants": [{ "name": "cur" }, { "name": "cur2" }],
+    "variants": [
+      {
+        "name": "cur"
+      },
+      {
+        "name": "cur2"
+      }
+    ],
     "live": {
-      "crop": [390, 60, 820, 540],
+      "crop": [
+        390,
+        60,
+        820,
+        540
+      ],
       "frames": 240,
-      "regions": { "顶沿": [0, 0, 820, 180], "岩壁": [0, 180, 820, 250], "脚下与云": [0, 430, 820, 110] },
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          180
+        ],
+        "岩壁": [
+          0,
+          180,
+          820,
+          250
+        ],
+        "脚下与云": [
+          0,
+          430,
+          820,
+          110
+        ]
+      },
       "thr": 16,
       "frac": 0.05
     }
@@ -41,11 +88,42 @@
   {
     "name": "vcont-night-live",
     "scene": "ws-vcont-night",
-    "variants": [{ "name": "cur" }, { "name": "cur2" }],
+    "variants": [
+      {
+        "name": "cur"
+      },
+      {
+        "name": "cur2"
+      }
+    ],
     "live": {
-      "crop": [390, 60, 820, 540],
+      "crop": [
+        390,
+        60,
+        820,
+        540
+      ],
       "frames": 240,
-      "regions": { "顶沿": [0, 0, 820, 180], "岩壁": [0, 180, 820, 250], "脚下与云": [0, 430, 820, 110] },
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          180
+        ],
+        "岩壁": [
+          0,
+          180,
+          820,
+          250
+        ],
+        "脚下与云": [
+          0,
+          430,
+          820,
+          110
+        ]
+      },
       "thr": 16,
       "frac": 0.05
     }
