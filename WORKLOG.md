@@ -13,7 +13,8 @@
 ### 在途（2026-09-29 晚）
 | 任务 | 状态 | 分支 | 下一步 |
 | --- | --- | --- | --- |
-| WS09 垂直大陆奇观（Opus） | 实现中（OWV 变体） | `worktree-agent-a91d86c1d55d28f48` | 交付 → Opus 审查；收尾期是否合并待用户定（建议合并，奇观模式内、默认不出现在普通航程） |
+| WS09 垂直大陆奇观（Opus） | 审查需返工：逆光时大陆与天空同色几乎看不见（相机到岩壁的空气落在岩壁影里却按全受光算），原代理返工中 | `worktree-agent-a91d86c1d55d28f48` | 交付 → Opus 审查；收尾期是否合并待用户定（建议合并，奇观模式内、默认不出现在普通航程） |
+| UX-5 控件类型统一（Sonnet） | 实现中（用户 09-29 同意作为发布前唯一例外补进来） | worktree 分支（派发时建） | 交付 → Sonnet 审查 → 合并 |
 会话中断时：子代理不能跨会话续跑，但分支和 WIP 提交都在；新会话按上表分支名读 handoff / 提交记录，重派同一任务「从该分支继续」。
 
 ### 本段（09-28 — 09-29）已合并的主要内容
@@ -39,6 +40,7 @@ SPEC-PILEUS 幞状云重做、SPEC-ARCUS 弧状云、WS10 跨海巨门、NIGHT-A
 - 审查给出一行级修法的小问题，协调者可在合并时直接改并复测，不必再审一轮。
 - 每合并一个就清 worktree（`worktree remove -f -f` + 删分支；Windows 下目录残留用 PowerShell 删）。
 - 例行进度检查由会话内 cron 触发，只在当前会话有效；新会话需重建。
+- **隔离 worktree 创建被拒**（09-29）：Agent 工具报「protected checkout 的 git 元数据无法解析」。当时存在「worktree 里套 worktree」（审查 / shader-parity 把对照 worktree 建在另一个 worktree 的 tmp/ 下）和多个临时对照 worktree；逐个 `git worktree remove -f -f` + `prune` 清掉后恢复。根因未确证（假设：嵌套 worktree）；以后对照 worktree 一律建在主仓库 `tmp/` 下、用完即删。
 
 ### 如何复现当前立足点
 
