@@ -21,7 +21,11 @@ for spec in sys.argv[2:]:
     d1 = np.abs(A[1:] - A[:-1]).sum(0) / max(1, T - 1)
     crawl = d2[br].sum() / m[br].sum()
     c1 = d1[br].sum() / m[br].sum()
-    out.append(f"{name}: 爬行 {crawl:.5f}  一阶 {c1:.5f}  亮像素 {int(br.sum())}")
+    # 按边长归一（PUB-5）：裁剪区里的轮廓长度不同（整流罩区里还横穿一条主翼后缘），只比 crawl 会把「边多」算成「爬得凶」。
+    # 「会动的像素」= 一阶差分均值 > 0.5 级（亚像素平移时只有轮廓 / 高光边上的像素会变），报每个会动像素的平均 |二阶差|（级）
+    mv = br & (d1 > 0.5)
+    per = d2[mv].mean() if mv.any() else float("nan")
+    out.append(f"{name}: 爬行 {crawl:.5f}  一阶 {c1:.5f}  亮像素 {int(br.sum())}  会动像素 {int(mv.sum())}  每像素|二阶差| {per:.3f}")
 print(f"{d}（{T} 帧）")
 print("\n".join("  " + s for s in out))
 

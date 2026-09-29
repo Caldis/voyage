@@ -1,0 +1,10 @@
+[
+  {"name": "noon", "scene": "noon-cumulus",
+   "variants": [{"name": "old", "materials": {"wingMat": "base"}}, {"name": "new"}, {"name": "old2", "materials": {"wingMat": "base"}}]},
+  {"name": "sun", "scene": "sunset-wing",
+   "variants": [{"name": "old", "materials": {"wingMat": "base"}}, {"name": "new"}, {"name": "old2", "materials": {"wingMat": "base"}}]},
+  {"name": "hnd", "scene": "route-hnd-cts",
+   "variants": [{"name": "old", "materials": {"wingMat": "base"}}, {"name": "new"}, {"name": "old2", "materials": {"wingMat": "base"}}]},
+  {"name": "ic", "scene": "in-cloud", "offset": [-10, -5],
+   "variants": [{"name": "old", "materials": {"wingMat.wet": "base:wingMat"}}, {"name": "new"}, {"name": "old2", "materials": {"wingMat.wet": "base:wingMat"}}]}
+]
