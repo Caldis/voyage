@@ -1,0 +1,14 @@
+[
+ {
+  "name": "tw-ltg-off",
+  "p": { "preset": "scs", "date": "2026-08-26", "time": 1320, "wing-pos": "-4", "quality": "high" },
+  "wait": 3000,
+  "js": "v.state.heading = 0; v.state.bankDeg = 0; v.farTowers.override = [{id:'near', x: 250, z: 0, R: 6, top: 14, Ra: 20, dirX: 0.7, dirZ: 0.6, thick: 2.4, col: 1, anvil: 0.8, seed: 0.4}]; await new Promise(r=>setTimeout(r,1200)); return '默认（hold=' + v.farTowers.hold + '）应看不到闪光';"
+ },
+ {
+  "name": "tw-ltg-lit",
+  "p": { "preset": "scs", "date": "2026-08-26", "time": 1320, "wing-pos": "-4", "quality": "high" },
+  "wait": 3000,
+  "js": "v.state.heading = 0; v.state.bankDeg = 0; v.farTowers.override = [{id:'near', x: 180, z: 0, R: 6, top: 14, Ra: 20, dirX: 0.7, dirZ: 0.6, thick: 2.4, col: 1, anvil: 0.8, seed: 0.4}]; await new Promise(r=>setTimeout(r,1200)); v.farTowers.hold = true; v.farTowers.heldIntensity = 1.3; await new Promise(r=>setTimeout(r,200)); const D = v.farTowers.mat.uniforms.uFarD.value[0]; return 'hold 强制闪光（180km），D=' + D.toArray().map(x=>x.toFixed(3)).join(',');"
+ }
+]

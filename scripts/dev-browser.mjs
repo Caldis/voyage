@@ -451,18 +451,33 @@ async function setQualityTier(page, q) {
 /** DX-07：默认关闭闪电频闪（weather.hold + heldIntensity = 0，见 src/weather.ts 的 update()：
  * hold 为 true 时不再触发新闪电、亮度锁在 heldIntensity），不然截图偶尔会撞上一大团白光，
  * 差点被当成回归（T08 开发体验反馈）。这个开关本来就是给调试 / 截图用的（weather.ts 注释原话），
- * 只是调用它，不改 src/。--allow-flash 保留旧行为（正常按泊松过程闪）。 */
+ * 只是调用它，不改 src/。--allow-flash 保留旧行为（正常按泊松过程闪）。
+ * TW-LTG：远塔的云内闪电（`src/clouds/far-towers.ts`）照抄了同一个 hold / heldIntensity 约定，
+ * 这里一并设 `__voyage.farTowers`，不然默认截图会撞上远塔泊松节律偶发的一团紫白光。 */
 async function setFlashDisabled(page, disabled) {
   return page.evaluate((disabled) => {
     const w = window.__voyage && window.__voyage.weather;
-    if (!w) return false;
-    if (disabled) {
-      w.hold = true;
-      w.heldIntensity = 0;
-    } else {
-      w.hold = false;
+    const f = window.__voyage && window.__voyage.farTowers;
+    let applied = false;
+    if (w) {
+      if (disabled) {
+        w.hold = true;
+        w.heldIntensity = 0;
+      } else {
+        w.hold = false;
+      }
+      applied = true;
     }
-    return true;
+    if (f) {
+      if (disabled) {
+        f.hold = true;
+        f.heldIntensity = 0;
+      } else {
+        f.hold = false;
+      }
+      applied = true;
+    }
+    return applied;
   }, disabled);
 }
 
@@ -1363,7 +1378,7 @@ async function main() {
     console.error("  flight --jobs 路径.json [--variants 路径.json] [--modes static,reset,cruise,turn,exit,live]（DX-23）");
     console.error("                  确定性航迹重放（云的时间行为）：全冻结后手动推进云，航迹逐位可复现；对静止真值（raw 等权平均 --truth 帧）");
     console.error("                  算误差 / 等效模糊 σ（云边宽度）/ 云边梯度能量比，reset 后第 k 帧收敛，live 为解冻后页内逐帧 readPixels 的抖动");
-    console.error("  --allow-flash   仅 shots：不关闭雷电频闪（默认关，见 weather.ts 的 hold / heldIntensity 开关）");
+    console.error("  --allow-flash   仅 shots：不关闭雷电频闪（默认关，见 weather.ts / far-towers.ts 的 hold / heldIntensity 开关）");
     console.error("  --freeze        仅 shots（DX-08）：截图前 __voyage.freeze(true)——位置 / 航向 / 头部 / 模拟时间 /");
     console.error("                  曝光适应 / 闪电 / 翼尖频闪相位全部钉住（PERF-13：另把翼尖频闪钉死为灭），连续渲染逐像素一致，适合两图相减找回归");
     console.error("                  DX-22：benchFrame 现在也遵守冻结，不会再把状态推进掉（以前 --pair 两张之间调用 benchFrame 会绕开冻结）");
