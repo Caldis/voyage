@@ -8,6 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| DX-32 | 稳定版期间（测量可信度，不改产品） | 5306 | worktree | Sonnet（--wait-quiet 同时等 GPU < 10%、结果记录 GPU 利用率、gpu-ab 默认查 GPU） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -23,7 +24,6 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | W-EDGE-b | 【降级：细微 / 性能，晚做】机翼边缘共性偏差（PUB-5 审查）：「探测 → 解析」路径内侧系统偏浅约 −0.11、擦边命中直接判覆盖率 1 偏高 +0.24，所有部件共有，改 W-EDGE 共用路径；wing.glsl.ts:727 part 5 走满 12 步后先 sumD = min(sumD, d)；:371、:736-737 注释过时；以后边缘验收用掩码扣掉别的轮廓再比（handoff/PUB-5-review-decomp.py），不用矩形框 | 低 | wing | wing | PUB-5 审查遗留 |
 | PUB-3c | 【降级：细微 / 性能，晚做】PUB-3b 遗留：台风眼壁像石膏、有墨斑暗块；逆光近云亮面白色椒盐点；火车近景地面糊（面板标「实验 / 示例」）；天环白天偏透明；灯城雾盘近侧硬边；窗板透气孔在视觉中心；手机竖屏构图偏窄 | 低 | 多处 | — | PUB-3b |
 | PERF-17 | 【降级：细微 / 性能，晚做】PERF-16b 遗留：机翼程序冷编译稳定 +19%（疑 STROBE-FLASH，用 shader-budget --chain 坐实）；noon-cumulus +11–15% 为 SPEC-RAYS 等已审功能代价叠加；typhoon-bands 约 +12% 未细分（疑 TW02 / TW04） | 低 | 全局 | — | — |
-| DX-32 | dev-browser `--wait-quiet` 同时检查 GPU 利用率（nvidia-smi，空闲 < 10% 再测），并在测量结果里记录 GPU 利用率 | 中高（测量可信度） | scripts | — | PERF-16 教训 |
 | PUB-2 | 【降级：细微 / 性能，晚做】pages.yml 里 actions/checkout、setup-node、upload-pages-artifact、deploy-pages、pnpm/action-setup 仍是 Node 20 版本（GitHub 已提示弃用、被强制跑在 Node 24），升到对应新大版本 | 低 | .github | — | — |
 | WS10 | 新奇观：跨海巨门（悬空巨舰排后） | 中 | wonders | wonders | 收尾后 |
 | WS09-b | 【降级：细微 / 性能，晚做】垂直大陆遗留：正午顺光岩壁偏磨砂、贯穿亮横带；OWV 编好那帧已浮现下段一下跳出（同巨柱群 / 天环）；岩壁不在海面 / 云上投影；OWV 退路改 ["OW", ""]；按需变体链接失败只打 console.warn（截图工具统计不到）；瀑布 / 航迹云略像贴线；逆光机位地平线亮积云边闪烁被暗剪影放大（云缓冲既有问题）；在场 GPU 负载下 +0.67–0.70 ms、冷编译 +10–15%，安静窗口复测 | 低 | wonders | wonders | WS09 审查遗留 |
