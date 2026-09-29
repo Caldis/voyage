@@ -548,7 +548,9 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   // 亮度封顶（W01b 返工）：被照亮的部分最亮只到同方向天空的 1.3（贴地平线）–2 倍（高处）。
   // 暮色天空比阳光暗 4–5 个数量级，按物理算被照亮的缆 / 枝会截成一根过曝的光柱（像激光、霓虹灯），
   // 眼睛（和相机）看远处暮色里的亮物体也会被空气的散射光冲淡，这里直接按天空亮度封顶，保留色温
-  vec3 Lbg = L;
+  // 背景去掉月盘（PUB-4 B3，同 continent.glsl.ts:298 / 天环 / 巨柱群的做法）：天梯 / 建木浮现前沿、稀疏部件（撑杆 /
+  // 叶盘）覆盖不满时最终用 mix(L, …, c) 按覆盖率混，c < 1 的部分要是 Lbg 里还带着月盘，月亮就会从背后透出来
+  vec3 Lbg = L - (tLimit > 1e8 ? moonDisk(rd) * sunTransmittance(uCamR, rd.y) : vec3(0.0));
   // 白天（太阳在地平线以上）放宽到 4 倍：正午的中继站、云气本来就只比天空亮一点，不受影响
   float capLum = mix(4.0, mix(1.3, 2.0, smoothstep(10.0, 150.0, s)), duskW) * wonderLum(Lbg);
   float capScale;

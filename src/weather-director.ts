@@ -202,6 +202,12 @@ export class WeatherDirector {
   private realTime = 0;
   private lastPushReal = -Infinity;
   private snapNext = false;
+  /**
+   * 首次对齐天气场还没发生（B1，PUB-4 美术总监发布审查阻塞）：只用来给「首载兜底」nudge 计一次数，
+   * 和 snapNext 不是一回事——snapNext 每次跳变（换预设 / 中途开连续航程）都会重置，
+   * 这个只在页面打开后第一次真正对齐时为 true，用过一次就永久置 false（见 sampleField 的 jump 分支）
+   */
+  private firstAlign = true;
   private lastGateT = -Infinity;
   private gateCb: ((how: CoverKind | "forced") => void) | null = null;
   private lat = 0;
@@ -341,6 +347,19 @@ export class WeatherDirector {
       this.snapNext = false;
       this.regime = s.regime;
       this.cur = pick(s);
+      // B1（PUB-4，美术总监发布审查阻塞）：连续航程第一次对齐天气场时，如果天气场恰好抽到晴空（coverage < 15%，
+      // 多半是 regime === "clear"），首屏窗外是一片没有一朵云、连海面纹理都没有的光滑渐变，读起来像「没加载出来」
+      // （handoff/PUB-3b-art.md B1）。只在这唯一一次首载对齐时（firstAlign，不是每次 snapNext）用同一套
+      // 「外部改了就从新值继续逼近」的 nudge（UX-2 已有语义）把它抬到一片淡积云；之后照天气场自然演变，
+      // 不影响后续跳变（换预设 / 中途手动开连续航程时画面已经在跑，天气场给多少就是多少）。
+      // 不用另配 bottom / top / type / density：weather.ts 的「clear」分支本来就带着 CLOUD_PRESETS 同源的淡积云缺省值
+      // （bottom 1.2、top 3.4、type 1、density 1，见 WeatherSample 初值），只缺云量
+      if (this.firstAlign && this.cur.coverage < 0.15) {
+        this.cur.coverage = 0.3; // 固定值：首屏截图 / 回归要可复现（协调者合并时把随机 25–40% 改成定值）
+        this.regime = "cumulus";
+        this.note(`首屏兜底：晴空天气场抬到淡积云 ${Math.round(this.cur.coverage * 100)}%`, "jump");
+      }
+      this.firstAlign = false;
       this.push(true);
       // 跳变本身就是硬切：海面风直接对齐（海面在 Worker 算好新档位之前停在旧海况上，最多几十毫秒）
       this.seaWind = this.host.state.wind = this.seaWindGoal;

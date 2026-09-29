@@ -248,6 +248,11 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   L += opticsSunDisk(rd, hitGround) * (1.0 - gRingCov); // 天环挡住身后的太阳圆盘（WS08 审查）
 #elif defined(VERTICAL_CONTINENT)
   L += opticsSunDisk(rd, hitGround) * (1.0 - gWonderCov); // 垂直大陆挡住身后的太阳（黄昏太阳落到岩壁后面）
+#elif defined(OUTSIDE_WONDER)
+  // 巨柱群（WONDER_PILLARS）与天梯 / 建木（默认 wonderSky）共用同一个 gWonderCov（WS-STAR 已把它挪到这里统一乘一次）；
+  // PUB-4 B3（美术总监发布审查阻塞）：此前这两支落进下面的 #else，日面直接叠在柱子 / 塔 / 树前面。
+  // 只在 OUTSIDE_WONDER 变体里生效，默认程序（不含这个宏）预处理后落进 #else，逐字不变
+  L += opticsSunDisk(rd, hitGround) * (1.0 - gWonderCov);
 #else
   L += opticsSunDisk(rd, hitGround);
 #endif

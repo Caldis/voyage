@@ -223,7 +223,9 @@ vec3 wonderPillars(vec3 L, vec3 rd, float tLimit) {
 
   // ---- 着色（从远到近五步）：比 A 远的云 → A → A、B 之间的云 → B → 最近的云。
   // 每一步查表各一次（透射率 / 天光 / 空气透视），一个循环、一个调用点
-  vec3 Lbg = L;
+  // 背景去掉月盘（PUB-4 B3：柱子覆盖不满时——浮现前沿 visk、最远那根柱 cov < 1——月面会从 Lbg 透出来，
+  // 和 continent.glsl.ts:298 / 天环同一套做法：只在真天空（没打到地面）时才有月盘可减）
+  vec3 Lbg = L - (tLimit > 1e8 ? moonDisk(rd) * sunTransmittance(uCamR, rd.y) : vec3(0.0));
   float dayF = smoothstep(-0.10, 0.02, uSunDir.y);
   float moonW = 1.0 - smoothstep(-0.21, -0.14, uSunDir.y);
   float duskW = 1.0 - smoothstep(-0.02, 0.06, uSunDir.y);
