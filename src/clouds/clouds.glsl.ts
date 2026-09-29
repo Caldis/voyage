@@ -924,11 +924,10 @@ vec2 stormSeed2(vec4 c) { return stormHash22(vec2(c.z * 7.13 + c.w * 0.37, c.w *
 vec2 shieldAxes(vec4 c, vec2 h) {
   return vec2(c.z * (6.0 + 11.0 * h.x), c.z * (1.2 + 0.8 * h.y));
 }
-// 砧盾的平面外接圆（xy：世界坐标圆心，z：半径 km），给视线 / 采样点的包围判断用（clouds.ts）
-vec3 shieldCircle(vec4 c) {
-  vec2 L = shieldAxes(c, stormSeed2(c));
-  return vec3(c.xy + uUpperWind * (c.z * 0.7 + (L.x - L.y) * 0.5), (L.x + L.y) * 0.5 + c.z * 2.5 + 8.0);
-}
+// 砧盾足迹的外接椭圆（PERF-TW04，storm-shield.ts 在 CPU 上按下面同一套足迹拟合）：(世界坐标中心 x, z, 1/沿风半轴, 1/横风半轴)，
+// 给视线的包围判断用（clouds.ts 的 cloudRayShieldSpan）。**改足迹（shieldAxes、半宽 wh、中线弯曲）要同步改 storm-shield.ts 并跑
+// scripts/storm-shield.test.mts**，否则椭圆包不住足迹、视线跳过砧盾（画面缺一块）。旧版用扇形的外接圆（shieldCircle），半径最大约 85–90 km
+uniform vec4 uShieldEll[4];
 const float SHIELD_BELOW = 6.5;   // 砧盾在砧顶以下最多伸到多深（厚 3 km、多单体叠加处 ×1.55，+ 顶面下沉与底面起伏）
 const float SHIELD_ABOVE = 1.3;
 const float SHIELD_LIGHT_K = 0.36;   // 受光（精简密度 / 云影 / 阴影估计）里砧盾消光的 δ 缩放，见 cloudDensityLite   // 砧顶以上（顶面鼓包）

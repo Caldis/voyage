@@ -8,6 +8,7 @@ import { VIEW_COMMON } from "../render/view.glsl";
 import { createWonderCloudUniforms, wonderCloudGlsl, wonderMarchGlsl } from "../wonders/wonder-cloud.glsl";
 import { CLOUD_COMMON, CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES, OCC_LAYERS, OCC_N, OCC_SPACING } from "./clouds.glsl";
 import { LENTICULAR_GLSL } from "./lenticular.glsl";
+import { updateShieldUniforms } from "./storm-shield";
 import type { CloudNoise } from "./noise";
 import { BLUE_NOISE_RG8_BASE64, BLUE_NOISE_SIZE } from "./blue-noise";
 
@@ -193,17 +194,47 @@ bool cloudHurOn() {
   return false;
 #endif
 }
+#ifdef CLOUD_STORM
+// TW04：砧盾那一段（足迹 × 砧顶附近的高度层 [砧顶 − SHIELD_BELOW, 砧顶 + SHIELD_ABOVE]）的包络。
+// 单独一段而不并进雷暴包围柱：巡航高度常在砧的高度层里，往下看的视线出了这一层以后到层状云之间整段是空的，
+// 并成一段就跳不过去了。
+// PERF-TW04：足迹用 CPU 拟合的外接椭圆（uShieldEll，storm-shield.ts；轴沿高空风，二次方程精确求交），
+// 不再用扇形的外接圆（半径最大约 85–90 km，扇形只占其中约 1/3，上风半圆几乎全空）：
+// 巡航高度就在砧的高度层里，视线只要穿过那个大圆就整条走天气路径、在砧盾段里一路空步。足迹外 anvilShield 严格为 0，画面不变
+vec2 cloudRayShieldSpan(vec3 ro, vec3 rd) {
+  vec2 span = vec2(1e9, -1e9);
+  vec2 W = uUpperWind;
+  vec2 Pp = vec2(-W.y, W.x);
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 e = uShieldEll[i];
+    // 视线的水平投影是直线 xz = rd.xz · t（相机相对坐标），换到椭圆坐标（轴沿风向、按半轴归一）后解 |o + dv·t| = 1
+    vec2 rel = uCloudOffset - e.xy;
+    vec2 o = vec2(dot(rel, W), dot(rel, Pp)) * e.zw;
+    vec2 dv = vec2(dot(rd.xz, W), dot(rd.xz, Pp)) * e.zw;
+    float a = max(dot(dv, dv), 1e-12);
+    float b = dot(o, dv);
+    float disc = b * b - a * (dot(o, o) - 1.0);
+    if (disc < 0.0) continue;
+    float sq = sqrt(disc);
+    float top = uStorms[i].w;
+    vec2 hs = cloudShellIntervalH(ro, rd, top - SHIELD_BELOW, top + SHIELD_ABOVE);
+    vec2 s = vec2(max((-b - sq) / a, hs.x), min((-b + sq) / a, hs.y));
+    if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
+  }
+  return span;
+}
+#endif
 bvec2 cloudRayNearWeather(vec3 rd, vec2 seg) {
   bool nearAny = false;
 #ifdef CLOUD_STORM
   for (int i = 0; i < uStormCount; i++) {
     vec4 c = uStorms[i];
     if (cloudRayDist2D(rd, seg, c.xy) < c.z * 7.5 + WEATHER_LIGHT_REACH) nearAny = true;
-    // 砧盾（TW04）向下风铺开上百公里：视线从它下面 / 里面穿过也算够得着（砧盾是软边、解析受光，
-    // 只让视线走到砧的高度，塔身的表面细化只在碰到塔时发生）
-    vec3 sc = shieldCircle(c);
-    if (cloudRayDist2D(rd, seg, sc.xy) < sc.z) nearAny = true;
   }
+  // 砧盾（TW04）向下风铺开上百公里：视线穿过它所在的那一段（足迹 × 高度层）也算够得着（砧盾是软边、不做表面细化，
+  // 受光按样本点选路径）。PERF-TW04：按外接椭圆 × 高度层判断，见 cloudRayShieldSpan
+  vec2 sh = cloudRayShieldSpan(vec3(0.0, uCamR, 0.0), rd);
+  if (max(sh.x, seg.x) < min(sh.y, seg.y)) nearAny = true;
 #endif
   bool nearHur = cloudHurOn() && cloudRayDist2D(rd, seg, uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
   return bvec2(nearAny || nearHur, nearHur);
@@ -236,26 +267,6 @@ vec2 cloudRayWeatherSpan(vec3 ro, vec3 rd) {
     if (h2 < 0.0) continue;
     float hw = sqrt(h2 / a);
     vec2 hs = cloudShellIntervalH(ro, rd, uShellBottom, c.w + 1.8);
-    vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
-    if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
-  }
-  return span;
-}
-// TW04：砧盾那一段（外接圆 × 砧顶附近的高度层 [砧顶 − SHIELD_BELOW, 砧顶 + SHIELD_ABOVE]）的包络。
-// 单独一段而不并进上面的包围柱：巡航高度常在砧的高度层里，往下看的视线出了这一层以后到层状云之间整段是空的，
-// 并成一段就跳不过去了
-vec2 cloudRayShieldSpan(vec3 ro, vec3 rd) {
-  vec2 span = vec2(1e9, -1e9);
-  float a = max(dot(rd.xz, rd.xz), 1e-8);
-  for (int i = 0; i < uStormCount; i++) {
-    vec4 c = uStorms[i];
-    vec3 sc = shieldCircle(c);
-    vec2 rel = sc.xy - uCloudOffset;
-    float tc = dot(rel, rd.xz) / a;
-    float h2 = sc.z * sc.z - (dot(rel, rel) - tc * tc * a);
-    if (h2 < 0.0) continue;
-    float hw = sqrt(h2 / a);
-    vec2 hs = cloudShellIntervalH(ro, rd, c.w - SHIELD_BELOW, c.w + SHIELD_ABOVE);
     vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
     if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
   }
@@ -1287,6 +1298,8 @@ export function createCloudUniforms(noise: CloudNoise) {
     uShellTop: { value: 3.4 },
     uStormCount: { value: 0 },
     uStorms: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
+    // 砧盾足迹的外接椭圆（PERF-TW04，storm-shield.ts 每帧按 uStorms / uUpperWind 写；只有雷暴变体声明）
+    uShieldEll: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(0, 0, 1, 1)) },
     uUpperWind: { value: new THREE.Vector2(0.8, 0.6) },
     uHurricane: { value: new THREE.Vector4(0, 0, 20, 0) },
     uFlash: { value: new THREE.Vector4() },
@@ -2113,6 +2126,7 @@ export class Clouds {
    */
   render(motion: THREE.Vector3, camBasis: THREE.Matrix3, cabinToWorld: THREE.Matrix3) {
     cumulusShape(this.uniforms);
+    updateShieldUniforms(this.uniforms);
     this.updateOccupancy();
     this.updateShadow();
     this.marchMat.uniforms.uFrame.value = this.frame++ % 64;
