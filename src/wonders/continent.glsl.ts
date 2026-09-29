@@ -137,6 +137,8 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
   float sd = uContC.w * 97.0;
   float front = uContA.w;
   vec2 nh2 = vec2(-dh.y, dh.x) / dl;         // 水平面里「像面横向」
+  float dHz = sqrt(max(uCamR * uCamR - BOTTOM * BOTTOM, 1.0));    // 到几何地平线的距离（km）
+  float dipY = -dHz / uCamR;                                         // 几何地平线处视线的 rd.y
 
   // ---- 航迹云（在岩壁前面 90–160 km；整体早退之外也要画：它一直延伸到大陆的轮廓以外）
   vec2 ct = contContrail(o, d, pixelAngle, T);
@@ -223,7 +225,13 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
         fm = dot(mA, toCam) > dot(fm, toCam) ? mA : fm;
         pB = pA + vec4(-fm.y, fm.x, 0.0, 1.0);   // 退化成一个点：u、顶沿取顶点处的
       }
-      if (tW <= 0.0 || tW > tLimit || tW > tA) continue;   // 被海面挡住（地平线以下），或比已有的两块都远
+      // 被海面 / 地面挡住：墙脚和海面的交界、远处墙脚沉到地平线以下的那条线都是整条横贯的长边，一刀切会随飞行逐帧爬（WS09 返工 live 实测），
+      // 按亚像素解析：墙在地平线以外时按视线离几何地平线的像素距离，在地平线以内时按墙脚离海面的高度；离交界两个像素以外才整像素判
+      float covSea = 1.0;
+      if (tW > tLimit) {
+        if (tW > dHz && rd.y < dipY - 2.0 * pixelAngle) continue;
+      }
+      if (tW <= 0.0 || tW > tA) continue;   // 比已有的两块都远
       vec3 Pl = o + d * tW;
       vec2 eAB = pB.xy - pA.xy;
       float eL2 = max(dot(eAB, eAB), 1e-6);
@@ -245,7 +253,9 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
         else Hp = hq;
       }
       float slp = (Hp - Hm) / (2.0 * fy);
-      float cov = covLat * wonderTentCdf((Hc - y) / fy * inversesqrt(1.0 + slp * slp));
+      covSea = tW > dHz ? wonderTentCdf((rd.y - dipY) / pixelAngle) : wonderTentCdf((y + dot(Pl.xz, Pl.xz) / 12720.0) / fy);
+      if (tW > tLimit && tLimit < (tW > dHz ? dHz : tW) - 20.0) covSea = 0.0;   // 前面的真实地形（岛）挡住的，不按海面算
+      float cov = covLat * covSea * wonderTentCdf((Hc - y) / fy * inversesqrt(1.0 + slp * slp));
       if (cov <= 0.0) continue;
       // 相邻崖面之间的竖棱：离棱不到一个像素时按横向距离把两侧的法线混合（棱另一侧是背面 = 轮廓，已由 covLat 管）
       vec2 mh = fm;
