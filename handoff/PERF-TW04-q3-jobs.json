@@ -1,0 +1,7 @@
+[
+ {"name": "q3-storm-day", "scene": "storm-day", "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"},
+   {"name": "bigA", "patch": {"clouds.marchMat": [["    vec4 e = uShieldEll[i];", "    vec4 e = uShieldEll[i] * vec4(1.0, 1.0, 0.8, 1.0);"]]}},
+   {"name": "bigB", "patch": {"clouds.marchMat": [["    vec4 e = uShieldEll[i];", "    vec4 e = uShieldEll[i] * vec4(1.0, 1.0, 1.0, 0.8);"]]}},
+   {"name": "band2", "patch": {"clouds.marchMat": [["    vec2 hs = cloudShellIntervalH(ro, rd, top - SHIELD_BELOW, top + SHIELD_ABOVE);", "    vec2 hs = cloudShellIntervalH(ro, rd, top - SHIELD_BELOW - 1.0, top + SHIELD_ABOVE + 1.0);"]]}}
+ ]}
+]

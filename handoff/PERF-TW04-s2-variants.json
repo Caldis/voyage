@@ -1,0 +1,7 @@
+[
+  {"name": "s4", "materials": {"clouds.marchMat": "base"}},
+  {"name": "cur"},
+  {"name": "only2b", "patch": {"clouds.marchMat": [["    if (refineOn && wasEmpty && fine == 0) {\n      for (int k = 0; k < 256", "    if (false) {\n      for (int k = 0; k < 256"]]}},
+  {"name": "only2a", "patch": {"clouds.marchMat": [["&& covIn ? stormLayerBoost", "? stormLayerBoost"], ["if (!covIn && d > 0.0) gCovBoost", "if (false) gCovBoost"]]}},
+  {"name": "s4b", "materials": {"clouds.marchMat": "base"}}
+]

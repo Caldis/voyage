@@ -1,0 +1,16 @@
+[
+  {"name": "cur"},
+  {"name": "noShNear", "patch": {"clouds.marchMat": [
+    ["if (cloudRayDist2D(rd, seg, sc.xy) < sc.z) nearAny = true;", ""],
+    ["    anvSeg = cloudRayShieldSpan(ro, rd);", ""]
+  ]}},
+  {"name": "noSatLite", "patch": {"clouds.marchMat": [
+    ["float stormTowersSdf(vec4 c, vec2 xz, float alt, float lod, out float ao) {", "bool gNoSat = false;\nfloat stormTowersSdf(vec4 c, vec2 xz, float alt, float lod, out float ao) {"],
+    ["    if (k >= nSat) break;", "    if (k >= nSat || gNoSat) break;"],
+    ["  float sdf = stormTowersSdf(c, xz, alt, lod, ao);\n  float pilL = gPileusD;", "  gNoSat = true;\n  float sdf = stormTowersSdf(c, xz, alt, lod, ao);\n  gNoSat = false;\n  float pilL = gPileusD;"]
+  ]}},
+  {"name": "noShadowOD", "patch": {"clouds.marchMat": [
+    ["if (stormW < 0.5 && uStormCount > 0) sunLight *= 1.0 / (1.0 + 0.1125 * anvilShadowOD(p.xz + uCloudOffset, r - BOTTOM, uKeyDir));", ""]
+  ]}},
+  {"name": "cur2"}
+]
