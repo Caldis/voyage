@@ -10,6 +10,12 @@
 用户原话：「我觉得这个长程任务已经足够久了, 我觉得我们可以先进行一个阶段性收尾了, 当然并不是说项目就先不迭代了, 而是将项目先作为一个稳定态做好向外推出的准备」。
 → **停止派发新功能**；在途任务收尾合并；接着做发布准备清单（见下）。发布方式 / 受众待用户定。
 
+### 已发布（2026-09-29）
+- 公开仓库 https://github.com/Caldis/voyage （1098 个提交，压缩后 11 MB，历史只含 voyage 自己的文件），在线地址 **https://caldis.github.io/voyage/**。
+- 线上验收：控制台 0 error；本地资源（银河、星表等）200；外站瓦片 EOX 614 个、OpenFreeMap 252 个、AWS 地形 36 个全部 200（本地测试里的 EOX 跨域报错在 github.io 下没有出现）。截图 tmp/screenshot/pub-live/live-1.png。
+- 以后发布：monorepo 根目录 `bash scripts/publish-voyage.sh`（filter-repo 5 秒；`git subtree split` 在 Windows 上 30 分钟没跑完，已弃用）。推送后 Actions 自动构建部署。
+- 注意：apps/voyage 从此是公开内容，handoff / research / WORKLOG 里不写内网信息、凭据、个人信息。
+
 ### 发布决定（用户 2026-09-29 晚）
 用户原话：「做拆分吧, 需要保留历史, 临时文件你拆分过去确保 ignore 不推送就可以, 然后不需要设 private 了, 我希望能用 gh pages 直接看到」「也确保所有子代理在迁移过程中工作正常, 或者你可以等子代理完工之后最后再迁也行」。
 → 目标仓库 `Caldis/voyage`（公开，名字可用；账号公开邮箱就是提交作者邮箱 mail@caldis.me），站点 `https://caldis.github.io/voyage/`。

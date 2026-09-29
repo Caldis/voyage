@@ -20,6 +20,8 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| PUB-2 | 【降级：细微 / 性能，晚做】pages.yml 里 actions/checkout、setup-node、upload-pages-artifact、deploy-pages、pnpm/action-setup 仍是 Node 20 版本（GitHub 已提示弃用、被强制跑在 Node 24），升到对应新大版本 | 低 | .github | — | — |
+| PUB-3 | 发布后复核：安静窗口性能复测（冷启动、用户分辨率代表场景、中端 GPU 自动画质档）；全量回归控制台零 error；美术总监过一遍只挑发布阻塞级；macOS Safari / Chrome、手机实测线上地址 | 高 | 全局 | — | — |
 | WS10 | 新奇观：跨海巨门（悬空巨舰排后） | 中 | wonders | wonders | 收尾后 |
 | WS09-b | 【降级：细微 / 性能，晚做】垂直大陆遗留：正午顺光岩壁偏磨砂、贯穿亮横带；OWV 编好那帧已浮现下段一下跳出（同巨柱群 / 天环）；岩壁不在海面 / 云上投影；OWV 退路改 ["OW", ""]；按需变体链接失败只打 console.warn（截图工具统计不到）；瀑布 / 航迹云略像贴线；逆光机位地平线亮积云边闪烁被暗剪影放大（云缓冲既有问题）；在场 GPU 负载下 +0.67–0.70 ms、冷编译 +10–15%，安静窗口复测 | 低 | wonders | wonders | WS09 审查遗留 |
 | UX-5b | 【降级：细微 / 性能，晚做】UX-5 遗留：审计原 UX-5 其余控件类型统一项；wonder-rarity-out 文字与按钮标签重复 | 低 | 面板 | 面板 | — |
@@ -93,6 +95,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 合并日期 | 备注 |
 | --- | --- | --- | --- |
+| PUB（发布） | apps/voyage 连历史发布到公开仓库 Caldis/voyage + GitHub Pages（https://caldis.github.io/voyage/）；monorepo 根新增 scripts/publish-voyage.sh（filter-repo + 底线检查，确定性快进推送） | 2026-09-29 | 线上 0 console error、本地资源与外站瓦片全部 200；subtree split 太慢弃用；发布后复核立 PUB-3 |
 | WS09 | 新奇观垂直大陆：200–290 km 外、顶沿 30–90 km、长 280–600 km 的台地（层理、扶壁、冲沟、崩塌锥、瀑布雾带、冰盖），岬角 / 孤台逐层变蓝，脚下云墙、贴壁云带、同高度航迹云作尺度参照；黄昏半影、夜间挡星 / 月 / 日；按需变体 OWV（皮肤 4、uContOn）；回归场景 ws-vcont-noon / -noon-up / -dusk / -night / -sea / -backlit | 2026-09-29 | Opus 审查需返工一处（逆光时相机到岩壁的空气落在岩壁影里却按全受光算，太阳 4–43° 窗朝太阳时大陆与天空同色），原代理按影长比例扣散射 + 背光压暗 + 扣地面反光 + 墙脚亚像素覆盖，协调者核逆光四档截图后合并；47 程序逐字不变；冷编译超门槛协调者定不阻塞；遗留 WS09-b |
 | UX-5 | 流速合并为一行（连续航程开关时两组按钮 hidden 互换，不再整行变灰）；座位 / 舱等 / 舱内灯光 / 奇观稀有度改分段按钮（原控件隐藏作数据源、bindSegmented 双向同步、方向键组内导航 stopPropagation 防误转向） | 2026-09-29 | 用户同意作为发布前例外；Sonnet 审查通过（无事件回环、契约不变、1600×1200 不滚动、抽屉 40vh）；遗留 UX-5b |
 | PUB-1 | 发布准备：apps/voyage 独立 .gitignore、packageManager、独立 pnpm-lock、vite base 按 VOYAGE_BASE、运行时资源走 import.meta.env.BASE_URL、.github/workflows/pages.yml；历史审计（1070 提交无凭据 / 内网信息，handoff/PUB-1-audit.md） | 2026-09-29 | 工作区外副本在 /voyage/ 子路径构建并打开验证通过；协调者补查个人邮箱 / DDNS / 密码无命中后合并。事故：实现者按端口查杀误关主仓库 5181 dev server（已恢复），教训写进 DEV_SOP |
