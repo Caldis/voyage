@@ -91,6 +91,21 @@ export function fitShieldEllipse(R: number, s: { Lx: number; Ly: number; k: numb
   return { a0: best.a0, l0: best.l0, A: best.A * 1.02 + 0.5, B: best.B * 1.02 + 0.5 };
 }
 
+/** 伴生塔（与 clouds.glsl.ts 的 stormTowersSdf 注释里的式子一致）：相对塔心的轴线偏移、塔顶、半径、种子 */
+export function satellites(R: number, top: number) {
+  const [sx, sy] = stormSeed2(R, top);
+  const nSat = 2 + Math.trunc(f(sx * f(2.99)));
+  const flank = sy * 6.2831853;
+  const out: Array<{ dx: number; dz: number; tk: number; Rk: number; hx: number; hy: number }> = [];
+  for (let k = 0; k < nSat; k++) {
+    const [hx, hy] = stormHash22(f(f(sx * f(37.1)) + f(k * f(1.37))), f(f(sy * f(37.1)) + f(k * f(1.37))));
+    const ang = flank + (k - 0.5 * (nSat - 1)) * 1.1 + (hx - 0.5) * 0.9;
+    const rr = R * (1.25 + 1.1 * hy);
+    out.push({ dx: Math.cos(ang) * rr, dz: Math.sin(ang) * rr, tk: 1.2 + (top - 1.2) * (0.28 + 0.42 * hy * hy), Rk: R * (0.3 + 0.28 * hx), hx, hy });
+  }
+  return { sx, sy, nSat, sats: out };
+}
+
 type V4 = { set(x: number, y: number, z: number, w: number): unknown };
 type V2 = { x: number; y: number };
 type ShieldUniforms = {
@@ -98,10 +113,20 @@ type ShieldUniforms = {
   uStorms: { value: Array<{ x: number; y: number; z: number; w: number }> };
   uUpperWind: { value: V2 };
   uShieldEll: { value: V4[] };
+  uShieldP: { value: V4[] };
+  uShieldQ: { value: V4[] };
+  uStormSd: { value: V4[] };
+  uSatA: { value: V4[] };
+  uSatB: { value: V4[] };
 };
 
-const cache = new Map<string, ShieldEllipse>();
-/** 每帧调用（Clouds.render）：按当前雷暴单体与高空风写 uShieldEll = (中心世界 x, 中心世界 z, 1/沿风半轴, 1/横风半轴) */
+type CellConst = { e: ShieldEllipse; s: ReturnType<typeof shieldShape>; t: ReturnType<typeof satellites> };
+const cache = new Map<string, CellConst>();
+/**
+ * 每帧调用（Clouds.render）：按当前雷暴单体与高空风写各单体的常量（形状只随半径 / 砧顶变，按它们缓存；位置每帧跟着换原点平移）：
+ *  uShieldEll = (外接椭圆中心世界 x, z, 1/沿风半轴, 1/横风半轴)；uShieldP = (塔顶 O 世界 x, z, Lx, Ly)；uShieldQ = (k, 1 + 0.6·h.x, 1.9R, 0)；
+ *  uStormSd = (sd.x, sd.y, 伴生塔数, 0)；uSatA[4i + k] = (伴生塔轴世界 x, z, 塔顶, 半径)；uSatB[4i + k] = (hk.x, hk.y, 0, 0)
+ */
 export function updateShieldUniforms(u: ShieldUniforms) {
   // 与着色器一样直接用 uUpperWind（单位向量，weather.ts 里是常量 (0.8, 0.6)）
   const W = u.uUpperWind.value;
@@ -110,15 +135,30 @@ export function updateShieldUniforms(u: ShieldUniforms) {
   for (let i = 0; i < u.uStormCount.value; i++) {
     const c = u.uStorms.value[i];
     const key = `${c.z},${c.w}`;
-    let e = cache.get(key);
-    if (!e) {
+    let cc = cache.get(key);
+    if (!cc) {
       if (cache.size > 64) cache.clear();
-      e = fitShieldEllipse(c.z, shieldShape(c.z, c.w));
-      cache.set(key, e);
+      const s = shieldShape(c.z, c.w);
+      cc = { e: fitShieldEllipse(c.z, s), s, t: satellites(c.z, c.w) };
+      cache.set(key, cc);
     }
-    // O = c.xy + W·0.7R；中心 = O + W·a0 + P·l0，P = (−W.y, W.x)
-    const ox = c.x + wx * (0.7 * c.z) + wx * e.a0 - wz * e.l0;
-    const oz = c.y + wz * (0.7 * c.z) + wz * e.a0 + wx * e.l0;
-    u.uShieldEll.value[i].set(ox, oz, 1 / e.A, 1 / e.B);
+    const { e, s, t } = cc;
+    // O = c.xy + W·0.7R；椭圆中心 = O + W·a0 + P·l0，P = (−W.y, W.x)
+    const ox = c.x + wx * (0.7 * c.z);
+    const oz = c.y + wz * (0.7 * c.z);
+    u.uShieldEll.value[i].set(ox + wx * e.a0 - wz * e.l0, oz + wz * e.a0 + wx * e.l0, 1 / e.A, 1 / e.B);
+    u.uShieldP.value[i].set(ox, oz, s.Lx, s.Ly);
+    u.uShieldQ.value[i].set(s.k, 1 + 0.6 * s.hx, 1.9 * c.z, 0);
+    u.uStormSd.value[i].set(t.sx, t.sy, t.nSat, 0);
+    for (let k = 0; k < 4; k++) {
+      const sat = t.sats[k];
+      if (sat) {
+        u.uSatA.value[4 * i + k].set(c.x + sat.dx, c.y + sat.dz, sat.tk, sat.Rk);
+        u.uSatB.value[4 * i + k].set(sat.hx, sat.hy, 0, 0);
+      } else {
+        u.uSatA.value[4 * i + k].set(0, 0, 0, 1);
+        u.uSatB.value[4 * i + k].set(0, 0, 0, 0);
+      }
+    }
   }
 }

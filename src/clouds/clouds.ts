@@ -1186,7 +1186,7 @@ void main() {
       vec4 c = uStorms[i];
       vec2 dd = xz - c.xy;
       if (dot(dd, dd) > c.z * c.z * 56.0) continue;
-      d = max(d, stormDensity(c, xz, alt, lod, false, ao));
+      d = max(d, stormDensity(i, c, xz, alt, lod, false, ao));
     }
     // 砧盾（TW04）：云步进先查网格，网格里没登记的话整片砧盾被当成空白跳过
     if (uStormCount > 0) d = max(d, anvilShield(xz, alt, lod, false));
@@ -1298,8 +1298,14 @@ export function createCloudUniforms(noise: CloudNoise) {
     uShellTop: { value: 3.4 },
     uStormCount: { value: 0 },
     uStorms: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
-    // 砧盾足迹的外接椭圆（PERF-TW04，storm-shield.ts 每帧按 uStorms / uUpperWind 写；只有雷暴变体声明）
+    // 雷暴单体的常量（PERF-TW04，storm-shield.ts 每帧按 uStorms / uUpperWind 写；只有雷暴变体声明）：
+    // 砧盾足迹的外接椭圆、砧盾参数、主塔种子、伴生塔
     uShieldEll: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(0, 0, 1, 1)) },
+    uShieldP: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(0, 0, 1, 1)) },
+    uShieldQ: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
+    uStormSd: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
+    uSatA: { value: Array.from({ length: 16 }, () => new THREE.Vector4(0, 0, 0, 1)) },
+    uSatB: { value: Array.from({ length: 16 }, () => new THREE.Vector4()) },
     uUpperWind: { value: new THREE.Vector2(0.8, 0.6) },
     uHurricane: { value: new THREE.Vector4(0, 0, 20, 0) },
     uFlash: { value: new THREE.Vector4() },
