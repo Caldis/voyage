@@ -55,6 +55,13 @@ sampler 用量（自动生成，不一致时 `check:glsl` 会报错并提示重�
   默认收起成一条把手（抓手 + 「此刻」一行摘要 + 展开箭头，≤ 屏高 12%，不挡舷窗中心），点击整条把手或上下拖动
   （触屏 pointer events）展开到 ≤ 40% 屏高、内部滚动；展开状态记在 `voyage.pref.panel`（`drawer` 字段，只记
   `isTrusted` 操作）。桌面宽屏（断点之外）完全不受影响，`#panel` 逐位不变。
+- **控件类型统一**（UX-5，`research/PANEL_UX_GUIDE.md` §4.1）：座位、舱等、舱内灯光、奇观稀有度从下拉 / 滑条
+  换成分段按钮（键盘 Tab 停留、方向键在组内移动并选中、Enter / Space 选中，`aria-pressed`）；「时间流速」与
+  「航程流速」原是两行（连续航程开着时前一行整行变灰），合并成一行「流速」，选项随连续航程开关变（关：暂停 /
+  1× / 60× / 600×；开：1× / 10× / 60×），两组按钮谁可见由连续航程状态决定，不再是灰按钮。真正的数据源仍是
+  隐藏的原生 `<select>` / `<input type="range">`（id、选项 value 一个没改），分段按钮只是双向同步的可视化外壳
+  （`src/ui.ts` 的 `bindSegmented`）——`scripts/scenarios.mjs`、`scripts/regression.playwright.js`、
+  `dev-browser.mjs` 的截图 JSON 仍按原 id 读写 `.value` 不受影响。
 - 在画面上按住拖动 = 转头（窗框视差），滚轮 = 前后挪（靠近 / 远离舷窗），双击复位；`H` 隐藏面板
 - 聚焦观察（FOCUS-ZOOM）：在画面上**按住不动**约 0.2 秒（位移不超过 5 px），视场平滑收窄到「默认 / 倍率」（默认 2.5×，缓入缓出约 0.2 秒），松开平滑还原；按下就拖走的仍是转头。聚焦中照样可以拖动转头，灵敏度按倍率降低。触屏长按同理；键盘按住 `Z` 等价（焦点在输入框 / 下拉里时不触发）。聚焦时四角轻微压暗（CSS 叠层，不进渲染管线）
 - 头部左右限位（FOCUS-ZOOM 追加）：头往舷窗前伸得越多、视场越宽，左右能挪的就越少——保证视锥永远看不到没建模的前后机舱（纯黑 / 空白侧壁）和本窗很斜时的窗洞黑带；聚焦（视场变窄）时可以转得更偏。拖到限位附近有弹性阻尼，前伸或松开聚焦使限位收紧时头部被平滑拉回。限位表与判据见 `handoff/FOCUS-ZOOM.md`，离线重算 `node --experimental-transform-types --no-warnings apps/voyage/handoff/FOCUS-ZOOM-limits.mts`
@@ -1028,4 +1035,11 @@ CPU：太阳 / 月亮位置、航线与航向、颠簸、天气调度（闪电�
   它按 16 ms 一帧推进 30 帧的模拟时间与曝光适应，a、b、a2 三张其实是三个不同时刻——自己换自己（master 着色器换 master 着色器）也有 5–48% 的像素差 > 8，夕阳场景连太阳眩光都不一样。
   绕法：`--pair` 的预设置 js 里写 `v.benchFrame = () => 0;`（截图 JSON 里的 frameMs 变成 0），噪声底立刻变成逐像素 0。另一个坑：`--base-shader` 不带 `--pair` 时整段被静默忽略，只拍普通截图。
   识别：a−a2 不是 0 就先别看 a−b。
+- **给面板按钮加方向键导航时，会顺带触发全局的航向转弯快捷键**（UX-5）：`ui.ts` 的 `ownsArrowKeys()` 只认
+  input / select / textarea / contentEditable「拥有」方向键，普通 `<button>` 不算——所以 `window` 上那个
+  `←/→` 转弯的 keydown 监听（飞机模式全局快捷键）在任何按钮拿到焦点时都会响应方向键。给分段按钮组（座位 / 舱等
+  / 舱内灯光 / 稀有度 / 流速……）加「方向键在组内移动并选中」时，如果只在按钮的 keydown 里 `preventDefault()`
+  而不 `stopPropagation()`，方向键会同时把飞机也转了（复现：聚焦分段按钮按 `→`，`v.state.heading` 跟着变）。
+  修法：`addSegmentedArrowNav()`（`src/ui.ts`）的 keydown 处理里两个都调用；以后任何新的按钮组方向键导航都要
+  照此办理。识别：新增按钮组的键盘导航后，测试脚本里加一句读 `v.state.heading` 是否被方向键顺带改了。
 - **`ab` / `gpu-ab` 变体里的 `js` 副作用不会被复原**（TW02 踩到）：工具只复原材质原文 / defines / uniform；`{"name":"off","js":"v.farTowers.enabled = false;"}` 之后按 ABBA 轮到 `cur` 时开关仍是关的，gpu-ab 量出「开 / 关一样快」的假结论。做法：每个变体都显式写全自己的状态（`cur` 也写 `enabled = true`）。识别：A/A 变体与基准一致、而「关」与「开」也一致时先怀疑这一条。

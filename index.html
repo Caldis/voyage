@@ -77,12 +77,20 @@
       <details id="section-view" class="panel-section" open>
         <summary><span class="section-title">观景</span></summary>
         <div class="section-body">
-          <label>座位
-            <select id="seat">
+          <!-- UX-5（PANEL_UX_GUIDE §4.1）：2–3 项互斥选项从下拉换成分段按钮。真正的数据源仍是紧跟着的隐藏
+               select（id / 选项 value 一个没改），分段按钮只是双向同步的可视化外壳——scripts/scenarios.mjs
+               的 applyScene、regression.playwright.js 照旧按 id 设 value + 派发 change，见 ui.ts bindSegmented -->
+          <div class="seg-field">
+            <span class="seg-label">座位</span>
+            <div id="seat-seg" class="segmented" role="group" aria-label="座位">
+              <button type="button" data-value="right" class="on">右侧靠窗</button>
+              <button type="button" data-value="left">左侧靠窗</button>
+            </div>
+            <select id="seat" hidden aria-hidden="true">
               <option value="right">右侧靠窗</option>
               <option value="left">左侧靠窗</option>
             </select>
-          </label>
+          </div>
           <label>视角
             <select id="view-preset"></select>
           </label>
@@ -96,28 +104,51 @@
             </select>
           </label>
           <label>遮光板 <output id="shade-out"></output><input id="shade" type="range" min="0" max="1" step="0.01" value="0" /></label>
-          <label>舱等 <output id="cabin-class-status"></output>
-            <!-- T25：切到另一档时后台编译它的着色器（首次约几秒），编好之前画面保持原来的舱等 -->
-            <select id="cabin-class">
+          <div class="seg-field">
+            <span class="seg-label">舱等 <output id="cabin-class-status"></output></span>
+            <!-- T25：切到另一档时后台编译它的着色器（首次约几秒），编好之前画面保持原来的舱等） -->
+            <div id="cabin-class-seg" class="segmented" role="group" aria-label="舱等">
+              <button type="button" data-value="business" class="on" title="皮革、胡桃木、氛围灯">商务舱</button>
+              <button type="button" data-value="economy" title="织物座椅、塑料侧壁、冷白灯">经济舱</button>
+            </div>
+            <select id="cabin-class" hidden aria-hidden="true">
               <option value="business" selected title="皮革、胡桃木、氛围灯">商务舱</option>
               <option value="economy" title="织物座椅、塑料侧壁、冷白灯">经济舱</option>
             </select>
-          </label>
-          <label>舱内灯光
+          </div>
+          <div class="seg-field">
+            <span class="seg-label">舱内灯光</span>
             <!-- 选项值沿用旧复选框的 true / false，回归脚本里的 "cabin-light": true / false 不用改 -->
-            <select id="cabin-light">
+            <div id="cabin-light-seg" class="segmented" role="group" aria-label="舱内灯光">
+              <button type="button" data-value="true" class="on">开</button>
+              <button type="button" data-value="false" title="主灯关、氛围灯开">睡眠</button>
+              <button type="button" data-value="off" title="只剩阅读灯">全关</button>
+            </div>
+            <select id="cabin-light" hidden aria-hidden="true">
               <option value="true" selected>开</option>
               <option value="false">睡眠（主灯关、氛围灯开）</option>
               <option value="off">全关（只剩阅读灯）</option>
             </select>
-          </label>
+          </div>
           <!-- REFLECT-OFF：舷窗玻璃上的舱内倒影，默认关（用户嫌强）；观看偏好，只记用户亲手拖的值；URL ?reflect=0..1 优先 -->
           <label title="舷窗玻璃映出的舱内倒影（夜里开灯时最明显）。0 为关，100% 为物理强度；双击复位到关">窗上倒影 <output id="cabin-reflect-out"></output><input id="cabin-reflect" type="range" min="0" max="1" step="0.05" value="0" /></label>
           <button id="backdrop-on" type="button" title="隐藏面板，连续航程播放；按 Esc 或 B 退出">背景板模式 <kbd>B</kbd></button>
           <!-- 奇观模式（W01，research/WONDERS.md）：默认关；开了之后偶尔在远方出现不真实的东西，出现时不弹任何提示 -->
           <label class="check" title="偶尔在远方出现不真实的东西，出现时不弹任何提示"><input id="wonders-on" type="checkbox" />奇观模式</label>
           <div id="wonder-controls" hidden>
-            <label>稀有度 <output id="wonder-rarity-out"></output><input id="wonder-rarity" type="range" min="0" max="3" step="1" value="1" /></label>
+            <!-- UX-5：稀有度原是 0–3 的滑条（离散量不该用滑条，PANEL_UX_GUIDE §4.1），换成分段按钮；
+                 真正的数据源仍是隐藏的 #wonder-rarity（value 0–3 不变） -->
+            <div class="seg-field">
+              <span class="seg-label">稀有度</span>
+              <div id="wonder-rarity-seg" class="segmented" role="group" aria-label="稀有度">
+                <button type="button" data-value="0">罕见</button>
+                <button type="button" data-value="1" class="on">偶尔</button>
+                <button type="button" data-value="2">常见</button>
+                <button type="button" data-value="3">奇观巡礼</button>
+              </div>
+              <input id="wonder-rarity" type="range" min="0" max="3" step="1" value="1" hidden aria-hidden="true" />
+            </div>
+            <p id="wonder-rarity-out" class="hint"></p>
             <p id="wonder-status" class="hint"></p>
           </div>
         </div>
@@ -134,20 +165,24 @@
             <button id="now" type="button">现在</button>
           </div>
           <label>当地时刻 <span id="time-label"></span><input id="time" type="range" min="0" max="1439" step="1" /></label>
-          <div class="row rates" role="group" aria-label="时间流速">
-            <span>时间流速</span>
-            <button type="button" data-rate="0" class="on">暂停</button>
-            <button type="button" data-rate="1">1×</button>
-            <button type="button" data-rate="60">60×</button>
-            <button type="button" data-rate="600">600×</button>
-          </div>
           <!-- 连续航程 / 背景板模式（T19a）：到达终点上空直接接下一段航线，时间与飞行按航程流速一起走 -->
           <label class="check" title="自动接续东亚航线、随时间推进"><input id="voyage-on" type="checkbox" />连续航程</label>
-          <div id="voyage-rates" class="row rates" role="group" aria-label="航程流速" hidden>
-            <span>航程流速</span>
-            <button type="button" data-voyage-rate="1">1×</button>
-            <button type="button" data-voyage-rate="10">10×</button>
-            <button type="button" data-voyage-rate="60">60×</button>
+          <!-- UX-5（PANEL_UX_GUIDE §5.3 规则五）：「时间流速」与「航程流速」原是两行，连续航程开着时前一行
+               整行变灰；合并成一行「流速」，选项随连续航程开关变（关：暂停/1×/60×/600×；开：1×/10×/60×），
+               两组按钮谁可见由 ui.ts setupVoyageUi 的 sync() 切 hidden，不再是禁用变灰 -->
+          <div class="row rates" id="rate-group" role="group" aria-label="流速">
+            <span>流速</span>
+            <span id="rate-time" class="segmented-inline" role="group" aria-label="时间流速">
+              <button type="button" data-rate="0" class="on">暂停</button>
+              <button type="button" data-rate="1">1×</button>
+              <button type="button" data-rate="60">60×</button>
+              <button type="button" data-rate="600">600×</button>
+            </span>
+            <span id="rate-voyage" class="segmented-inline" role="group" aria-label="航程流速" hidden>
+              <button type="button" data-voyage-rate="1">1×</button>
+              <button type="button" data-voyage-rate="10">10×</button>
+              <button type="button" data-voyage-rate="60">60×</button>
+            </span>
           </div>
           <!-- 航向控制（T49，flight.ts 的自动驾驶 + director.ts）：默认「自动航线」（沿大圆航线、到达后接下一段）；
                左右转 / 航向滑块 = 手动航向，直飞机场到达后盘旋，盘旋 = 跑道形等待航线。转弯按真实客机：坡度 ≤ 25°、滚转约 3°/s -->
