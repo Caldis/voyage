@@ -922,7 +922,8 @@ float rainDensity(vec2 xz, float alt, vec2 center, float R, float lod) {
 // 也没有塔身、砧根投在砧盾上的影子；而且并不省——受光步进让砧底变暗，视线的透射率降得快、早停，
 // gpu-ab 反而比解析版快 6–12%（storm-day ×1.58 对 ×1.81，飑线 ×1.74 对 ×1.85）
 
-// 每个单体的常量（PERF-TW04 ④，storm-shield.ts 每帧在 CPU 上按 uStorms / uUpperWind 算好）：原来 anvilShield / anvilShadowOD /
+// 每个单体的常量（PERF-TW04 ④，storm-shield.ts 每帧在 CPU 上按 uStorms / uUpperWind 算好；其中的种子是 GPU 算好读回的，
+// stormHash22 是混沌哈希、CPU 模拟对不上，见 storm-shield.ts 文件头）：原来 anvilShield / anvilShadowOD /
 // stormTowersSdf 在每个样本、每个单体上重算一遍种子哈希（stormSeed2）、砧盾半轴（shieldAxes）、伴生塔的哈希与方位三角函数
 // （受光步进、占据网格、云影里各内联几份）。
 //  - 单体的种子 sd = stormHash22(R·7.13 + top·0.37, top·3.71 + R·1.9)：按半径与砧顶取（换原点时整体平移，按位置取哈希会让形状在换原点时跳变）；
