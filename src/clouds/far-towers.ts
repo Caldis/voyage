@@ -30,6 +30,17 @@ import { VIEW_COMMON } from "../render/view.glsl";
  * 山前 / 山后判断（T38 深度）都把它当作 400 km 处的云，不用改。
  * 冷编译：独立小程序、第一次需要时后台编译，不在启动批次、不碰窗外 / 云步进的任何变体（默认程序逐字不变）；
  * 没有远塔时整个 pass 不画，画面逐位不变。只画地平线附近的一条带（CPU 把每座塔的包围盒投影到屏幕，取并集当 scissor）。
+ *
+ * 云内闪电（TW-LTG）：热闪电——巡航高度常能看到几百公里外的雷暴一闪一闪照亮云塔内部，听不到雷声。每座已长出砧的塔
+ * （`anvil > 0.05`，还没到冰晶化阶段的浓积云塔不打闪）各自按独立的泊松节律触发（平均约 9 s 一次，`advanceFlashes`，
+ * 节律与衰减写法照抄 `weather.ts` 近处雷暴那一套：泊松间隔、一次 2–4 下回击、每下按各自的时间常数指数衰减）；
+ * 只在夜间 / 暮光（太阳高度 < −4°，从 `shared.uSunDir.y` 反算，与 main.ts 切换主光源到月光同一阈值）触发，白天恒为 0。
+ * 每次新的一串闪光在塔身内部重新随机取一个放电点（离轴 10–45% 半径、约 0.4–0.8 塔高，世界系水平偏移 + 绝对海拔），
+ * 同一串共用、串与串之间随机挪动，不会总在同一个地方亮。强度数组每帧由 CPU 算好塞进 `uFarD`（新增的第 4 个 per-塔
+ * uniform，不影响 A/B/C 与合成、scissor、编译预算），着色器里只在塔身 / 砧的受光公式后加一个像点光源在散射介质里
+ * 的经验衰减项（`exp(-fd/尺度)/(1+fd²)`，与 `clouds.ts` 里近处雷暴照亮云体的公式同一形式，`fd` = 着色点到放电点的
+ * 3D 距离），色调冷白偏紫、随距离自然软化，砧底同一份强度也照一份。截图 / 回归默认关（`hold`/`heldIntensity`，
+ * 与 `weather.ts` 同名同义，`dev-browser.mjs` 的 `setFlashDisabled` 会一并设置），`--allow-flash` 恢复正常泊松。
  */
 
 /** 远景层最多画几座塔（uniform 数组长度）。按离相机的距离挑最近的；只挑相机朝向 ±FAR_VIEW_DEG 以内的 */
@@ -74,6 +85,9 @@ uniform int uFarCount;
 uniform vec4 uFarA[${FAR_MAX}];
 uniform vec4 uFarB[${FAR_MAX}];
 uniform vec4 uFarC[${FAR_MAX}];
+// 云内闪电（TW-LTG）：(强度 0..~2、衰减中、CPU 每帧按泊松节律算好, 放电点相对塔心的世界系水平偏移 x km,
+//                       放电点相对塔心的世界系水平偏移 z km, 放电点绝对海拔 km)。强度为 0 时不产生任何贡献（默认逐位不变）
+uniform vec4 uFarD[${FAR_MAX}];
 varying vec2 vUv;
 
 // 厚积雨云的有效反照率（πL/E，受光面）：与体积云受光云顶 p90 ≈ 0.75 的标定同量级（C01）
@@ -81,6 +95,17 @@ const float FT_ALBEDO = 0.78;
 // 砧（冰晶云）的消光（1/km）：几十公里的水平弦长上光学厚度十几，中部不透明、边缘弦长短处半透明
 const float FT_ANVIL_SIGMA = 0.45;
 const float FT_BASE = 1.3;   // 云底（km）
+// 云内闪电：源色冷白偏紫（B 明显高于 R/G）。FT_FLASH_R 是塔身散射把放电点的光晕开的经验尺度（与 clouds.ts 里
+// 近处雷暴照亮云体的 1.5 km 同数量级，远塔个头更大取 2.2 km）。
+// 实测坑（见 handoff/TW-LTG.md「颜色标定」）：这份颜色只是「放电点自己的色」，塔在 200+ km 外时，从塔到相机这段
+// 空气透视会把蓝分量吃掉大半（同一物理已经在把整座塔染暖，见文件头坑三 / NIGHT-AP-1），紫调走到相机这里几乎全部
+// 褪成暖白——越近（贴着 170 km）越看得出偏紫，越远越接近纯白，这是物理结果，不是又一个待修的偏色。
+// FT_FLASH_K：夜里满月照度量级只有 3e-4（klux，magnitudeToKlux），CPU 侧闪光强度是 0..~1.4 的抽象单位，
+// 直接相加会比周围亮上千倍、把曝光冲穿成一团失色的白斑；也不能纯靠调暗（暗到贴近背景就看不出「亮起」了）。
+// 压到这个量级后，闪光处比未闪的塔亮出一大截、边缘仍软（核心亮部小范围过曝，属可接受的核心过曝，不是全屏死白）
+const vec3 FT_FLASH_COLOR = vec3(0.6, 0.62, 1.25);
+const float FT_FLASH_K = 0.7;
+const float FT_FLASH_R = 2.2;
 
 float ftHash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -163,6 +188,7 @@ void main() {
     vec4 A = uFarA[i];
     vec4 B = uFarB[i];
     vec4 C = uFarC[i];
+    vec4 D = uFarD[i];
     vec2 rel = A.xy;
     float R = A.z;
     float top = A.w;
@@ -248,6 +274,13 @@ void main() {
           vec3 Lr = 0.5 / M_PI * (Esky * 0.6 + Ek * 0.2 * max(mu, 0.0));
           Lc = mix(Lr, Lc, aC / aTot);
           aC = aTot;
+          // 云内闪电：塔身内部某处的放电点被塔身散射后从里面照亮这一片表面，越近越亮、边缘随距离软化（经验扩散项，
+          // 与 clouds.ts 近处雷暴照亮云体同一形式）；D.x 白天恒为 0（CPU 侧按太阳高度门控），这里不用再判一次
+          if (D.x > 1e-4) {
+            vec3 Pf = vec3(rel.x + D.y, D.w, rel.y + D.z);
+            float fd = length(vec3(P.x, h, P.z) - Pf);
+            Lc += FT_FLASH_COLOR * D.x * FT_FLASH_K * exp(-fd / FT_FLASH_R) / (1.0 + fd * fd * 0.05);
+          }
         }
       }
     }
@@ -310,6 +343,12 @@ void main() {
             La = FT_ALBEDO / M_PI * (Ek * diffA + Esky * (0.55 + 0.25 * v));
             // 薄的外缘背光时透亮
             La += Ek * ftHg(cosV, 0.85) * 0.4 * smoothstep(0.5, 0.95, cosV) * (1.0 - aA);
+            // 云内闪电：砧底也是同一次放电照到的一部分（放电点常年就在塔顶下方一截，离砧底最近）
+            if (D.x > 1e-4) {
+              vec3 Pf = vec3(rel.x + D.y, D.w, rel.y + D.z);
+              float fd = length(vec3(PA.x, am, PA.z) - Pf);
+              La += FT_FLASH_COLOR * D.x * FT_FLASH_K * exp(-fd / FT_FLASH_R) / (1.0 + fd * fd * 0.05);
+            }
           }
         }
       }
@@ -347,6 +386,7 @@ export function createFarTowerMaterial(shared: Record<string, THREE.IUniform>, a
       uFarA: { value: vec4s() },
       uFarB: { value: vec4s() },
       uFarC: { value: vec4s() },
+      uFarD: { value: vec4s() },
     },
     depthTest: false,
     depthWrite: false,
@@ -383,6 +423,35 @@ const smooth = (a: number, b: number, x: number) => {
   const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
   return t * t * (3 - 2 * t);
 };
+
+/** 云内闪电（TW-LTG）：一座塔当前这一串回击 */
+interface FlashStroke {
+  /** 触发时刻（FarTowers.clock，累计挂钟秒） */
+  t0: number;
+  intensity: number;
+  /** 这一下的衰减时间常数（秒），50–200 ms（研究要求的单下持续区间） */
+  decay: number;
+}
+
+/** 云内闪电：一座塔的泊松状态（按 id 持久化，塔对象本身每帧重建） */
+interface FlashState {
+  /** 下一次自动触发的挂钟时刻 */
+  next: number;
+  /** 当前放电点相对塔心的世界系水平偏移（km），串内共用、串间随机换 */
+  fx: number;
+  fz: number;
+  /** 当前放电点绝对海拔（km） */
+  fh: number;
+  strokes: FlashStroke[];
+}
+
+/** 泊松间隔（秒）：平均 9 s 一次，比近处雷暴的 5 s 稍稀——地平线外的远塔本来就没那么显眼 */
+const FAR_FLASH_MEAN_S = 9;
+const flashInterval = () => -Math.log(1 - Math.random()) * FAR_FLASH_MEAN_S;
+/** 淘汰早已衰减到看不见的回击（強度对时间常数的比值最大也就几个 e 折，0.6 s 足够保守） */
+const FLASH_STROKE_TTL_S = 0.6;
+/** 只有长出砧（开始冰晶化）的塔才会打闪；纯浓积云塔（anvil = 0）不打 */
+const FLASH_MIN_ANVIL = 0.05;
 
 /** 一座远塔这一帧的几何（本地坐标、相对相机，km；调试 / 截图读 `__voyage.farTowers.towers`） */
 export interface FarTower {
@@ -421,6 +490,15 @@ export class FarTowers {
   private readonly tmp = new THREE.Vector3();
   private readonly c2wT = new THREE.Matrix3();
   private readonly camT = new THREE.Matrix3();
+  /** 云内闪电（TW-LTG）：调试 / 截图关闪开关，命名与语义照抄 `weather.ts`（`hold` 时强度钉在 `heldIntensity`，
+   *  不再衰减也不触发新的闪光）。`scripts/dev-browser.mjs` 的 `setFlashDisabled` 会和 `weather.hold` 一起设它，
+   *  `shots` 默认截图因此也默认关远塔的闪电；`--allow-flash` 保留旧行为（正常按泊松过程闪） */
+  hold = false;
+  heldIntensity = 0;
+  /** 闪电节律的累计挂钟秒（真实时间，不受模拟时间倍率影响，和 weather.ts 近处雷暴同一口径） */
+  private clock = 0;
+  /** 每座塔的泊松状态，按 id 持久化（towers 数组每帧重建，id 不变） */
+  private readonly flashState = new Map<string, FlashState>();
 
   constructor(
     private readonly renderer: THREE.WebGLRenderer,
@@ -530,12 +608,96 @@ export class FarTowers {
       C[i].set(t.col, t.anvil, t.seed, t.fade * this.fadeIn);
     });
     u.uFarCount.value = this.towers.length;
+    this.advanceFlashes(dtS);
     if (!this.computeScissor(w, h)) return;
     raw.scissorTest = true;
     raw.scissor.copy(this.scissor);
     this.pass.render(this.mat, raw);
     raw.scissorTest = false;
     this.active = true;
+  }
+
+  /**
+   * 云内闪电（TW-LTG）：每帧按泊松节律推进每座塔的闪光状态，结果写进 `uFarD`。只在夜间 / 暮光（太阳高度 < −4°，
+   * 从 `shared.uSunDir.y` 反算 asin，和 main.ts 切换主光源到月光同一阈值）触发；白天、关着（`enabled = false`）、
+   * `hold` 时都直接写 0（或 `heldIntensity`），不推进泊松计时——和 `weather.ts` 的 `hold` 一样，恢复后按已经走到的
+   * 挂钟时刻续。dtS 是 `render()` 已经算好的真实帧间隔（秒），按 0.5 s 夹一下：恢复一个长时间冻结 / 切后台的标签页时
+   * 一次性推进太久会让好几座塔的泊松计时同时「补触发」，挤成一次不自然的齐闪
+   */
+  private advanceFlashes(dtS: number) {
+    this.clock += Math.min(dtS, 0.5);
+    const D = this.mat.uniforms.uFarD.value as THREE.Vector4[];
+    const ids = new Set(this.towers.map((t) => t.id));
+    for (const id of this.flashState.keys()) if (!ids.has(id)) this.flashState.delete(id);
+    if (this.hold) {
+      this.towers.forEach((t, i) => {
+        const eligible = t.anvil > FLASH_MIN_ANVIL;
+        D[i].set(eligible ? this.heldIntensity : 0, 0, 0, 2 + (t.top - 2) * 0.6);
+      });
+      return;
+    }
+    const sunDirY = (this.shared.uSunDir.value as THREE.Vector3).y;
+    const nightOk = Math.asin(Math.min(Math.max(sunDirY, -1), 1)) * (180 / Math.PI) < -4;
+    this.towers.forEach((t, i) => {
+      if (!nightOk || t.anvil <= FLASH_MIN_ANVIL) {
+        D[i].set(0, 0, 0, 0);
+        return;
+      }
+      let st = this.flashState.get(t.id);
+      if (!st) {
+        st = { next: this.clock + flashInterval(), fx: 0, fz: 0, fh: 0, strokes: [] };
+        this.flashState.set(t.id, st);
+      }
+      if (this.clock >= st.next) {
+        st.next = this.clock + flashInterval();
+        this.newFlashChannel(st, t);
+      }
+      D[i].set(this.sumFlash(st), st.fx, st.fz, st.fh);
+    });
+  }
+
+  /** 一串新的回击（2–4 下）：位置在塔身内部重新随机取，串内共用、串间才换（真实闪电同一串沿差不多的通道走） */
+  private newFlashChannel(st: FlashState, t: FarTower) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = t.R * (0.1 + 0.35 * Math.random());
+    st.fx = Math.cos(ang) * rad;
+    st.fz = Math.sin(ang) * rad;
+    // 电荷分离带大致在塔身中上部（约 0.4–0.8 塔高），比穹顶低、比云底高
+    st.fh = 2 + (t.top - 2) * (0.4 + 0.4 * Math.random());
+    const n = 2 + Math.floor(Math.random() * 3); // 2..4 下
+    for (let k = 0; k < n; k++) {
+      st.strokes.push({ t0: this.clock + k * (0.05 + Math.random() * 0.08), intensity: 0.7 + Math.random() * 0.7, decay: 0.05 + Math.random() * 0.15 });
+    }
+  }
+
+  /** 这一帧的合成强度：还没触发的（t0 在未来）按 0 算，已经触发的按各自的时间常数指数衰减，叠加（同一串的回击会短暂重叠变亮） */
+  private sumFlash(st: FlashState): number {
+    st.strokes = st.strokes.filter((k) => this.clock - k.t0 < FLASH_STROKE_TTL_S);
+    let intensity = 0;
+    for (const k of st.strokes) {
+      const age = this.clock - k.t0;
+      if (age >= 0) intensity += k.intensity * Math.exp(-age / k.decay);
+    }
+    return intensity;
+  }
+
+  /**
+   * 调试：立刻在（给定 id 的 / 列表里第一座已长出砧的）塔上触发一串闪光，按正常节律衰减（不经过 hold，省得等平均
+   * 9 s 的泊松间隔）。白天 / 暮光未到（太阳高度 ≥ −4°）时这一串不会显示（和自动触发一样受夜间门控），仅供夜景截图 /
+   * 回归用：`await __voyage.farTowers.flashNow()`，或按 id 指定某一座
+   */
+  flashNow(id?: string): boolean {
+    const t = id ? this.towers.find((x) => x.id === id) : this.towers.find((x) => x.anvil > FLASH_MIN_ANVIL);
+    if (!t) return false;
+    let st = this.flashState.get(t.id);
+    if (!st) {
+      st = { next: 0, fx: 0, fz: 0, fh: 0, strokes: [] };
+      this.flashState.set(t.id, st);
+    }
+    st.strokes = [];
+    this.newFlashChannel(st, t);
+    st.next = this.clock + flashInterval();
+    return true;
   }
 
   /**

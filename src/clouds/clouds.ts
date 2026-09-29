@@ -6,8 +6,9 @@ import type { FullscreenPass } from "../render/pass";
 import { LIGHTS_COMMON } from "../render/lights.glsl";
 import { VIEW_COMMON } from "../render/view.glsl";
 import { createWonderCloudUniforms, wonderCloudGlsl, wonderMarchGlsl } from "../wonders/wonder-cloud.glsl";
-import { CLOUD_COMMON, CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES, OCC_LAYERS, OCC_N, OCC_SPACING } from "./clouds.glsl";
+import { CLOUD_COMMON, CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES, OCC_LAYERS, OCC_N, OCC_SPACING, STORM_HASH22_GLSL } from "./clouds.glsl";
 import { LENTICULAR_GLSL } from "./lenticular.glsl";
+import { type StormSeeds, updateShieldUniforms } from "./storm-shield";
 import type { CloudNoise } from "./noise";
 import { BLUE_NOISE_RG8_BASE64, BLUE_NOISE_SIZE } from "./blue-noise";
 
@@ -193,17 +194,47 @@ bool cloudHurOn() {
   return false;
 #endif
 }
+#ifdef CLOUD_STORM
+// TW04：砧盾那一段（足迹 × 砧顶附近的高度层 [砧顶 − SHIELD_BELOW, 砧顶 + SHIELD_ABOVE]）的包络。
+// 单独一段而不并进雷暴包围柱：巡航高度常在砧的高度层里，往下看的视线出了这一层以后到层状云之间整段是空的，
+// 并成一段就跳不过去了。
+// PERF-TW04：足迹用 CPU 拟合的外接椭圆（uShieldEll，storm-shield.ts；轴沿高空风，二次方程精确求交），
+// 不再用扇形的外接圆（半径最大约 85–90 km，扇形只占其中约 1/3，上风半圆几乎全空）：
+// 巡航高度就在砧的高度层里，视线只要穿过那个大圆就整条走天气路径、在砧盾段里一路空步。足迹外 anvilShield 严格为 0，画面不变
+vec2 cloudRayShieldSpan(vec3 ro, vec3 rd) {
+  vec2 span = vec2(1e9, -1e9);
+  vec2 W = uUpperWind;
+  vec2 Pp = vec2(-W.y, W.x);
+  for (int i = 0; i < uStormCount; i++) {
+    vec4 e = uShieldEll[i];
+    // 视线的水平投影是直线 xz = rd.xz · t（相机相对坐标），换到椭圆坐标（轴沿风向、按半轴归一）后解 |o + dv·t| = 1
+    vec2 rel = uCloudOffset - e.xy;
+    vec2 o = vec2(dot(rel, W), dot(rel, Pp)) * e.zw;
+    vec2 dv = vec2(dot(rd.xz, W), dot(rd.xz, Pp)) * e.zw;
+    float a = max(dot(dv, dv), 1e-12);
+    float b = dot(o, dv);
+    float disc = b * b - a * (dot(o, o) - 1.0);
+    if (disc < 0.0) continue;
+    float sq = sqrt(disc);
+    float top = uStorms[i].w;
+    vec2 hs = cloudShellIntervalH(ro, rd, top - SHIELD_BELOW, top + SHIELD_ABOVE);
+    vec2 s = vec2(max((-b - sq) / a, hs.x), min((-b + sq) / a, hs.y));
+    if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
+  }
+  return span;
+}
+#endif
 bvec2 cloudRayNearWeather(vec3 rd, vec2 seg) {
   bool nearAny = false;
 #ifdef CLOUD_STORM
   for (int i = 0; i < uStormCount; i++) {
     vec4 c = uStorms[i];
     if (cloudRayDist2D(rd, seg, c.xy) < c.z * 7.5 + WEATHER_LIGHT_REACH) nearAny = true;
-    // 砧盾（TW04）向下风铺开上百公里：视线从它下面 / 里面穿过也算够得着（砧盾是软边、解析受光，
-    // 只让视线走到砧的高度，塔身的表面细化只在碰到塔时发生）
-    vec3 sc = shieldCircle(c);
-    if (cloudRayDist2D(rd, seg, sc.xy) < sc.z) nearAny = true;
   }
+  // 砧盾（TW04）向下风铺开上百公里：视线穿过它所在的那一段（足迹 × 高度层）也算够得着（砧盾是软边、不做表面细化，
+  // 受光按样本点选路径）。PERF-TW04：按外接椭圆 × 高度层判断，见 cloudRayShieldSpan
+  vec2 sh = cloudRayShieldSpan(vec3(0.0, uCamR, 0.0), rd);
+  if (max(sh.x, seg.x) < min(sh.y, seg.y)) nearAny = true;
 #endif
   bool nearHur = cloudHurOn() && cloudRayDist2D(rd, seg, uHurricane.xy) < uHurricane.z * 18.0 + WEATHER_LIGHT_REACH;
   return bvec2(nearAny || nearHur, nearHur);
@@ -236,26 +267,6 @@ vec2 cloudRayWeatherSpan(vec3 ro, vec3 rd) {
     if (h2 < 0.0) continue;
     float hw = sqrt(h2 / a);
     vec2 hs = cloudShellIntervalH(ro, rd, uShellBottom, c.w + 1.8);
-    vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
-    if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
-  }
-  return span;
-}
-// TW04：砧盾那一段（外接圆 × 砧顶附近的高度层 [砧顶 − SHIELD_BELOW, 砧顶 + SHIELD_ABOVE]）的包络。
-// 单独一段而不并进上面的包围柱：巡航高度常在砧的高度层里，往下看的视线出了这一层以后到层状云之间整段是空的，
-// 并成一段就跳不过去了
-vec2 cloudRayShieldSpan(vec3 ro, vec3 rd) {
-  vec2 span = vec2(1e9, -1e9);
-  float a = max(dot(rd.xz, rd.xz), 1e-8);
-  for (int i = 0; i < uStormCount; i++) {
-    vec4 c = uStorms[i];
-    vec3 sc = shieldCircle(c);
-    vec2 rel = sc.xy - uCloudOffset;
-    float tc = dot(rel, rd.xz) / a;
-    float h2 = sc.z * sc.z - (dot(rel, rel) - tc * tc * a);
-    if (h2 < 0.0) continue;
-    float hw = sqrt(h2 / a);
-    vec2 hs = cloudShellIntervalH(ro, rd, c.w - SHIELD_BELOW, c.w + SHIELD_ABOVE);
     vec2 s = vec2(max(tc - hw, hs.x), min(tc + hw, hs.y));
     if (s.y > s.x) span = vec2(min(span.x, s.x), max(span.y, s.y));
   }
@@ -1175,7 +1186,7 @@ void main() {
       vec4 c = uStorms[i];
       vec2 dd = xz - c.xy;
       if (dot(dd, dd) > c.z * c.z * 56.0) continue;
-      d = max(d, stormDensity(c, xz, alt, lod, false, ao));
+      d = max(d, stormDensity(i, c, xz, alt, lod, false, ao));
     }
     // 砧盾（TW04）：云步进先查网格，网格里没登记的话整片砧盾被当成空白跳过
     if (uStormCount > 0) d = max(d, anvilShield(xz, alt, lod, false));
@@ -1223,6 +1234,20 @@ void main() {
     T = exp(-od * dt * CLOUD_EXTINCTION);
   }
   gl_FragColor = T;
+}
+`;
+
+// 雷暴单体的种子（PERF-TW04，见 storm-shield.ts）：5×4 个像素，第 i 行是第 i 个单体，第 0 列 sd = stormSeed2(c)，第 k + 1 列是伴生塔 k 的 hk。
+// 式子与改动前着色器里逐样本算的逐字相同（stormSeed2 / stormTowersSdf 的伴生塔循环），读回后由 CPU 写进 uStormSd / uSatA / uSatB 等
+const STORM_SEED_FRAG = /* glsl */ `
+uniform vec4 uStorms[4];
+${STORM_HASH22_GLSL}
+vec2 stormSeed2(vec4 c) { return stormHash22(vec2(c.z * 7.13 + c.w * 0.37, c.w * 3.71 + c.z * 1.9)); }
+void main() {
+  ivec2 ij = ivec2(gl_FragCoord.xy);
+  vec2 sd = stormSeed2(uStorms[ij.y]);
+  int k = ij.x - 1;
+  gl_FragColor = vec4(k < 0 ? sd : stormHash22(sd * 37.1 + float(k) * 1.37), 0.0, 1.0);
 }
 `;
 
@@ -1287,6 +1312,14 @@ export function createCloudUniforms(noise: CloudNoise) {
     uShellTop: { value: 3.4 },
     uStormCount: { value: 0 },
     uStorms: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
+    // 雷暴单体的常量（PERF-TW04，storm-shield.ts 每帧按 uStorms / uUpperWind 写；只有雷暴变体声明）：
+    // 砧盾足迹的外接椭圆、砧盾参数、主塔种子、伴生塔
+    uShieldEll: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(0, 0, 1, 1)) },
+    uShieldP: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(0, 0, 1, 1)) },
+    uShieldQ: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
+    uStormSd: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
+    uSatA: { value: Array.from({ length: 16 }, () => new THREE.Vector4(0, 0, 0, 1)) },
+    uSatB: { value: Array.from({ length: 16 }, () => new THREE.Vector4()) },
     uUpperWind: { value: new THREE.Vector2(0.8, 0.6) },
     uHurricane: { value: new THREE.Vector4(0, 0, 20, 0) },
     uFlash: { value: new THREE.Vector4() },
@@ -1490,6 +1523,32 @@ export class Clouds {
   private readonly resolveMat: THREE.ShaderMaterial;
   // ---- 雷暴 / 台风的占据网格（PERF-2）----
   private readonly occMat: THREE.ShaderMaterial;
+  // 雷暴单体种子的 GPU 计算与读回（PERF-TW04，见 updateStormSeeds）
+  private stormSeedMatLazy: THREE.ShaderMaterial | null = null;
+  private readonly stormSeedTarget = new THREE.WebGLRenderTarget(5, 4, {
+    type: THREE.FloatType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    depthBuffer: false,
+  });
+  private readonly stormSeedBuf = new Float32Array(5 * 4 * 4);
+  private readonly stormSeeds: StormSeeds[] = [0, 1, 2, 3].map(() => ({ sd: [0, 0] as [number, number], hk: [[0, 0], [0, 0], [0, 0], [0, 0]] as Array<[number, number]> }));
+  private stormSeedKey = "";
+  private get stormSeedMat() {
+    if (!this.stormSeedMatLazy) {
+      this.stormSeedMatLazy = new THREE.ShaderMaterial({
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+        vertexShader: FULLSCREEN_VERT,
+        fragmentShader: STORM_SEED_FRAG,
+        uniforms: { uStorms: this.uniforms.uStorms },
+      });
+      this.stormSeedMatLazy.name = "cloud-storm-seed";
+    }
+    return this.stormSeedMatLazy;
+  }
   /** 前台（步进正在查的）和后台（正在分帧重建的）两张网格 */
   private occ = [occTarget(), occTarget()];
   /** 前台网格对应的天气签名（雷暴、台风、高空风、云壳高度）；天气一变前台立刻作废 */
@@ -2004,6 +2063,28 @@ export class Clouds {
     mu.uOccValid.value = 1;
   }
 
+  /**
+   * 雷暴单体的种子（PERF-TW04，见 storm-shield.ts）：单体的半径 / 砧顶变了（新摆雷暴、面板切天气）才在 GPU 上算一次、同步读回
+   * （5×4 个像素，一次几十微秒的等待；平时每帧只比一次键）。种子是混沌哈希，必须用 GPU 的结果，CPU 模拟对不上
+   */
+  private updateStormSeeds() {
+    const u = this.uniforms;
+    const n = u.uStormCount.value;
+    const key = u.uStorms.value.slice(0, n).map((v) => `${v.z},${v.w}`).join(";");
+    if (key === this.stormSeedKey) return;
+    this.stormSeedKey = key;
+    const renderer = this.pass.renderer;
+    const prev = renderer.getRenderTarget();
+    this.pass.render(this.stormSeedMat, this.stormSeedTarget);
+    renderer.readRenderTargetPixels(this.stormSeedTarget, 0, 0, 5, 4, this.stormSeedBuf);
+    renderer.setRenderTarget(prev);
+    const b = this.stormSeedBuf;
+    for (let i = 0; i < 4; i++) {
+      const at = (k: number): [number, number] => [b[(i * 5 + k) * 4], b[(i * 5 + k) * 4 + 1]];
+      this.stormSeeds[i] = { sd: at(0), hk: [at(1), at(2), at(3), at(4)] };
+    }
+  }
+
   /** 每几帧调用一次：在 GPU 上算飞机位置的云密度，异步读回（不阻塞渲染） */
   probe(renderer: THREE.WebGLRenderer, heading: THREE.Vector3) {
     this.ensureAuxCompiled(renderer);
@@ -2113,6 +2194,10 @@ export class Clouds {
    */
   render(motion: THREE.Vector3, camBasis: THREE.Matrix3, cabinToWorld: THREE.Matrix3) {
     cumulusShape(this.uniforms);
+    if (this.uniforms.uStormCount.value > 0) {
+      this.updateStormSeeds();
+      updateShieldUniforms(this.uniforms, (i) => this.stormSeeds[i]);
+    }
     this.updateOccupancy();
     this.updateShadow();
     this.marchMat.uniforms.uFrame.value = this.frame++ % 64;

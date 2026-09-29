@@ -1,0 +1,5 @@
+[
+  {"name": "pre", "materials": {"clouds.marchMat": "base"}},
+  {"name": "cur"},
+  {"name": "pre2", "materials": {"clouds.marchMat": "base"}}
+]

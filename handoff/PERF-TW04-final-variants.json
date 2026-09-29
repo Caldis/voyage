@@ -1,0 +1,6 @@
+[
+  {"name": "old", "materials": {"clouds.marchMat": "base"}},
+  {"name": "cur"},
+  {"name": "circ", "patch": {"clouds.marchMat": [["    vec4 e = uShieldEll[i];", "    vec4 sp = uShieldP[i];\n    float rc = (sp.z + sp.w) * 0.5 + uStorms[i].z * 2.5 + 8.0;\n    vec4 e = vec4(sp.xy + uUpperWind * (sp.z - sp.w) * 0.5, 1.0 / rc, 1.0 / rc);"]]}},
+  {"name": "old2", "materials": {"clouds.marchMat": "base"}}
+]
