@@ -1,0 +1,86 @@
+[
+ {
+  "name": "sw-storm-day",
+  "scene": "storm-day",
+  "crop": [
+   380,
+   0,
+   840,
+   1180
+  ],
+  "variants": [
+   {
+    "name": "orig",
+    "js": "if(!window.__Sd) window.__Sd=v.weather.storms.map(s=>({...s})); v.weather.storms=window.__Sd.map(s=>({...s})); v.weather.syncUniforms(); return v.weather.storms.length;"
+   },
+   {
+    "name": "off",
+    "js": "if(!window.__Sd) window.__Sd=v.weather.storms.map(s=>({...s})); v.weather.removeStorms(()=>true); v.weather.syncUniforms(); return v.weather.storms.length;"
+   },
+   {
+    "name": "edgeP",
+    "js": "if(!window.__Sd) window.__Sd=v.weather.storms.map(s=>({...s})); const W=v.director.weather; const [px,pz]=W.host.localPos(); let best=null; for(let d=0; d<=180; d+=1){ const a=1*d*Math.PI/180, c=Math.cos(a), s=Math.sin(a); const S=window.__Sd.map(q=>{const dx=q.x-px, dz=q.z-pz; return {...q, x:px+dx*c-dz*s, z:pz+dx*s+dz*c};}); if(W.outOfView(S.map(q=>({x:q.x,z:q.z,r:q.radius*2.5})))){best={d,S};break;} } v.weather.storms=best.S; v.weather.syncUniforms(); return 'rot '+best.d+' n '+best.S.length;"
+   },
+   {
+    "name": "edgeM",
+    "js": "if(!window.__Sd) window.__Sd=v.weather.storms.map(s=>({...s})); const W=v.director.weather; const [px,pz]=W.host.localPos(); let best=null; for(let d=0; d<=180; d+=1){ const a=-1*d*Math.PI/180, c=Math.cos(a), s=Math.sin(a); const S=window.__Sd.map(q=>{const dx=q.x-px, dz=q.z-pz; return {...q, x:px+dx*c-dz*s, z:pz+dx*s+dz*c};}); if(W.outOfView(S.map(q=>({x:q.x,z:q.z,r:q.radius*2.5})))){best={d,S};break;} } v.weather.storms=best.S; v.weather.syncUniforms(); return 'rot '+best.d+' n '+best.S.length;"
+   }
+  ]
+ },
+ {
+  "name": "sw-storm-sc",
+  "scene": "storm-sc",
+  "crop": [
+   380,
+   0,
+   840,
+   1180
+  ],
+  "variants": [
+   {
+    "name": "orig",
+    "js": "if(!window.__Ssc) window.__Ssc=v.weather.storms.map(s=>({...s})); v.weather.storms=window.__Ssc.map(s=>({...s})); v.weather.syncUniforms(); return v.weather.storms.length;"
+   },
+   {
+    "name": "off",
+    "js": "if(!window.__Ssc) window.__Ssc=v.weather.storms.map(s=>({...s})); v.weather.removeStorms(()=>true); v.weather.syncUniforms(); return v.weather.storms.length;"
+   },
+   {
+    "name": "edgeP",
+    "js": "if(!window.__Ssc) window.__Ssc=v.weather.storms.map(s=>({...s})); const W=v.director.weather; const [px,pz]=W.host.localPos(); let best=null; for(let d=0; d<=180; d+=1){ const a=1*d*Math.PI/180, c=Math.cos(a), s=Math.sin(a); const S=window.__Ssc.map(q=>{const dx=q.x-px, dz=q.z-pz; return {...q, x:px+dx*c-dz*s, z:pz+dx*s+dz*c};}); if(W.outOfView(S.map(q=>({x:q.x,z:q.z,r:q.radius*2.5})))){best={d,S};break;} } v.weather.storms=best.S; v.weather.syncUniforms(); return 'rot '+best.d+' n '+best.S.length;"
+   },
+   {
+    "name": "edgeM",
+    "js": "if(!window.__Ssc) window.__Ssc=v.weather.storms.map(s=>({...s})); const W=v.director.weather; const [px,pz]=W.host.localPos(); let best=null; for(let d=0; d<=180; d+=1){ const a=-1*d*Math.PI/180, c=Math.cos(a), s=Math.sin(a); const S=window.__Ssc.map(q=>{const dx=q.x-px, dz=q.z-pz; return {...q, x:px+dx*c-dz*s, z:pz+dx*s+dz*c};}); if(W.outOfView(S.map(q=>({x:q.x,z:q.z,r:q.radius*2.5})))){best={d,S};break;} } v.weather.storms=best.S; v.weather.syncUniforms(); return 'rot '+best.d+' n '+best.S.length;"
+   }
+  ]
+ },
+ {
+  "name": "sw-storm-sc-low",
+  "scene": "storm-sc-low",
+  "crop": [
+   380,
+   0,
+   840,
+   1180
+  ],
+  "variants": [
+   {
+    "name": "orig",
+    "js": "if(!window.__Sscl) window.__Sscl=v.weather.storms.map(s=>({...s})); v.weather.storms=window.__Sscl.map(s=>({...s})); v.weather.syncUniforms(); return v.weather.storms.length;"
+   },
+   {
+    "name": "off",
+    "js": "if(!window.__Sscl) window.__Sscl=v.weather.storms.map(s=>({...s})); v.weather.removeStorms(()=>true); v.weather.syncUniforms(); return v.weather.storms.length;"
+   },
+   {
+    "name": "edgeP",
+    "js": "if(!window.__Sscl) window.__Sscl=v.weather.storms.map(s=>({...s})); const W=v.director.weather; const [px,pz]=W.host.localPos(); let best=null; for(let d=0; d<=180; d+=1){ const a=1*d*Math.PI/180, c=Math.cos(a), s=Math.sin(a); const S=window.__Sscl.map(q=>{const dx=q.x-px, dz=q.z-pz; return {...q, x:px+dx*c-dz*s, z:pz+dx*s+dz*c};}); if(W.outOfView(S.map(q=>({x:q.x,z:q.z,r:q.radius*2.5})))){best={d,S};break;} } v.weather.storms=best.S; v.weather.syncUniforms(); return 'rot '+best.d+' n '+best.S.length;"
+   },
+   {
+    "name": "edgeM",
+    "js": "if(!window.__Sscl) window.__Sscl=v.weather.storms.map(s=>({...s})); const W=v.director.weather; const [px,pz]=W.host.localPos(); let best=null; for(let d=0; d<=180; d+=1){ const a=-1*d*Math.PI/180, c=Math.cos(a), s=Math.sin(a); const S=window.__Sscl.map(q=>{const dx=q.x-px, dz=q.z-pz; return {...q, x:px+dx*c-dz*s, z:pz+dx*s+dz*c};}); if(W.outOfView(S.map(q=>({x:q.x,z:q.z,r:q.radius*2.5})))){best={d,S};break;} } v.weather.storms=best.S; v.weather.syncUniforms(); return 'rot '+best.d+' n '+best.S.length;"
+   }
+  ]
+ }
+]

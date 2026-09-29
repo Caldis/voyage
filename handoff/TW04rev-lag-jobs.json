@@ -1,0 +1,74 @@
+[
+ {
+  "name": "lag-storm-sc",
+  "scene": "storm-sc",
+  "crop": [
+   400,
+   500,
+   700,
+   600
+  ],
+  "variants": [
+   {
+    "name": "orig",
+    "js": "if(!window.__Sc3) window.__Sc3=v.weather.storms.map(s=>({...s})); v.weather.storms=window.__Sc3.map(s=>({...s})); v.weather.syncUniforms(); return 1;"
+   },
+   {
+    "name": "off0",
+    "js": "if(!window.__Sc3) window.__Sc3=v.weather.storms.map(s=>({...s})); v.weather.removeStorms(()=>true); v.weather.syncUniforms(); await new Promise(r=>setTimeout(r,0)); return 0;"
+   },
+   {
+    "name": "orig2",
+    "js": "if(!window.__Sc3) window.__Sc3=v.weather.storms.map(s=>({...s})); v.weather.storms=window.__Sc3.map(s=>({...s})); v.weather.syncUniforms(); return 1;"
+   },
+   {
+    "name": "off3s",
+    "js": "if(!window.__Sc3) window.__Sc3=v.weather.storms.map(s=>({...s})); v.weather.removeStorms(()=>true); v.weather.syncUniforms(); await new Promise(r=>setTimeout(r,3000)); return 3000;"
+   },
+   {
+    "name": "orig3",
+    "js": "if(!window.__Sc3) window.__Sc3=v.weather.storms.map(s=>({...s})); v.weather.storms=window.__Sc3.map(s=>({...s})); v.weather.syncUniforms(); return 1;"
+   },
+   {
+    "name": "off8s",
+    "js": "if(!window.__Sc3) window.__Sc3=v.weather.storms.map(s=>({...s})); v.weather.removeStorms(()=>true); v.weather.syncUniforms(); await new Promise(r=>setTimeout(r,8000)); return 8000;"
+   }
+  ]
+ },
+ {
+  "name": "lag-storm-sc-low",
+  "scene": "storm-sc-low",
+  "crop": [
+   400,
+   500,
+   700,
+   600
+  ],
+  "variants": [
+   {
+    "name": "orig",
+    "js": "if(!window.__Scl3) window.__Scl3=v.weather.storms.map(s=>({...s})); v.weather.storms=window.__Scl3.map(s=>({...s})); v.weather.syncUniforms(); return 1;"
+   },
+   {
+    "name": "off0",
+    "js": "if(!window.__Scl3) window.__Scl3=v.weather.storms.map(s=>({...s})); v.weather.removeStorms(()=>true); v.weather.syncUniforms(); await new Promise(r=>setTimeout(r,0)); return 0;"
+   },
+   {
+    "name": "orig2",
+    "js": "if(!window.__Scl3) window.__Scl3=v.weather.storms.map(s=>({...s})); v.weather.storms=window.__Scl3.map(s=>({...s})); v.weather.syncUniforms(); return 1;"
+   },
+   {
+    "name": "off3s",
+    "js": "if(!window.__Scl3) window.__Scl3=v.weather.storms.map(s=>({...s})); v.weather.removeStorms(()=>true); v.weather.syncUniforms(); await new Promise(r=>setTimeout(r,3000)); return 3000;"
+   },
+   {
+    "name": "orig3",
+    "js": "if(!window.__Scl3) window.__Scl3=v.weather.storms.map(s=>({...s})); v.weather.storms=window.__Scl3.map(s=>({...s})); v.weather.syncUniforms(); return 1;"
+   },
+   {
+    "name": "off8s",
+    "js": "if(!window.__Scl3) window.__Scl3=v.weather.storms.map(s=>({...s})); v.weather.removeStorms(()=>true); v.weather.syncUniforms(); await new Promise(r=>setTimeout(r,8000)); return 8000;"
+   }
+  ]
+ }
+]

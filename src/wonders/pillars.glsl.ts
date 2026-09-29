@@ -257,8 +257,8 @@ vec3 wonderPillars(vec3 L, vec3 rd, float tLimit) {
     vec3 eSkyUp = skyIrradiance(min(rr, TOP), a) * (1.0 - smoothstep(40.0, 100.0, hq));
     vec3 eUp = 0.21 * (uSunIlluminance * max(dot(a, uSunDir), 0.0) + uMoonIlluminance * max(dot(a, uMoonDir), 0.0));
     // 空气透视：远柱更淡更蓝，柱脚埋在霾里、柱顶在稀薄的高空里清楚（大气分层是物理的，不另加）
-    vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, min(tk, AERIAL_MAX_DISTANCE));
-    vec3 apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
+    vec3 uvw = aerialPerspectiveUvw(rd, uApDir, min(tk, AERIAL_MAX_DISTANCE));
+    vec3 apL = texture(uAerialInscatterS, uvw).rgb * uApIlluminance;
     vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;
     // 相机到柱之间的内散射：月光那一路按「背景里线前面那段空气的比例」补（同天梯）；黄昏地影里的一段画成挡掉约 22% 天光的淡剪影
     vec3 frontFrac = 1.0 - apT;

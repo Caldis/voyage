@@ -396,8 +396,8 @@ vec3 orbitRing(vec3 L, vec3 rd, bool hitGround) {
     Lsky += vec3(1.0, 0.8, 0.55) * 2e-3 * ringBandsAA(altP, pixA * tP * inversesqrt(max(1.0 - dot(rd, aP) * dot(rd, aP), 1e-6)), 25.0, 0.5);
     vec3 Lpil = 0.3 / M_PI * uSunIlluminance * tS * perp * ph + Lsky;
     vec3 LpilR = 0.3 / M_PI * uSunIlluminance * tSR * perp * ph + Lsky; // 封顶比例按半影的参考透射率定（同环体）
-    vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, min(tP, AERIAL_MAX_DISTANCE));
-    vec3 apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
+    vec3 uvw = aerialPerspectiveUvw(rd, uApDir, min(tP, AERIAL_MAX_DISTANCE));
+    vec3 apL = texture(uAerialInscatterS, uvw).rgb * uApIlluminance;
     vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;
     // 月光那一路的内散射没有 LUT：按「背景里有多少比例的空气在支柱前面」近似（同 wonder-sky 的做法）
     vec3 fF = clamp((1.0 - apT) / max(1.0 - Ttop, vec3(1e-4)), 0.0, 1.0);

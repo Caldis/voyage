@@ -1,0 +1,11 @@
+[
+ {"name": "live-storm-day", "scene": "storm-day",
+  "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "cur2"}],
+  "live": {"crop": [400, 350, 800, 750], "frames": 240, "regions": {"砧": [0, 40, 800, 110], "塔身": [150, 150, 450, 250], "云海与塔脚": [0, 400, 800, 350]}, "thr": 16, "frac": 0.05, "variants": ["old", "cur", "cur2"]}},
+ {"name": "live-storm-sc-low", "scene": "storm-sc-low",
+  "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "cur2"}],
+  "live": {"crop": [400, 350, 800, 750], "frames": 240, "regions": {"砧": [0, 40, 800, 110], "塔身": [150, 150, 450, 250], "云海": [0, 400, 800, 350]}, "thr": 16, "frac": 0.05, "variants": ["old", "cur", "cur2"]}},
+ {"name": "live-typhoon-outer", "scene": "typhoon-outer",
+  "variants": [{"name": "old", "materials": {"clouds.marchMat": "base"}}, {"name": "cur"}, {"name": "cur2"}],
+  "live": {"crop": [400, 100, 800, 800], "frames": 240, "regions": {"卷云盖": [0, 20, 800, 400], "雨带与低云": [0, 440, 800, 340]}, "thr": 16, "frac": 0.05, "variants": ["old", "cur", "cur2"]}}
+]

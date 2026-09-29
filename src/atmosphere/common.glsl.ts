@@ -217,7 +217,11 @@ vec2 skyViewUv(bool hitGround, float viewZenithCos, float lightViewCos, float r)
   return vec2(unitToUv(x, SKY_VIEW_SIZE.x), unitToUv(y, SKY_VIEW_SIZE.y));
 }
 
-// ---- 空气透视 LUT（相对太阳的方位角 × 天顶角 × 距离），以相机为中心，不随视线朝向变化 ----
+// ---- 空气透视 LUT（相对主导光源的方位角 × 天顶角 × 距离），以相机为中心，不随视线朝向变化 ----
+// NIGHT-AP-1：表里是太阳、月亮两路一起积分的结果，以主导光源照度为单位、按主导光源的方位参数化（白天是太阳，满月夜是月亮）。
+// 消费方一律 aerialPerspectiveUvw(rd, uApDir, 距离)、内散射 × uApIlluminance；不要再用 uSunDir / uSunIlluminance 查这张表
+uniform vec3 uApDir;
+uniform vec3 uApIlluminance;
 vec3 aerialPerspectiveUvw(vec3 rd, vec3 sunDir, float dist) {
   vec2 h = rd.xz;
   vec2 s = sunDir.xz;

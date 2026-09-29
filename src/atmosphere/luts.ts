@@ -147,13 +147,56 @@ void main() {
 // PERF-CPU：两张图一次画出（MRT：location 0 = 内散射，即 three 的 gl_FragColor；location 1 = 透射率）。
 // 以前按 uOutputTransmittance 分两遍各画 32 层，同一段 integrateSegment 算两次、每帧 64 次 draw（全帧 111 次里的 64 次），
 // 现在 32 次；两张图的数值与分两遍时逐位相同（同一段代码、同样的输入）
+// NIGHT-AP-1：太阳、月亮两路光源一起积分，以「主导光源照度 = 1」为单位存，方位角按主导光源参数化（见 Atmosphere.updateAerialPerspective）。
+// 次要光源弱到可以忽略时（白天的月亮、深夜的太阳）走原来的单光源 integrateSegment，这张表与改前逐位相同
 const AERIAL_FRAG = /* glsl */ `
 ${ATMOSPHERE_COMMON}
 uniform float uCamR;
-uniform vec3 uSunDirLocal;   // 太阳方向，已经转到「太阳方位角 = 0」的坐标里
+uniform vec3 uSunDirLocal;      // 主导光源方向，已经转到「主导光源方位角 = 0」的坐标里（名字沿用改前，白天就是太阳）
+uniform vec4 uApSecondLocal;    // xyz：次要光源方向（同一坐标，放在 z ≥ 0 这一侧）；w > 0.5 时才积分这一路
+uniform vec3 uApSecondScale;    // 次要光源照度 ÷ 主导光源照度（逐通道：月光比日光偏暖）
 uniform float uLayer;
 layout(location = 1) out highp vec4 aerialTransmittanceOut;
 varying vec2 vUv;
+
+// integrateSegment 的两光源版：介质、透射率沿视线只算一次，两路光源各自的相函数、到光源的透射率、多次散射相加。
+// 次要光源按 bScale 换算到主导光源的单位
+vec3 integrateSegment2(vec3 ro, vec3 rd, vec3 aDir, vec3 bDir, vec3 bScale, float tLimit, float sampleCount, out vec3 transmittance) {
+  float tBottom = raySphere(ro, rd, BOTTOM);
+  float tTop = raySphere(ro, rd, TOP);
+  float tMax = min(tBottom > 0.0 ? tBottom : tTop, tLimit);
+  transmittance = vec3(1.0);
+  if (tMax <= 0.0) return vec3(0.0);
+  float cA = dot(rd, aDir);
+  float cB = dot(rd, bDir);
+  vec3 phA = vec3(rayleighPhase(cA), miePhase(cA), csPhase(cA, HAZE_G));
+  vec3 phB = vec3(rayleighPhase(cB), miePhase(cB), csPhase(cB, HAZE_G));
+  vec3 L = vec3(0.0);
+  vec3 T = vec3(1.0);
+  float tPrev = 0.0;
+  for (int i = 0; i < 64; i++) {
+    if (float(i) >= sampleCount) break;
+    float s = (float(i) + 1.0) / sampleCount;
+    float tNext = tMax * s * s;
+    float dt = tNext - tPrev;
+    vec3 p = ro + rd * (tPrev + 0.3 * dt);
+    float r = length(p);
+    Medium m = sampleMedium(r - BOTTOM);
+    vec3 up = p / r;
+    float muA = dot(up, aDir);
+    float muB = dot(up, bDir);
+    vec3 scat = m.rayleigh + m.mie + m.haze;
+    vec3 stepT = exp(-m.extinction * dt);
+    vec3 S = (m.rayleigh * phA.x + m.mie * phA.y + m.haze * phA.z) * sunTransmittance(r, muA) + scat * multiScattering(r, muA)
+           + bScale * ((m.rayleigh * phB.x + m.mie * phB.y + m.haze * phB.z) * sunTransmittance(r, muB) + scat * multiScattering(r, muB));
+    L += T * (S - S * stepT) / max(m.extinction, vec3(1e-7));
+    T *= stepT;
+    tPrev = tNext;
+  }
+  transmittance = T;
+  return L;
+}
+
 void main() {
   float x = uvToUnit(gl_FragCoord.x / AERIAL_SIZE.x, AERIAL_SIZE.x);
   float y = uvToUnit(gl_FragCoord.y / AERIAL_SIZE.y, AERIAL_SIZE.y);
@@ -165,7 +208,10 @@ void main() {
   vec3 rd = vec3(vs * lightViewCos, vz, vs * sqrt(max(0.0, 1.0 - lightViewCos * lightViewCos)));
   float dist = z * z * AERIAL_MAX_DISTANCE;
   vec3 T;
-  vec3 L = integrateSegment(vec3(0.0, max(uCamR, BOTTOM + 0.01), 0.0), rd, uSunDirLocal, dist, 24.0, T);
+  vec3 ro = vec3(0.0, max(uCamR, BOTTOM + 0.01), 0.0);
+  vec3 L;
+  if (uApSecondLocal.w > 0.5) L = integrateSegment2(ro, rd, uSunDirLocal, uApSecondLocal.xyz, uApSecondScale, dist, 24.0, T);
+  else L = integrateSegment(ro, rd, uSunDirLocal, dist, 24.0, T);
   gl_FragColor = vec4(L, 1.0);
   aerialTransmittanceOut = vec4(T, 1.0);
 }
@@ -218,6 +264,34 @@ function lutMaterial(fragmentShader: string, uniforms: Record<string, THREE.IUni
   });
 }
 
+// 地平线天光系数（NIGHT-AP-1）：天空视图 LUT 在地平线上第一行、所有方位的亮度均值（「光源照度 = 1」为单位），
+// 按光源高度角、相机海拔查表，只用来判断太阳 / 月亮哪一路主导空气透视、另一路可不可以忽略（相对量，不进画面）。
+// 数值是 log10，NIGHT-AP-1 用 handoff/NIGHT-AP-1-sky-scale.mjs 在本程序里实测（无霾、32 位 LUT，RTX 5090）；−30° 以下按最后一段斜率外推
+const HORIZON_SKY_ELEV = [-30, -29, -28, -27, -26, -25, -24, -23, -22, -21, -20, -19, -18, -17, -16, -15, -14, -13, -12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, 0, 2, 5, 10, 20, 30, 45, 60, 90];
+const HORIZON_SKY_ALT_KM = [0.3, 3, 10.7, 13];
+const HORIZON_SKY_LOG10 = [
+  [-15.76, -15.39, -14.9, -14.58, -14.35, -14.06, -13.66, -13.37, -13.16, -12.92, -12.63, -12.15, -11.49, -10.66, -9.4, -9.06, -8.84, -7.95, -7.04, -6.76, -6.58, -5.71, -5.17, -4.93, -4.77, -3.99, -3.62, -3.42, -3.28, -2.55, -1.66, -1.13, -0.99, -1.04, -1.15, -1.28, -1.35, -1.41],
+  [-16.14, -15.67, -15.38, -15.15, -14.83, -14.44, -14.17, -13.97, -13.71, -13.4, -12.9, -12.23, -11.42, -10.03, -9.34, -9.05, -8.65, -7.53, -6.94, -6.68, -6.33, -5.52, -5.08, -4.86, -4.5, -3.86, -3.54, -3.35, -3.15, -1.87, -1.46, -1.23, -1.12, -1.11, -1.14, -1.18, -1.2, -1.23],
+  [-15.43, -15.19, -14.94, -14.53, -14.22, -14, -13.78, -13.48, -12.99, -12.45, -11.87, -10.88, -10.1, -9.57, -9.16, -8.42, -7.72, -7.16, -6.76, -6.27, -5.74, -5.26, -4.92, -4.52, -4.08, -3.66, -3.38, -2.98, -2.15, -1.6, -1.37, -1.21, -1.12, -1.09, -1.09, -1.11, -1.13, -1.15],
+  [-15.54, -15.31, -15, -14.6, -14.33, -14.12, -13.87, -13.58, -13, -12.38, -11.77, -10.66, -9.99, -9.52, -9.08, -8.22, -7.59, -7.1, -6.68, -6.14, -5.65, -5.21, -4.84, -4.43, -4.01, -3.62, -3.35, -2.66, -2.03, -1.56, -1.36, -1.21, -1.12, -1.09, -1.09, -1.11, -1.13, -1.15],
+];
+
+function interp(xs: readonly number[], ys: readonly number[], x: number) {
+  const n = xs.length;
+  if (x <= xs[0]) return ys[0] + ((x - xs[0]) * (ys[1] - ys[0])) / (xs[1] - xs[0]);
+  if (x >= xs[n - 1]) return ys[n - 1];
+  let i = 1;
+  while (x > xs[i]) i++;
+  return ys[i - 1] + ((x - xs[i - 1]) * (ys[i] - ys[i - 1])) / (xs[i] - xs[i - 1]);
+}
+
+/** 地平线天光系数（线性值）：光源高度角 elevDeg（度）、相机到地心距离 camR（km） */
+function horizonSkyScale(elevDeg: number, camR: number) {
+  const alt = Math.min(Math.max(camR - 6360, HORIZON_SKY_ALT_KM[0]), HORIZON_SKY_ALT_KM[HORIZON_SKY_ALT_KM.length - 1]);
+  const col = HORIZON_SKY_LOG10.map((row) => interp(HORIZON_SKY_ELEV, row, elevDeg));
+  return 10 ** interp(HORIZON_SKY_ALT_KM, col, alt);
+}
+
 export class Atmosphere {
   readonly transmittance = lutTarget(LUT_SIZE.transmittance);
   readonly multiScattering = lutTarget(LUT_SIZE.multiScattering);
@@ -230,11 +304,28 @@ export class Atmosphere {
   readonly aerialInscatter = { texture: this.aerial.textures[0] as THREE.Data3DTexture };
   readonly aerialTransmittance = { texture: this.aerial.textures[1] as THREE.Data3DTexture };
 
-  /** 所有用到大气 LUT 的着色器共享这两个 uniform */
+  /**
+   * 所有用到大气 LUT 的着色器共享这几个 uniform。
+   * uApDir / uApIlluminance（NIGHT-AP-1）：空气透视 LUT 的主导光源方向与照度（klux，逐通道）。查表一律
+   * `aerialPerspectiveUvw(rd, uApDir, 距离)`，内散射乘 `uApIlluminance`——白天就是太阳（与 uSunDir / uSunIlluminance 同值），
+   * 满月夜是月亮（表里已含换算过来的另一路光源）。由 updateAerialPerspective 每帧写
+   */
   readonly sharedUniforms = {
     uTransmittanceLut: { value: this.transmittance.texture },
     uMultiScatteringLut: { value: this.multiScattering.texture },
+    uApDir: { value: new THREE.Vector3(0, 1, 0) },
+    uApIlluminance: { value: new THREE.Vector3(120, 120, 120) },
   };
+
+  /**
+   * 空气透视 LUT 的光源状态（NIGHT-AP-1，调试读）：dominant 主导光源；second 这一帧是否积分了次要光源；
+   * ratio 次要 ÷ 主导的地平线天光估计；sunSky / moonSky 两路的估计值（照度 klux × 地平线天光系数，相对量）
+   */
+  readonly apState = { dominant: "sun" as "sun" | "moon", second: false, ratio: 0, sunSky: 0, moonSky: 0 };
+  /** 调试：false = 只有太阳一路（NIGHT-AP-1 改前的行为，同页 A/B 用） */
+  apMoon = true;
+  /** 调试：强制主导光源（量切换那一帧的跳变用）；null = 按估计自动选 */
+  apForce: "sun" | "moon" | null = null;
 
   /**
    * 边界层霾（T18）：所有 LUT 程序共用这两个 uniform 对象（含义见 common.glsl.ts 的 uHaze / uHazeShape）。
@@ -266,6 +357,8 @@ export class Atmosphere {
     ...this.hazeUniforms,
     uCamR: { value: 6370 },
     uSunDirLocal: { value: new THREE.Vector3() },
+    uApSecondLocal: { value: new THREE.Vector4() },
+    uApSecondScale: { value: new THREE.Vector3() },
     uLayer: { value: 0 },
   });
 
@@ -328,10 +421,48 @@ export class Atmosphere {
     this.pass.render(this.skyViewMaterial, this.skyViewMoon);
   }
 
-  updateAerialPerspective(camR: number, sunCosZenith: number) {
+  /**
+   * 空气透视 LUT（NIGHT-AP-1：太阳、月亮两路）。sunDir / moonDir 是世界坐标的单位向量，照度单位 klux（月光逐通道）。
+   * 主导光源：按两路在地平线处天光的估计（照度 × horizonSkyScale）比大小，带 25% 回差，谁大谁定方位参数化与单位；
+   * 另一路估计不到主导的 1e-3 时不积分（白天的月亮约 1e-6、满月深夜的太阳 0），LUT 与改前逐位相同
+   */
+  updateAerialPerspective(camR: number, sunDir: ArrayLike<number>, sunKlux: number, moonDir: ArrayLike<number>, moonKlux: THREE.Vector3) {
     const u = this.aerialMaterial.uniforms;
+    const st = this.apState;
     u.uCamR.value = camR;
-    u.uSunDirLocal.value.set(Math.sqrt(Math.max(0, 1 - sunCosZenith * sunCosZenith)), sunCosZenith, 0);
+    const altOf = (d: ArrayLike<number>) => (Math.asin(Math.max(-1, Math.min(1, d[1]))) * 180) / Math.PI;
+    const moonLum = 0.2126 * moonKlux.x + 0.7152 * moonKlux.y + 0.0722 * moonKlux.z;
+    st.sunSky = sunKlux * horizonSkyScale(altOf(sunDir), camR);
+    st.moonSky = this.apMoon ? moonLum * horizonSkyScale(altOf(moonDir), camR) : 0;
+    // 回差：月亮要比太阳亮 25% 才接管，太阳要比月亮亮 25% 才交回（两路都是 0 时回到太阳，与改前一致）
+    if (st.dominant === "sun" && st.moonSky > st.sunSky * 1.25) st.dominant = "moon";
+    else if (st.dominant === "moon" && !(st.moonSky * 1.25 > st.sunSky)) st.dominant = "sun";
+    if (this.apForce) st.dominant = this.apForce;
+    const moonDom = st.dominant === "moon";
+    const dom = moonDom ? moonDir : sunDir;
+    const sec = moonDom ? sunDir : moonDir;
+    st.ratio = moonDom ? st.sunSky / Math.max(st.moonSky, 1e-30) : st.moonSky / Math.max(st.sunSky, 1e-30);
+    st.second = st.ratio > 1e-3 && (moonDom ? st.sunSky : st.moonSky) > 0;
+    const apDir = this.sharedUniforms.uApDir.value;
+    const apI = this.sharedUniforms.uApIlluminance.value;
+    apDir.set(dom[0], dom[1], dom[2]);
+    if (moonDom) apI.copy(moonKlux);
+    else apI.setScalar(sunKlux);
+    const cz = dom[1];
+    u.uSunDirLocal.value.set(Math.sqrt(Math.max(0, 1 - cz * cz)), cz, 0);
+    const s2 = u.uApSecondLocal.value as THREE.Vector4;
+    if (st.second) {
+      // 次要光源转到「主导光源方位角 = 0」的坐标：LUT 只存 z ≥ 0 半边（消费方按 |方位差| 查），次要光源放在这半边，
+      // 与它同侧的视线准确，另一侧是镜像（两路量级相当时误差最大，但那时次要光源本身也只有一半的份额）
+      const lh = Math.hypot(dom[0], dom[2]);
+      const hx = lh > 1e-5 ? dom[0] / lh : 1, hz = lh > 1e-5 ? dom[2] / lh : 0;
+      const sx = sec[0] * hx + sec[2] * hz;
+      const sz = Math.abs(sec[2] * hx - sec[0] * hz);
+      s2.set(sx, sec[1], sz, 1);
+      const scale = u.uApSecondScale.value as THREE.Vector3;
+      if (moonDom) scale.set(sunKlux / Math.max(moonKlux.x, 1e-30), sunKlux / Math.max(moonKlux.y, 1e-30), sunKlux / Math.max(moonKlux.z, 1e-30));
+      else scale.copy(moonKlux).divideScalar(sunKlux);
+    } else s2.w = 0;
     for (let layer = 0; layer < LUT_SIZE.aerial[2]; layer++) {
       u.uLayer.value = layer;
       this.pass.render(this.aerialMaterial, this.aerial, layer);
