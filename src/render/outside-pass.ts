@@ -17,6 +17,7 @@ import { HAZE_COMMON } from "./haze.glsl";
 import { WONDER_SKY_COMMON } from "./wonder-sky.glsl";
 import { WONDER_PILLARS_COMMON } from "../wonders/pillars.glsl";
 import { ORBIT_RING_COMMON } from "../wonders/ring.glsl";
+import { VERTICAL_CONTINENT_COMMON } from "../wonders/continent.glsl";
 import { OPTICS_COMMON } from "./optics.glsl";
 import { RAIL_FAR_COMMON, RAIL_FAR_HIT } from "../rail/far-view.glsl";
 import { railFarUniforms } from "../rail/far-view";
@@ -80,6 +81,10 @@ ${WONDER_PILLARS_COMMON}
 // 天环（WS08，wonders/ring.glsl.ts）只在 OWT 变体里（按需后台编译）；OW / DOW / DROW 预处理后与改动前逐字相同
 #ifdef ORBIT_RING
 ${ORBIT_RING_COMMON}
+#endif
+// 垂直大陆（WS09，wonders/continent.glsl.ts）只在 OWV 变体里（按需后台编译）；其余变体预处理后与改动前逐字相同
+#ifdef VERTICAL_CONTINENT
+${VERTICAL_CONTINENT_COMMON}
 #endif
 #endif
 ${OPTICS_COMMON}
@@ -227,6 +232,9 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   gStarVis *= 1.0 - gRingCov;
   // 月亮在上面已加进背景，orbitRing 只往上叠——盖住的部分把月盘连光晕减掉（WS08 审查：否则环读成透明玻璃带）
   if (!hitGround) L -= gRingCov * moonDisk(rd) * sunTransmittance(uCamR, rd.y);
+#elif defined(VERTICAL_CONTINENT)
+  // 垂直大陆（WS09）：自己的开关 uContOn（天梯 / 建木那段此时 uWonderOn = 0，不调）；写 gWonderCov / gWonderT，挡星、排远云照旧
+  L = wonderContinent(L, rd, hitGround ? tGround : 1e9);
 #else
   L = wonderSky(L, rd, hitGround ? tGround : 1e9);
 #endif
@@ -238,6 +246,8 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
 #ifdef ORBIT_RING
   L += opticsSunDisk(rd, hitGround) * (1.0 - gRingCov); // 天环挡住身后的太阳圆盘（WS08 审查）
+#elif defined(VERTICAL_CONTINENT)
+  L += opticsSunDisk(rd, hitGround) * (1.0 - gWonderCov); // 垂直大陆挡住身后的太阳（黄昏太阳落到岩壁后面）
 #else
   L += opticsSunDisk(rd, hitGround);
 #endif
@@ -328,13 +338,14 @@ export function outsideRailFragment() {
  * - "DOW"  低空（4 km 以下）：和改动前的低空细节变体是同一个程序（O / W 总是带着，低空细节本来就是按需后台编的，不在关键路径上）
  * - "DROW" 火车：同上，和改动前的火车变体是同一个程序
  * - "OWP"  巨柱群在场（WS07）：巡航和低空都用它（巨柱群在 4.5 km 以下本来就退场），只在巨柱群在场时才后台编译，不预编
+ * - "OWV"  垂直大陆在场（WS09，V = VERTICAL_CONTINENT）：同 OWT，自己的开关 uContOn，只在垂直大陆在场时才后台编译，编好之前退到默认（不画）
  * - "OWT"  天环在场（WS08，T = ORBIT_RING；字母 R 已给火车）：同 OWP，只在天环在场时才后台编译（离线 FXC 约 18 s，天环浮现本身 60 s），
  *          编好之前退到默认（不画天环）。不放进 OW：OW 同时承载罕见光学和天梯 / 建木，多编一段天环会让它们都晚可用
  * 选哪个只由 wantedOutsideKey 决定；没编好时按 OUTSIDE_FALLBACK 退到已编好的（O / W 的效果暂时不画，不会画错）。
  */
-export type OutsideKey = "" | "OW" | "DOW" | "DROW" | "OWP" | "OWT";
-export const OUTSIDE_KEYS: readonly OutsideKey[] = ["", "OW", "DOW", "DROW", "OWP", "OWT"];
-const OUTSIDE_FEATURE_DEFINES: Record<string, string> = { D: "GROUND_DETAIL", R: "RAIL", O: "OUTSIDE_OPTICS", W: "OUTSIDE_WONDER", P: "WONDER_PILLARS", T: "ORBIT_RING" };
+export type OutsideKey = "" | "OW" | "DOW" | "DROW" | "OWP" | "OWT" | "OWV";
+export const OUTSIDE_KEYS: readonly OutsideKey[] = ["", "OW", "DOW", "DROW", "OWP", "OWT", "OWV"];
+const OUTSIDE_FEATURE_DEFINES: Record<string, string> = { D: "GROUND_DETAIL", R: "RAIL", O: "OUTSIDE_OPTICS", W: "OUTSIDE_WONDER", P: "WONDER_PILLARS", T: "ORBIT_RING", V: "VERTICAL_CONTINENT" };
 /** 天幕层奇观的皮肤编号（uWonderShape.z）：2 = 巨柱群（WS07），要 OWP 变体画 */
 export const PILLARS_SKIN = 2;
 
@@ -374,6 +385,8 @@ export function wantedOutsideKey(w: OutsideWant): { key: OutsideKey; fallback: O
   if (wonder && !w.rail && Math.round(skin) === PILLARS_SKIN) return { key: "OWP", fallback: [""] };
   // 天环（WS08）：自己的开关 uRingOn，只在 OWT 里画，编好之前退到默认（不画天环）；火车模式不画（天环在低空本来就退场）
   if (((w.uniforms.uRingOn?.value as number | undefined) ?? 0) > 0.5 && !w.rail) return { key: "OWT", fallback: [""] };
+  // 垂直大陆（WS09）：同天环，自己的开关 uContOn，只在 OWV 里画；火车模式不画（DROW 里没有它，也不会被当成别的奇观画）
+  if (((w.uniforms.uContOn?.value as number | undefined) ?? 0) > 0.5 && !w.rail) return { key: "OWV", fallback: [""] };
   const extras = wonder || opticsWanted(w.uniforms);
   const tail: OutsideKey[] = extras ? ["OW", ""] : [""];
   if (w.rail) return { key: "DROW", fallback: ["DOW", ...tail] };

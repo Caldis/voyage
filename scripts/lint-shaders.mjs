@@ -152,6 +152,8 @@ export async function collectPrograms(server, opts = {}) {
     addDerived("outside-pillars", keyed && (o.OUTSIDE_KEYS ?? []).includes("OWP") ? outside : null, (m2) => outsideKey("OWP", m2));
     // WS08：天环在场时的变体（OW + ORBIT_RING）。旧树没有这个键时按缺失处理
     addDerived("outside-ring", keyed && (o.OUTSIDE_KEYS ?? []).includes("OWT") ? outside : null, (m2) => outsideKey("OWT", m2));
+    // WS09：垂直大陆在场时的变体（OW + VERTICAL_CONTINENT）。旧树没有这个键时按缺失处理
+    addDerived("outside-continent", keyed && (o.OUTSIDE_KEYS ?? []).includes("OWV") ? outside : null, (m2) => outsideKey("OWV", m2));
     addDerived("outside-ground-detail", outside, (m2) => (keyed ? outsideKey("DOW", m2) : { fragmentShader: "#define GROUND_DETAIL 1\n" + m2.fragmentShader, vertexShader: m2.vertexShader }));
     // TR03：窗外的火车远景变体（GroundDetailVariant 火车模式下编译：源码多拼了 rail/far-view.glsl.ts 的两段，再加 #define）。
     // 旧树没有 outsideRailFragment 时按缺失处理（lenient 下跳过）
@@ -894,7 +896,7 @@ async function main() {
       const res = spawnSync(bin, ["-E", "-S", "frag", file], { encoding: "utf8", maxBuffer: 64 << 20 });
       return res.error || !res.stdout ? null : res.stdout;
     };
-    for (const [id, expectAll] of [["outside-default", false], ["outside-extras", true], ["outside-ground-detail", true], ["outside-rail", true], ["outside-pillars", true], ["outside-ring", true]]) {
+    for (const [id, expectAll] of [["outside-default", false], ["outside-extras", true], ["outside-ground-detail", true], ["outside-rail", true], ["outside-pillars", true], ["outside-ring", true], ["outside-continent", true]]) {
       const prog = programs.find((p) => p.id === id);
       if (!prog) continue;
       const out = preprocess(prog);
@@ -914,7 +916,7 @@ async function main() {
     }
     // WS08：天环只在 OWT（outside-ring）里；其余窗外程序预处理后都不含它（OW 与改动前逐字相同，编译时间不涨）
     const RING_IDS = ["orbitRing", "uRingOn", "ringLampPts"];
-    for (const id of ["outside-default", "outside-extras", "outside-ground-detail", "outside-rail", "outside-pillars", "outside-ring"]) {
+    for (const id of ["outside-default", "outside-extras", "outside-ground-detail", "outside-rail", "outside-pillars", "outside-ring", "outside-continent"]) {
       const prog = programs.find((p) => p.id === id);
       if (!prog) continue;
       const out = preprocess(prog);
@@ -925,6 +927,20 @@ async function main() {
         exitCode = 1;
         console.log(`  [FAIL] ${id}：${want ? `缺 ${RING_IDS.filter((w) => !hits.includes(w)).join(", ")}（ORBIT_RING 宏没定义上？）` : `仍含天环代码 ${hits.join(", ")}——要写在 #ifdef ORBIT_RING 里`}`);
       } else console.log(`  [OK]   ${id}：${want ? "含" : "不含"}天环代码`);
+    }
+    // WS09：垂直大陆只在 OWV（outside-continent）里；其余窗外程序预处理后都不含它
+    const CONT_IDS = ["wonderContinent", "uContOn", "contBrink"];
+    for (const id of ["outside-default", "outside-extras", "outside-ground-detail", "outside-rail", "outside-pillars", "outside-ring", "outside-continent"]) {
+      const prog = programs.find((p) => p.id === id);
+      if (!prog) continue;
+      const out = preprocess(prog);
+      if (out === null) continue;
+      const hits = CONT_IDS.filter((w) => new RegExp(`\\b${w}\\b`).test(out));
+      const want = id === "outside-continent";
+      if (want ? hits.length !== CONT_IDS.length : hits.length) {
+        exitCode = 1;
+        console.log(`  [FAIL] ${id}：${want ? `缺 ${CONT_IDS.filter((w) => !hits.includes(w)).join(", ")}（VERTICAL_CONTINENT 宏没定义上？）` : `仍含垂直大陆代码 ${hits.join(", ")}——要写在 #ifdef VERTICAL_CONTINENT 里`}`);
+      } else console.log(`  [OK]   ${id}：${want ? "含" : "不含"}垂直大陆代码`);
     }
 
     // -- 1d. PERF-14：舱内合成不再调用座椅的追踪 / 着色（在座椅 pass 里）；机翼默认程序不调用 waterOnPane（只在 WING_WET 变体里）。

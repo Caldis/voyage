@@ -14,12 +14,14 @@
  * | 1 | 建木（jianmu） | uWonderOn + uWonderShape.z | OW（DOW / DROW） | render/wonder-sky.glsl.ts |
  * | 2 | 巨柱群（pillars，PILLARS_SKIN） | uWonderOn + uWonderShape.z = 2 | OWP（按需编译） | wonders/pillars.glsl.ts |
  * | 3 | 天环（orbital-ring，RING_SKIN） | uRingOn（不写 uWonderOn / uWonderShape） | OWT（按需编译） | wonders/ring.glsl.ts |
+ * | 4 | 垂直大陆（vcontinent，CONT_SKIN） | uContOn（不写 uWonderOn / uWonderShape） | OWV（按需编译） | wonders/continent.glsl.ts |
  *
  * 云间层奇观（layer = "cloud"）不用皮肤号，按 volume.kind（wonder-cloud.glsl.ts 的 WONDER_CLOUD_KINDS）登记，开关是 uWonderVol。
  */
 
 import { FLOATCITY_KIND, FOGCITY_KIND, W00_PROBE_KIND, WONDER_CLOUD_KINDS } from "./wonder-cloud.glsl";
 import { RING_SKIN } from "./ring-shape";
+import { CONT_SKIN } from "./continent-shape";
 
 /** 奇观所在的层：sky = 天幕层（在所有云之外，云的遮挡是现成的）；cloud = 云间层（插进云的步进，W00，见 wonder-cloud.glsl.ts） */
 export type WonderLayer = "sky" | "cloud";
@@ -69,7 +71,7 @@ export interface WonderDef {
     radiusKm: number;
     /** 表面反照率 */
     albedo: [number, number, number];
-    /** 着色器皮肤编号：0 天梯、1 建木、2 巨柱群（WS07）、3 天环（WS08，wonders/ring.glsl.ts，RING_SKIN） */
+    /** 着色器皮肤编号：0 天梯、1 建木、2 巨柱群（WS07）、3 天环（WS08，wonders/ring.glsl.ts，RING_SKIN）、4 垂直大陆（WS09，CONT_SKIN） */
     skin: number;
     /** 天梯的附属结构：中继站、舱体、系留平台、航标灯（建木没有） */
     beacons: boolean;
@@ -165,6 +167,24 @@ export const WONDERS: WonderDef[] = [
     fadeS: 120,
     // 尺寸、根数、摆放全按每次出现的种子（wonders/pillar-shape.ts）；radiusKm 不用。albedo 不用（着色器用 WONDER_CONCRETE 按柱微调）
     look: { radiusKm: 2, albedo: [0.3, 0.3, 0.3], skin: 2, beacons: false },
+  },
+  {
+    id: "vcontinent",
+    // 原创造型（参考图「垂直大陆」一类巨构插画的视觉语言：竖起来的整块陆地、大气把上半截冲淡），地貌取自真实的桌状山 / 断崖
+    // （委内瑞拉的特普伊台地、约塞米蒂的花岗岩巨壁）放大一千倍，不致敬具体作品
+    name: "垂直大陆（拔出云海的千里岩壁）",
+    layer: "sky",
+    // WS09：近端的「船首」在 200–290 km 外，主块长 280–600 km、斜着往地平线退去，前面挂着 2–4 块岬角 / 孤台；顶沿 30–90 km（continent-shape.ts）
+    distanceKm: [200, 290],
+    forwardOffsetDeg: [5, 25],
+    minAltitudeKm: 6,
+    // 白天到黄昏最好（黄昏只剩顶沿被照亮、脚下已入夜）；夜里是挡住星空的一整块剪影，也出现，权重低
+    sunWeight: (a) => (a > -4 && a < 8 ? 3 : a >= 8 ? 2 : a > -12 ? 1.5 : 0.8),
+    riseS: 120,
+    holdSimS: [480, 900],
+    fadeS: 120,
+    // skin 4（CONT_SKIN）：着色在 wonders/continent.glsl.ts（自己的 uContOn）；radiusKm / albedo 不用（岩性按种子取）
+    look: { radiusKm: 0, albedo: [0.3, 0.3, 0.3], skin: CONT_SKIN, beacons: false },
   },
   {
     id: "fogcity",

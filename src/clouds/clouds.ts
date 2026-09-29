@@ -2149,7 +2149,8 @@ export class Clouds {
     // WS01：天幕层奇观（天梯锚塔）在场时也要云的深度——比塔远的云要排到塔后面（outside-pass.ts 的 OUTSIDE_WONDER 段）
     const depthOn =
       ((v.uGroundOn?.value ?? 0) > 0.5 && ((v.uTerrainMax?.value ?? 0) > DEPTH_TERRAIN_MIN_KM || camAlt < DEPTH_LOW_CAMERA_KM)) ||
-      (v.uWonderOn?.value ?? 0) > 0.5;
+      (v.uWonderOn?.value ?? 0) > 0.5 ||
+      (v.uContOn?.value ?? 0) > 0.5; // WS09：垂直大陆（自己的开关）同理
     r.uResetDepth.value = depthOn && !this.depthOn;
     this.depthOn = depthOn;
     if (this.uniforms.uCloudDepthOn) this.uniforms.uCloudDepthOn.value = depthOn ? 1 : 0;
