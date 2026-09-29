@@ -51,7 +51,7 @@ vec3 ${pre}ShadowT(vec3 p, vec3 dir, out vec3 tRef, out float vis) {
   float dh = 2.0 * SUN_ANGULAR_RADIUS / (1.0 / max(D, 1.0) + 0.00267 * exp(-max(hc, 0.0) / 7.5));
   float x = clamp(hc / (0.5 * dh), -1.0, 1.0);                // 地面在日面上的位置（日面半径为 1，x = 1 整个露出）
   float sx = sqrt(1.0 - x * x);
-  float A = acos(-x) + x * sx;                                // 露出的弓形面积（单位圆）
+  float A = max(acos(-x) + x * sx, 0.0);                      // 露出的弓形面积（单位圆）；x → −1 时浮点会给出 −1e−8 量级的负数，sqrt 出 NaN，整帧被泛光刷白（live 实测）
   float uc = A > 1e-5 ? 0.6667 * sx * sx * sx / A : 1.0;      // 弓形形心（日面半径为 1）
   float he = max(hc + 0.5 * dh * uc, 0.0);
   float q = A / M_PI * smoothstep(0.0, 8.0, he);              // 露出的日面比例 × 没被低层云 / 霾挡掉的比例

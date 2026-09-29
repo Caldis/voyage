@@ -140,7 +140,7 @@ float ringLampPts(vec2 q, vec3 rd, vec3 P, vec3 A, vec3 B, vec3 n, float r, floa
     float t = dot(dv, rd);
     vec3 pp = dv - rd * t;
     float px2 = pixA * pixA * t * t;
-    sum += e < p ? (0.4 + 1.2 * e / p) * exp(-2.0 * dot(pp, pp) / px2) * 0.6366 * w2 * (pb / p) * cosI / px2 : 0.0;
+    sum += e < p ? (0.4 + 1.2 * e / p) * exp(-2.0 * dot(pp, pp) / px2) * 0.6366 * w2 * (pb / max(p, 1e-6)) * cosI / px2 : 0.0;
   }
   return sum;
 }
