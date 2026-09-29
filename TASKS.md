@@ -8,6 +8,7 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| UX-5 | 收尾例外（用户 09-29 同意补进发布） | 5300 | worktree | Sonnet（时间 / 航程流速合并为「流速」一行；座位 / 舱等 / 灯光 / 稀有度改分段按钮；原 id 作隐藏数据源双向同步，场景表不变） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -44,7 +45,6 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 | SPEC-ARCUS | 弧状云 / 滚轴云（飑线阵风锋前的架状云），原属 TW07 提前 | 中高（壮观） | clouds（天气宏） | clouds | TW04 后 |
 | DX-29 | 【降级：细微 / 性能，晚做】 ab / gpu-ab 材质别名 `outsideMat.current`（当前实际画的窗外变体，低空海面走低空细节变体，已踩两次）；ab 自带目标区遮罩与孤立点 / 单像素死白指标；live 与冻结表格分开输出；ab 每变体指定自己的真值（refOf）；内置 cloud-alt 高度出口与竖壁 / 平顶游程指标；--montage 裁剪拼图；测量锁排队拥堵（4 个以上代理时等锁 20 min 后不持锁开测，结果只能参考） | 中 | scripts/* | — | — |
 | VOY-START | 【降级：细微 / 性能，晚做】 首屏构图：连续航程默认开后首屏从「右窗朝西夕阳逆光」变成「顺光积云与海」（默认地点西太平洋向南飞前方无机场，机头转向西北航段）；在 routes.ts 加关岛 / 塞班等南方机场让首段继续向南，或改默认地点 / 时刻；给美术总监看一眼 | 中 | routes.ts / 默认预设 | — | default 首屏对照 first-5317.png |
-| UX-5 | 控件类型统一：时间流速与航程流速合并为「流速」一行、座位 / 舱等 / 灯光 / 稀有度改分段按钮（场景表按原 id 设值不变） | 中 | 同上 | 面板 | 半天–1 天 |
 | UX-6~9 | 【降级：细微 / 性能，晚做】 记忆与恢复默认、ControlSpec 框架试点、「准备中」反馈统一、快捷键帮助（见 research/PANEL_UX_GUIDE.md） | 低 | 同上 | 面板 | — |
 | C10d | 【降级：细微 / 性能，晚做】 C-FLAT 后远处 / 近处对真值偏暗被放大（sea-sc 0–20 km 0.959→0.932、60–90 km 0.85→0.77；storm-sc 同向）：C10c 的 odCut 在远处放宽或按 C-FLAT 新响应重标定 | 中 | clouds（受光） | clouds | sea-sc / storm-sc 分带对真值 |
 | WX-LTG | 【降级：细微 / 性能，晚做】 海上雷暴闪电频率按陆上（平均 5 s 一次），实际海上闪电少得多（TW01 发现）：按海陆比例降闪电率，给出处 | 低 | weather / clouds 闪电调度 | — | weather-stats |
