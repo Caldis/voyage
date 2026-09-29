@@ -183,8 +183,8 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
       // 层叠山脊之间的抗锯齿：擦过的近处山脊按「同一片地表、换成它那个距离的空气透视」估它的颜色，按覆盖比例混进来
       if (gh.occ > 0.0) {
         vec3 surf = (L - gh.apL) / max(gh.apT, vec3(1e-4));
-        vec3 uvwO = aerialPerspectiveUvw(rd, uSunDir, gh.tOcc);
-        vec3 nearL = texture(uAerialInscatterS, uvwO).rgb * uSunIlluminance + texture(uAerialTransmittanceS, uvwO).rgb * surf;
+        vec3 uvwO = aerialPerspectiveUvw(rd, uApDir, gh.tOcc);
+        vec3 nearL = texture(uAerialInscatterS, uvwO).rgb * uApIlluminance + texture(uAerialTransmittanceS, uvwO).rgb * surf;
         L = mix(L, nearL, gh.occ);
       }
       // 调试 26（只在火车变体里，不乘曝光前的量级，用 ×0.3 让它在白天的曝光下落在可读范围）：红 = 轮廓覆盖率，绿 = 命中距离 / 50 km，蓝 = 擦过的近处山脊的覆盖率

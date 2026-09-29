@@ -259,7 +259,7 @@ bool railGroundHit(vec3 ro, vec3 rd, out GroundHit gh) {
       wat.r = mix(wat.r, smoothstep(0.3 - k, 0.3 + k, wat.r + e), w);
     }
   }
-  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);
+  vec3 uvw = aerialPerspectiveUvw(rd, uApDir, tT);
   gh.P = P;
   gh.up = up;
   gh.g = g;
@@ -269,7 +269,7 @@ bool railGroundHit(vec3 ro, vec3 rd, out GroundHit gh) {
   gh.texelM = texelW;
   gh.alb = alb;
   gh.wat = wat;
-  gh.apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
+  gh.apL = texture(uAerialInscatterS, uvw).rgb * uApIlluminance;
   gh.apT = texture(uAerialTransmittanceS, uvw).rgb;
   gh.nT = nT;
   gh.fpLong = longM;

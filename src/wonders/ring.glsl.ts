@@ -349,8 +349,8 @@ vec3 orbitRing(vec3 L, vec3 rd, bool hitGround) {
     vec3 Lpil = 0.3 / M_PI * (uSunIlluminance * tS * perp * ph + 0.5 * (eSky + eUp) + 0.35 * eM);
     // 夜里：每 25 km 一盏暖白灯（足迹沿轴线积分）
     Lpil += vec3(1.0, 0.8, 0.55) * 2e-3 * ringBandsAA(altP, pixA * tP * inversesqrt(max(1.0 - dot(rd, aP) * dot(rd, aP), 1e-6)), 25.0, 0.5);
-    vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, min(tP, AERIAL_MAX_DISTANCE));
-    vec3 apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
+    vec3 uvw = aerialPerspectiveUvw(rd, uApDir, min(tP, AERIAL_MAX_DISTANCE));
+    vec3 apL = texture(uAerialInscatterS, uvw).rgb * uApIlluminance;
     vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;
     // 月光那一路的内散射没有 LUT：按「背景里有多少比例的空气在支柱前面」近似（同 wonder-sky 的做法）
     vec3 fF = clamp((1.0 - apT) / max(1.0 - Ttop, vec3(1e-4)), 0.0, 1.0);

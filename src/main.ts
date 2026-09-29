@@ -475,7 +475,11 @@ function renderFrame(now: number) {
   lastMoonAlt = moon.altitude;
   const moonDir = directionFromAzAlt(moon.azimuth, moon.altitude);
   atmosphere.updateSkyView(camR, sunDir[1], moonDir[1]);
-  atmosphere.updateAerialPerspective(camR, sunDir[1]);
+  // 月光：由视星等换算；月面反射让月光比日光略偏暖（空气透视 LUT 也要这一路，NIGHT-AP-1）
+  const moonKlux = magnitudeToKlux(moon.mag);
+  const u = sceneMat.uniforms;
+  u.uMoonIlluminance.value.set(moonKlux * 1.04, moonKlux, moonKlux * 0.9);
+  atmosphere.updateAerialPerspective(camR, sunDir, SUN_ILLUMINANCE_KLUX, moonDir, u.uMoonIlluminance.value);
 
   // 加速时拆成不超过 0.5 模拟秒的小步：航向控制器（按角度差的 0.3 倍转）步长太大会来回过冲
   // 火车模式（TR02）：列车沿线路推进，写 state 的航向 / 俯仰 / 滚转 / 高度和 uCloudOffset；导演（航段、天气场）不接管
@@ -520,13 +524,9 @@ function renderFrame(now: number) {
     sceneMat.uniforms.uTrafficActive.value[i] = p.active ? 1 : 0;
   });
 
-  const u = sceneMat.uniforms;
   u.uSunDir.value.set(...sunDir);
   u.uSunIlluminance.value.setScalar(SUN_ILLUMINANCE_KLUX);
-  // 月光：由视星等换算；月面反射让月光比日光略偏暖
-  const moonKlux = magnitudeToKlux(moon.mag);
   u.uMoonDir.value.set(...moonDir);
-  u.uMoonIlluminance.value.set(moonKlux * 1.04, moonKlux, moonKlux * 0.9);
   u.uMoonAngularRadius.value = moon.angularRadius;
   u.uMoonPhaseFraction.value = moon.phaseFraction;
   u.uSunFromMoon.value.set(...sunDir);

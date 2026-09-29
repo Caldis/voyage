@@ -150,7 +150,7 @@ vec3 hurricaneShadowedInscatter(vec3 ro, vec3 rd, float depth, vec3 full) {
   const float N = 6.0;
   for (int k = 1; k < 7 + min(uStormCount, 0); k++) {
     float fk = float(k);
-    vec3 Lk = fk >= N ? full : textureLod(uAerialInscatter, aerialPerspectiveUvw(rd, uSunDir, depth * fk / N), 0.0).rgb;
+    vec3 Lk = fk >= N ? full : textureLod(uAerialInscatter, aerialPerspectiveUvw(rd, uApDir, depth * fk / N), 0.0).rgb;
     vec3 pk = ro + rd * (depth * (fk - 0.5) / N);
     float vis = hurricaneSunVis(pk, uSunDir, 0.0);
     // 影子里的空气仍被天空光照着（多次散射）；眼里低处四周是眼壁，看得到的天空只有头顶一块，取约 12%。
@@ -858,7 +858,7 @@ void main() {
 #endif
   float depth = depthSum / wSum;
   // 相机到云之间的空气透视：远处的云被大气染蓝、变淡，融进地平线
-  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, depth);
+  vec3 uvw = aerialPerspectiveUvw(rd, uApDir, depth);
   vec3 apL = texture(uAerialInscatter, uvw).rgb;
   vec3 apT = texture(uAerialTransmittance, uvw).rgb;
   // 台风：视线上被眼壁 / 卷云盖挡住阳光的那几段空气不散射阳光（体积阴影）。
@@ -878,8 +878,8 @@ void main() {
     apL *= 1.0 - HUR_BACKLIT_AP_CUT * inEye * toward * toward * (1.0 - smoothstep(0.35, 0.8, uSunDir.y));
   }
 #endif
-  apL *= uSunIlluminance;
-  // 夜天光的空气透视（T46）：LUT 只有太阳一路，夜里远处的云只剩「自身 × 透射率」（掠射几百公里、透射率偏红），
+  apL *= uApIlluminance;
+  // 夜天光的空气透视（T46）：LUT 含太阳、月亮两路（NIGHT-AP-1），无月夜两路都近乎 0，远处的云只剩「自身 × 透射率」（掠射几百公里、透射率偏红），
   // 读成比海面、地平线天空都暗的红褐色斑。远处的云应当和白天一样淡进地平线的天光：按同方向的夜天光补上 (1 − 透射率) 那部分。
   // 海面反射、天空用的都是同一个 nightglow（lights.glsl.ts），三者一致。白天比太阳那一路小 8 个数量级
   // 取透射率的亮度（不按通道）：按通道补是 (1 − 偏红的透射率) = 偏蓝，远处的云发蓝；系数 0.6：

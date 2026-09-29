@@ -76,11 +76,11 @@ vec4 trafficRadiance(vec3 rd) {
       vec3 amb = skyIrradiance(uCamR + A.y, up) / (2.0 * M_PI);
       vec3 Lc = (1.0 - exp(-tau)) * (eKey * ph + amb);
       // 空气透视
-      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, t);
+      vec3 uvw = aerialPerspectiveUvw(rd, uApDir, t);
       vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;
       // SEA-3：outside-pass 按「背景 × T + 这里的 L」合成，背景里「相机→尾迹」这段内散射也被 e^−τ 挡掉了，要补回来，
       // 否则侧光下尾迹比天空暗（暗色尾迹）：背景·e^−τ + apL·(1 − e^−τ) + apT·Lc
-      L += T * (Lc * apT + texture(uAerialInscatterS, uvw).rgb * uSunIlluminance * (1.0 - exp(-tau)));
+      L += T * (Lc * apT + texture(uAerialInscatterS, uvw).rgb * uApIlluminance * (1.0 - exp(-tau)));
       T *= exp(-tau);
     }
     // 飞机本身：远处只有几个像素，白色机身被阳光照亮，偶尔把太阳反射过来一闪
@@ -97,7 +97,7 @@ vec4 trafficRadiance(vec3 rd) {
       vec3 body = 0.6 / M_PI * eKey * (0.4 + 0.6 * max(uKeyDir.y, 0.0));
       // 机身或舷窗恰好把太阳反射过来时的一闪：随姿态轻微变化，这里用缓慢的时间调制近似
       float glint = pow(max(sin(uTime * 0.45 + float(i) * 2.1), 0.0), 60.0) * 8.0 * step(0.0, uKeyDir.y);
-      vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tA);
+      vec3 uvw = aerialPerspectiveUvw(rd, uApDir, tA);
       L = mix(L, (body * (1.0 + glint)) * texture(uAerialTransmittanceS, uvw).rgb, cover);
       T *= 1.0 - cover;
     }

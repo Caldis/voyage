@@ -118,12 +118,12 @@ float ftHg(float c, float g) {
   return (1.0 - g2) / (4.0 * M_PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
 }
 
-// 相机沿 rd 到距离 t 处的空气透视：apL = 内散射（已乘太阳照度，含夜天光的补项，与云步进同一口径），apT = 透射率。
+// 相机沿 rd 到距离 t 处的空气透视：apL = 内散射（已乘主导光源照度 uApIlluminance，含夜天光的补项，与云步进同一口径），apT = 透射率。
 // 400 km 内直接查空气透视 LUT（与体积云同一张）；更远的一段：透射率 = LUT 在 400 km 的值 × 透射率 LUT 的比值
 // （两点沿同一方向到大气层顶的透射率之比；远塔在地平线以上，这段视线不会碰到地面），
 // 内散射按「沿视线的源函数不变」外推：I(t) = I400 / (1 − T400) · (1 − T(t))
 void ftAerial(vec3 ro, vec3 rd, float t, out vec3 apL, out vec3 apT) {
-  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, min(t, AERIAL_MAX_DISTANCE));
+  vec3 uvw = aerialPerspectiveUvw(rd, uApDir, min(t, AERIAL_MAX_DISTANCE));
   vec3 I = texture(uAerialInscatter, uvw).rgb;
   vec3 T = texture(uAerialTransmittance, uvw).rgb;
   if (t > AERIAL_MAX_DISTANCE) {
@@ -135,7 +135,7 @@ void ftAerial(vec3 ro, vec3 rd, float t, out vec3 apL, out vec3 apT) {
     I = I / max(vec3(1.0) - T, vec3(1e-3)) * (vec3(1.0) - Tn);
     T = Tn;
   }
-  apL = I * uSunIlluminance + nightglow(rd) * (0.6 * (1.0 - dot(T, vec3(0.2126, 0.7152, 0.0722))));
+  apL = I * uApIlluminance + nightglow(rd) * (0.6 * (1.0 - dot(T, vec3(0.2126, 0.7152, 0.0722))));
   apT = T;
 }
 

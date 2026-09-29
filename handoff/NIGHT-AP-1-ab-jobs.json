@@ -1,0 +1,26 @@
+[
+  {
+    "name": "fuji-fullmoon",
+    "scene": { "name": "fuji-fullmoon", "p": { "preset": "fuji", "date": "2026-01-03", "time": 1260, "altitude": 4, "coverage": 0.15, "cabin-light": false }, "offset": [0, -25], "ground": true, "head": -0.25 },
+    "variants": [
+      { "name": "old", "js": "v.atmosphere.apMoon = false; v.atmosphere.apForce = null;" },
+      { "name": "new", "js": "v.atmosphere.apMoon = true; v.atmosphere.apForce = null;" }
+    ]
+  },
+  {
+    "name": "fuji-fullmoon-high",
+    "scene": { "name": "fuji-fullmoon-high", "p": { "preset": "fuji", "date": "2026-01-03", "time": 1260, "altitude": 10.7, "coverage": 0.1, "cabin-light": false }, "offset": [-20, 0.2], "ground": true },
+    "variants": [
+      { "name": "old", "js": "v.atmosphere.apMoon = false; v.atmosphere.apForce = null;" },
+      { "name": "new", "js": "v.atmosphere.apMoon = true; v.atmosphere.apForce = null;" }
+    ]
+  },
+  {
+    "name": "rail-fullmoon",
+    "scene": { "name": "rail-fullmoon", "p": { "vehicle": "train", "date": "2026-07-29", "time": 1320 }, "wait": 3000, "js": "for (let i = 0; i < 300 && !v.rail.active; i++) await new Promise((r) => setTimeout(r, 100)); v.rail.teleport(12650, 1, 0); for (let i = 0; i < 90 && v.ground.pending > 0; i++) await new Promise((r) => setTimeout(r, 500)); for (let i = 0; i < 480 && ![\"ready\", \"failed\"].includes(v.groundDetail.railStatus ?? v.groundDetail.status); i++) await new Promise((r) => setTimeout(r, 250)); v.rail.teleport(12650, 1, 0); return v.rail.describe() + ' · moon ' + v.moonAltDeg().toFixed(1);" },
+    "variants": [
+      { "name": "old", "js": "v.atmosphere.apMoon = false; v.atmosphere.apForce = null;" },
+      { "name": "new", "js": "v.atmosphere.apMoon = true; v.atmosphere.apForce = null;" }
+    ]
+  }
+]

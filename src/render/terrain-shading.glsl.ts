@@ -90,7 +90,7 @@ bool groundHit(vec3 ro, vec3 rd, out GroundHit gh) {
     }
   }
   // 相机到地面的空气透视：用空气透视 LUT（地形不在海平面，天空视图 LUT 的地面部分不适用）
-  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, tT);
+  vec3 uvw = aerialPerspectiveUvw(rd, uApDir, tT);
   // SEA-3（远海横纹）：天顶角方向不交给硬件线性插值。LUT 每一行在同一距离上取值，陡的那一行早已打到海面（积分截在海面），
   // 平的那一行还在半空、少穿一截霾，两行线性混合是折线——平滑的海面上每行一条马赫带（巡航约 40 px 一条）。
   // 改成上下两行各取「到它自己那条视线的海平面交点的同一比例」处的值，再按行插值（地形高出海面时比例 < 1，照样成立）；
@@ -120,7 +120,7 @@ bool groundHit(vec3 ro, vec3 rd, out GroundHit gh) {
   gh.alb = alb;
   gh.wat = wat;
   gh.nT = nT;
-  gh.apL = mix(texture(uAerialInscatterS, q0).rgb, texture(uAerialInscatterS, q1).rgb, wRow) * uSunIlluminance;
+  gh.apL = mix(texture(uAerialInscatterS, q0).rgb, texture(uAerialInscatterS, q1).rgb, wRow) * uApIlluminance;
   gh.apT = mix(texture(uAerialTransmittanceS, q0).rgb, texture(uAerialTransmittanceS, q1).rgb, wRow);
   return true;
 #endif

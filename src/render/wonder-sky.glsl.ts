@@ -528,8 +528,8 @@ vec3 wonderSky(vec3 L, vec3 rd, float tLimit) {
   vec3 Lt = direct + uWonderAlbedo / M_PI * 0.5 * (eSkyUp + eUp);
 
   // 空气透视（LUT 最远 400 km；更远的那段视线已经在大气层外，没有更多内散射）
-  vec3 uvw = aerialPerspectiveUvw(rd, uSunDir, min(t, AERIAL_MAX_DISTANCE));
-  vec3 apL = texture(uAerialInscatterS, uvw).rgb * uSunIlluminance;
+  vec3 uvw = aerialPerspectiveUvw(rd, uApDir, min(t, AERIAL_MAX_DISTANCE));
+  vec3 apL = texture(uAerialInscatterS, uvw).rgb * uApIlluminance;
   vec3 apT = texture(uAerialTransmittanceS, uvw).rgb;
   // 相机到线之间的内散射：空气透视 LUT 只有太阳一路；月光那一路没有 LUT，按「背景里有多少比例的空气在线前面」近似：
   // 天空的内散射 ∝ 沿视线的消光，线前面那段占 (1 − T线) / (1 − T层顶)。否则月夜里线会黑得像一道裂缝。
