@@ -121,8 +121,11 @@ export function parseRailData(meta: RailMeta, buf: ArrayBuffer): RailData {
   };
 }
 
-/** 浏览器里按相对路径拉取（和 sky-assets.ts 的 `data/bsc5.json` 同一口径） */
-export async function loadRailData(id: string, base = "data/rail/"): Promise<RailData> {
+/** 浏览器里按相对路径拉取（和 sky-assets.ts 的 `data/bsc5.json` 同一口径，都基于 BASE_URL，兼容 GitHub Pages 子路径部署） */
+export async function loadRailData(
+  id: string,
+  base = `${import.meta.env.BASE_URL}data/rail/`,
+): Promise<RailData> {
   const metaResp = await fetch(`${base}${id}.json`);
   if (!metaResp.ok) throw new Error(`线路元数据加载失败：HTTP ${metaResp.status}`);
   const meta = (await metaResp.json()) as RailMeta;

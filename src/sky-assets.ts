@@ -23,7 +23,7 @@ const MILKY_WAY_LOG_MIN = -3.5;
  */
 async function loadMilkyWay(): Promise<Float32Array | null> {
   try {
-    const resp = await fetch("data/milkyway_4k.jpg");
+    const resp = await fetch(`${import.meta.env.BASE_URL}data/milkyway_4k.jpg`);
     if (!resp.ok) return null;
     // 灰度 JPEG 不做色彩管理，原样拿到编码值
     const bmp = await createImageBitmap(await resp.blob(), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
@@ -69,7 +69,9 @@ export function starRowCells(j: number) {
 
 export async function buildStarMap(): Promise<THREE.DataTexture> {
   const milkyWayJob = loadMilkyWay();
-  const stars: [number, number, number, number][] = await (await fetch("data/bsc5.json")).json();
+  const stars: [number, number, number, number][] = await (
+    await fetch(`${import.meta.env.BASE_URL}data/bsc5.json`)
+  ).json();
   // T41：点星不再溅射成辐亮度图（一个 texel 5.3′ ≈ 2 个屏幕像素，双线性放大后是菱形 / 方块，高赤纬处被拉成短划线），
   // 改成「每格最多一颗星」的星表格子：R = 照度（klux × 1e12，6.5 等 ≈ 6.5、天狼星 ≈ 9800），G = 格内位置（32 × 32 级，qx + 32·qy），
   // B = B−V 色指数。着色器按屏幕像素对星点做解析的点扩散积分（stars.glsl.ts）。格子是「每行格数随赤纬减少」的等面积近似，
@@ -130,7 +132,7 @@ export async function buildStarMap(): Promise<THREE.DataTexture> {
 }
 
 export function loadMoonTexture(): THREE.Texture {
-  const tex = new THREE.TextureLoader().load("data/moon_2k.jpg");
+  const tex = new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}data/moon_2k.jpg`);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
   tex.anisotropy = 4;

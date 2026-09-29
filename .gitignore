@@ -1,0 +1,9 @@
+# 独立仓库使用（在 monorepo 里与根 .gitignore 并存无害，只是多一层保险）
+node_modules/
+dist/
+.vite/
+*.log
+tmp/
+.playwright-mcp/
+__pycache__/
+*.tsbuildinfo
