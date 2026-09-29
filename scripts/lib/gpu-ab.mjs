@@ -21,7 +21,7 @@ import path from "node:path";
 import { DEFAULTS, applyScene, pinGeometry } from "../scenarios.mjs";
 import { resolveRepoPath } from "./chrome.mjs";
 import { acquireOrWait } from "./measure-lock.mjs";
-import { sampleAndWarn } from "./cpu-load.mjs";
+import { sampleAndWarn, sampleAndWarnGpu, waitForQuiet } from "./cpu-load.mjs";
 import { readJson, sceneOf, installVariantLib, resolveSources, collectPaths, validateVariants, raf } from "./ab.mjs";
 import { setGround, groundSettle, readGround } from "./ab-live.mjs";
 
@@ -127,7 +127,11 @@ export async function cmdGpuAb(args, h) {
       return resolveBaseShaderSource(String(args.base), matPath, { browser, angle });
     };
     const { page, renderer, errors } = await openPage(browser, port, angle, viewport, dpr, { collectErrors: true, extraQuery: parseExtraQuery(args) });
-    log(`gpu-ab --angle=${angle}  viewport=${viewport.width}x${viewport.height}  GL_RENDERER = ${renderer}  每样本 ${n} 次、${rounds} 轮 ABBA 交替`);
+    // DX-32：gpu-ab 本身就是要报「GPU 到底快不快」的权威结论，默认做一次 GPU 空闲检查（不用像 bench/cold 那样显式加 --wait-quiet）——
+    // 只警告不阻塞（真要等干净再测，用 --wait-quiet 走 waitForQuiet 的轮询等待）。
+    const gpuLoadStart = sampleAndWarnGpu("gpu-ab 开始");
+    log(`gpu-ab --angle=${angle}  viewport=${viewport.width}x${viewport.height}  GL_RENDERER = ${renderer}  每样本 ${n} 次、${rounds} 轮 ABBA 交替${gpuLoadStart != null ? `  GPU=${gpuLoadStart.toFixed(0)}%` : ""}`);
+    if (args["wait-quiet"]) await waitForQuiet({ log });
     await setQualityTier(page, args.quality);
     await setFlashDisabled(page, true);
     await page.evaluate(installVariantLib);
@@ -156,6 +160,7 @@ export async function cmdGpuAb(args, h) {
       const progs = {}; // 变体名 -> { 路径: { id, hash } }
       let lastSeen = null;
       const load0 = sampleAndWarn(`gpu-ab ${job.name} 开始`);
+      const gpuLoad0 = sampleAndWarnGpu(`gpu-ab ${job.name} 开始`); // DX-32
       const t0 = Date.now();
       for (let r = 0; r < rounds; r++) {
         const order = r % 2 === 0 ? resolved : [...resolved].reverse();
@@ -195,6 +200,7 @@ export async function cmdGpuAb(args, h) {
       await setWingStrobe(page, null);
       if (groundOrig) await setGround(page, groundOrig, log, "复原");
       const load1 = sampleAndWarn(`gpu-ab ${job.name} 结束`);
+      const gpuLoad1 = sampleAndWarnGpu(`gpu-ab ${job.name} 结束`); // DX-32
 
       const base = names[0];
       const rows = {};
@@ -222,7 +228,7 @@ export async function cmdGpuAb(args, h) {
           samples: xs,
         };
       }
-      console.log(`\n== ${job.name}（--time ${kind}，每样本 ${n} 次取平均、${rounds} 轮 ABBA；云步进变体键 "${lastSeen?.marchKey ?? ""}"；${((Date.now() - t0) / 1000).toFixed(0)} s；CPU ${load0 == null ? "?" : load0.toFixed(0)}% → ${load1 == null ? "?" : load1.toFixed(0)}%）`);
+      console.log(`\n== ${job.name}（--time ${kind}，每样本 ${n} 次取平均、${rounds} 轮 ABBA；云步进变体键 "${lastSeen?.marchKey ?? ""}"；${((Date.now() - t0) / 1000).toFixed(0)} s；CPU ${load0 == null ? "?" : load0.toFixed(0)}% → ${load1 == null ? "?" : load1.toFixed(0)}%；GPU ${gpuLoad0 == null ? "?" : gpuLoad0.toFixed(0)}% → ${gpuLoad1 == null ? "?" : gpuLoad1.toFixed(0)}%）`);
       console.log(`| 变体 | 中位 ms | 最小 ms | 离散（IQR/中位） | 对 ${base} 配对比 中位 [p25, p75] | 判定（门槛 ±${(100 * gate).toFixed(1)}%） | 程序 # | disjoint |`);
       console.log("|---|---:|---:|---:|---|---|---|---:|");
       for (const nm of names) {
@@ -230,7 +236,7 @@ export async function cmdGpuAb(args, h) {
         const pr = Object.entries(r.programs || {}).map(([p, x]) => `${p}#${x.id}`).join(" ");
         console.log(`| ${nm} | ${f3(r.median)} | ${f3(r.min)} | ${r.iqrRel == null ? "—" : (100 * r.iqrRel).toFixed(1) + "%"} | ${r.ratio ? `×${f3(r.ratio.median)} [${f3(r.ratio.p25)}, ${f3(r.ratio.p75)}]` : "（基准）"} | ${r.ratio ? r.ratio.verdict : ""} | ${pr || "—"} | ${r.disjoint} |`);
       }
-      summary.push({ job: job.name, scene: sc.name, time: kind, n, rounds, marchKey: lastSeen?.marchKey ?? null, cpu: [load0, load1], rows });
+      summary.push({ job: job.name, scene: sc.name, time: kind, n, rounds, marchKey: lastSeen?.marchKey ?? null, cpu: [load0, load1], gpu: [gpuLoad0, gpuLoad1], rows });
       fs.writeFileSync(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
     }
     log(`完成，输出 ${path.relative(REPO_ROOT, outDir).replace(/\\/g, "/")}/summary.json；console error ${errors.length} 条`);
