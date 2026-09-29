@@ -8,7 +8,6 @@
 
 | 编号 | 波次 | 端口 | 分支 | 实现 | 审查 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PERF-16b | 发布后（GPU 空闲重测） | 5302 | worktree | Sonnet（GPU 空闲时同口径复测 55cd90f 与 master 的晴天 / 夜城 / 雷暴代表场景与用户分辨率帧时间，确认是否真有回退；有则二分） | — | 进行中 |
 | PERF-15 | **最高优先（用户 2026-09-28：「性能劣化很严重，记得修复和跟进」）** | — | — | 待派：在途任务结束后的安静窗口，主线 vs 今早基线（7436ba1 附近）逐场景按 pass GPU / 主线程长任务 / 内存 / 网络对比，逐合并归因并修复 | — | 待派（等安静窗口）；**第 7 波补充**：C10 + C10b 合计相对 C10 前云 GPU ×1.3–2.0（C10 当时「GPU 持平」量错）；天气场景 ×1.07–1.12、最坏 storm-graze ×1.38（+1.0 ms）；集显估算 cu-side 12–18 ms、storm-graze 28–41 ms（未实测）；机翼累计冷编译 +0.3 s → cold --repeat 看是否成关键路径 |
 
 第 2 波文件归属：T02 独占 `scene.ts`、`ground.glsl.ts`、`terrain-shading.glsl.ts`、`src/ground/*`；T03 独占 `src/clouds/*`、`weather.ts`、`lightning.glsl.ts`；T05 独占 `main.ts`、`flight.ts`、`ui.ts`、`state.ts`、`wing.glsl.ts`、`wing-shading.glsl.ts`、`lights.glsl.ts`、`index.html`；T14 独占 `ocean.glsl.ts` 与新建的 `src/ocean/*`（scene.ts / main.ts 的接入以代码片段交付）。
@@ -21,6 +20,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 优先级 | 归属文件（可改） | 热点 | 验收场景 / 标准 |
 | --- | --- | --- | --- | --- | --- |
+| PERF-17 | 【降级：细微 / 性能，晚做】PERF-16b 遗留：机翼程序冷编译稳定 +19%（疑 STROBE-FLASH，用 shader-budget --chain 坐实）；noon-cumulus +11–15% 为 SPEC-RAYS 等已审功能代价叠加；typhoon-bands 约 +12% 未细分（疑 TW02 / TW04） | 低 | 全局 | — | — |
 | DX-32 | dev-browser `--wait-quiet` 同时检查 GPU 利用率（nvidia-smi，空闲 < 10% 再测），并在测量结果里记录 GPU 利用率 | 中高（测量可信度） | scripts | — | PERF-16 教训 |
 | PUB-3b | 发布后复核第二部分：美术总监过一遍线上版只挑发布阻塞级；macOS Safari / Chrome、手机实测（需用户真机） | 高 | 全局 | — | PERF-16 后 |
 | PUB-2 | 【降级：细微 / 性能，晚做】pages.yml 里 actions/checkout、setup-node、upload-pages-artifact、deploy-pages、pnpm/action-setup 仍是 Node 20 版本（GitHub 已提示弃用、被强制跑在 Node 24），升到对应新大版本 | 低 | .github | — | — |
@@ -97,6 +97,7 @@ T14 · 海面去重复（用户 2026-09-25 截图反馈：低空海面是规则�
 
 | 编号 | 任务 | 合并日期 | 备注 |
 | --- | --- | --- | --- |
+| PERF-16b | GPU 空闲（6–14%）重测 master vs 55cd90f（09-28）：「晴天涨 50–90%」证实是污染假象；真实变化 noon-cumulus +11–15%（SPEC-RAYS 等已审功能代价叠加，C-TOFU 证伪）、typhoon-bands 约 +12%、sea-sc / night-city +5–9%、storm-day 持平；用户分辨率预算占比 62–194%；冷启动 +3–6%（噪声边界），机翼程序编译 +19% | 2026-09-29 | 无回退 bug，不开返工；遗留立 PERF-17 |
 | PERF-16（调查，作废结论） | 晴天回退二分：测得 55cd90f 与 master 同量级、wave8 基线偏低；冷启动 9.0→9.86 s（+7–9%） | 2026-09-29 | **帧时间数据受协调者没关的 Playwright 页面占 GPU 51% 污染**（报告里归因为并发代理是错的），结论作废，立 PERF-16b 在 GPU 空闲时重测；教训进 DEV_SOP、立 DX-32 |
 | PUB-3（第一部分） | 发布后安静窗口复核（handoff/PUB-3-perf.md）：全量回归 59 场景 0 error；自动画质在 8.6 倍画布下降到 min 档、画面可用；冷启动 11.28 s（09-27 为 9.1 s，+24%）；用户分辨率 8 个代表场景全部超 6.25 ms 预算（103–247%），晴天 / 夜城较 09-28 涨 50–92%、雷暴涨 13–19%、台风变快 | 2026-09-29 | 无发布阻塞级问题；回退另立 PERF-16 二分；第二部分立 PUB-3b |
 | PUB（发布） | apps/voyage 连历史发布到公开仓库 Caldis/voyage + GitHub Pages（https://caldis.github.io/voyage/）；monorepo 根新增 scripts/publish-voyage.sh（filter-repo + 底线检查，确定性快进推送） | 2026-09-29 | 线上 0 console error、本地资源与外站瓦片全部 200；subtree split 太慢弃用；发布后复核立 PUB-3 |
