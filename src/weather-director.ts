@@ -355,7 +355,7 @@ export class WeatherDirector {
       // 不用另配 bottom / top / type / density：weather.ts 的「clear」分支本来就带着 CLOUD_PRESETS 同源的淡积云缺省值
       // （bottom 1.2、top 3.4、type 1、density 1，见 WeatherSample 初值），只缺云量
       if (this.firstAlign && this.cur.coverage < 0.15) {
-        this.cur.coverage = 0.25 + Math.random() * 0.15;
+        this.cur.coverage = 0.3; // 固定值：首屏截图 / 回归要可复现（协调者合并时把随机 25–40% 改成定值）
         this.regime = "cumulus";
         this.note(`首屏兜底：晴空天气场抬到淡积云 ${Math.round(this.cur.coverage * 100)}%`, "jump");
       }
