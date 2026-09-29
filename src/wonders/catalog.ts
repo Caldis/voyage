@@ -178,8 +178,12 @@ export const WONDERS: WonderDef[] = [
     distanceKm: [200, 290],
     forwardOffsetDeg: [5, 25],
     minAltitudeKm: 6,
-    // 白天到黄昏最好（黄昏只剩顶沿被照亮、脚下已入夜）；夜里是挡住星空的一整块剪影，也出现，权重低
-    sunWeight: (a) => (a > -4 && a < 8 ? 3 : a >= 8 ? 2 : a > -12 ? 1.5 : 0.8),
+    // PUB-4 B4（美术总监发布审查阻塞）：黄昏 / 正午岩壁读成半透明磨砂玻璃板（handoff/PUB-3b-art.md「玻璃罩类假形状」），
+    // 第一眼读不出「岩石」。先把权重压到 0，从自动出场池（WonderSystem.candidates，按 sunWeight > 0 过滤）拿掉，
+    // 不影响 URL / 调试面板按 id 手动召唤（trigger(id) 直接 wonderById 查表，不经 candidates）与回归场景（同样按 id 触发）。
+    // 根治（岩壁的内散射要按自身受光 / 地影状态算，不能直接套背景天空的分带）留给 WS09-b，回归权重时把这行改回原来的曲线：
+    // sunWeight: (a) => (a > -4 && a < 8 ? 3 : a >= 8 ? 2 : a > -12 ? 1.5 : 0.8),
+    sunWeight: () => 0,
     riseS: 120,
     holdSimS: [480, 900],
     fadeS: 120,
