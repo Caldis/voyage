@@ -1,0 +1,3 @@
+[
+  {"name":"tw-ltg-v1-scs-0714-2200","p":{"preset":"scs","date":"2026-07-14","time":1320,"quality":"high"},"continuousJourney":true,"wait":4000,"js":"const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const w = v.director.weather; v.director.setHeading(225); v.state.heading = 225; v.state.bankDeg = 0; w.onJump(); await sleep(15000); w.onJump(); await sleep(3000); for (let i = 0; i < 90 && Math.abs(v.state.bankDeg) > 0.5; i++) await sleep(1000); await sleep(4000); const f = v.farTowers; const eligible = f.towers.filter((t) => t.anvil > 0.05); const ok = eligible.length > 0 && f.flashNow(eligible[0].id); return '远塔 ' + f.towers.length + ' 座，可打闪 ' + eligible.length + ' 座，flashNow=' + ok + '（' + (eligible[0] ? eligible[0].id : '无') + '）';"}
+]
