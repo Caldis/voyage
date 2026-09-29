@@ -142,3 +142,11 @@ nvidia-smi --query-gpu=utilization.gpu,memory.used,clocks.current.graphics --for
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_016y6hSYV47jmqaRvVkgSr1F
+
+---
+
+## 协调者更正（2026-09-29）：本报告与 PUB-3 的帧时间数字受 GPU 占用污染
+
+PERF-16 观察到「测量期间 GPU 被占用 48–58%」，当时归因为并发代理。协调者复查：**真正的来源是协调者自己在 12:52 为线上验收打开、之后没关的 Playwright MCP 页面**（https://caldis.github.io/voyage/ 持续实时渲染）。关掉后 GPU 从 51% 降到 8%，同期没有其他代理在跑。
+影响：PUB-3 第 2 节帧时间与本报告的两端对照都在这份负载下测，**绝对值偏高、两端比较也不可靠**；冷启动对 GPU 负载不敏感，+7–9% 的结论相对可信。
+处理：在 GPU 空闲（nvidia-smi 利用率 < 10%）时重测，另立 PERF-16b。教训写进 DEV_SOP：用完浏览器页面立刻关；测量前查 GPU 利用率，不只查 CPU。
