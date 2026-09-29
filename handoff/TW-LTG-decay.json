@@ -1,0 +1,8 @@
+[
+ {
+  "name": "tw-ltg-decay",
+  "p": { "preset": "scs", "date": "2026-08-26", "time": 1320, "wing-pos": "-4", "quality": "high" },
+  "wait": 1000,
+  "js": "v.state.heading = 0; v.state.bankDeg = 0; v.farTowers.override = [{id:'near', x: 220, z: 0, R: 6, top: 14, Ra: 20, dirX: 0.7, dirZ: 0.6, thick: 2.4, col: 1, anvil: 0.8, seed: 0.4}]; await new Promise(r=>setTimeout(r,1200)); v.farTowers.flashNow('near'); const samples = []; const t0 = performance.now(); while (performance.now() - t0 < 500) { await new Promise(r=>requestAnimationFrame(r)); samples.push(((performance.now()-t0)|0) + 'ms:' + v.farTowers.mat.uniforms.uFarD.value[0].x.toFixed(3)); } return samples.join(' ');"
+ }
+]
