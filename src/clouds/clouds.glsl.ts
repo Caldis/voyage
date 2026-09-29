@@ -1368,7 +1368,10 @@ float cloudDensity(vec3 p, float lod, bool detail) {
   float alt = length(p) - BOTTOM;
   if (alt < uShellBottom || alt > uShellTop) return 0.0;
 #ifdef CLOUD_STORM
-  gCovBoost = gWeatherOn && uStormCount > 0 ? stormLayerBoost(p.xz + uCloudOffset) : 0.0;
+  // PERF-TW04：塔脚加云量只在层状云高度里才用得上（layerDensity 在层外直接返回 0）。层外的样本（外壳里大片的空白步）先不算，
+  // 等这一点真有云（要做受光步进、受光里的 layerDensity 沿用 gCovBoost）时再在下面补上：结果与先算逐位相同
+  bool covIn = alt > uCloudBottom && alt < uCloudTop;
+  gCovBoost = gWeatherOn && uStormCount > 0 && covIn ? stormLayerBoost(p.xz + uCloudOffset) : 0.0;
 #endif
   float d = layerDensity(p, lod, detail);
 #ifdef CLOUD_WEATHER
@@ -1404,6 +1407,8 @@ float cloudDensity(vec3 p, float lod, bool detail) {
       float sh = anvilShield(xz, alt, lod, detail) * uCloudDensity;
       if (sh > d) { d = sh; gStormW = 1.0; gStormAO = 0.8; gStormSoft = 1.0; gStormPileus = 0.0; }
     }
+    // 层外、但这一点有雷暴的云：补上塔脚加云量（见开头 covIn）
+    if (!covIn && d > 0.0) gCovBoost = stormLayerBoost(xz);
 #endif
 #ifdef CLOUD_TYPHOON
     if (uHurricane.w > 0.5) {

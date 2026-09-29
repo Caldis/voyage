@@ -515,6 +515,32 @@ void main() {
     // 与默认程序从层顶起步（i == 0 半步）一致——远离雷暴的层状云在两个程序里是同一套采样，换程序不跳变
     bool jumped = false;
 #ifdef CLOUD_STORM_SKIP
+#ifndef CLOUD_LENTICULAR
+    // PERF-TW04 ②：只落在砧盾段里的空白步（不在层状云包络、也不在雷暴包围柱里），用一个只查占据网格的小循环走过去。
+    // 这一段里一个样本的密度只可能来自砧盾，而砧盾先查占据网格（cloudDensity 的 cloudWeatherMaybe）：网格说空、样本又不在
+    // 层状云高度 / 任何单体的 √56·R 圆盘里时，完整步进也只会得到 0 → 空白步（步长 4dt、lastEmpty 同步）。采样点、步长与完整步进
+    // 逐一相同，只是不再每步跑一遍主循环体（飑线 4 个单体、砧盾连成一片，巡航高度的视线要在砧的高度层里空走上百公里：
+    // 去掉整个砧盾段 ×0.90，gpu-ab，handoff/PERF-TW04.md）。样本一旦可能有云就交回主循环，由它照常求值
+    if (refineOn && wasEmpty && fine == 0) {
+      for (int k = 0; k < 256 + uLoopGuard; k++) {
+        if (t >= seg.y || !(t >= anvSeg.x && t < anvSeg.y) || (t >= wxSeg.x && t < wxSeg.y) || (t >= laySeg.x && t < laySeg.y)) break;
+        float slq = 4.0 * clamp(t * 0.008, 0.06, 2.0);
+        float tq = t + slq * jitter;
+#ifdef WONDER_LAYER
+        if (wPending && tq >= tW) break;
+#endif
+        vec3 q = ro + rd * tq;
+        float altq = length(q) - BOTTOM;
+        // 层状云高度（留 10 m，边界的舍入与 layerDensity 的判断不必逐位一致）；外壳里网格说可能有雷暴的云（塔身、砧、砧盾都登记在网格里，
+        // cloudDensity 也是先查网格、网格说空就不求任何雷暴密度）
+        if (altq > uCloudBottom - 0.01 && altq < uCloudTop + 0.01) break;
+        if (altq >= uShellBottom && altq <= uShellTop && cloudWeatherMaybe(q.xz + uCloudOffset, altq)) break;
+        lastEmpty = tq;
+        t += slq;
+      }
+      if (t >= seg.y) break;
+    }
+#endif
     if (refineOn && wasEmpty && fine == 0 && !(t >= laySeg.x && t < laySeg.y) && !(t >= wxSeg.x && t < wxSeg.y) && !(t >= anvSeg.x && t < anvSeg.y)) {
       float tn = min(min(t < laySeg.x ? laySeg.x : 1e9, t < wxSeg.x ? wxSeg.x : 1e9), t < anvSeg.x ? anvSeg.x : 1e9);
       if (tn >= seg.y) break;

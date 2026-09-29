@@ -1,0 +1,16 @@
+[
+  {"name": "s1", "materials": {"clouds.marchMat": "base"}},
+  {"name": "cur"},
+  {"name": "cAnv8", "patch": {"clouds.marchMat": [
+    ["emptyK = 4.0;", "emptyK = 8.0;"]
+  ]}},
+  {"name": "cNoAnv", "patch": {"clouds.marchMat": [
+    ["    anvSeg = cloudRayShieldSpan(ro, rd);", ""]
+  ]}},
+  {"name": "cNoSatLite", "patch": {"clouds.marchMat": [
+    ["float stormTowersSdf(int si, vec4 c, vec2 xz, float alt, float lod, out float ao) {", "bool gNoSat = false;\nfloat stormTowersSdf(int si, vec4 c, vec2 xz, float alt, float lod, out float ao) {"],
+    ["    if (k >= nSat) break;", "    if (k >= nSat || gNoSat) break;"],
+    ["  float sdf = stormTowersSdf(si, c, xz, alt, lod, ao);\n  float pilL = gPileusD;", "  gNoSat = true;\n  float sdf = stormTowersSdf(si, c, xz, alt, lod, ao);\n  gNoSat = false;\n  float pilL = gPileusD;"]
+  ]}},
+  {"name": "s1b", "materials": {"clouds.marchMat": "base"}}
+]
