@@ -360,6 +360,15 @@ const HUR_BANDS_LIGHT = /* glsl */ `
   }
 `;
 
+// 雷暴 / 台风共用的哈希（CLOUD_COMMON 的天气段里用；clouds.ts 的 STORM_SEED_FRAG 也用同一段文本在 GPU 上算单体种子再读回，
+// 见 storm-shield.ts：这个哈希是混沌的，CPU 上模拟不出与 GPU 相同的结果）
+export const STORM_HASH22_GLSL = /* glsl */ `vec2 stormHash22(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.xx + p3.yz) * p3.zy);
+}
+`;
+
 export const CLOUD_COMMON = /* glsl */ `
 uniform sampler3D uShapeNoise;
 uniform sampler3D uDetailNoise;
@@ -723,12 +732,7 @@ float gStormAO = 1.0;
 float gStormSoft = 0.0;   // 1：属于软边的部分（雷暴的砧和雨幡、台风的卷云盖和砧），见 gStormSoftHit / gHurSoft
 
 // 雷暴、台风雨带共用的两个小工具
-vec2 stormHash22(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.xx + p3.yz) * p3.zy);
-}
-
+${STORM_HASH22_GLSL}
 float sminStorm(float a, float b, float k) {
   float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
   return mix(b, a, h) - k * h * (1.0 - h);

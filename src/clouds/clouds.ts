@@ -6,9 +6,9 @@ import type { FullscreenPass } from "../render/pass";
 import { LIGHTS_COMMON } from "../render/lights.glsl";
 import { VIEW_COMMON } from "../render/view.glsl";
 import { createWonderCloudUniforms, wonderCloudGlsl, wonderMarchGlsl } from "../wonders/wonder-cloud.glsl";
-import { CLOUD_COMMON, CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES, OCC_LAYERS, OCC_N, OCC_SPACING } from "./clouds.glsl";
+import { CLOUD_COMMON, CLOUD_SHADOW_EXT, CLOUD_SHADOW_RES, OCC_LAYERS, OCC_N, OCC_SPACING, STORM_HASH22_GLSL } from "./clouds.glsl";
 import { LENTICULAR_GLSL } from "./lenticular.glsl";
-import { updateShieldUniforms } from "./storm-shield";
+import { type StormSeeds, updateShieldUniforms } from "./storm-shield";
 import type { CloudNoise } from "./noise";
 import { BLUE_NOISE_RG8_BASE64, BLUE_NOISE_SIZE } from "./blue-noise";
 
@@ -1237,6 +1237,20 @@ void main() {
 }
 `;
 
+// 雷暴单体的种子（PERF-TW04，见 storm-shield.ts）：5×4 个像素，第 i 行是第 i 个单体，第 0 列 sd = stormSeed2(c)，第 k + 1 列是伴生塔 k 的 hk。
+// 式子与改动前着色器里逐样本算的逐字相同（stormSeed2 / stormTowersSdf 的伴生塔循环），读回后由 CPU 写进 uStormSd / uSatA / uSatB 等
+const STORM_SEED_FRAG = /* glsl */ `
+uniform vec4 uStorms[4];
+${STORM_HASH22_GLSL}
+vec2 stormSeed2(vec4 c) { return stormHash22(vec2(c.z * 7.13 + c.w * 0.37, c.w * 3.71 + c.z * 1.9)); }
+void main() {
+  ivec2 ij = ivec2(gl_FragCoord.xy);
+  vec2 sd = stormSeed2(uStorms[ij.y]);
+  int k = ij.x - 1;
+  gl_FragColor = vec4(k < 0 ? sd : stormHash22(sd * 37.1 + float(k) * 1.37), 0.0, 1.0);
+}
+`;
+
 export interface CloudPreset {
   id: string;
   name: string;
@@ -1509,6 +1523,32 @@ export class Clouds {
   private readonly resolveMat: THREE.ShaderMaterial;
   // ---- 雷暴 / 台风的占据网格（PERF-2）----
   private readonly occMat: THREE.ShaderMaterial;
+  // 雷暴单体种子的 GPU 计算与读回（PERF-TW04，见 updateStormSeeds）
+  private stormSeedMatLazy: THREE.ShaderMaterial | null = null;
+  private readonly stormSeedTarget = new THREE.WebGLRenderTarget(5, 4, {
+    type: THREE.FloatType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    depthBuffer: false,
+  });
+  private readonly stormSeedBuf = new Float32Array(5 * 4 * 4);
+  private readonly stormSeeds: StormSeeds[] = [0, 1, 2, 3].map(() => ({ sd: [0, 0] as [number, number], hk: [[0, 0], [0, 0], [0, 0], [0, 0]] as Array<[number, number]> }));
+  private stormSeedKey = "";
+  private get stormSeedMat() {
+    if (!this.stormSeedMatLazy) {
+      this.stormSeedMatLazy = new THREE.ShaderMaterial({
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+        vertexShader: FULLSCREEN_VERT,
+        fragmentShader: STORM_SEED_FRAG,
+        uniforms: { uStorms: this.uniforms.uStorms },
+      });
+      this.stormSeedMatLazy.name = "cloud-storm-seed";
+    }
+    return this.stormSeedMatLazy;
+  }
   /** 前台（步进正在查的）和后台（正在分帧重建的）两张网格 */
   private occ = [occTarget(), occTarget()];
   /** 前台网格对应的天气签名（雷暴、台风、高空风、云壳高度）；天气一变前台立刻作废 */
@@ -2023,6 +2063,28 @@ export class Clouds {
     mu.uOccValid.value = 1;
   }
 
+  /**
+   * 雷暴单体的种子（PERF-TW04，见 storm-shield.ts）：单体的半径 / 砧顶变了（新摆雷暴、面板切天气）才在 GPU 上算一次、同步读回
+   * （5×4 个像素，一次几十微秒的等待；平时每帧只比一次键）。种子是混沌哈希，必须用 GPU 的结果，CPU 模拟对不上
+   */
+  private updateStormSeeds() {
+    const u = this.uniforms;
+    const n = u.uStormCount.value;
+    const key = u.uStorms.value.slice(0, n).map((v) => `${v.z},${v.w}`).join(";");
+    if (key === this.stormSeedKey) return;
+    this.stormSeedKey = key;
+    const renderer = this.pass.renderer;
+    const prev = renderer.getRenderTarget();
+    this.pass.render(this.stormSeedMat, this.stormSeedTarget);
+    renderer.readRenderTargetPixels(this.stormSeedTarget, 0, 0, 5, 4, this.stormSeedBuf);
+    renderer.setRenderTarget(prev);
+    const b = this.stormSeedBuf;
+    for (let i = 0; i < 4; i++) {
+      const at = (k: number): [number, number] => [b[(i * 5 + k) * 4], b[(i * 5 + k) * 4 + 1]];
+      this.stormSeeds[i] = { sd: at(0), hk: [at(1), at(2), at(3), at(4)] };
+    }
+  }
+
   /** 每几帧调用一次：在 GPU 上算飞机位置的云密度，异步读回（不阻塞渲染） */
   probe(renderer: THREE.WebGLRenderer, heading: THREE.Vector3) {
     this.ensureAuxCompiled(renderer);
@@ -2132,7 +2194,10 @@ export class Clouds {
    */
   render(motion: THREE.Vector3, camBasis: THREE.Matrix3, cabinToWorld: THREE.Matrix3) {
     cumulusShape(this.uniforms);
-    updateShieldUniforms(this.uniforms);
+    if (this.uniforms.uStormCount.value > 0) {
+      this.updateStormSeeds();
+      updateShieldUniforms(this.uniforms, (i) => this.stormSeeds[i]);
+    }
     this.updateOccupancy();
     this.updateShadow();
     this.marchMat.uniforms.uFrame.value = this.frame++ % 64;

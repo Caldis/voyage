@@ -9,9 +9,8 @@ let n = 0;
 let worst = 0;
 for (let it = 0; it < 400; it++) {
   const R = 3.5 + Math.random() * 3.5;
-  const top = 10 + Math.random() * 6;
-  const s = shieldShape(R, top);
-  // 故意扰动一点形状参数（模拟 GPU 哈希末位差）：±0.2%
+  const s = shieldShape(R, [Math.random(), Math.random()]);
+  // 故意扰动一点形状参数：±0.2%
   const e = fitShieldEllipse(R, s);
   const sp = { Lx: s.Lx * (1 + (Math.random() - 0.5) * 0.004), Ly: s.Ly * (1 + (Math.random() - 0.5) * 0.004), k: s.k + (Math.random() - 0.5) * 0.001 };
   for (let j = 0; j < 20000; j++) {
