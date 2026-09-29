@@ -1,0 +1,74 @@
+[
+ {
+  "p": {
+   "preset": "wpac",
+   "seat": "left",
+   "date": "2026-09-27",
+   "time": 1030,
+   "coverage": 0.3,
+   "cabin-light": false,
+   "wing-pos": "-4"
+  },
+  "head": [
+   0,
+   0.02,
+   -0.3
+  ],
+  "name": "sun-behind-on",
+  "js": "v.director.setHeading(0); v.state.heading = 0; v.state.bankDeg = 0; for (let i = 0; i < 10; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.enabled = true; v.wonders.trigger(\"vcontinent\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.61 }); for (let i = 0; i < 6; i++) await new Promise((r) => requestAnimationFrame(r)); for (let i = 0; i < 480 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); for (let i = 0; i < 30; i++) await new Promise((r) => requestAnimationFrame(r)); const s = v.groundDetail.variantStatus; return v.wonders.describe() + ' ' + s.wanted + '/' + s.shown;"
+ },
+ {
+  "p": {
+   "preset": "wpac",
+   "seat": "left",
+   "date": "2026-09-27",
+   "time": 1030,
+   "coverage": 0.3,
+   "cabin-light": false,
+   "wing-pos": "-4"
+  },
+  "head": [
+   0,
+   0.02,
+   -0.3
+  ],
+  "name": "sun-behind-off",
+  "js": "v.director.setHeading(0); v.state.heading = 0; v.state.bankDeg = 0; for (let i = 0; i < 10; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.clear(); v.wonders.enabled = false; for (let i = 0; i < 6; i++) await new Promise((r) => requestAnimationFrame(r)); for (let i = 0; i < 480 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); for (let i = 0; i < 30; i++) await new Promise((r) => requestAnimationFrame(r)); return 'off';"
+ },
+ {
+  "p": {
+   "preset": "wpac",
+   "seat": "left",
+   "date": "2026-09-27",
+   "time": 960,
+   "coverage": 0.3,
+   "cabin-light": false,
+   "wing-pos": "-4"
+  },
+  "head": [
+   0,
+   0.02,
+   -0.3
+  ],
+  "name": "sunW-960",
+  "js": "v.director.setHeading(0); v.state.heading = 0; v.state.bankDeg = 0; for (let i = 0; i < 10; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.enabled = true; v.wonders.trigger(\"vcontinent\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.61 }); for (let i = 0; i < 6; i++) await new Promise((r) => requestAnimationFrame(r)); for (let i = 0; i < 480 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); for (let i = 0; i < 30; i++) await new Promise((r) => requestAnimationFrame(r)); const s = v.groundDetail.variantStatus; return v.wonders.describe() + ' ' + s.wanted + '/' + s.shown;"
+ },
+ {
+  "p": {
+   "preset": "wpac",
+   "seat": "left",
+   "date": "2026-09-27",
+   "time": 840,
+   "coverage": 0.3,
+   "cabin-light": false,
+   "wing-pos": "-4"
+  },
+  "head": [
+   0,
+   0.02,
+   -0.3
+  ],
+  "name": "sunW-840",
+  "js": "v.director.setHeading(0); v.state.heading = 0; v.state.bankDeg = 0; for (let i = 0; i < 10; i++) await new Promise((r) => requestAnimationFrame(r)); v.wonders.enabled = true; v.wonders.trigger(\"vcontinent\", { forwardOffsetDeg: 0, distKm: 230, reveal: 1, seed: 0.61 }); for (let i = 0; i < 6; i++) await new Promise((r) => requestAnimationFrame(r)); for (let i = 0; i < 480 && v.groundDetail.pending; i++) await new Promise((r) => setTimeout(r, 250)); for (let i = 0; i < 30; i++) await new Promise((r) => requestAnimationFrame(r)); const s = v.groundDetail.variantStatus; return v.wonders.describe() + ' ' + s.wanted + '/' + s.shown;"
+ }
+]

@@ -1,0 +1,181 @@
+[
+  {
+    "name": "vcont-noon-live",
+    "scene": "ws-vcont-noon",
+    "variants": [
+      {
+        "name": "cur"
+      },
+      {
+        "name": "cur2"
+      }
+    ],
+    "live": {
+      "crop": [
+        390,
+        60,
+        820,
+        540
+      ],
+      "frames": 240,
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          180
+        ],
+        "岩壁": [
+          0,
+          180,
+          820,
+          250
+        ],
+        "脚下与云": [
+          0,
+          430,
+          820,
+          110
+        ]
+      },
+      "thr": 16,
+      "frac": 0.05
+    }
+  },
+  {
+    "name": "vcont-dusk-live",
+    "scene": "ws-vcont-dusk",
+    "variants": [
+      {
+        "name": "cur"
+      },
+      {
+        "name": "cur2"
+      }
+    ],
+    "live": {
+      "crop": [
+        390,
+        60,
+        820,
+        540
+      ],
+      "frames": 240,
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          180
+        ],
+        "岩壁": [
+          0,
+          180,
+          820,
+          250
+        ],
+        "脚下与云": [
+          0,
+          430,
+          820,
+          110
+        ]
+      },
+      "thr": 16,
+      "frac": 0.05
+    }
+  },
+  {
+    "name": "vcont-night-live",
+    "scene": "ws-vcont-night",
+    "variants": [
+      {
+        "name": "cur"
+      },
+      {
+        "name": "cur2"
+      }
+    ],
+    "live": {
+      "crop": [
+        390,
+        60,
+        820,
+        540
+      ],
+      "frames": 240,
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          180
+        ],
+        "岩壁": [
+          0,
+          180,
+          820,
+          250
+        ],
+        "脚下与云": [
+          0,
+          430,
+          820,
+          110
+        ]
+      },
+      "thr": 16,
+      "frac": 0.05
+    }
+  },
+  {
+    "name": "vcont-backlit-live",
+    "scene": "ws-vcont-backlit",
+    "variants": [
+      {
+        "name": "on",
+        "js": "v.wonders.enabled = true; v.wonders.active = v.__vcSave;"
+      },
+      {
+        "name": "off",
+        "js": "v.wonders.clear(); v.wonders.enabled = false;"
+      },
+      {
+        "name": "on2",
+        "js": "v.wonders.enabled = true; v.wonders.active = v.__vcSave;"
+      }
+    ],
+    "live": {
+      "crop": [
+        390,
+        200,
+        820,
+        480
+      ],
+      "frames": 240,
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          160
+        ],
+        "岩壁": [
+          0,
+          160,
+          820,
+          200
+        ],
+        "脚下与海面": [
+          0,
+          360,
+          820,
+          120
+        ]
+      },
+      "thr": 16,
+      "frac": 0.05
+    },
+    "pre": "v.__vcSave = v.wonders.active; return v.wonders.describe();"
+  }
+]

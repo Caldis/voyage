@@ -4,6 +4,7 @@ import { createWonderCloudUniforms } from "./wonder-cloud.glsl";
 import { applyTetherUniforms, createTetherUniforms, tetherShape, type TetherShape } from "./tether-shape";
 import { applyPillarUniforms, createPillarUniforms, pillarShape, type PillarShape } from "./pillar-shape";
 import { applyRingUniforms, createRingUniforms, RING_SKIN, ringShape, type RingShape } from "./ring-shape";
+import { applyContinentUniforms, CONT_SKIN, continentShape, createContinentUniforms, type ContinentShape } from "./continent-shape";
 
 /**
  * 奇观系统（W01）：触发、放置、编排，驱动着色器的 uniform。设计见 research/WONDERS.md §5。
@@ -63,6 +64,8 @@ export interface ActiveWonder {
   pillars?: PillarShape;
   /** 天环（skin 3 = RING_SKIN）按种子生成的环平面与尺寸（WS08，ring-shape.ts） */
   ring?: RingShape;
+  /** 垂直大陆（skin 4 = CONT_SKIN）按种子生成的台地轮廓 / 顶沿 / 岩性（WS09，continent-shape.ts） */
+  cont?: ContinentShape;
 }
 
 export interface TriggerOptions {
@@ -164,6 +167,8 @@ export class WonderSystem {
     ...createPillarUniforms(),
     // 天环（WS08，只有窗外程序的 OWT 变体读）：开关另立 uRingOn，不经 uWonderOn（那会让天梯 / 建木那段也跑）
     ...createRingUniforms(),
+    // 垂直大陆（WS09，只有窗外程序的 OWV 变体读）：开关另立 uContOn，同天环
+    ...createContinentUniforms(),
     // 云间层（W00）：云步进程序读这一组（经 main.ts 合进场景 uniforms，Clouds 构造时共用同一批对象）
     ...createWonderCloudUniforms(),
   };
@@ -297,6 +302,7 @@ export class WonderSystem {
     };
     if (def.look?.skin === 0) this.active.tether = tetherShape(this.active.seed);
     if (def.look?.skin === 2) this.active.pillars = pillarShape(this.active.seed, bearing);
+    if (def.look?.skin === CONT_SKIN) this.active.cont = continentShape(this.active.seed, bearing, dist);
     // 天环：环平面按种子取（在这个方位上横贯 / 斜贯天空），锚点换成环在窗口方向上的星下点（小地图、飞过判断用）
     if (def.look?.skin === RING_SKIN) {
       const ring = (this.active.ring = ringShape(this.active.seed, ctx.lat, ctx.lon, ctx.altitudeKm, bearing));
@@ -332,6 +338,7 @@ export class WonderSystem {
       this.uniforms.uWonderOn.value = 0;
       this.uniforms.uWonderVol.value = 0;
       this.uniforms.uRingOn.value = 0;
+      this.uniforms.uContOn.value = 0;
       return;
     }
     if (this.cooldown > 0) this.cooldown -= dt;
@@ -436,6 +443,7 @@ export class WonderSystem {
     u.uWonderOn.value = 0;
     u.uWonderVol.value = 0;
     u.uRingOn.value = 0;
+    u.uContOn.value = 0;
     if (!ctx || !a || a.reveal <= 0) return;
     if (a.ring) {
       applyRingUniforms(u, a.ring, ctx.lat, ctx.lon, a.reveal, a.seed);
@@ -454,6 +462,11 @@ export class WonderSystem {
     const r = a.reveal;
     const front =
       r < 0.9 ? FRONT_MIN_KM * Math.pow(FRONT_MID_KM / FRONT_MIN_KM, ease(r / 0.9)) : FRONT_MID_KM * Math.pow(FRONT_MAX_KM / FRONT_MID_KM, (r - 0.9) / 0.1);
+    // 垂直大陆（WS09）：只写自己的一组 uniform 与 uContOn（不写 uWonderOn / uWonderShape，见 catalog.ts 顶部分配表）
+    if (a.cont) {
+      applyContinentUniforms(u, a.cont, u.uWonderAxis.value, ctx.lat, ctx.altitudeKm, front, a.seed);
+      return;
+    }
     const look = a.def.look;
     // w：有航标灯的（天梯）= 1；没有的（建木）= −种子（WS05：建木的尺寸按种子在着色器里取）
     u.uWonderShape.value.set(look.radiusKm, front, look.skin, look.beacons ? 1 : -a.seed);
@@ -511,7 +524,9 @@ export class WonderSystem {
         ? ` · ${a.pillars.pillars.length} 根 · 最高 ${Math.max(...a.pillars.pillars.map((p) => p[3])).toFixed(0)} km`
         : a.ring
           ? ` · 环高 ${a.ring.hKm.toFixed(0)} km · 宽 ${(2 * a.ring.halfW).toFixed(0)} km · 仰角 ${a.ring.elevDeg.toFixed(0)}° · 倾斜 ${a.ring.tiltDeg.toFixed(0)}°`
-          : "";
+          : a.cont
+            ? ` · 长 ${a.cont.lengthKm.toFixed(0)} km · 顶沿最高 ${a.cont.maxH.toFixed(0)} km`
+            : "";
     return `${name} · ${phase} · 方位 ${bearingDeg.toFixed(0)}° · ${distKm.toFixed(0)} km${size}`;
   }
 

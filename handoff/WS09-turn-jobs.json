@@ -1,0 +1,102 @@
+[
+  {
+    "name": "vcont-turn-live",
+    "scene": "ws-vcont-noon",
+    "pre": "v.__vcSave = v.wonders.active; return v.wonders.describe();",
+    "variants": [
+      {
+        "name": "on",
+        "js": "v.wonders.enabled = true; v.wonders.active = v.__vcSave; v.director.setHeading(180); v.state.heading = 180; v.state.bankDeg = 0; v.director.turnBy(-25); return v.wonders.describe();"
+      },
+      {
+        "name": "off",
+        "js": "v.wonders.clear(); v.wonders.enabled = false; v.director.setHeading(180); v.state.heading = 180; v.state.bankDeg = 0; v.director.turnBy(-25); return '关';"
+      },
+      {
+        "name": "on2",
+        "js": "v.wonders.enabled = true; v.wonders.active = v.__vcSave; v.director.setHeading(180); v.state.heading = 180; v.state.bankDeg = 0; v.director.turnBy(-25); return v.wonders.describe();"
+      }
+    ],
+    "live": {
+      "crop": [
+        390,
+        60,
+        820,
+        540
+      ],
+      "frames": 240,
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          180
+        ],
+        "岩壁": [
+          0,
+          180,
+          820,
+          250
+        ],
+        "脚下与云": [
+          0,
+          430,
+          820,
+          110
+        ]
+      },
+      "thr": 16,
+      "frac": 0.05
+    }
+  },
+  {
+    "name": "vcont-turn50-live",
+    "scene": "ws-vcont-noon",
+    "pre": "v.__vcSave = v.wonders.active; return v.wonders.describe();",
+    "variants": [
+      {
+        "name": "on",
+        "js": "v.wonders.enabled = true; v.wonders.active = v.__vcSave; v.director.setHeading(180); v.state.heading = 180; v.state.bankDeg = 0; v.director.turnBy(-50); return v.wonders.describe();"
+      },
+      {
+        "name": "off",
+        "js": "v.wonders.clear(); v.wonders.enabled = false; v.director.setHeading(180); v.state.heading = 180; v.state.bankDeg = 0; v.director.turnBy(-50); return '关';"
+      },
+      {
+        "name": "on2",
+        "js": "v.wonders.enabled = true; v.wonders.active = v.__vcSave; v.director.setHeading(180); v.state.heading = 180; v.state.bankDeg = 0; v.director.turnBy(-50); return v.wonders.describe();"
+      }
+    ],
+    "live": {
+      "crop": [
+        390,
+        60,
+        820,
+        540
+      ],
+      "frames": 240,
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          180
+        ],
+        "岩壁": [
+          0,
+          180,
+          820,
+          250
+        ],
+        "脚下与云": [
+          0,
+          430,
+          820,
+          110
+        ]
+      },
+      "thr": 16,
+      "frac": 0.05
+    }
+  }
+]
