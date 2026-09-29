@@ -420,6 +420,25 @@ vec3 wonderContinent(vec3 L, vec3 rd, float tLimit) {
     vec3 lFront = max(apL, Lbg * frontFrac * moonW);
     // 黄昏：地影里的岩壁画成比天空暗约两成的剪影（同巨柱群；查表的内散射在这里和整条视线的天空几乎一样亮，不压就看不见岩壁）
     lFront = mix(lFront, min(lFront, Lbg * 0.78), duskW);
+    // 逆光（WS09 审查）：太阳在崖面背后时，相机到岩壁之间的空气落在岩壁自己的影子里——影长 (Hc − y)/tanα（太阳 4° 时 400–1300 km），
+    // 占视线长度的比例 shadowF 那一段没有太阳的单次散射；查表的内散射默认整段都被照着，岩壁就和同方向的天空一样亮、整块隐形。
+    // 按比例扣掉，留三成（天光与多次散射），逆光时是有空气透视层次的暗剪影，不是纯黑贴片。云那一步按近块的几何算
+    vec4 gs1 = isCloud ? gB1 : g1;
+    float azS = isCloud ? gB2.x : g2.x;
+    vec3 nWh = E * cos(azS) + S * sin(azS);                 // 崖面水平外法线（窗外坐标）
+    vec3 sH = uSunDir - up * dot(uSunDir, up);
+    float sHl = max(length(sH), 1e-4);
+    float behind = gs1.w > 0.0 ? smoothstep(0.0, 0.25, -dot(nWh, sH) / sHl) : 0.0;
+    float shadowF = behind * clamp(max(gs1.z - gs1.y, 0.0) * sHl / max(dot(uSunDir, up), 0.02) / max(tk, 1.0), 0.0, 1.0);
+    lFront *= 1.0 - 0.7 * shadowF;
+    // 太阳再高一些（影长只占视线的几成）时，查表的前景空气里还有太阳附近强烈的前向散射，岩壁仍和天空几乎一样亮：
+    // 背光时和黄昏一样，至少挡掉身后那段空气与天空的约两成（背景 × 0.78，同黄昏剪影），轮廓一眼可见
+    lFront = mix(lFront, min(lFront, Lbg * 0.78), behind * (1.0 - duskW));
+    // 贴壁的云 / 雾在顶沿以下也在岩壁的影子里（不然逆光时一圈发亮的云挂在暗墙上）
+    if (isCloud) eSun *= 1.0 - behind * smoothstep(-1.0, 1.0, gs1.z - hq);
+    // 背光的崖面朝着的是岩壁脚下那片被它自己挡住阳光的海面 / 云海：地球反光按背光程度扣掉大半（顺光时这一项占崖面照度的两三成，
+    // 逆光时不扣，暗面就比天空还亮，岩壁又隐形了）
+    eUp *= 1.0 - 0.8 * behind;
     // 亮度封顶（同巨柱群）：暮色里被照亮的顶沿不超过同方向天空的 1.3–2 倍；比例按半影的参考透射率定，「没有太阳」的一份按 visS 混
     float capLum = mix(4.0, mix(1.3, 2.0, smoothstep(10.0, 150.0, hq)), duskW) * wonderLum(Lbg);
     vec3 eRest = eMoon + eSkyUp + eUp;

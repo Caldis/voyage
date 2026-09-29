@@ -127,5 +127,55 @@
       "thr": 16,
       "frac": 0.05
     }
+  },
+  {
+    "name": "vcont-backlit-live",
+    "scene": "ws-vcont-backlit",
+    "variants": [
+      {
+        "name": "on",
+        "js": "v.wonders.enabled = true; v.wonders.active = v.__vcSave;"
+      },
+      {
+        "name": "off",
+        "js": "v.wonders.clear(); v.wonders.enabled = false;"
+      },
+      {
+        "name": "on2",
+        "js": "v.wonders.enabled = true; v.wonders.active = v.__vcSave;"
+      }
+    ],
+    "live": {
+      "crop": [
+        390,
+        200,
+        820,
+        480
+      ],
+      "frames": 240,
+      "regions": {
+        "顶沿": [
+          0,
+          0,
+          820,
+          160
+        ],
+        "岩壁": [
+          0,
+          160,
+          820,
+          200
+        ],
+        "脚下与海面": [
+          0,
+          360,
+          820,
+          120
+        ]
+      },
+      "thr": 16,
+      "frac": 0.05
+    },
+    "pre": "v.__vcSave = v.wonders.active; return v.wonders.describe();"
   }
 ]
