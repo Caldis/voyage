@@ -15,6 +15,8 @@ import { TRAFFIC_COMMON } from "./traffic.glsl";
 import { VIEW_COMMON } from "./view.glsl";
 import { HAZE_COMMON } from "./haze.glsl";
 import { WONDER_SKY_COMMON } from "./wonder-sky.glsl";
+import { WONDER_PILLARS_COMMON } from "../wonders/pillars.glsl";
+import { ORBIT_RING_COMMON } from "../wonders/ring.glsl";
 import { OPTICS_COMMON } from "./optics.glsl";
 import { RAIL_FAR_COMMON, RAIL_FAR_HIT } from "../rail/far-view.glsl";
 import { railFarUniforms } from "../rail/far-view";
@@ -71,6 +73,14 @@ ${HAZE_COMMON}
 // 默认程序（启动批次、冷启动关键路径）预处理后不含它们；太阳圆盘 + 绿闪（opticsSunDisk）每个程序都有
 #ifdef OUTSIDE_WONDER
 ${WONDER_SKY_COMMON}
+// 巨柱群（WS07，wonders/pillars.glsl.ts）只在 OWP 变体里；OW 变体预处理后与改动前逐字相同
+#ifdef WONDER_PILLARS
+${WONDER_PILLARS_COMMON}
+#endif
+// 天环（WS08，wonders/ring.glsl.ts）只在 OWT 变体里（按需后台编译）；OW / DOW / DROW 预处理后与改动前逐字相同
+#ifdef ORBIT_RING
+${ORBIT_RING_COMMON}
+#endif
 #endif
 ${OPTICS_COMMON}
 
@@ -209,10 +219,28 @@ vec3 outsideRadiance(vec3 rd, vec4 cloud) {
   // 线在地面 / 海面之前才可见（下半截沉到地平线以下时由 tGround 截掉）。奇观模式关时第一行就返回。
   // 只在 OUTSIDE_WONDER 变体里（PERF-13）：uWonderOn = 0 时两个程序逐像素相同，选哪个由 wantedOutsideKey 决定
 #ifdef OUTSIDE_WONDER
+#ifdef WONDER_PILLARS
+  L = wonderPillars(L, rd, hitGround ? tGround : 1e9);
+#elif defined(ORBIT_RING)
+  // 天环（WS08，wonders/ring.glsl.ts）：在大气层外，比所有云都远；盖住的地方不画点星（天环在场时 uWonderOn = 0，不调天梯 / 建木）
+  L = orbitRing(L, rd, hitGround);
+  gStarVis *= 1.0 - gRingCov;
+  // 月亮在上面已加进背景，orbitRing 只往上叠——盖住的部分把月盘连光晕减掉（WS08 审查：否则环读成透明玻璃带）
+  if (!hitGround) L -= gRingCov * moonDisk(rd) * sunTransmittance(uCamR, rd.y);
+#else
   L = wonderSky(L, rd, hitGround ? tGround : 1e9);
 #endif
+  // WS-STAR：天梯 / 建木（wonderSky）此前漏了这一行，实体挡住的天空仍标成「看得到点星」，夜里点星整根穿柱而出
+  // （多角度 / 多种子 on-off 对照 + 回退代码复测核实，见 handoff/WS-STAR.md）。巨柱群 / 天梯 / 建木共用同一个
+  // gWonderCov，挪到分支外统一乘一次即可，OWP 预处理后逐字不变
+  gStarVis *= 1.0 - gWonderCov; // 奇观实体挡住它身后的点星（点星在舱内程序画，只认这个标记）
+#endif
   // 太阳圆盘（T17 起在 optics.glsl.ts）：地平线按亚像素解析裁切（含绿闪），所以天空、地面两条路径都要走这里
+#ifdef ORBIT_RING
+  L += opticsSunDisk(rd, hitGround) * (1.0 - gRingCov); // 天环挡住身后的太阳圆盘（WS08 审查）
+#else
   L += opticsSunDisk(rd, hitGround);
+#endif
   // 地形挡住它后面的云（T38，clouds.glsl.ts 的 cloudBeforeGround）：云步进不知道地形，只去掉地面之后那一段的云
 #ifdef RAIL
   // 火车远景（TR03）：轮廓上只盖住一部分像素的地形，身后的云也只挡掉那一部分（否则云在山脊处被一刀切成台阶）
@@ -291,18 +319,24 @@ export function outsideRailFragment() {
 /**
  * 窗外程序的变体（PERF-13，照 PERF-10 云步进的写法）。键 = 特性字母：
  * D 低空细节（GROUND_DETAIL，T02）、R 火车远景（RAIL，TR03，源码另拼 rail/far-view.glsl.ts）、
- * O 罕见光学（OUTSIDE_OPTICS：宝光 / 本机影子 / 幻日 / 22° 晕，T17）、W 天幕层奇观（OUTSIDE_WONDER：天梯 / 建木，W01 / W01b）。
+ * O 罕见光学（OUTSIDE_OPTICS：宝光 / 本机影子 / 幻日 / 22° 晕，T17）、W 天幕层奇观（OUTSIDE_WONDER：天梯 / 建木，W01 / W01b）、
+ * P 巨柱群（WONDER_PILLARS，WS07：和 W 一起用，把天幕层奇观的调用点换成 wonderPillars）。
  *
  * 只有四个组合真的存在（组合矩阵的取舍见 handoff/PERF-13.md）：
  * - ""     默认：启动批次里编，冷启动的关键路径。不含 O / W，太阳圆盘 + 绿闪照旧
  * - "OW"   巡航（4 km 以上）时有罕见光学或天幕层奇观：首帧后后台预编（O、W 不再拆开——两者都常在巡航出现，拆开只会多一个程序）
  * - "DOW"  低空（4 km 以下）：和改动前的低空细节变体是同一个程序（O / W 总是带着，低空细节本来就是按需后台编的，不在关键路径上）
  * - "DROW" 火车：同上，和改动前的火车变体是同一个程序
+ * - "OWP"  巨柱群在场（WS07）：巡航和低空都用它（巨柱群在 4.5 km 以下本来就退场），只在巨柱群在场时才后台编译，不预编
+ * - "OWT"  天环在场（WS08，T = ORBIT_RING；字母 R 已给火车）：同 OWP，只在天环在场时才后台编译（离线 FXC 约 18 s，天环浮现本身 60 s），
+ *          编好之前退到默认（不画天环）。不放进 OW：OW 同时承载罕见光学和天梯 / 建木，多编一段天环会让它们都晚可用
  * 选哪个只由 wantedOutsideKey 决定；没编好时按 OUTSIDE_FALLBACK 退到已编好的（O / W 的效果暂时不画，不会画错）。
  */
-export type OutsideKey = "" | "OW" | "DOW" | "DROW";
-export const OUTSIDE_KEYS: readonly OutsideKey[] = ["", "OW", "DOW", "DROW"];
-const OUTSIDE_FEATURE_DEFINES: Record<string, string> = { D: "GROUND_DETAIL", R: "RAIL", O: "OUTSIDE_OPTICS", W: "OUTSIDE_WONDER" };
+export type OutsideKey = "" | "OW" | "DOW" | "DROW" | "OWP" | "OWT";
+export const OUTSIDE_KEYS: readonly OutsideKey[] = ["", "OW", "DOW", "DROW", "OWP", "OWT"];
+const OUTSIDE_FEATURE_DEFINES: Record<string, string> = { D: "GROUND_DETAIL", R: "RAIL", O: "OUTSIDE_OPTICS", W: "OUTSIDE_WONDER", P: "WONDER_PILLARS", T: "ORBIT_RING" };
+/** 天幕层奇观的皮肤编号（uWonderShape.z）：2 = 巨柱群（WS07），要 OWP 变体画 */
+export const PILLARS_SKIN = 2;
 
 /** 变体键 → three 的 defines（lint-shaders.mjs / shader-budget.mjs 离线枚举也用这一份，不要另写） */
 export function outsideVariantDefines(key: OutsideKey): Record<string, number> {
@@ -334,6 +368,12 @@ export interface OutsideWant {
  */
 export function wantedOutsideKey(w: OutsideWant): { key: OutsideKey; fallback: OutsideKey[] } {
   const wonder = ((w.uniforms.uWonderOn?.value as number | undefined) ?? 0) > 0.5;
+  // 巨柱群（WS07）：OW / DOW 里的天幕层调用点是天梯 / 建木（皮肤 2 会被当成建木画），所以只用 OWP、编好之前退到默认（不画奇观）。
+  // 火车模式照旧（奇观在低空本来就退场）。只看 uWonderOn：天环（WS08）不写 uWonderShape，那里可能还留着上一个奇观的皮肤号
+  const skin = (w.uniforms.uWonderShape?.value as THREE.Vector4 | undefined)?.z ?? 0;
+  if (wonder && !w.rail && Math.round(skin) === PILLARS_SKIN) return { key: "OWP", fallback: [""] };
+  // 天环（WS08）：自己的开关 uRingOn，只在 OWT 里画，编好之前退到默认（不画天环）；火车模式不画（天环在低空本来就退场）
+  if (((w.uniforms.uRingOn?.value as number | undefined) ?? 0) > 0.5 && !w.rail) return { key: "OWT", fallback: [""] };
   const extras = wonder || opticsWanted(w.uniforms);
   const tail: OutsideKey[] = extras ? ["OW", ""] : [""];
   if (w.rail) return { key: "DROW", fallback: ["DOW", ...tail] };

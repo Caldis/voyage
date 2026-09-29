@@ -40,6 +40,19 @@
          页脚折叠为一行。折叠状态记忆在 voyage.pref.panel（ui.ts setupPanelFoldUi），只记用户亲手展开 / 折叠的。
          控件 id / 选项 value 全部原样保留（scripts/scenarios.mjs 的 applyScene 按 id 设值，回归场景照常）。 -->
     <aside id="panel" aria-label="控制面板">
+      <!-- UX-4（PANEL_UX_GUIDE §9）：窄屏 / 矮屏（宽 ≤ 720px 或高 ≤ 500px，见 style.css 媒体查询）下的抽屉把手。
+           桌面宽屏下 .panel-handle 常年 display:none，不占地方、不改变桌面布局（#panel 逐位不变）。窄屏下这是
+           收起状态唯一可见的一条：抓手 + 「此刻」一行摘要（#panel-peek，内容跟 #now-line1 同步，见 ui.ts
+           updateInfo）+ 展开 / 收起指示。整条是一个原生 <button>（键盘 Enter / Space 可用），点击切换展开 /
+           收起；也支持按住上下拖动（pointer events，见 ui.ts setupDrawerUi）。展开状态记忆沿用 UX-3 的偏好
+           存储方式（voyage.pref.panel，try/catch、只记 isTrusted 的操作）。桌面上完全没有这一条，`H`
+           仍然是隐藏 / 显示整个面板，与抽屉展开状态是两件事（互不影响）。 -->
+      <button id="panel-handle" type="button" class="panel-handle" aria-expanded="false">
+        <span class="panel-grip" aria-hidden="true"></span>
+        <span id="panel-peek" class="panel-peek"></span>
+        <span class="panel-handle-icon" aria-hidden="true">▲</span>
+      </button>
+      <div id="panel-body" class="panel-body">
       <h1>航行伴侣 <small>按 <kbd>H</kbd> 隐藏</small></h1>
       <!-- 交通工具（TR02）：火车沿 JR 大糸线松本—信濃大町行驶；近景 / 中景还没做（TR03–TR05），窗外暂时只有远景 -->
       <label>交通工具 <output id="vehicle-status"></output>
@@ -276,6 +289,7 @@
         <summary><span class="section-title">数据来源与许可</span></summary>
         <p class="credits">影像：<a id="credit-eox" href="https://cloudless.eox.at" target="_blank" rel="noopener">Sentinel-2 cloudless 2025</a> by EOX IT Services GmbH（含修改过的 Copernicus Sentinel 数据，CC BY-NC-SA 4.0）· 日本低空近景细节：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院（地理院タイル・全国最新写真（シームレス））</a>を加工して作成 · 地形：AWS Terrain Tiles · 水体：© OpenStreetMap contributors（OpenFreeMap）<br />关闭真实地理数据时，岛屿为程序生成的示例，不对应真实地理。<br />星表：耶鲁亮星表 BSC5（CDS V/50）· 月面贴图 © Solar System Scope（CC BY 4.0）</p>
       </details>
+      </div>
     </aside>
     <!-- 背景板模式：只在鼠标移动后的几秒内显示的提示与退出按钮 -->
     <!-- 火车车内广播的字幕（TR07，示意）：广播时出现几秒 -->

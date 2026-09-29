@@ -1,0 +1,38 @@
+[
+  {
+    "name": "pillars-noon-live",
+    "scene": "ws-pillars-noon",
+    "variants": [{ "name": "cur" }, { "name": "cur2" }],
+    "live": {
+      "crop": [390, 0, 820, 600],
+      "frames": 240,
+      "regions": { "柱顶": [150, 0, 500, 250], "柱身": [0, 250, 820, 230], "柱脚与旗云": [0, 480, 820, 110] },
+      "thr": 16,
+      "frac": 0.05
+    }
+  },
+  {
+    "name": "pillars-night-live",
+    "scene": "ws-pillars-night",
+    "variants": [{ "name": "cur" }, { "name": "cur2" }],
+    "live": {
+      "crop": [390, 0, 820, 600],
+      "frames": 240,
+      "regions": { "柱顶": [150, 0, 500, 250], "柱身": [0, 250, 820, 230], "柱脚与旗云": [0, 480, 820, 110] },
+      "thr": 16,
+      "frac": 0.05
+    }
+  },
+  {
+    "name": "pillars-dusk-live",
+    "scene": "ws-pillars-dusk",
+    "variants": [{ "name": "cur" }, { "name": "cur2" }],
+    "live": {
+      "crop": [390, 0, 820, 600],
+      "frames": 240,
+      "regions": { "柱顶": [150, 0, 500, 250], "柱身": [0, 250, 820, 230], "柱脚与旗云": [0, 480, 820, 110] },
+      "thr": 16,
+      "frac": 0.05
+    }
+  }
+]

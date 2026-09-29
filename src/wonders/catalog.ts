@@ -4,9 +4,22 @@
  * 设计依据：research/WONDERS.md §5（系统设计）、§6.1（天梯 / 建木）。
  *
  * 命名约定（研究文档 §2.1）：面板名写成「名字（致敬《作品》）」或注明典籍出处；id 用描述性英文。
+ *
+ * 天幕层奇观的「皮肤号 / 开关 uniform / 窗外变体」分配表（WS08 起登记；新奇观先在这里占号，别复用已有的号或开关——
+ * wonderSky 对不是天梯的皮肤一律按建木画，wantedOutsideKey 按皮肤号 / 开关选变体，撞号会画成别的奇观或选错变体）：
+ *
+ * | look.skin | 奇观 | 开关 uniform | 窗外变体（outside-pass.ts 的 OutsideKey） | 着色 |
+ * | --- | --- | --- | --- | --- |
+ * | 0 | 天梯（tether） | uWonderOn + uWonderShape.z | OW（低空 DOW、火车 DROW） | render/wonder-sky.glsl.ts |
+ * | 1 | 建木（jianmu） | uWonderOn + uWonderShape.z | OW（DOW / DROW） | render/wonder-sky.glsl.ts |
+ * | 2 | 巨柱群（pillars，PILLARS_SKIN） | uWonderOn + uWonderShape.z = 2 | OWP（按需编译） | wonders/pillars.glsl.ts |
+ * | 3 | 天环（orbital-ring，RING_SKIN） | uRingOn（不写 uWonderOn / uWonderShape） | OWT（按需编译） | wonders/ring.glsl.ts |
+ *
+ * 云间层奇观（layer = "cloud"）不用皮肤号，按 volume.kind（wonder-cloud.glsl.ts 的 WONDER_CLOUD_KINDS）登记，开关是 uWonderVol。
  */
 
 import { FLOATCITY_KIND, FOGCITY_KIND, W00_PROBE_KIND, WONDER_CLOUD_KINDS } from "./wonder-cloud.glsl";
+import { RING_SKIN } from "./ring-shape";
 
 /** 奇观所在的层：sky = 天幕层（在所有云之外，云的遮挡是现成的）；cloud = 云间层（插进云的步进，W00，见 wonder-cloud.glsl.ts） */
 export type WonderLayer = "sky" | "cloud";
@@ -56,7 +69,7 @@ export interface WonderDef {
     radiusKm: number;
     /** 表面反照率 */
     albedo: [number, number, number];
-    /** 着色器皮肤编号：0 天梯、1 建木 */
+    /** 着色器皮肤编号：0 天梯、1 建木、2 巨柱群（WS07）、3 天环（WS08，wonders/ring.glsl.ts，RING_SKIN） */
     skin: number;
     /** 天梯的附属结构：中继站、舱体、系留平台、航标灯（建木没有） */
     beacons: boolean;
@@ -137,6 +150,23 @@ export const WONDERS: WonderDef[] = [
     look: { radiusKm: 3.2, albedo: [0.15, 0.125, 0.125], skin: 1, beacons: false },
   },
   {
+    id: "pillars",
+    // 原创造型（参考图「垂直荒原」一类的巨构插画的视觉语言：极简混凝土柱、大气把上半截冲淡），不致敬具体作品
+    name: "巨柱群（贯穿云海的混凝土巨柱）",
+    layer: "sky",
+    // WS07：锚点（群中心附近）在 180–280 km 外；行往远处退，最近一根约 140–240 km、最远的柱脚沉到地平线以下只剩柱顶
+    distanceKm: [180, 280],
+    forwardOffsetDeg: [8, 30],
+    minAltitudeKm: 6,
+    // 白天到黄昏最好（柱顶还亮着、柱脚已入夜的那段最美）；夜里只剩一排同步慢闪的红灯，也出现，权重低
+    sunWeight: (a) => (a > -3 && a < 8 ? 3 : a >= 8 ? 1.5 : a > -12 ? 1.5 : 0.6),
+    riseS: 120,
+    holdSimS: [420, 720],
+    fadeS: 120,
+    // 尺寸、根数、摆放全按每次出现的种子（wonders/pillar-shape.ts）；radiusKm 不用。albedo 不用（着色器用 WONDER_CONCRETE 按柱微调）
+    look: { radiusKm: 2, albedo: [0.3, 0.3, 0.3], skin: 2, beacons: false },
+  },
+  {
     id: "fogcity",
     // 致敬《银翼杀手》（1982）开场的「地狱城」：原创造型（阶梯金字塔、火炬、光束、车流都是程序生成），不用任何官方资产
     name: "雾海灯城（致敬《银翼杀手》）",
@@ -213,6 +243,25 @@ export const WONDERS: WonderDef[] = [
       // 影子浓度 0.6：椭球只是整座城的粗近似（树冠有缝、根须透光），不该投出一个实心的坑
       caster: { center: [0, 0.5, 0], radii: [3.0, 3.0, 3.0], strength: 0.6 },
     },
+  },
+  {
+    id: "orbital-ring",
+    // 设定出自 Paul Birch 的「轨道环」构想（Orbital Ring Systems and Jacob's Ladders, JBIS 1982），不是致敬某部作品；
+    // 造型（箱形环体、转子护套、缆塔、灯带）都是程序生成
+    name: "天环（轨道环：Paul Birch 1982 年的设想）",
+    layer: "sky",
+    // 环本身的位置按种子定（wonders/ring-shape.ts：高 500–1400 km、在窗口方向仰角 7–18° 处横贯 / 斜贯天空），
+    // 这里的距离只是挂给系统的锚点（环在窗口方向上的星下点，最远收到 1200 km）
+    distanceKm: [900, 1200],
+    forwardOffsetDeg: [0, 20],
+    minAltitudeKm: 6,
+    // 黄昏最美（一段在阳光里、一段在地影里，交界发红）；夜里是城市般的灯带；白天是一道淡白的弧
+    sunWeight: (a) => (dusk(a) ? 3 : a <= -12 ? 2 : 1.2),
+    riseS: 60,
+    holdSimS: [600, 900],
+    fadeS: 60,
+    // skin 3（RING_SKIN）：着色在 wonders/ring.glsl.ts（自己的 uRingOn，不走天梯 / 建木 / 巨柱群那段）；radiusKm / albedo 不用
+    look: { radiusKm: 0, albedo: [0.3, 0.3, 0.3], skin: RING_SKIN, beacons: true },
   },
 ];
 
